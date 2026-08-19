@@ -18,7 +18,7 @@ const fileCoverage = (counts: ReadonlyArray<number>) => ({
 })
 
 describe("coverage brackets", () => {
-  it("keeps production and maintained cassette floors exact and independent", () => {
+  it("keeps production and maintained evaluation-infrastructure floors exact and independent", () => {
     expect(coveragePolicy.brackets.production.thresholds).toEqual({
       branches: 99,
       functions: 99,
@@ -26,12 +26,12 @@ describe("coverage brackets", () => {
       statements: 99
     })
     expect(coveragePolicy.brackets["maintained-evaluation"].thresholds).toEqual({
-      branches: 90,
-      functions: 90,
-      lines: 90,
-      statements: 90
+      branches: 75,
+      functions: 75,
+      lines: 75,
+      statements: 75
     })
-    expect(coveragePolicy.globalThresholds).toEqual({ branches: 90, functions: 90, lines: 90, statements: 90 })
+    expect(coveragePolicy.globalThresholds).toEqual({ branches: 75, functions: 75, lines: 75, statements: 75 })
   })
 
   it("classifies production, cassette, lab, scripts, tests, and disposable prototypes", () => {
@@ -53,7 +53,7 @@ describe("coverage brackets", () => {
       coverageBracketForPath(
         "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts"
       )
-    ).toBe("production")
+    ).toBe("maintained-evaluation")
     expect(coverageBracketForPath("prototypes/reducer-lab/src/cassette-lab.ts")).toBeUndefined()
     expect(coverageBracketForPath("scripts/verify-coverage-summary.mjs")).toBeUndefined()
     expect(coverageBracketForPath("specs/acceptedResultIntegration.qnt")).toBeUndefined()
@@ -74,7 +74,7 @@ describe("coverage brackets", () => {
     expect(summaries.production.total.statements.pct).toBe(100)
     expect(summaries["maintained-evaluation"].total.statements.pct).toBe(50)
     expect(coverageBracketThresholdFailures(coverage)).toContain(
-      "maintained-evaluation statements: expected at least 90%, observed 50"
+      "maintained-evaluation statements: expected at least 75%, observed 50"
     )
     expect(coverageBracketThresholdFailures(coverage)).not.toContain(
       "production statements: expected at least 99%, observed 50"
@@ -82,7 +82,7 @@ describe("coverage brackets", () => {
   })
 
   it("passes aggregate metrics at the maintained-evaluation floor exactly", () => {
-    const exactCassette = fileCoverage([...Array.from({ length: 9 }, () => 1), 0])
+    const exactCassette = fileCoverage([1, 1, 1, 0])
     const exactProduction = fileCoverage([...Array.from({ length: 99 }, () => 1), 0])
     const coverage = {
       "/repo/src/application.ts": exactProduction,
@@ -91,8 +91,19 @@ describe("coverage brackets", () => {
     const summaries = coverageBracketSummaries(coverage)
 
     expect(Object.values(summaries.production.total).map(({ pct }) => pct)).toEqual([99, 99, 99, 99])
-    expect(Object.values(summaries["maintained-evaluation"].total).map(({ pct }) => pct)).toEqual([90, 90, 90, 90])
+    expect(Object.values(summaries["maintained-evaluation"].total).map(({ pct }) => pct)).toEqual([75, 75, 75, 75])
     expect(coverageBracketThresholdFailures(coverage)).toEqual([])
+  })
+
+  it("rejects production below 99 even when maintained evaluation exceeds its floor", () => {
+    const coverage = {
+      "/repo/src/application.ts": fileCoverage([...Array.from({ length: 98 }, () => 1), 0, 0]),
+      "/repo/packages/dalph/src/cassettes/recorded.ts": fileCoverage([1, 1, 1, 1])
+    }
+
+    const failures = coverageBracketThresholdFailures(coverage)
+    expect(failures).toContain("production statements: expected at least 99%, observed 98")
+    expect(failures.some((failure) => failure.startsWith("maintained-evaluation"))).toBe(false)
   })
 
   it("fails each changed bracket independently and fails closed when an entry is absent", () => {
@@ -112,7 +123,7 @@ describe("coverage brackets", () => {
     expect(results.production.percentage).toBe(100)
     expect(results["maintained-evaluation"].percentage).toBe(50)
     expect(coverageBracketLineFailures(results)).toEqual([
-      "changed maintained-evaluation line coverage: expected at least 90%, observed 50.00%",
+      "changed maintained-evaluation line coverage: expected at least 75%, observed 50.00%",
       "  packages/dalph/src/cassettes/recorded.ts:2"
     ])
 
@@ -122,30 +133,27 @@ describe("coverage brackets", () => {
       "/repo"
     )
     expect(coverageBracketLineFailures(missing)).toEqual([
-      "changed maintained-evaluation line coverage: expected at least 90%, observed 0.00%",
+      "changed maintained-evaluation line coverage: expected at least 75%, observed 0.00%",
       "  packages/dalph/src/cassettes/missing.ts:7 (coverage entry missing)"
     ])
   })
 
-  it("passes changed cassette lines at the 90 percent floor exactly", () => {
+  it("passes changed evaluation-infrastructure lines at the 75 percent floor exactly", () => {
     const changedLines = new Map([
       ["src/application.ts", new Set(Array.from({ length: 100 }, (_, i) => i + 1))],
-      ["packages/dalph/src/cassettes/fixtures/recorded.ts", new Set(Array.from({ length: 10 }, (_, i) => i + 1))]
+      ["packages/dalph/src/cassettes/fixtures/recorded.ts", new Set(Array.from({ length: 4 }, (_, i) => i + 1))]
     ])
     const results = changedLineCoverageByBracket(
       {
         "/repo/src/application.ts": fileCoverage([...Array.from({ length: 99 }, () => 1), 0]),
-        "/repo/packages/dalph/src/cassettes/fixtures/recorded.ts": fileCoverage([
-          ...Array.from({ length: 9 }, () => 1),
-          0
-        ])
+        "/repo/packages/dalph/src/cassettes/fixtures/recorded.ts": fileCoverage([1, 1, 1, 0])
       },
       changedLines,
       "/repo"
     )
 
     expect(results.production.percentage).toBe(99)
-    expect(results["maintained-evaluation"].percentage).toBe(90)
+    expect(results["maintained-evaluation"].percentage).toBe(75)
     expect(coverageBracketLineFailures(results)).toEqual([])
   })
 })

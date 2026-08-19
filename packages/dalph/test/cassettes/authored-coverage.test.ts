@@ -1,51 +1,32 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 import { expect } from "vitest"
 import { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
 import {
   CompletionTaskBoundary,
   CompletionTaskRequest,
   controlledTrackerMutationLayerFrom,
-  describeJournalEvent,
   FixtureTarget,
-  IntegrationCandidateCorrelation,
-  JournalPosition,
   makeTaskClaimObservationOperation,
   OperationId,
   TrackerGraphReader,
   type IntegratorCandidateText,
-  TrackerMutation,
-  workflowJournalEventVersion
+  TrackerMutation
 } from "@dalph/orchestrator"
 import {
   AuthoredCassetteStoryItem,
   maintainedAuthoredCassetteCatalog,
   runAuthoredScenarioCassette
 } from "../../src/cassettes/index.js"
-import {
-  renderAuthoredStoryItemLandmark,
-  renderAuthoredStoryItemLyric
-} from "../../src/cassettes/authored-presentation.js"
-import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
 import { controlledTrackerGraphReaderLayer, controlledTrace } from "../../src/cassettes/authored-adapters.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
-import {
-  TargetVerificationEvidenceSealedEvent,
-  TargetVerificationPlanId,
-  targetVerificationCorrelationFor
-} from "../../../orchestrator/src/workflow/protocols/target-verification/events.js"
-import { IntegrationCandidateConstructedEvent } from "../../../orchestrator/src/workflow/protocols/integration-candidate-construction/events.js"
-
 const decodeStoryItem = (input: unknown): AuthoredCassetteStoryItem =>
   Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(input)
 
 const decodeDalphSelection = (input: unknown): typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type =>
   Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.DalphSelects)(input)
-
-const decodeExpectedBehavior = (input: unknown): typeof AuthoredCassetteStoryItem.cases.ExpectedBehavior.Type =>
-  Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(input)
 
 const completionRequest = Schema.decodeUnknownSync(CompletionTaskRequest)({
   claim: {
@@ -105,98 +86,6 @@ const completionRequest = Schema.decodeUnknownSync(CompletionTaskRequest)({
   taskRevision: "coverage-revision"
 })
 
-it("renders authored candidate, verification, graph, and operator variants at the public presentation boundary", () => {
-  const graphEmpty = { revision: "empty", tasks: [] }
-  const graphWithTask = {
-    revision: "with-task",
-    tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
-  }
-  const expected = decodeExpectedBehavior({
-    _tag: "ExpectedBehavior",
-    orchestration: [
-      {
-        _tag: "IntegrationCandidateConstructed",
-        acceptedResultCommit: "a".repeat(40),
-        attemptId: "attempt:A:0",
-        candidateCommit: "c".repeat(40),
-        expectedTargetHead: "1".repeat(40),
-        taskId: "A"
-      },
-      { _tag: "TargetVerificationPassed", candidateCommit: "c".repeat(40), planId: "coverage-plan", taskId: "A" },
-      {
-        _tag: "TargetVerificationStopped",
-        candidateCommit: "c".repeat(40),
-        outcome: "TimedOut",
-        planId: "coverage-plan",
-        taskId: "A"
-      },
-      { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-      { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalAccepted" },
-      { _tag: "PlannedAttemptExecutorCommandProjectionObserved", attemptId: "attempt:A:0", report: "Running" }
-    ],
-    protocol: [
-      { _tag: "PlannedAttemptReplaced", priorAttemptId: "attempt:A:0", successorAttemptId: "attempt:A:1", taskId: "A" }
-    ],
-    taskWork: { absences: [], results: [] }
-  })
-  const unpause = Object.values(maintainedAuthoredCassetteCatalog)
-    .flatMap(({ story }) => story)
-    .find((item) => item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting")
-  expect(unpause).toBeDefined()
-  if (unpause === undefined) return
-  const rendered = [
-    expected,
-    decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: graphEmpty }),
-    decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: graphWithTask }),
-    decodeStoryItem({
-      _tag: "IntegrationCandidateAgentReported",
-      attemptId: "attempt:A:0",
-      report: { _tag: "Working" }
-    }),
-    decodeStoryItem({
-      _tag: "IntegrationCandidateGitValidationFailed",
-      candidateCommit: "c".repeat(40),
-      detail: "coverage read failed",
-      repository: "/coverage/authored.git"
-    }),
-    decodeStoryItem({
-      _tag: "IntegrationCandidateGitValidationReturned",
-      candidateCommit: "c".repeat(40),
-      observation: { _tag: "Missing", candidateText: "refs/heads/candidate" },
-      repository: "/coverage/authored.git"
-    }),
-    decodeStoryItem({
-      _tag: "TargetVerificationReturned",
-      result: { _tag: "Passed", artifacts: [{ content: "ok", name: "report.txt" }] }
-    }),
-    decodeStoryItem({ _tag: "OperatorSubscribesToPauseObservation", subject: { _tag: "Run" } }),
-    decodeStoryItem({
-      _tag: "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
-      direction: "Pause",
-      subject: { _tag: "Run" }
-    }),
-    unpause
-  ]
-  const lyrics = rendered.map(renderAuthoredStoryItemLyric)
-  expect(lyrics[0]).toContain("public verification plan coverage-plan to pass")
-  expect(lyrics[0]).toContain("candidate cccccccccccccccccccccccccccccccccccccccc to have target")
-  expect(lyrics[1]).toContain("0 task graph facts")
-  expect(lyrics[2]).toContain("with-task")
-  expect(lyrics[4]).toContain("coverage read failed")
-  expect(lyrics[5]).toContain("Missing")
-  expect(lyrics[6]).toContain("returns Passed")
-  expect(lyrics[7]).toContain("the Run")
-  expect(lyrics[8]).toContain("before delivery-action admission")
-  expect(lyrics[9]).toContain("Alice unpauses task A")
-  const graphWithTaskItem = rendered[2]
-  expect(graphWithTaskItem).toBeDefined()
-  if (graphWithTaskItem === undefined) return
-  expect(renderAuthoredStoryItemLandmark(graphWithTaskItem)).toContain("with-task")
-  expect(rendered.map(renderAuthoredStoryItemLandmark).filter((landmark) => landmark !== null).length).toBeGreaterThan(
-    0
-  )
-})
-
 it.effect("uses default authored tracker hooks and exposes every completion lookup outcome", () =>
   Effect.gen(function* () {
     const tracker = yield* TrackerMutation.pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
@@ -231,11 +120,6 @@ it.effect("uses default authored tracker hooks and exposes every completion look
 it.effect("runs the authored candidate and promotion outcomes through their production adapters", () =>
   Effect.gen(function* () {
     const names = [
-      "candidateConflictRecovery",
-      "candidateCorrectionAfterUnreadableGit",
-      "candidateCorrectionExhaustion",
-      "candidateCorrelationContradiction",
-      "candidateVerificationPassed",
       "changedAttemptContinues",
       "changedAttemptRestartsCleanly",
       "changedAttemptRestartAfterSupersessionCrash",
@@ -267,272 +151,12 @@ it.effect("runs the authored candidate and promotion outcomes through their prod
   })
 )
 
-it.effect("correlates authored candidate, Git, and verification cursor boundaries", () =>
-  Effect.gen(function* () {
-    const attemptId = AttemptId.make("attempt:coverage-agent")
-    const candidateText = "refs/heads/coverage-agent" as IntegratorCandidateText
-    const repository = GitRepositoryLocator.make("/coverage/candidate.git")
-    const candidateCommit = GitCommitSha.make("c".repeat(40))
-    const agent = decodeStoryItem({ _tag: "IntegrationCandidateAgentReported", attemptId, report: { _tag: "Working" } })
-    const targetLineageSelection = decodeDalphSelection({
-      _tag: "DalphSelects",
-      operation: { _tag: "ReadTargetLineage", attemptId, taskId: "A" }
-    })
-    const agentCursor = yield* makeStoryCursor([agent])
-    const directAgent = yield* agentCursor.consumeIntegrationCandidateAgentReport(attemptId)
-    expect(Option.isSome(directAgent)).toBe(true)
-
-    const selectionCursor = yield* makeStoryCursor([targetLineageSelection, agent])
-    const waitingAgent = yield* selectionCursor.consumeIntegrationCandidateAgentReport(attemptId).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    expect(yield* selectionCursor.consumeDalphSelectionFor(targetLineageSelection.operation)).toEqual(
-      targetLineageSelection
-    )
-    expect(Option.isSome(yield* Fiber.join(waitingAgent))).toBe(true)
-
-    const missingAgentCursor = yield* makeStoryCursor([
-      decodeStoryItem({
-        _tag: "ExpectedBehavior",
-        orchestration: null,
-        protocol: null,
-        taskWork: { absences: [], results: [] }
-      })
-    ])
-    expect(Option.isNone(yield* missingAgentCursor.consumeIntegrationCandidateAgentReport(attemptId))).toBe(true)
-
-    const wrongAgentCursor = yield* makeStoryCursor([
-      decodeStoryItem({
-        _tag: "IntegrationCandidateAgentReported",
-        attemptId: "attempt:other",
-        report: { _tag: "Working" }
-      })
-    ])
-    expect(yield* wrongAgentCursor.consumeIntegrationCandidateAgentReport(attemptId).pipe(Effect.flip)).toMatchObject({
-      _tag: "AuthoredCassetteInteractionMismatch"
-    })
-
-    const failedGit = decodeStoryItem({
-      _tag: "IntegrationCandidateGitValidationFailed",
-      candidateCommit,
-      detail: "candidate repository unreadable",
-      repository
-    })
-    const failedGitCursor = yield* makeStoryCursor([failedGit])
-    expect(
-      yield* failedGitCursor.consumeIntegrationCandidateGitValidation(repository, candidateCommit).pipe(Effect.flip)
-    ).toMatchObject({ _tag: "AuthoredIntegrationCandidateGitValidationFailure" })
-
-    const returnedGit = decodeStoryItem({
-      _tag: "IntegrationCandidateGitValidationReturned",
-      candidateCommit,
-      observation: { _tag: "Missing", candidateText },
-      repository
-    })
-    const returnedGitCursor = yield* makeStoryCursor([returnedGit])
-    expect(yield* returnedGitCursor.consumeIntegrationCandidateGitValidation(repository, candidateCommit)).toEqual(
-      returnedGit
-    )
-
-    const terminalGitCursor = yield* makeStoryCursor([
-      decodeStoryItem({
-        _tag: "ExpectedBehavior",
-        orchestration: null,
-        protocol: null,
-        taskWork: { absences: [], results: [] }
-      })
-    ])
-    expect(
-      yield* terminalGitCursor.consumeIntegrationCandidateGitValidation(repository, candidateCommit).pipe(Effect.flip)
-    ).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", expected: "ExpectedBehavior" })
-
-    const expectedGit = decodeStoryItem({
-      _tag: "IntegrationCandidateGitValidationReturned",
-      candidateCommit,
-      observation: { _tag: "Missing", candidateText },
-      repository
-    })
-    const mismatchedGitCursor = yield* makeStoryCursor([expectedGit])
-    expect(
-      yield* mismatchedGitCursor
-        .consumeIntegrationCandidateGitValidation(
-          GitRepositoryLocator.make("/coverage/other.git"),
-          GitCommitSha.make("d".repeat(40))
-        )
-        .pipe(Effect.flip)
-    ).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", storyPosition: 0 })
-
-    const verification = decodeStoryItem({
-      _tag: "TargetVerificationReturned",
-      result: { _tag: "Passed", artifacts: [{ content: "coverage", name: "report.txt" }] }
-    })
-    const verificationCursor = yield* makeStoryCursor([verification])
-    expect(yield* verificationCursor.consumeTargetVerificationReturned).toEqual(verification)
-
-    const selection = decodeDalphSelection({ _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } })
-    const git = decodeStoryItem({
-      _tag: "IntegratorGitObservationReturned",
-      candidateText,
-      observation: { _tag: "Missing", candidateText }
-    })
-    const releaseGit = yield* Deferred.make<void>()
-    const ownershipCursor = yield* makeStoryCursor([git, selection], {
-      onOccurrence: ({ item }) =>
-        item._tag === "IntegratorGitObservationReturned" ? Deferred.await(releaseGit) : Effect.void
-    })
-    const waitingSelection = yield* ownershipCursor.consumeDalphSelectionFor(selection.operation).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    yield* Effect.yieldNow
-    const gitFiber = yield* ownershipCursor.consumeIntegratorGitObservation(candidateText).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    expect(yield* Fiber.join(waitingSelection)).toEqual(selection)
-    yield* Deferred.succeed(releaseGit, undefined)
-    expect(yield* Fiber.join(gitFiber)).toEqual(git)
-
-    const reverseRelease = yield* Deferred.make<void>()
-    const reverseCursor = yield* makeStoryCursor([git, selection], {
-      onOccurrence: ({ item }) =>
-        item._tag === "IntegratorGitObservationReturned" ? Deferred.await(reverseRelease) : Effect.void
-    })
-    const reverseGitFiber = yield* reverseCursor.consumeIntegratorGitObservation(candidateText).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    const reverseSelectionFiber = yield* reverseCursor
-      .consumeDalphSelectionFor(selection.operation)
-      .pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    yield* Effect.yieldNow
-    expect(yield* Fiber.join(reverseSelectionFiber)).toEqual(selection)
-    yield* Deferred.succeed(reverseRelease, undefined)
-    expect(yield* Fiber.join(reverseGitFiber)).toEqual(git)
-  })
-)
-
-it.effect("projects candidate construction and both target-verification terminals into authored evidence", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(
-      maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration
-    )
-    const plannedRecord = run.records.find(({ event }) => event._tag === "TaskAttemptPlanned")
-    const acceptedRecord = run.records.find(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report._tag === "Terminal" &&
-        event.report.result._tag === "Accepted"
-    )
-    if (
-      plannedRecord?.event._tag !== "TaskAttemptPlanned" ||
-      acceptedRecord?.event._tag !== "PlannedAttemptExecutorWorkReported" ||
-      acceptedRecord.event.report._tag !== "Terminal" ||
-      acceptedRecord.event.report.result._tag !== "Accepted"
-    ) {
-      return yield* Effect.die("planned accepted work is required for authored outcome projection")
-    }
-    const candidateCorrelation = Schema.decodeUnknownSync(IntegrationCandidateCorrelation)({
-      acceptanceManifest: acceptedRecord.event.report.result.acceptedResult.evidenceManifest,
-      acceptedResultCommit: acceptedRecord.event.report.result.acceptedResult.commit,
-      attemptId: plannedRecord.event.operation.plannedAttempt.attemptId,
-      candidateId: "coverage-outcome-candidate",
-      candidateResource: "/coverage/outcome-candidate",
-      expectedTargetHead: plannedRecord.event.operation.plannedAttempt.baseSha,
-      integrationSessionId: "coverage-outcome-session",
-      integrationTarget: { repository: "/coverage/outcome.git", ref: "refs/heads/master" },
-      runId: run.runId
-    })
-    const constructedEvent = IntegrationCandidateConstructedEvent.make({
-      candidateCommit: GitCommitSha.make("c".repeat(40)),
-      correlation: candidateCorrelation,
-      gitObservationAt: JournalPosition.make(run.records.length + 1),
-      reviewManifest: acceptedRecord.event.report.result.acceptedResult.evidenceManifest,
-      version: workflowJournalEventVersion
-    })
-    const correlation = targetVerificationCorrelationFor(
-      {
-        candidateCommit: constructedEvent.candidateCommit,
-        constructedAt: JournalPosition.make(run.records.length + 1),
-        correlation: constructedEvent.correlation,
-        reviewManifest: constructedEvent.reviewManifest
-      },
-      TargetVerificationPlanId.make("coverage-verification-passed")
-    )
-    const stoppedCorrelation = targetVerificationCorrelationFor(
-      {
-        candidateCommit: constructedEvent.candidateCommit,
-        constructedAt: JournalPosition.make(run.records.length + 1),
-        correlation: constructedEvent.correlation,
-        reviewManifest: constructedEvent.reviewManifest
-      },
-      TargetVerificationPlanId.make("coverage-verification-stopped")
-    )
-    const passed = TargetVerificationEvidenceSealedEvent.make({
-      correlation,
-      manifest: constructedEvent.reviewManifest,
-      terminal: "Passed",
-      version: workflowJournalEventVersion
-    })
-    const stopped = TargetVerificationEvidenceSealedEvent.make({
-      correlation: stoppedCorrelation,
-      manifest: constructedEvent.reviewManifest,
-      terminal: "TimedOut",
-      version: workflowJournalEventVersion
-    })
-    const recordFor = (event: typeof passed, position: number) => ({
-      event,
-      key: describeJournalEvent(event).expectedKey,
-      position: JournalPosition.make(position),
-      runId: run.runId
-    })
-    const expected = decodeExpectedBehavior({
-      _tag: "ExpectedBehavior",
-      orchestration: [
-        {
-          _tag: "IntegrationCandidateConstructed",
-          acceptedResultCommit: constructedEvent.correlation.acceptedResultCommit,
-          attemptId: constructedEvent.correlation.attemptId,
-          candidateCommit: constructedEvent.candidateCommit,
-          expectedTargetHead: constructedEvent.correlation.expectedTargetHead,
-          taskId: plannedRecord.event.operation.plannedAttempt.taskId
-        },
-        {
-          _tag: "TargetVerificationPassed",
-          candidateCommit: constructedEvent.candidateCommit,
-          planId: correlation.planId,
-          taskId: plannedRecord.event.operation.plannedAttempt.taskId
-        },
-        {
-          _tag: "TargetVerificationStopped",
-          candidateCommit: constructedEvent.candidateCommit,
-          outcome: "TimedOut",
-          planId: stoppedCorrelation.planId,
-          taskId: plannedRecord.event.operation.plannedAttempt.taskId
-        }
-      ],
-      protocol: null,
-      taskWork: { absences: [], results: [] }
-    })
-    const actual = yield* assertAuthoredExpectedBehavior(
-      [
-        plannedRecord,
-        { ...plannedRecord, event: constructedEvent },
-        recordFor(passed, run.records.length + 2),
-        recordFor(stopped, run.records.length + 3)
-      ],
-      expected
-    )
-    expect(actual.orchestrationEvidence).toEqual(expected.orchestration)
-  }).pipe(Effect.provide(NodeCrypto.layer))
-)
-
 it.effect("covers authored cursor terminal and cleanup outcomes", () =>
   Effect.gen(function* () {
     const attemptId = AttemptId.make("attempt:cursor-terminals")
     const repository = GitRepositoryLocator.make("/coverage/cursor.git")
     const candidateCommit = GitCommitSha.make("e".repeat(40))
     const candidateText = "refs/heads/cursor" as IntegratorCandidateText
-
-    const emptyGit = yield* makeStoryCursor([])
-    const emptyGitExit = yield* Effect.exit(
-      emptyGit.consumeIntegrationCandidateGitValidation(repository, candidateCommit)
-    )
-    expect(Exit.isFailure(emptyGitExit)).toBe(true)
 
     const emptyExecutor = yield* makeStoryCursor([])
     const emptyExecutorExit = yield* Effect.exit(emptyExecutor.consumeExecutorReportFor("StartOrContinue", attemptId))

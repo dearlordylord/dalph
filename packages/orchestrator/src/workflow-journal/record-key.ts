@@ -12,18 +12,12 @@ import type { ControlDirectionApplicationOrdinal } from "../workflow/protocols/c
 import type { TaskClaimReacquisitionRequestId } from "../workflow/protocols/task-claim-reacquisition/events.js"
 import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
 import type {
-  IntegrationCandidateAgentReportOrdinal,
-  IntegrationCandidateCorrelation,
-  IntegrationCandidateGitValidationAttemptOrdinal
-} from "../workflow/protocols/integration-candidate-construction/events.js"
-import type {
   IntegratorCandidateText,
   IntegratorCorrelation,
   IntegratorRunCorrelation,
   IntegratorResponsibilityFacts,
   IntegratorSessionId
 } from "../workflow/protocols/integrator/events.js"
-import type { TargetVerificationRequestId } from "../workflow/protocols/target-verification/events.js"
 import type {
   TargetPromotionAttemptOrdinal,
   TargetPromotionRequestId
@@ -202,77 +196,6 @@ export const integratorCandidateGitObservedRecordKey = (
   candidateText: IntegratorCandidateText
 ): JournalRecordKey =>
   JournalRecordKey.make(`${integratorCandidateRecordKeyPrefix(correlation, candidateText)}:git-observation`)
-
-const integrationCandidateCorrelationKey = (correlation: IntegrationCandidateCorrelation): string =>
-  `${correlation.runId}:${correlation.attemptId}:${correlation.candidateId}`
-
-export const integrationCandidateConstructionIntentRecordKey = (
-  correlation: IntegrationCandidateCorrelation
-): JournalRecordKey =>
-  JournalRecordKey.make(`integration-candidate:${integrationCandidateCorrelationKey(correlation)}:intent`)
-
-/** Stable journal key for one exact stale-session supersession. */
-export const integrationCandidateSessionSupersededRecordKey = (
-  priorCorrelation: IntegrationCandidateCorrelation,
-  successorCorrelation: IntegrationCandidateCorrelation
-): JournalRecordKey =>
-  JournalRecordKey.make(
-    `integration-candidate:${integrationCandidateCorrelationKey(priorCorrelation)}:superseded:${successorCorrelation.candidateId}`
-  )
-
-export const integrationCandidateAgentReportRecordKey = (
-  correlation: IntegrationCandidateCorrelation,
-  ordinal: IntegrationCandidateAgentReportOrdinal
-): JournalRecordKey =>
-  JournalRecordKey.make(
-    `integration-candidate:${integrationCandidateCorrelationKey(correlation)}:agent-report:${ordinal}`
-  )
-
-export const integrationCandidateGitObservationRecordKey = (
-  correlation: IntegrationCandidateCorrelation,
-  submissionPosition: JournalPosition
-): JournalRecordKey =>
-  JournalRecordKey.make(
-    `integration-candidate:${integrationCandidateCorrelationKey(correlation)}:submission:${submissionPosition}:git-observation`
-  )
-
-export const integrationCandidateConstructedRecordKey = (
-  correlation: IntegrationCandidateCorrelation
-): JournalRecordKey =>
-  JournalRecordKey.make(`integration-candidate:${integrationCandidateCorrelationKey(correlation)}:constructed`)
-
-export const integrationCandidateGitValidationFailureRecordKey = (
-  correlation: IntegrationCandidateCorrelation,
-  submissionPosition: JournalPosition,
-  attemptOrdinal: IntegrationCandidateGitValidationAttemptOrdinal
-): JournalRecordKey =>
-  JournalRecordKey.make(
-    `integration-candidate:${integrationCandidateCorrelationKey(correlation)}:submission:${submissionPosition}:git-failure:${attemptOrdinal}`
-  )
-
-export const integrationCandidateCorrectionLimitReachedRecordKey = (
-  correlation: IntegrationCandidateCorrelation
-): JournalRecordKey =>
-  JournalRecordKey.make(`integration-candidate:${integrationCandidateCorrelationKey(correlation)}:non-convergent`)
-
-export const integrationCandidateContinuationLimitReachedRecordKey = (
-  correlation: IntegrationCandidateCorrelation
-): JournalRecordKey =>
-  JournalRecordKey.make(`integration-candidate:${integrationCandidateCorrelationKey(correlation)}:continuation-limit`)
-
-const targetVerificationRecordKeyPrefix = (requestId: TargetVerificationRequestId): string =>
-  `target-verification:${requestId}`
-
-export const targetVerificationIntentRecordKey = (requestId: TargetVerificationRequestId): JournalRecordKey =>
-  JournalRecordKey.make(`${targetVerificationRecordKeyPrefix(requestId)}:intent`)
-
-export const targetVerificationEvidenceSealedRecordKey = (requestId: TargetVerificationRequestId): JournalRecordKey =>
-  JournalRecordKey.make(`${targetVerificationRecordKeyPrefix(requestId)}:evidence-sealed`)
-
-export const targetVerificationCorrelationContradictedRecordKey = (
-  requestId: TargetVerificationRequestId
-): JournalRecordKey =>
-  JournalRecordKey.make(`${targetVerificationRecordKeyPrefix(requestId)}:correlation-contradiction`)
 
 const targetPromotionRecordKeyPrefix = (requestId: TargetPromotionRequestId): string => `target-promotion:${requestId}`
 

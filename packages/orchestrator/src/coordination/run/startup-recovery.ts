@@ -17,12 +17,6 @@ import {
   makeRunRecoveryProjection,
   RunRecoveryProjection
 } from "./recovery-activation.js"
-import {
-  type CandidateContinuationLimit,
-  type CandidateCorrectionLimit,
-  IntegrationCandidateAgent,
-  IntegrationCandidateGit
-} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { Integrator, IntegratorGit } from "../../workflow/protocols/integrator/protocol.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
@@ -39,14 +33,7 @@ import {
 } from "../delivery/delivery-runtime-resources.js"
 import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
-import {
-  TargetVerificationRuntime,
-  type TargetVerificationRuntimeInput
-} from "../../workflow/protocols/target-verification/runtime.js"
-import {
-  EvidenceStore,
-  type EvidenceStoreService
-} from "../../workflow/protocols/target-verification/evidence-store.js"
+import { EvidenceStore, type EvidenceStoreService } from "../../workflow/protocols/evidence-store.js"
 import {
   TargetPromotionRuntime,
   type TargetPromotionRuntimeInput
@@ -112,9 +99,6 @@ export const inspectStartupRecovery = Effect.fn("StartupRecovery.inspect")(funct
 interface RunActivationContextInput {
   readonly runId: RunId
   readonly integrationTarget: IntegrationTarget | undefined
-  readonly candidateCorrectionLimit: CandidateCorrectionLimit | undefined
-  readonly candidateContinuationLimit: CandidateContinuationLimit | undefined
-  readonly targetVerification: TargetVerificationRuntimeInput | undefined
   readonly targetPromotion: TargetPromotionRuntimeInput | undefined
   readonly integrationFinality: CompletionClaimBoundaryService | undefined
   readonly completionTask: CompletionTaskBoundaryService | undefined
@@ -123,14 +107,11 @@ interface RunActivationContextInput {
 
 const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function* ({
   acceptedResultEvidenceStore,
-  candidateContinuationLimit,
-  candidateCorrectionLimit,
   completionTask,
   integrationFinality,
   integrationTarget,
   runId,
-  targetPromotion,
-  targetVerification
+  targetPromotion
 }: RunActivationContextInput) {
   const ownership = yield* CoordinatorOwnership
   const inRunJournal = yield* InRunJournal
@@ -144,8 +125,6 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   const attemptChoiceControl = yield* AttemptChoiceControl
   const plannedAttemptProtocolController = yield* makePlannedAttemptProtocolController()
   const ambient = yield* Effect.context<never>()
-  const candidateAgent = Context.getOption(ambient, IntegrationCandidateAgent)
-  const candidateGit = Context.getOption(ambient, IntegrationCandidateGit)
   const integrator = Context.getOption(ambient, Integrator)
   const integratorGit = Context.getOption(ambient, IntegratorGit)
   const ambientRuntimeCapabilities = Context.getOption(ambient, DeliveryRuntimeResourceCapabilityPair)
@@ -164,15 +143,12 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   const recovery = yield* makeRunRecoveryProjection(
     runId,
     integrationTarget,
-    candidateCorrectionLimit,
-    candidateContinuationLimit,
     integrationResources,
-    targetVerification,
     targetPromotion,
     integrationFinality !== undefined,
     completionTask !== undefined
   )
-  const evidenceStore = acceptedResultEvidenceStore ?? targetVerification?.evidenceStore
+  const evidenceStore = acceptedResultEvidenceStore
   const requiredContext = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
     Context.add(RunRecoveryProjection, recovery),
@@ -190,14 +166,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   const optionalContext = Context.empty().pipe(
     Context.add(DeliveryRuntimeResources, runtimeResources),
     Context.add(DeliveryRuntimeObservationPublication, observationPublication),
-    Context.addOrOmit(IntegrationCandidateAgent, candidateAgent),
-    Context.addOrOmit(IntegrationCandidateGit, candidateGit),
     Context.addOrOmit(Integrator, integrator),
     Context.addOrOmit(IntegratorGit, integratorGit),
-    Context.addOrOmit(
-      TargetVerificationRuntime,
-      Option.fromUndefinedOr(targetVerification).pipe(Option.map(TargetVerificationRuntime.of))
-    ),
     Context.addOrOmit(EvidenceStore, Option.fromUndefinedOr(evidenceStore).pipe(Option.map(EvidenceStore.of))),
     Context.addOrOmit(
       TargetPromotionRuntime,
@@ -220,9 +190,6 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
 export const validatedRunActivationLayer = (
   runId: RunId,
   integrationTarget: IntegrationTarget | undefined,
-  candidateCorrectionLimit?: CandidateCorrectionLimit,
-  candidateContinuationLimit?: CandidateContinuationLimit,
-  targetVerification?: TargetVerificationRuntimeInput,
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
   completionTask?: CompletionTaskBoundaryService,
@@ -232,9 +199,6 @@ export const validatedRunActivationLayer = (
     makeRunActivationContext({
       runId,
       integrationTarget,
-      candidateCorrectionLimit,
-      candidateContinuationLimit,
-      targetVerification,
       targetPromotion,
       integrationFinality,
       completionTask,

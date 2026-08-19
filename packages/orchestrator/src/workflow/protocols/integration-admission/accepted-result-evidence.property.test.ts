@@ -16,7 +16,7 @@ import {
 import { Effect } from "effect"
 import fc from "fast-check"
 import { expect } from "vitest"
-import { EvidenceStore } from "../target-verification/evidence-store.js"
+import { EvidenceStore } from "../evidence-store.js"
 import { AcceptedResultEvidenceConflict, qualifyAcceptedResultEvidence } from "./protocol.js"
 
 const runId = RunId.make("accepted-result-evidence-property-run")

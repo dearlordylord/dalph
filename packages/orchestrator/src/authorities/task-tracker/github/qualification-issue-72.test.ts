@@ -27,7 +27,7 @@ import {
 import { githubTrackerGraphReaderLayer } from "./graph-reader.js"
 import { githubClaimLabelNameFor, githubTrackerMutationLayer } from "./claim-mutation.js"
 import { githubTaskIdFor } from "./task-identity.js"
-import { nodeEvidenceStoreLayer } from "../../../workflow/protocols/target-verification/evidence-store.js"
+import { nodeEvidenceStoreLayer } from "../../../workflow/protocols/evidence-store.js"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
 
 const GraphqlErrorsEnvelope = Schema.Struct({

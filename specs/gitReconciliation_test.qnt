@@ -59,32 +59,32 @@ module gitReconciliationTest {
       .expect(nonDescendantResultRejectedReached and rejectedResultPreservesWorktree)
   }
 
-  run exactVerifiedPromotionUsesCompareAndSetTest = {
+  run exactGitQualifiedPromotionUsesCompareAndSetTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .expect(exactCompareAndSetReached and promotionRequiresExactExpectedHead)
   }
 
   run staleTargetReconcilesWithoutOverwriteTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeStaleTargetAfterVerification)
+      .then(observeStaleTargetAfterGitQualification)
       .expect(staleTargetReconciliationReached and staleTargetNeverOverwrites)
   }
 
   run ambiguousTargetRequiresRereadTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeAmbiguousTargetAfterVerification)
+      .then(observeAmbiguousTargetAfterGitQualification)
       .expect(ambiguousTargetRereadReached and ambiguousTargetNeverPromotes)
   }
 
-  run unverifiedCandidateCannotPromoteTest = {
+  run unqualifiedCandidateCannotPromoteTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactTargetWithUnverifiedCandidate)
-      .expect(unverifiedCandidateRejectionReached and unverifiedCandidateNeverPromotes)
+      .then(observeExactTargetWithUnqualifiedCandidate)
+      .expect(unqualifiedCandidateRejectionReached and unqualifiedCandidateNeverPromotes)
   }
 
   run prePromotionBlockerPreservesCandidateAndReleasesTargetTest = {
@@ -125,7 +125,7 @@ module gitReconciliationTest {
   run postPromotionBlockerPreservesProofAndWaitsTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .then(observePostPromotionDependencyBlocker)
       .expect(postPromotionBlockerPreservesProof and postPromotionBlockerNeverRollsBack and state.decision == GitConstraintWait)
   }
@@ -133,7 +133,7 @@ module gitReconciliationTest {
   run clearedPromotionRequiresFreshAncestryAndNeverReintegratesTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .then(observePostPromotionDependencyBlocker)
       .then(clearPostPromotionDependencyBlocker)
       .then(observeFreshPromotedCandidateAncestry)
@@ -150,7 +150,7 @@ module gitReconciliationTest {
   run completionRacePreservesAcceptedCompletionAndDerivedWarningTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .then(observePostPromotionDependencyBlocker)
       .then(clearPostPromotionDependencyBlocker)
       .then(observeFreshPromotedCandidateAncestry)

@@ -8,7 +8,6 @@ import { Match } from "effect"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { TrackerTask } from "../../authorities/task-tracker/task.js"
 import { isDependencySatisfied, isTaskOpen } from "../../authorities/task-tracker/task.js"
-import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { targetPromotionCorrelationEquals } from "../../workflow/protocols/target-promotion/events.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
@@ -160,23 +159,14 @@ const evidenceTaskId = (evidence: TicketDeliveryEvidence): TaskId =>
   Match.valueTags(evidence, {
     AcceptedAwaitingIntegration: ({ accepted }) => accepted.plannedAttempt.taskId,
     FocusedTaskCompletionSuccess: ({ observed }) => observed.observation.facts.taskId,
-    IntegrationCandidate: ({ responsibility }) => responsibility.plannedAttempt.taskId,
     IntegratorPreparation: ({ responsibility }) => responsibility.plannedAttempt.taskId,
     IntegrationWait: ({ wait }) => integrationWaitTaskId(wait),
     IntegrationFinalitySettlement: ({ settlement }) => settlement.claim.plannedAttempt.taskId,
     QueuedIntegration: ({ responsibility }) => responsibility.plannedAttempt.taskId,
     ResponsibilityFacts: ({ facts }) => responsibilityTaskId(facts),
     StartedIntegration: ({ responsibility }) => responsibility.plannedAttempt.taskId,
-    TargetPromotion: ({ responsibility }) => responsibility.plannedAttempt.taskId,
-    TargetVerification: ({ responsibility }) => responsibility.plannedAttempt.taskId
+    TargetPromotion: ({ responsibility }) => responsibility.plannedAttempt.taskId
   })
-
-const targetVerificationIdentity = (
-  state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetVerification" }>["state"]
-): string => {
-  const requestId = "correlation" in state ? state.correlation.requestId : state.expected.requestId
-  return JSON.stringify(["target-verification", state._tag, requestId])
-}
 
 const targetPromotionIdentity = (
   state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetPromotion" }>["state"]
@@ -187,8 +177,6 @@ const evidenceIdentity = (evidence: TicketDeliveryEvidence): string =>
     AcceptedAwaitingIntegration: ({ accepted }) =>
       JSON.stringify(["integration", exactAttemptIdentity(accepted.plannedAttempt)]),
     FocusedTaskCompletionSuccess: ({ observed }) => JSON.stringify(["focused-task-completion", observed.operationId]),
-    IntegrationCandidate: ({ responsibility }) =>
-      JSON.stringify(["candidate", exactAttemptIdentity(responsibility.plannedAttempt), responsibility.startedAt]),
     IntegratorPreparation: ({ responsibility, state }) =>
       JSON.stringify([
         "integrator",
@@ -204,8 +192,7 @@ const evidenceIdentity = (evidence: TicketDeliveryEvidence): string =>
     ResponsibilityFacts: ({ facts }) => `workflow:${workflowResponsibilityKey(facts.responsibility)}`,
     StartedIntegration: ({ responsibility }) =>
       JSON.stringify(["integration", exactAttemptIdentity(responsibility.plannedAttempt)]),
-    TargetPromotion: ({ state }) => targetPromotionIdentity(state),
-    TargetVerification: ({ state }) => targetVerificationIdentity(state)
+    TargetPromotion: ({ state }) => targetPromotionIdentity(state)
   })
 
 const endedDispositionTags: ReadonlySet<ResponsibilityFreshFacts["disposition"]["_tag"]> = new Set([
@@ -238,39 +225,13 @@ const obligationFrom = (evidence: TicketDeliveryEvidence): ReadonlyArray<ExactWo
   Match.valueTags(evidence, {
     AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegration" as const, accepted }],
     FocusedTaskCompletionSuccess: () => [],
-    IntegrationCandidate: () => [],
     IntegratorPreparation: () => [],
     IntegrationWait: () => [],
     IntegrationFinalitySettlement: () => [],
     QueuedIntegration: ({ responsibility }) => [{ _tag: "QueuedIntegration" as const, responsibility }],
     ResponsibilityFacts: ({ facts }) => responsibilityObligationFrom(facts),
     StartedIntegration: ({ responsibility }) => [{ _tag: "StartedIntegration" as const, responsibility }],
-    TargetPromotion: () => [],
-    TargetVerification: () => []
-  })
-
-const candidateStandingFrom = (state: IntegrationCandidateConstructionState): ReadonlyArray<TicketDeliveryStanding> => {
-  if (state._tag === "CandidateConstructed") return [{ _tag: "CandidateConstructedUnsettled", state }]
-  if (state._tag === "CandidateCorrectionLimitReached" || state._tag === "CandidateContinuationLimitReached") {
-    return [{ _tag: "IntegrationNonConvergencePreserved", state }]
-  }
-  return [{ _tag: "CandidateWorkActive", state }]
-}
-
-const targetVerificationStandingFrom = (
-  state: Extract<TicketDeliveryEvidence, { readonly _tag: "TargetVerification" }>["state"]
-): ReadonlyArray<TicketDeliveryStanding> =>
-  Match.valueTags(state, {
-    VerificationPending: (state): ReadonlyArray<TicketDeliveryStanding> => [
-      { _tag: "TargetVerificationPending", state }
-    ],
-    VerificationPassed: (state): ReadonlyArray<TicketDeliveryStanding> => [{ _tag: "TargetVerificationPassed", state }],
-    VerificationStopped: (state): ReadonlyArray<TicketDeliveryStanding> => [
-      { _tag: "TargetVerificationStopped", state }
-    ],
-    VerificationContradicted: (state): ReadonlyArray<TicketDeliveryStanding> => [
-      { _tag: "TargetVerificationContradicted", state }
-    ]
+    TargetPromotion: () => []
   })
 
 const targetPromotionStandingFrom = (
@@ -300,15 +261,13 @@ const standingFrom = (
   Match.valueTags(evidence, {
     AcceptedAwaitingIntegration: ({ accepted }) => [{ _tag: "AcceptedAwaitingIntegrationQueue" as const, accepted }],
     FocusedTaskCompletionSuccess: () => [],
-    IntegrationCandidate: ({ state }) => candidateStandingFrom(state),
     IntegratorPreparation: ({ state }) => [{ _tag: "IntegratorPreparation" as const, state }],
     IntegrationWait: ({ wait }) => [{ _tag: "IntegrationWait" as const, wait }],
     IntegrationFinalitySettlement: ({ settlement }) => [{ _tag: "IntegrationFinalitySettled" as const, settlement }],
     QueuedIntegration: ({ responsibility }) => [{ _tag: "QueuedIntegration" as const, responsibility }],
     ResponsibilityFacts: ({ facts }) => responsibilityStandingFrom(facts, placement),
     StartedIntegration: ({ responsibility }) => [{ _tag: "StartedIntegration" as const, responsibility }],
-    TargetPromotion: ({ state }) => targetPromotionStandingFrom(state),
-    TargetVerification: ({ state }) => targetVerificationStandingFrom(state)
+    TargetPromotion: ({ state }) => targetPromotionStandingFrom(state)
   })
 
 const placementFor = (tickets: BoundedParallelTickets, taskId: TaskId): TicketDeliveryPlacement => {

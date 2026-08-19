@@ -98,8 +98,8 @@ the isolated session after a read failure.
 ### Acceptance test
 
 `reads real candidate objects and preserves exact ordered parents and typed
-negative observations` uses the public `IntegrationCandidateGit` seam against
-the same temporary repository.
+negative observations` uses the public `IntegratorGit` seam against the same
+temporary repository.
 
 ## Dalph compares and sets the target ref, then reconciles a lost response
 

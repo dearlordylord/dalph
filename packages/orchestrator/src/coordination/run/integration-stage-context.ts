@@ -6,7 +6,7 @@ import {
   IntegrationTargetSelection,
   queueAcceptedResultIntegrationResponsibility
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import { EvidenceStore } from "../../workflow/protocols/target-verification/evidence-store.js"
+import { EvidenceStore } from "../../workflow/protocols/evidence-store.js"
 
 /** Captures optional integration configuration and journal access for process-local fresh stages. */
 export const makeIntegrationStageContext = Effect.fn("Workflow.makeIntegrationStageContext")(function* () {

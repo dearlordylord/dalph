@@ -339,27 +339,6 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
     const emptyCursor = yield* makeStoryCursor([])
     expect(yield* emptyCursor.consumeExecutorReport.pipe(Effect.flip)).toMatchObject({ expected: "EndOfStory" })
 
-    const candidateCursor = yield* makeStoryCursor([
-      {
-        _tag: "IntegrationCandidateAgentReported",
-        attemptId: AttemptId.make("other-attempt"),
-        report: { _tag: "Working" }
-      }
-    ])
-    expect(
-      yield* candidateCursor
-        .consumeIntegrationCandidateAgentReport(AttemptId.make("requested-attempt"))
-        .pipe(Effect.flip)
-    ).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", storyPosition: 0 })
-    expect(
-      yield* candidateCursor
-        .consumeIntegrationCandidateGitValidation(
-          GitRepositoryLocator.make("/repositories/requested.git"),
-          GitCommitSha.make("1".repeat(40))
-        )
-        .pipe(Effect.flip)
-    ).toMatchObject({ _tag: "AuthoredCassetteInteractionMismatch", storyPosition: 0 })
-
     const runId = RunId.make("coverage-executor-projection-run")
     const correlation = { attemptId: AttemptId.make("coverage-executor-projection-attempt"), runId }
     const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
@@ -1264,7 +1243,6 @@ it.effect("finishes an already-held integration boundary after task Pause withou
     expect(pauseAt).toBeGreaterThan(0)
     expect(pauseAt).toBeGreaterThan(intentAt)
     expect(qualifiedAt).toBeGreaterThan(0)
-    expect(tags).not.toContain("IntegrationCandidateConstructed")
     expect(tags.slice(pauseAt + 1)).not.toContain("TaskClaimReleaseIntended")
     if (run.history._tag !== "ValidWorkflowJournalHistory") {
       return yield* Effect.die("held-integration pause cassette must retain valid journal history")
@@ -2022,17 +2000,6 @@ it.effect("continues an accepted result after process death and crosses its inte
       entries: recorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
     })
     expect(yield* foldRecordedCassetteOutcome(withoutIntegrationOrigin)).toContain("RecordedCausalPositionMissing")
-
-    const candidateRun = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)
-    const candidateTags = candidateRun.records.map(({ event }) => event._tag)
-    expect(candidateTags).toContain("IntegratorSessionFixed")
-    expect(candidateTags).toContain("IntegratorRunResultRecorded")
-    expect(candidateTags).not.toContain("IntegrationCandidateAgentReported")
-    expect(candidateTags).not.toContain("TargetVerificationEvidenceSealed")
-    expect(candidateTags).not.toContain("IntegrationCandidateConstructed")
-    const result = candidateRun.records.findLast(({ event }) => event._tag === "IntegratorRunResultRecorded")?.event
-    if (result?._tag !== "IntegratorRunResultRecorded") return yield* Effect.die("outer Integrator result is required")
-    expect(result.result._tag).toBe("NotPrepared")
   })
 )
 
@@ -2077,125 +2044,6 @@ it.effect("projects exact integration order from typed delivery obligations", ()
   })
 )
 
-it.effect("records one outer Integrator result and exact Git qualification", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateVerificationPassed)
-    const outer = run.records.filter(({ event }) => event._tag.startsWith("Integrator"))
-    expect(outer.map(({ event }) => event._tag)).toEqual(
-      expect.arrayContaining([
-        "IntegratorSessionFixed",
-        "IntegratorRunResultRecorded",
-        "IntegratorRunCandidateGitReadIntended",
-        "IntegratorRunCandidateGitObserved"
-      ])
-    )
-    const result = outer.findLast(({ event }) => event._tag === "IntegratorRunResultRecorded")?.event
-    if (result?._tag !== "IntegratorRunResultRecorded") return yield* Effect.die("outer Integrator result is required")
-    expect(result.result._tag).toBe("PreparedCandidate")
-    const observed = outer.findLast(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")?.event
-    if (observed?._tag !== "IntegratorRunCandidateGitObserved") {
-      return yield* Effect.die("outer Integrator Git qualification is required")
-    }
-    expect(observed.observation).toMatchObject({
-      _tag: "Commit",
-      directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-    })
-    expect(outer.some(({ event }) => event._tag.startsWith("TargetVerification"))).toBe(false)
-  })
-)
-
-it.effect("records one Git qualification without a private candidate correction", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(
-      maintainedAuthoredCassetteCatalog.candidateCorrectionAfterUnreadableGit
-    )
-    const tags = run.records.map(({ event }) => event._tag)
-    expect(tags).toContain("IntegratorSessionFixed")
-    expect(tags).toContain("IntegratorRunResultRecorded")
-    expect(tags).toContain("IntegratorRunCandidateGitReadIntended")
-    expect(tags).toContain("IntegratorRunCandidateGitObserved")
-    expect(tags).not.toContain("IntegrationCandidateCorrectionLimitReached")
-    expect(tags).not.toContain("TargetVerificationEvidenceSealed")
-    expect(tags.filter((tag) => tag === "IntegratorRunResultRecorded")).toHaveLength(1)
-    const observed = run.records.findLast(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")?.event
-    if (observed?._tag !== "IntegratorRunCandidateGitObserved") {
-      return yield* Effect.die("outer Integrator Git qualification is required")
-    }
-    expect(observed.observation._tag).toBe("Commit")
-  })
-)
-
-it.effect("runs maintained outer Integrator, Git qualification, and NotPrepared stories", () =>
-  Effect.gen(function* () {
-    const conflict = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)
-    const conflictTags = conflict.records.map(({ event }) => event._tag)
-    expect(conflictTags).toContain("IntegratorRunResultRecorded")
-    expect(conflictTags).not.toContain("IntegratorRunCandidateGitReadIntended")
-    expect(conflictTags).not.toContain("TargetVerificationEvidenceSealed")
-
-    const corrected = yield* runAuthoredScenarioCassette(
-      maintainedAuthoredCassetteCatalog.candidateCorrectionAfterUnreadableGit
-    )
-    const correctedTags = corrected.records.map(({ event }) => event._tag)
-    expect(correctedTags).toContain("IntegratorRunCandidateGitReadIntended")
-    expect(correctedTags).toContain("IntegratorRunCandidateGitObserved")
-    expect(correctedTags).not.toContain("IntegrationCandidateAgentReported")
-    expect(correctedTags).not.toContain("TargetVerificationEvidenceSealed")
-
-    const exhausted = yield* runAuthoredScenarioCassette(
-      maintainedAuthoredCassetteCatalog.candidateCorrectionExhaustion
-    )
-    const exhaustedTags = exhausted.records.map(({ event }) => event._tag)
-    expect(exhaustedTags).toContain("IntegratorRunCandidateGitObserved")
-    expect(exhaustedTags).not.toContain("IntegrationCandidateCorrectionLimitReached")
-    expect(exhaustedTags).not.toContain("IntegrationCandidateAgentReported")
-    const rejected = exhausted.records.findLast(({ event }) => event._tag === "IntegratorRunResultRecorded")?.event
-    if (rejected?._tag !== "IntegratorRunResultRecorded") return yield* Effect.die("Git rejection result is required")
-    expect(rejected.result._tag).toBe("PreparedCandidate")
-    const rejectedGit = exhausted.records.findLast(
-      ({ event }) => event._tag === "IntegratorRunCandidateGitObserved"
-    )?.event
-    if (rejectedGit?._tag !== "IntegratorRunCandidateGitObserved")
-      return yield* Effect.die("Git observation is required")
-    expect(rejectedGit.observation._tag).toBe("Missing")
-
-    const contradiction = yield* runAuthoredScenarioCassette(
-      maintainedAuthoredCassetteCatalog.candidateCorrelationContradiction
-    )
-    const contradictionTags = contradiction.records.map(({ event }) => event._tag)
-    expect(contradictionTags).toContain("IntegratorRunResultRecorded")
-    expect(contradictionTags).not.toContain("IntegratorRunCandidateGitReadIntended")
-  })
-)
-
-it.effect("records one outer Integrator result and exact Git parents for M", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateVerificationPassed)
-    const tags = run.records.map(({ event }) => event._tag)
-    expect(tags).toContain("IntegratorSessionFixed")
-    expect(tags).toContain("IntegratorRunResultRecorded")
-    expect(tags).toContain("IntegratorRunCandidateGitReadIntended")
-    expect(tags).toContain("IntegratorRunCandidateGitObserved")
-    expect(tags.some((tag) => tag.startsWith("TargetVerification"))).toBe(false)
-    const result = run.records.findLast(({ event }) => event._tag === "IntegratorRunResultRecorded")?.event
-    if (result?._tag !== "IntegratorRunResultRecorded") return yield* Effect.die("outer Integrator result is required")
-    expect(result.result._tag).toBe("PreparedCandidate")
-    const observed = run.records.findLast(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")?.event
-    if (observed?._tag !== "IntegratorRunCandidateGitObserved")
-      return yield* Effect.die("Git qualification is required")
-    expect(observed.observation).toMatchObject({
-      _tag: "Commit",
-      directParents: ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
-    })
-    const authoredLyrics = renderAuthoredCassetteLyrics(run.cassette)
-    expect(authoredLyrics).toContain("The outer Integrator receives session")
-    expect(authoredLyrics).toContain("The outer Integrator returns PreparedCandidate")
-    expect(authoredLyrics).toContain(
-      "Git returns Commit for reported candidate refs/heads/dalph/integrator-candidate-A"
-    )
-  })
-)
-
 it.effect("promotes Git-qualified M by exact compare-and-set and records exact ancestry", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
@@ -2236,7 +2084,6 @@ it.effect("promotes Git-qualified M by exact compare-and-set and records exact a
         "IntegratorRunCandidateGitObserved"
       ])
     )
-    expect(outer.some(({ event }) => event._tag.startsWith("TargetVerification"))).toBe(false)
   })
 )
 
@@ -2249,8 +2096,6 @@ it.effect(
       expect(run.records.some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(false)
       expect(run.records.some(({ event }) => event._tag === "IntegratorRunResultRecorded")).toBe(true)
       expect(run.records.some(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")).toBe(true)
-      expect(run.records.some(({ event }) => event._tag.startsWith("TargetVerification"))).toBe(false)
-      expect(run.records.some(({ event }) => event._tag.startsWith("IntegrationCandidate"))).toBe(false)
     })
 )
 
@@ -2295,7 +2140,7 @@ it.effect(
 it.effect("keeps an unfinished Integrator session dormant when a blocker appears after process loss", () =>
   Effect.gen(function* () {
     const [prepared, blocked] = yield* Effect.all([
-      runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateVerificationPassed),
+      runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess),
       runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.prePromotionBlocker)
     ])
     const runStartedAt = prepared.records.findIndex(({ event }) => event._tag === "IntegratorRunStarted")
@@ -2485,7 +2330,6 @@ it.effect("durably waits after an unreadable blocker restart read and resumes on
     })
     expect(run.records.some(({ event }) => event._tag === "IntegratorRunResultRecorded")).toBe(true)
     expect(run.records.some(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")).toBe(true)
-    expect(run.records.some(({ event }) => event._tag.startsWith("TargetVerification"))).toBe(false)
     expect(run.records.some(({ event }) => event._tag.startsWith("TargetPromotion"))).toBe(false)
     expect(run.records.some(({ event }) => event._tag.startsWith("Completion"))).toBe(false)
     const resumed = run.deliveryFrames.find(
@@ -2682,7 +2526,6 @@ it.effect("records completion finality after Git-qualified promotion history", (
     expect(finalized.records.map(({ event }) => event._tag)).toContain("IntegrationFinalitySettled")
     expect(finalized.records.some(({ event }) => event._tag === "IntegratorRunResultRecorded")).toBe(true)
     expect(finalized.records.some(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")).toBe(true)
-    expect(finalized.records.some(({ event }) => event._tag.startsWith("TargetVerification"))).toBe(false)
   })
 )
 
@@ -3218,7 +3061,6 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
     expect(completionAt + clearAndAncestryRecords.length).toBeGreaterThan(ancestryAt)
     expect(resumed.records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
     expect(resumed.records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
-    expect(resumed.records.some(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded")).toBe(false)
     expect(resumed.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(true)
   })
 )
@@ -3435,65 +3277,6 @@ it("rejects protocol cassettes with duplicate, missing, or unsettled participant
   ).toBe(false)
 })
 
-it.effect("leaves a non-prepared Integrator result without Git or promotion", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateVerificationFailure)
-    const result = run.records.findLast(({ event }) => event._tag === "IntegratorRunResultRecorded")?.event
-    if (result?._tag !== "IntegratorRunResultRecorded") return yield* Effect.die("NotPrepared result is required")
-    expect(result.result._tag).toBe("NotPrepared")
-    expect(run.records.some(({ event }) => event._tag === "IntegratorRunCandidateGitReadIntended")).toBe(false)
-    expect(run.records.some(({ event }) => event._tag.startsWith("TargetVerification"))).toBe(false)
-    expect(run.records.some(({ event }) => event._tag.includes("Promot"))).toBe(false)
-  })
-)
-
-it.effect("rejects invalid Git as CandidateRejected without automatic correction", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateCorrectionExhaustion)
-    const result = run.records.findLast(({ event }) => event._tag === "IntegratorRunResultRecorded")?.event
-    const git = run.records.findLast(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")?.event
-    if (result?._tag !== "IntegratorRunResultRecorded" || git?._tag !== "IntegratorRunCandidateGitObserved") {
-      return yield* Effect.die("invalid Git cassette must record result and observation")
-    }
-    expect(result.result._tag).toBe("PreparedCandidate")
-    expect(git.observation._tag).toBe("Missing")
-    expect(run.records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
-    expect(run.records.some(({ event }) => event._tag === "IntegrationCandidateCorrectionLimitReached")).toBe(false)
-    expect(run.records.some(({ event }) => event._tag.startsWith("TargetVerification"))).toBe(false)
-    expect(run.records.some(({ event }) => event._tag.includes("Promot"))).toBe(false)
-  })
-)
-
-it.effect("records every non-submitting outer Integrator report without Git", () =>
-  Effect.gen(function* () {
-    for (const reportTag of ["Conflict", "ExitedWithoutCandidate", "Working"] as const) {
-      const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
-        ...maintainedAuthoredCassetteCatalog.candidateConflictRecovery,
-        name: `outer Integrator reports ${reportTag}`,
-        story: maintainedAuthoredCassetteCatalog.candidateConflictRecovery.story.map((item) =>
-          item._tag === "IntegrationCandidateAgentReported" ? { ...item, report: { _tag: reportTag } } : item
-        )
-      })
-      const run = yield* runAuthoredScenarioCassette(cassette)
-      const result = run.records.findLast(({ event }) => event._tag === "IntegratorRunResultRecorded")?.event
-      if (result?._tag !== "IntegratorRunResultRecorded") return yield* Effect.die(`fixture must record ${reportTag}`)
-      expect(result.result._tag).toBe("NotPrepared")
-      expect(run.records.some(({ event }) => event._tag === "IntegratorRunCandidateGitReadIntended")).toBe(false)
-      expect(run.records.some(({ event }) => event._tag.startsWith("TargetVerification"))).toBe(false)
-    }
-  })
-)
-
-it.effect("does not automatically continue a terminal outer Integrator report", () =>
-  Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.candidateConflictRecovery)
-    const reports = run.records.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")
-    expect(reports).toHaveLength(1)
-    expect(run.records.some(({ event }) => event._tag === "IntegrationCandidateAgentReported")).toBe(false)
-    expect(run.records.some(({ event }) => event._tag === "TargetVerificationEvidenceSealed")).toBe(false)
-  })
-)
-
 it.effect("starts a queued accepted result in the same live coordinator process", () =>
   Effect.gen(function* () {
     const source = acceptedResultRestartsIntoIntegrationAuthoredCassette.story
@@ -3503,18 +3286,10 @@ it.effect("starts a queued accepted result in the same live coordinator process"
     )
     const terminal = source.at(-1)
     if (terminal?._tag !== "ExpectedBehavior") return yield* Effect.die("expected terminal assertion")
-    const withoutCandidateExpectation = {
-      ...terminal,
-      orchestration: terminal.orchestration?.filter(({ _tag }) => _tag !== "IntegrationCandidateConstructed") ?? null
-    }
     const uninterrupted = AuthoredScenarioCassette.make({
       ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
       name: "accepted result starts without coordinator restart",
-      story: [
-        ...source.slice(0, deathAt),
-        ...source.slice(blockedGraphAt - 1, blockedGraphAt + 1),
-        withoutCandidateExpectation
-      ]
+      story: [...source.slice(0, deathAt), ...source.slice(blockedGraphAt - 1, blockedGraphAt + 1), terminal]
     })
 
     const run = yield* runAuthoredScenarioCassette(uninterrupted)
@@ -4050,7 +3825,6 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
           executor: "executor:controlled-fake",
           integrationTarget: { repository: "/dalph/cassettes/changed-membership.git", ref: "refs/heads/master" },
           target,
-          verificationPlanId: null,
           worktreeRoot: "/dalph/cassettes/changed-membership"
         },
         ...read(initialGraph),
@@ -4670,7 +4444,6 @@ it.effect(
             executor: "executor:controlled-fake",
             integrationTarget: { repository: "/dalph/cassettes/localized-constraint.git", ref: "refs/heads/master" },
             target,
-            verificationPlanId: null,
             worktreeRoot: "/dalph/cassettes/localized-constraint"
           },
           { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
@@ -6665,9 +6438,8 @@ it.effect(
           { from: acquiredClaimEntry.claim.token, to: "renamed-claim-token-A" },
           { from: rejectedClaimToken, to: "renamed-rejected-claim-token" }
         ],
-        integrationCandidateIds: [],
-        integrationCandidateResourceLocators: [],
-        integrationSessionIds: [],
+        integratorCandidateResourceLocators: [],
+        integratorSessionIds: [],
         operationIds: [
           ...projectedOperationIds.map((operationId, ordinal) => ({
             from: operationId,
@@ -6711,8 +6483,7 @@ it.effect(
       const allRenamings = [
         ...renaming.attemptIds,
         ...renaming.claimTokens,
-        ...renaming.integrationCandidateIds,
-        ...renaming.integrationSessionIds,
+        ...renaming.integratorSessionIds,
         ...renaming.operationIds,
         ...renaming.runIds,
         ...renaming.taskBranchRefs,
@@ -6729,16 +6500,6 @@ it.effect(
         IntegrationStarted: true,
         PlannedAttemptContinuationAuthorized: true,
         PlannedAttemptReplaced: true,
-        IntegrationCandidateAgentReported: true,
-        IntegrationCandidateConstructed: true,
-        IntegrationCandidateConstructionIntended: true,
-        IntegrationCandidateGitObserved: true,
-        IntegrationCandidateGitValidationFailed: true,
-        IntegrationCandidateCorrectionLimitReached: true,
-        IntegrationCandidateContinuationLimitReached: true,
-        TargetVerificationIntended: true,
-        TargetVerificationEvidenceSealed: true,
-        TargetVerificationCorrelationContradicted: true,
         TargetPromotionIntended: true,
         TargetPromotionAttemptIntended: true,
         TargetPromotionObservedSuccess: true,
@@ -6752,7 +6513,6 @@ it.effect(
         CompletionClaimDeletionReadObserved: true,
         CompletionClaimDeleted: true,
         IntegrationFinalitySettled: true,
-        IntegrationCandidateSessionSuperseded: true,
         IntegratorSessionFixed: true,
         IntegratorSuccessorSessionFixed: true,
         IntegratorResultRecorded: true,
@@ -6903,9 +6663,8 @@ it.effect(
           { from: replacementEntry.successorPlan.plannedAttempt.attemptId, to: "renamed-successor-attempt" }
         ],
         claimTokens: [{ from: replacementEntry.witness.expectedClaim.token, to: "renamed-replacement-claim" }],
-        integrationCandidateIds: [],
-        integrationCandidateResourceLocators: [],
-        integrationSessionIds: [],
+        integratorCandidateResourceLocators: [],
+        integratorSessionIds: [],
         operationIds: replacementOperationIds.map((operationId, ordinal) => ({
           from: operationId,
           to: `renamed-replacement-operation:${ordinal}`
@@ -7121,8 +6880,6 @@ it.effect(
         new Set(
           Object.keys(entryVariants).filter(
             (tag) =>
-              !tag.startsWith("IntegrationCandidate") &&
-              !tag.startsWith("TargetVerification") &&
               !tag.startsWith("TargetPromotion") &&
               !tag.startsWith("CompletionTask") &&
               !tag.startsWith("CompletionClaim") &&
@@ -7199,9 +6956,8 @@ it.effect("renames and renders every contradictory planned-worktree observation 
       yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [],
         claimTokens: [],
-        integrationCandidateIds: [],
-        integrationCandidateResourceLocators: [],
-        integrationSessionIds: [],
+        integratorCandidateResourceLocators: [],
+        integratorSessionIds: [],
         operationIds: [],
         runIds: [],
         taskBranchRefs: [
@@ -7229,9 +6985,8 @@ it.effect("rejects identity renaming that repeats a source or destination", () =
   Effect.gen(function* () {
     const otherwiseEmptyRenaming = {
       claimTokens: [],
-      integrationCandidateIds: [],
-      integrationCandidateResourceLocators: [],
-      integrationSessionIds: [],
+      integratorCandidateResourceLocators: [],
+      integratorSessionIds: [],
       operationIds: [],
       runIds: [],
       taskBranchRefs: [],
@@ -7688,9 +7443,6 @@ it.effect("restart after promotion resumes completion settlement without another
     )
     expect(run.replacementCalls).toBe(0)
     expect(run.journalTags).toContain("CompletionClaimReplaced")
-    const promotionAt = run.journalTags.lastIndexOf("TargetPromotionObservedSuccess")
-    expect(promotionAt).toBeGreaterThan(0)
-    expect(run.journalTags.slice(promotionAt + 1)).not.toContain("IntegrationCandidateAgentReported")
   })
 )
 

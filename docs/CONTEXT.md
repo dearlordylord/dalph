@@ -763,8 +763,8 @@ _Avoid_: Integration queue entry, target lock, accepted executor report
 **Integration start**:
 The durable initiated action that crosses one integration responsibility's
 non-cancellable cutoff. It consumes the derived pre-integration cancellation
-capability, but does not prove candidate construction, verification, promotion,
-or tracker completion.
+capability, but does not prove an Integrator result, Git qualification,
+promotion, or tracker completion.
 _Avoid_: Integration completed, target promoted, task completed
 
 **Integration target resource**:
@@ -945,24 +945,9 @@ _Avoid_: Retry, new integration responsibility, task re-execution, cleanup
 The durable preservation disposition after three exact target-promotion
 attempts remain unresolved and the final Git reconciliation does not establish
 promotion or a different readable head. Dalph keeps M, its candidate resource,
-session, accepted result, and sealed evidence, releases its process-local
+session, accepted result, and Git-qualification evidence, releases its process-local
 target position, and sends no fourth attempt.
 _Avoid_: Failed task, discarded candidate, automatic replacement, unbounded retry
-
-**Pending candidate submission**:
-One explicit candidate commit awaiting a readable Git object-type and parent
-observation. An unreadable Git call preserves this submission for a later
-reread without asking the integration agent to resubmit it.
-_Avoid_: Missing object, invalid candidate, agent failure
-
-**Non-convergent candidate construction**:
-The durable disposition after either the separately selected positive
-correction limit or automatic agent-continuation limit is exhausted in one
-integration session. Dalph preserves the accepted result and isolated Git
-work, leaves the task incomplete, and releases the process-local
-integration-target resource for unrelated work. Production supplies both
-limits explicitly; Dalph does not silently choose them.
-_Avoid_: Failed task, discarded worktree, replacement session
 
 **Planned-task-attempt recording predecessor**:
 An earlier workflow operation named by a planned-task-attempt recording

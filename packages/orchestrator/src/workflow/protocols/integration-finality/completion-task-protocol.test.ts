@@ -21,7 +21,7 @@ import {
   TargetPromotionGitReadFailure,
   targetPromotionCorrelationFor
 } from "../target-promotion/events.js"
-import { memoryEvidenceStoreLayer, EvidenceStore, EvidenceStoreFailure } from "../target-verification/evidence-store.js"
+import { memoryEvidenceStoreLayer, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
 import {
   CompletionTaskAcknowledgement,
   CompletionTaskAuthorizationReadOrdinal,

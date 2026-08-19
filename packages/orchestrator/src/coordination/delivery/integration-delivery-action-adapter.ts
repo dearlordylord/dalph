@@ -5,18 +5,8 @@ import {
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import {
-  IntegrationCandidateAgent,
-  IntegrationCandidateGit
-} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
-import { runIntegrationCandidateConstruction } from "../run/integration-candidate-runtime.js"
-import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
-import { EvidenceStore } from "../../workflow/protocols/target-verification/evidence-store.js"
-import { TargetVerificationBoundary } from "../../workflow/protocols/target-verification/events.js"
-import { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
-import { TargetVerificationRuntime } from "../../workflow/protocols/target-verification/runtime.js"
-import { TargetVerificationRuntimeUnavailable } from "./target-verification-boundary.js"
+import { EvidenceStore } from "../../workflow/protocols/evidence-store.js"
 import { TargetPromotionGit } from "../../workflow/protocols/target-promotion/events.js"
 import { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
 import {
@@ -78,11 +68,6 @@ type IntegrationTransition = Exclude<
       | "SuspendPlannedAttemptExecutorWork"
   }
 >
-type ContinueIntegrationCandidate = Extract<
-  IntegrationTransition,
-  { readonly _tag: "ContinueStartedIntegrationCandidate" }
->
-type RunTargetVerification = Extract<IntegrationTransition, { readonly _tag: "RunTargetVerification" }>
 type RunTargetPromotion = Extract<IntegrationTransition, { readonly _tag: "RunTargetPromotion" }>
 type ReplacePromotedTaskClaim = Extract<IntegrationTransition, { readonly _tag: "ReplacePromotedTaskClaim" }>
 type ObservePromotedCandidateAncestryAfterBlockerClear = Extract<
@@ -99,7 +84,6 @@ type OuterIntegratorTransition = Extract<
   IntegrationTransition,
   {
     readonly _tag:
-      | "ContinueStartedIntegrationCandidate"
       | "FixIntegratorSuccessorSession"
       | "RecordChangedHeadRetryQuarantine"
       | "RecordInitialConclusiveIntegrationQuarantine"
@@ -350,53 +334,6 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   return deliveryActionCompleted(action.proposal.id)
 })
 
-const executeTargetVerification = Effect.fn("DeliveryAction.runTargetVerification")(function* (
-  action: IdentityFreeAction,
-  transition: RunTargetVerification,
-  lease: DeliveryActionExecutionLease
-) {
-  const context = yield* Effect.context<never>()
-  const runtime = Context.getOption(context, TargetVerificationRuntime)
-  if (Option.isNone(runtime)) return yield* new TargetVerificationRuntimeUnavailable()
-  yield* lease.integrationTargets
-    .withPermit(
-      transition.responsibility,
-      runTargetVerification(transition.candidate, transition.plan).pipe(
-        Effect.provideService(TargetVerificationBoundary, runtime.value.boundary),
-        Effect.provideService(EvidenceStore, runtime.value.evidenceStore)
-      )
-    )
-    .pipe(Effect.ensuring(lease.integrationTargets.release(transition.responsibility)))
-  return deliveryActionCompleted(action.proposal.id)
-})
-
-const continueIntegrationCandidate = Effect.fn("DeliveryAction.continueIntegrationCandidate")(function* (
-  action: IdentityFreeAction,
-  transition: ContinueIntegrationCandidate,
-  lease: DeliveryActionExecutionLease
-) {
-  const context = yield* Effect.context<never>()
-  const agent = Context.getOption(context, IntegrationCandidateAgent)
-  if (Option.isNone(agent)) return yield* new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" })
-  const git = Context.getOption(context, IntegrationCandidateGit)
-  if (Option.isNone(git)) return yield* new IntegrationCandidateBoundaryUnavailable({ boundary: "Git" })
-  const state = yield* runIntegrationCandidateConstruction(
-    transition.responsibility,
-    transition.lineage,
-    transition.correctionLimit,
-    transition.continuationLimit,
-    lease.integrationTargets
-  ).pipe(
-    Effect.provideService(IntegrationCandidateAgent, agent.value),
-    Effect.provideService(IntegrationCandidateGit, git.value)
-  )
-  const resourceDisposition =
-    state._tag === "CandidateCorrectionLimitReached" || state._tag === "CandidateContinuationLimitReached"
-      ? ("Release" as const)
-      : ("Retain" as const)
-  return { _tag: "IntegrationCandidateAdvanced" as const, proposalId: action.proposal.id, resourceDisposition, state }
-})
-
 const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterIntegrator")(function* (
   action: IdentityFreeAction,
   transition: OuterIntegratorTransition,
@@ -417,8 +354,7 @@ const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterInteg
   if (transition._tag === "RecordRetryConclusiveIntegrationQuarantine") {
     return yield* recordRetryConclusiveIntegrationQuarantine(action, transition, lease)
   }
-  if (transition._tag === "RunIntegrator") return yield* executeIntegratorAction(action, transition, lease)
-  return yield* continueIntegrationCandidate(action, transition, lease)
+  return yield* executeIntegratorAction(action, transition, lease)
 })
 
 const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvancedIntegration")(function* (
@@ -427,7 +363,6 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
   lease: DeliveryActionExecutionLease,
   target: TrackerTarget
 ) {
-  if (transition._tag === "RunTargetVerification") return yield* executeTargetVerification(action, transition, lease)
   if (transition._tag === "RunTargetPromotion") return yield* executeTargetPromotion(action, transition, lease)
   if (transition._tag === "ObservePromotedCandidateAncestryAfterBlockerClear") {
     return yield* observePromotedCandidateAncestryAfterBlockerClear(action, transition)

@@ -28,16 +28,8 @@ import type {
   WorkflowTaskClaimReleaseOperation
 } from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
-import type {
-  CandidateContinuationLimit,
-  CandidateCorrectionLimit
-} from "../../workflow/protocols/integration-candidate-construction/events.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import type {
-  TargetVerificationCandidate,
-  TargetVerificationPlan
-} from "../../workflow/protocols/target-verification/events.js"
 import type {
   IntegratorRunCorrelation,
   IntegratorRunQualifiedCandidate
@@ -169,14 +161,6 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   }
   StartQueuedIntegration: { readonly responsibility: QueuedIntegrationResponsibility }
   AcquireStartedIntegrationTarget: { readonly responsibility: StartedIntegrationResponsibility }
-  ContinueStartedIntegrationCandidate: {
-    /** Latest durable candidate fact accepted before this exact continuation was proposed. */
-    readonly acceptedCandidateProgressAt: JournalPosition | null
-    readonly correctionLimit: CandidateCorrectionLimit
-    readonly continuationLimit: CandidateContinuationLimit
-    readonly lineage: TargetLineageObservation
-    readonly responsibility: StartedIntegrationResponsibility
-  }
   /** Runs or resumes the one outer Integrator session bound to this exact durable lineage observation. */
   RunIntegrator: {
     readonly lineage: TargetLineageObservation
@@ -208,11 +192,6 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   /** Fixes one deterministic FullRerun successor after the operator direction and fresh Git lineage are durable. */
   FixIntegratorSuccessorSession: {
     readonly input: IntegratorSuccessorPreparationInput
-    readonly responsibility: StartedIntegrationResponsibility
-  }
-  RunTargetVerification: {
-    readonly candidate: TargetVerificationCandidate
-    readonly plan: TargetVerificationPlan
     readonly responsibility: StartedIntegrationResponsibility
   }
   RunTargetPromotion: {
@@ -299,14 +278,12 @@ const transitionTrackerGraphRequirements = {
   ContinueFreshWorkflowOperation: "CurrentTrackerGraphRequired",
   ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
-  ContinueStartedIntegrationCandidate: "CurrentTrackerGraphRequired",
   RecordChangedHeadRetryQuarantine: "CurrentTrackerGraphRequired",
   RecordInitialConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
   RecordProviderRunFailureIntegrationQuarantine: "AcceptedHistorySufficient",
   RecordRetryConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
   FixIntegratorSuccessorSession: "CurrentTrackerGraphRequired",
   RunIntegrator: "CurrentTrackerGraphRequired",
-  RunTargetVerification: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",
   ReplacePromotedTaskClaim: "CurrentTrackerGraphRequired",
   ObservePromotedCandidateAncestryAfterBlockerClear: "CurrentTrackerGraphRequired",
@@ -388,10 +365,6 @@ export type FrontierExplanation = Data.TaggedEnum<{
   IntegrationTargetWait: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly wakeCondition: "IntegrationTargetReleased"
-  }
-  TargetVerificationConfigurationWait: {
-    readonly plannedAttempt: PlannedTaskAttempt
-    readonly wakeCondition: "TargetVerificationPlanConfigured"
   }
   TargetPromotionConfigurationWait: {
     readonly plannedAttempt: PlannedTaskAttempt

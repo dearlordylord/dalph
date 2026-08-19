@@ -435,9 +435,8 @@ it("projects, folds, compares, renders, and alpha-renames a public recorded run"
       const emptyRenaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
         attemptIds: [],
         claimTokens: [],
-        integrationCandidateIds: [],
-        integrationCandidateResourceLocators: [],
-        integrationSessionIds: [],
+        integratorCandidateResourceLocators: [],
+        integratorSessionIds: [],
         operationIds: [],
         runIds: [],
         taskBranchRefs: [],

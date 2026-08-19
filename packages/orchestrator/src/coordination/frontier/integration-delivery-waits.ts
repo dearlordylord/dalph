@@ -16,7 +16,6 @@ export type IntegrationDeliveryWait =
     }
   | { readonly _tag: "IntegrationTrackerFactsWait"; readonly plannedAttempt: PlannedTaskAttempt }
   | { readonly _tag: "IntegrationTargetWait"; readonly plannedAttempt: PlannedTaskAttempt }
-  | { readonly _tag: "TargetVerificationConfigurationWait"; readonly plannedAttempt: PlannedTaskAttempt }
   | { readonly _tag: "TargetPromotionConfigurationWait"; readonly plannedAttempt: PlannedTaskAttempt }
 
 const integrationDeliveryWaitFrom = (explanation: FrontierExplanation): IntegrationDeliveryWait | undefined => {
@@ -34,7 +33,6 @@ const integrationDeliveryWaitFrom = (explanation: FrontierExplanation): Integrat
     explanation._tag === "IntegrationConfigurationWait" ||
     explanation._tag === "IntegrationTrackerFactsWait" ||
     explanation._tag === "IntegrationTargetWait" ||
-    explanation._tag === "TargetVerificationConfigurationWait" ||
     explanation._tag === "TargetPromotionConfigurationWait"
   ) {
     return { _tag: explanation._tag, plannedAttempt: explanation.plannedAttempt }

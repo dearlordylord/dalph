@@ -11,7 +11,7 @@ import {
   EvidenceStore,
   EvidenceStoreFailure,
   type EvidenceStoreService
-} from "../../src/workflow/protocols/target-verification/evidence-store.js"
+} from "../../src/workflow/protocols/evidence-store.js"
 
 const evidenceDigestLength = 64
 const evidenceCommitPaddingLength = 24

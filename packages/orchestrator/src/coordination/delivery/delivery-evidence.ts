@@ -7,14 +7,9 @@ import {
   deriveUnqueuedAcceptedResults
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import {
-  deriveConstructedIntegrationCandidateOccurrence,
-  deriveIntegrationCandidateConstruction
-} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
-import {
   deriveCurrentIntegratorState,
   integratorRunQualifiedCandidateFromState
 } from "../../workflow/protocols/integrator/state.js"
-import { deriveTargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
 import { deriveIntegrationFinalityStateFor } from "../../workflow/protocols/integration-finality/state.js"
 import { completionTaskConfirmationDisposition } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
@@ -28,7 +23,6 @@ type StartedDeliveryResponsibility = Extract<
   ReturnType<typeof deriveIntegrationAdmission>["responsibilities"][number],
   { readonly _tag: "StartedIntegrationResponsibility" }
 >
-type IntegrationConstructionState = ReturnType<typeof deriveIntegrationCandidateConstruction>
 type IntegratorReconstructionState = ReturnType<typeof deriveCurrentIntegratorState>
 
 const focusedTaskCompletionSuccessOf = (
@@ -50,28 +44,6 @@ const focusedTaskCompletionSuccessOf = (
     : []
 }
 
-const targetVerificationEvidenceOf = (
-  records: ReadonlyArray<JournalRecord>,
-  responsibility: StartedDeliveryResponsibility
-): ReadonlyArray<ExactTicketDeliveryEvidence> => {
-  const constructed = Option.getOrThrow(
-    Option.fromUndefinedOr(deriveConstructedIntegrationCandidateOccurrence(records, responsibility))
-  )
-  const verification = deriveTargetVerificationState(records, constructed)
-  if (verification === undefined) return []
-  return [{ _tag: "TargetVerification", responsibility, state: verification }]
-}
-
-const candidateEvidenceOf = (
-  responsibility: StartedDeliveryResponsibility,
-  state: IntegrationConstructionState,
-  integratorState: IntegratorReconstructionState
-): ReadonlyArray<ExactTicketDeliveryEvidence> => {
-  if (state === undefined) return []
-  if (integratorState._tag !== "Absent") return []
-  return [{ _tag: "IntegrationCandidate", responsibility, state }]
-}
-
 const integratorEvidenceOf = (
   responsibility: StartedDeliveryResponsibility,
   integratorState: IntegratorReconstructionState
@@ -91,17 +63,6 @@ const targetPromotionEvidenceOf = (
   return [{ _tag: "TargetPromotion", responsibility, state: promotion }]
 }
 
-const targetVerificationEvidenceFor = (
-  records: ReadonlyArray<JournalRecord>,
-  responsibility: StartedDeliveryResponsibility,
-  state: IntegrationConstructionState,
-  integratorState: IntegratorReconstructionState
-): ReadonlyArray<ExactTicketDeliveryEvidence> => {
-  if (integratorState._tag !== "Absent") return []
-  if (state?._tag !== "CandidateConstructed") return []
-  return targetVerificationEvidenceOf(records, responsibility)
-}
-
 const integrationEvidenceOf = (
   records: ReadonlyArray<JournalRecord>,
   responsibility: ReturnType<typeof deriveIntegrationAdmission>["responsibilities"][number]
@@ -111,14 +72,11 @@ const integrationEvidenceOf = (
       ? ({ _tag: "QueuedIntegration", responsibility } as const)
       : ({ _tag: "StartedIntegration", responsibility } as const)
   if (responsibility._tag !== "StartedIntegrationResponsibility") return [initial]
-  const state = deriveIntegrationCandidateConstruction(records, responsibility)
   const integratorState = deriveCurrentIntegratorState(records, responsibility)
   return [
     initial,
-    ...candidateEvidenceOf(responsibility, state, integratorState),
     ...integratorEvidenceOf(responsibility, integratorState),
-    ...targetPromotionEvidenceOf(records, responsibility, integratorState),
-    ...targetVerificationEvidenceFor(records, responsibility, state, integratorState)
+    ...targetPromotionEvidenceOf(records, responsibility, integratorState)
   ]
 }
 

@@ -22,10 +22,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import {
-  IntegrationCandidateGit,
-  IntegrationCandidateGitReadFailure
-} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
+import { IntegratorGit, IntegratorGitReadFailure } from "../../workflow/protocols/integrator/protocol.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
@@ -48,7 +45,7 @@ import {
 } from "../../workflow/protocols/target-promotion/events.js"
 import { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitCommandLayer } from "./command.js"
 import { GitTargetLineage, GitTargetLineageReadFailure, nodeGitTargetLineageLayer } from "./target-lineage.js"
-import { nodeGitIntegrationCandidateLayer } from "./integration-candidate.js"
+import { nodeGitIntegratorCandidateLayer } from "./integrator-candidate.js"
 import { nodeGitTargetPromotionLayer } from "./target-promotion.js"
 
 type Repository = {
@@ -97,7 +94,7 @@ const nodeLineageLayer = nodeGitTargetLineageLayer.pipe(
   Layer.provide(NodeServices.layer)
 )
 
-const nodeCandidateLayer = nodeGitIntegrationCandidateLayer.pipe(
+const nodeCandidateLayer = nodeGitIntegratorCandidateLayer.pipe(
   Layer.provide(nodeGitCommandLayer),
   Layer.provide(NodeServices.layer)
 )
@@ -395,24 +392,46 @@ it.effect("reads real candidate objects and preserves exact ordered parents and 
         const { accepted, base, candidate, targetHead } = yield* setupMerge({ gitDirectory, run })
         const tree = GitCommitSha.make(yield* run("rev-parse", `${candidate}^{tree}`))
         const missing = GitCommitSha.make("0".repeat(40))
-        const git = yield* IntegrationCandidateGit
+        const target = IntegrationTarget.make({
+          ref: IntegrationTargetRef.make("refs/heads/main"),
+          repository: gitDirectory
+        })
+        const git = yield* IntegratorGit
+        const candidateText = (commit: GitCommitSha) => IntegratorCandidateText.make(commit)
 
-        expect(yield* git.readSubmittedCommit(gitDirectory, candidate)).toEqual({
+        expect(yield* git.readCandidate(target, candidateText(candidate))).toEqual({
           _tag: "Commit",
+          candidateText: candidateText(candidate),
+          commit: candidate,
           directParents: [targetHead, accepted]
         })
-        expect(yield* git.readSubmittedCommit(gitDirectory, accepted)).toEqual({
+        expect(yield* git.readCandidate(target, candidateText(accepted))).toEqual({
           _tag: "Commit",
+          candidateText: candidateText(accepted),
+          commit: accepted,
           directParents: [base]
         })
-        expect(yield* git.readSubmittedCommit(gitDirectory, tree)).toEqual({ _tag: "NonCommit", objectType: "tree" })
-        expect(yield* git.readSubmittedCommit(gitDirectory, missing)).toEqual({ _tag: "Missing" })
+        expect(yield* git.readCandidate(target, candidateText(tree))).toEqual({
+          _tag: "NonCommit",
+          candidateText: candidateText(tree),
+          objectType: "tree"
+        })
+        expect(yield* git.readCandidate(target, candidateText(missing))).toEqual({
+          _tag: "Missing",
+          candidateText: candidateText(missing)
+        })
         expect(yield* run("rev-parse", "refs/heads/main")).toBe(targetHead)
         expect(
           yield* git
-            .readSubmittedCommit(GitRepositoryLocator.make(`${gitDirectory}/missing`), candidate)
+            .readCandidate(
+              IntegrationTarget.make({
+                ref: IntegrationTargetRef.make("refs/heads/main"),
+                repository: GitRepositoryLocator.make(`${gitDirectory}/missing`)
+              }),
+              candidateText(candidate)
+            )
             .pipe(Effect.flip)
-        ).toBeInstanceOf(IntegrationCandidateGitReadFailure)
+        ).toBeInstanceOf(IntegratorGitReadFailure)
       }).pipe(Effect.provide(nodeCandidateLayer))
     )
   )

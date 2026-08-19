@@ -48,8 +48,8 @@ server, private executor storage, owned activity observations, Git, and
 evidence storage. Implemented Dalph coordinator and protocol code executes
 normally. A mismatched or unsupported story item fails at that item and is
 displayed as a failure; the Lab never skips it or manufactures a completed
-result. The historical candidate/verification catalogs remain regression
-evidence only until the outer Integrator replaces them.
+result. Removed candidate/verification catalogs are not loaded as regression
+evidence; maintained cassettes exercise the current outer Integrator boundary.
 
 The browser build imports the production package sources directly. Its Vite
 composition replaces only the unavailable Node platform layers; none of the

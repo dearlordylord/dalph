@@ -53,31 +53,6 @@ const orchestrationProjectionEvidence = (
   report: authoredExecutorReportKind(report)
 })
 
-const targetVerificationEvidenceFor = (
-  event: Extract<JournalRecord["event"], { readonly _tag: "TargetVerificationEvidenceSealed" }>,
-  taskByAttempt: ReadonlyMap<AttemptId, TaskId>
-): ReadonlyArray<OrchestrationEvidence> => {
-  const taskId = Option.getOrThrow(
-    Option.fromUndefinedOr(taskByAttempt.get(event.correlation.candidateCorrelation.attemptId))
-  )
-  return [
-    event.terminal === "Passed"
-      ? {
-          _tag: "TargetVerificationPassed",
-          candidateCommit: event.correlation.candidateCommit,
-          planId: event.correlation.planId,
-          taskId
-        }
-      : {
-          _tag: "TargetVerificationStopped",
-          candidateCommit: event.correlation.candidateCommit,
-          outcome: event.terminal,
-          planId: event.correlation.planId,
-          taskId
-        }
-  ]
-}
-
 const worktreeEvidence = (
   event: Extract<JournalRecord["event"], { readonly _tag: "TaskWorktreeReady" }>,
   worktreeAttemptByOperation: ReadonlyMap<string, { readonly attemptId: AttemptId; readonly taskId: TaskId }>
@@ -252,23 +227,7 @@ const orchestrationEvidenceFor = (
   event: JournalRecord["event"],
   taskByAttempt: ReadonlyMap<AttemptId, TaskId>
 ): ReadonlyArray<OrchestrationEvidence> => {
-  if (event._tag === "IntegrationCandidateConstructed") {
-    const taskId = Option.getOrThrow(Option.fromUndefinedOr(taskByAttempt.get(event.correlation.attemptId)))
-    return [
-      {
-        _tag: "IntegrationCandidateConstructed",
-        acceptedResultCommit: event.correlation.acceptedResultCommit,
-        attemptId: event.correlation.attemptId,
-        candidateCommit: event.candidateCommit,
-        expectedTargetHead: event.correlation.expectedTargetHead,
-        taskId
-      }
-    ]
-  }
   if (isIntegrationLifecycleEvidenceEvent(event)) return [integrationLifecycleEvidenceFor(event)]
-  if (event._tag === "TargetVerificationEvidenceSealed") {
-    return targetVerificationEvidenceFor(event, taskByAttempt)
-  }
   if (isTargetPromotionEvidenceEvent(event)) return targetPromotionEvidenceFor(event, taskByAttempt)
   if (isAuthoredExecutorEvidenceEvent(event)) return executorOrchestrationEvidenceFor(event)
   return []

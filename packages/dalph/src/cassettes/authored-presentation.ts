@@ -55,9 +55,6 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       IntegratorGitObservationReturned: noLandmark,
       IntegratorGitObservationFailed: noLandmark,
       InitialControlPolicy: noLandmark,
-      IntegrationCandidateAgentReported: noLandmark,
-      IntegrationCandidateGitValidationFailed: noLandmark,
-      IntegrationCandidateGitValidationReturned: noLandmark,
       OperatorAppliesControlDirection: (item) => {
         const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
         return `Operator ${item.direction.toLowerCase()}d ${target}`
@@ -96,7 +93,6 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       TargetPromotionCompareAndSetReturned: noLandmark,
       TargetPromotionGitReadFailed: noLandmark,
       TargetPromotionGitReadReturned: noLandmark,
-      TargetVerificationReturned: noLandmark,
       TaskClaimCurrentReadReturned: noLandmark,
       TaskClaimReadFailed: noLandmark,
       TaskClaimReadReturned: noLandmark,
@@ -137,20 +133,6 @@ const targetPromotionEvidenceLyric = Match.type<AuthoredTargetPromotionEvidence>
   })
 )
 
-type AuthoredTargetVerificationEvidence = Extract<
-  AuthoredOrchestrationEvidence,
-  { readonly _tag: "TargetVerificationPassed" | "TargetVerificationStopped" }
->
-
-const isTargetVerificationEvidence = (
-  evidence: AuthoredOrchestrationEvidence
-): evidence is AuthoredTargetVerificationEvidence => evidence._tag.startsWith("TargetVerification")
-
-const targetVerificationEvidenceLyric = (evidence: AuthoredTargetVerificationEvidence): string =>
-  evidence._tag === "TargetVerificationPassed"
-    ? `The story expects public verification plan ${evidence.planId} to pass candidate ${evidence.candidateCommit} for task ${evidence.taskId}.`
-    : `The story expects public verification plan ${evidence.planId} to stop candidate ${evidence.candidateCommit} with ${evidence.outcome} for task ${evidence.taskId}.`
-
 type AuthoredExecutorOrchestrationEvidence = Extract<
   AuthoredOrchestrationEvidence,
   {
@@ -178,16 +160,13 @@ const executorOrchestrationEvidenceLyric = Match.type<AuthoredExecutorOrchestrat
 
 const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): string => {
   if (isTargetPromotionEvidence(evidence)) return targetPromotionEvidenceLyric(evidence)
-  if (isTargetVerificationEvidence(evidence)) return targetVerificationEvidenceLyric(evidence)
   if (isExecutorOrchestrationEvidence(evidence)) return executorOrchestrationEvidenceLyric(evidence)
   return Match.value(evidence).pipe(
     Match.tagsExhaustive({
       AcceptedResultIntegrationResponsibilityBegan: (evidence) =>
         `The story expects Dalph to queue accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`,
       AcceptedResultIntegrationStarted: (evidence) =>
-        `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`,
-      IntegrationCandidateConstructed: (evidence) =>
-        `The story expects candidate ${evidence.candidateCommit} to have target ${evidence.expectedTargetHead} first and accepted result ${evidence.acceptedResultCommit} second.`
+        `The story expects Dalph to start integrating accepted commit ${evidence.commit} from attempt ${evidence.attemptId}.`
     })
   )
 }
@@ -438,20 +417,12 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,
-      IntegrationCandidateAgentReported: (item) =>
-        `The integration agent reports ${item.report._tag} for ${item.attemptId}.`,
-      IntegrationCandidateGitValidationFailed: (item) =>
-        `Git cannot validate candidate ${item.candidateCommit} in ${item.repository}: ${item.detail}`,
-      IntegrationCandidateGitValidationReturned: (item) =>
-        `Git returns ${item.observation._tag} for candidate ${item.candidateCommit} in ${item.repository}.`,
       CompletionTaskFocusedReadReturned: (item) =>
         `The task tracker reports task ${item.taskId} ${item.lifecycle} with ${item.unfinishedPrerequisiteTaskIds.length} unfinished prerequisites in the focused completion read.`,
       CompletionTaskRequestReturned: (item) =>
         `The task tracker returns ${item.outcome} for the exact completion request for task ${item.taskId}.`,
       CompletionTaskRequestLookupReturned: (item) =>
         `The task tracker classifies the exact completion request for task ${item.taskId} as ${item.outcome}.`,
-      TargetVerificationReturned: (item) =>
-        `The target repository's public verification wrapper returns ${item.result._tag}.`,
       TargetPromotionCompareAndSetReturned: (item) =>
         `Git returns ${item.result._tag} for the exact expected-head compare-and-set.`,
       TargetPromotionCompareAndSetResponseLost: (item) =>

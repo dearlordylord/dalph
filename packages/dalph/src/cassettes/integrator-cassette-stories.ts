@@ -287,7 +287,7 @@ export const rejectsAnInvalidReportedGitObject = AuthoredIntegratorCassette.make
   gitResults: [invalidObjectResult()]
 })
 
-/** The maintained focused catalog is separate from the legacy candidate/verification catalog. */
+/** The maintained focused catalog exercises only the current outer Integrator boundary. */
 export const maintainedIntegratorCassetteCatalog = {
   exactCandidate: givesOneExactSessionToTheIntegratorAndQualifiesItsReportedCandidate,
   incompatibleLineage: stopsBeforeTheIntegratorWhenGitCannotProveCompatibleTargetLineage,

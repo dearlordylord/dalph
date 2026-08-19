@@ -159,10 +159,8 @@ export {
   nodeGitTargetLineageLayer,
   TestGitTargetLineage
 } from "./authorities/git/target-lineage.js"
-export { nodeGitIntegrationCandidateLayer } from "./authorities/git/integration-candidate.js"
 export { nodeGitIntegratorCandidateLayer } from "./authorities/git/integrator-candidate.js"
 export { nodeGitTargetPromotionLayer } from "./authorities/git/target-promotion.js"
-export { runIntegrationCandidateConstruction } from "./coordination/run/integration-candidate-runtime.js"
 export * from "./workflow/protocols/integrator/protocol.js"
 export {
   CompetingWorktreeRegistrations,
@@ -317,16 +315,7 @@ export * from "./workflow/protocols/planned-attempt-continuation/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
-export * from "./workflow/protocols/integration-candidate-construction/events.js"
-export * from "./workflow/protocols/integration-candidate-construction/protocol.js"
-export * from "./workflow/protocols/target-verification/evidence-store.js"
-export * from "./workflow/protocols/target-verification/evidence-chain.js"
-export * from "./workflow/protocols/target-verification/events.js"
-export * from "./workflow/protocols/target-verification/manifest.js"
-export * from "./workflow/protocols/target-verification/protocol.js"
-export * from "./workflow/protocols/target-verification/runtime.js"
-export * from "./authorities/verification/repository-resource-lock.js"
-export { TargetVerificationRuntimeUnavailable } from "./coordination/delivery/target-verification-boundary.js"
+export * from "./workflow/protocols/evidence-store.js"
 export * from "./workflow/protocols/target-promotion/events.js"
 export * from "./workflow/protocols/target-promotion/protocol.js"
 export * from "./workflow/protocols/target-promotion/runtime.js"
@@ -478,9 +467,7 @@ export {
   journaledRunBootstrapLayer,
   type JournaledRuntimeLayerInput
 } from "./coordination/run/journaled-run-bootstrap.js"
-export { IntegrationCandidateBoundaryUnavailable } from "./coordination/delivery/integration-candidate-boundary.js"
 export { IntegrationFinalityRuntimeUnavailable } from "./coordination/delivery/integration-finality-boundary.js"
-export { TargetVerificationPlan, TargetVerificationPlanId } from "./workflow/protocols/target-verification/events.js"
 export {
   CompletionClaimBoundary,
   CompletionTaskBoundary,

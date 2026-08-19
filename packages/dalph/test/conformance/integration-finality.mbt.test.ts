@@ -70,7 +70,7 @@ import {
   targetPromotionCorrelationFor,
   type TargetPromotionCorrelation
 } from "../../../orchestrator/src/workflow/protocols/target-promotion/events.js"
-import { EvidenceStore } from "../../../orchestrator/src/workflow/protocols/target-verification/evidence-store.js"
+import { EvidenceStore } from "../../../orchestrator/src/workflow/protocols/evidence-store.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   TaskTrackerFactsObservedEvent

@@ -79,11 +79,6 @@ import {
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { IntegrationStartedEvent } from "../../workflow/protocols/integration-admission/events.js"
-import {
-  IntegrationCandidateAgent,
-  CandidateContinuationLimit,
-  CandidateCorrectionLimit
-} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
@@ -102,7 +97,6 @@ import type {
   TrackerGraphActionProposal
 } from "./delivery-action-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
-import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import {
   Integrator,
   IntegratorCallFailure,
@@ -166,7 +160,7 @@ import {
   EvidenceStore,
   EvidenceStoreFailure,
   type EvidenceStoreService
-} from "../../workflow/protocols/target-verification/evidence-store.js"
+} from "../../workflow/protocols/evidence-store.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 
@@ -667,18 +661,6 @@ describe("delivery proposal route matrix", () => {
         })
       },
       {
-        access: "UseHeld",
-        owner: "DeliverySettlement",
-        position: null,
-        transition: RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-          acceptedCandidateProgressAt: null,
-          continuationLimit: CandidateContinuationLimit.make(2),
-          correctionLimit: CandidateCorrectionLimit.make(2),
-          lineage,
-          responsibility: started
-        })
-      },
-      {
         access: "Release",
         owner: "DeliverySettlement",
         position: null,
@@ -781,7 +763,7 @@ describe("delivery proposal route matrix", () => {
     }
   })
 
-  effectIt.effect("executes the identity-free acquire route and names missing candidate boundaries", () =>
+  effectIt.effect("executes the identity-free acquire route and names missing Integrator boundaries", () =>
     Effect.gen(function* () {
       const candidateJournal = InRunJournal.of({
         append: (_runId, _key, _event) => Effect.die("candidate journal must not append"),
@@ -820,34 +802,6 @@ describe("delivery proposal route matrix", () => {
         plannedBaseSha: plannedAttempt.baseSha,
         targetHeadSha: GitCommitSha.make("4".repeat(40))
       })
-      const continuation = RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-        acceptedCandidateProgressAt: null,
-        continuationLimit: CandidateContinuationLimit.make(2),
-        correctionLimit: CandidateCorrectionLimit.make(2),
-        lineage,
-        responsibility: started
-      })
-      const continuationProposal = proposalsFor(continuation).proposals[0]
-      if (continuationProposal === undefined || !isIdentityFreeProposal(continuationProposal)) {
-        return yield* Effect.die("missing identity-free continuation proposal")
-      }
-      const action = { _tag: "IdentityFreeAction" as const, proposal: continuationProposal }
-      const missingAgent = yield* executeIntegrationAction(action, continuation, inertLease, target).pipe(
-        Effect.provideService(InRunJournal, candidateJournal),
-        Effect.flip
-      )
-      expect(missingAgent).toEqual(new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" }))
-
-      const missingGit = yield* executeIntegrationAction(action, continuation, inertLease, target).pipe(
-        Effect.provideService(
-          IntegrationCandidateAgent,
-          IntegrationCandidateAgent.of({ startOrContinue: () => Effect.die("candidate agent must not run") })
-        ),
-        Effect.provideService(InRunJournal, candidateJournal),
-        Effect.flip
-      )
-      expect(missingGit).toEqual(new IntegrationCandidateBoundaryUnavailable({ boundary: "Git" }))
-
       const preparation = { lineage, lineageObservedAt: JournalPosition.make(19), responsibility: started }
       const runIntegrator = RunnableFrontierTransition.RunIntegrator({
         ...preparation,

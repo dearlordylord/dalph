@@ -54,9 +54,7 @@ target-verification result before promotion.
 ### Scenario-to-test mapping
 
 - `gives one exact session to the Integrator and qualifies its reported candidate`
-- `records one outer Integrator result and exact Git parents for M`
 - `records completion finality after Git-qualified promotion history`
-- `never exposes Integrator-private work as separate Dalph stages`
 - Quint `outerIntegratorReportsOneExplicitCandidateTest`
 - Negative control `unreportedCandidateCannotAuthorizePromotionTest`
 
@@ -170,9 +168,8 @@ events merely to test the removed cassette infrastructure.
 
 - `consumes a staggered graph while reconstructed positions delay restart-added X`
 - `preserves the double-diamond middle positions across coordinator restart`
-- `runs every maintained cassette through production to its declared end`
-- A #225 residual-surface test must prove that maintained authored/recorded
-  catalogs and public workflow exports contain no legacy action or event tag.
+- generated `runs maintained authored cassette <catalog-key> through the composed production coordinator`
+- `keeps maintained authored and recorded catalogs and public exports free of legacy integration tags`
 
 ## Removal boundary
 

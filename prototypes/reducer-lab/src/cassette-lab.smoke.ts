@@ -793,9 +793,9 @@ await scenario("shows represented and off-graph responsibilities without inventi
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
   assert(
     document.querySelector(".delivery-story-scope")?.textContent?.includes(
-      "keeps those frames only as historical regression evidence"
+      "one outer Integrator session"
     ) === true,
-    "The old candidate, verification, and integration frames must not be presented as current conformance evidence"
+    "The Lab must present the maintained graph chronology with its outer Integrator evidence"
   )
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()

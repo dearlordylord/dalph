@@ -3,7 +3,6 @@ import { Schema } from "effect"
 import {
   AcceptedResult,
   AttemptId,
-  GitCommitSha,
   IntegrationTarget,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
@@ -42,16 +41,8 @@ import {
   WorkflowActor,
   WorkflowOperation,
   TaskClaimReacquisitionRequestId,
-  IntegrationCandidateAgentReport,
-  CandidateCorrectionLimit,
-  CandidateContinuationLimit,
-  IntegrationCandidateAgentReportOrdinal,
-  IntegrationCandidateCorrelation,
-  IntegrationCandidateGitObservation,
-  IntegrationCandidateGitValidationAttemptOrdinal,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId,
+  IntegratorSessionId,
+  IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorCorrelation,
   IntegratorGitObservation,
@@ -63,9 +54,6 @@ import {
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantineFailureDetail,
-  EvidenceReference,
-  TargetVerificationCorrelation,
-  TargetVerificationOutcome,
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
   TargetPromotionCorrelation,
@@ -212,69 +200,6 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     initiatedBy: WorkflowActor.cases.Operator,
     occurrenceClassification: Schema.Literal("InitiatedAction"),
     requestId: IntegrationQuarantineDirectionRequestId
-  },
-  IntegrationCandidateConstructionIntended: {
-    correlation: IntegrationCandidateCorrelation,
-    correctionLimit: CandidateCorrectionLimit,
-    continuationLimit: CandidateContinuationLimit,
-    ...initiatedByCoordinator,
-    plannedAttempt: PlannedTaskAttempt
-  },
-  IntegrationCandidateSessionSuperseded: {
-    observedTargetHead: GitCommitSha,
-    priorCandidateCommit: GitCommitSha,
-    priorCorrelation: IntegrationCandidateCorrelation,
-    successorCorrelation: IntegrationCandidateCorrelation,
-    ...nonActionOccurrence
-  },
-  IntegrationCandidateAgentReported: {
-    ...nonActionOccurrence,
-    expectedCorrelation: IntegrationCandidateCorrelation,
-    ordinal: IntegrationCandidateAgentReportOrdinal,
-    report: IntegrationCandidateAgentReport
-  },
-  IntegrationCandidateGitObserved: {
-    candidateCommit: GitCommitSha,
-    correlation: IntegrationCandidateCorrelation,
-    ...nonActionOccurrence,
-    observation: IntegrationCandidateGitObservation
-  },
-  IntegrationCandidateConstructed: {
-    candidateCommit: GitCommitSha,
-    correlation: IntegrationCandidateCorrelation,
-    ...nonActionOccurrence,
-    reviewManifest: EvidenceReference
-  },
-  IntegrationCandidateGitValidationFailed: {
-    attemptOrdinal: IntegrationCandidateGitValidationAttemptOrdinal,
-    candidateCommit: GitCommitSha,
-    correlation: IntegrationCandidateCorrelation,
-    detail: Schema.String,
-    ...nonActionOccurrence
-  },
-  IntegrationCandidateCorrectionLimitReached: {
-    correctionCount: Schema.Int.check(Schema.isGreaterThan(0)),
-    correctionLimit: CandidateCorrectionLimit,
-    correlation: IntegrationCandidateCorrelation,
-    ...nonActionOccurrence
-  },
-  IntegrationCandidateContinuationLimitReached: {
-    continuationCount: Schema.Int.check(Schema.isGreaterThan(0)),
-    continuationLimit: CandidateContinuationLimit,
-    correlation: IntegrationCandidateCorrelation,
-    ...nonActionOccurrence
-  },
-  TargetVerificationIntended: { correlation: TargetVerificationCorrelation, ...initiatedByCoordinator },
-  TargetVerificationEvidenceSealed: {
-    correlation: TargetVerificationCorrelation,
-    manifest: EvidenceReference,
-    ...nonActionOccurrence,
-    terminal: TargetVerificationOutcome
-  },
-  TargetVerificationCorrelationContradicted: {
-    expected: TargetVerificationCorrelation,
-    received: TargetVerificationCorrelation,
-    ...nonActionOccurrence
   },
   TargetPromotionIntended: { correlation: TargetPromotionCorrelation, ...initiatedByCoordinator },
   TargetPromotionAttemptIntended: {
@@ -527,13 +452,10 @@ const consistentIdentityRenaming = Schema.makeFilter(
 /** One explicit, consistent alpha-renaming for generated cassette identities. */
 export const CassetteIdentityRenaming = Schema.Struct({
   attemptIds: Schema.Array(Schema.Struct({ from: AttemptId, to: AttemptId })).check(consistentIdentityRenaming),
-  integrationCandidateIds: Schema.Array(
-    Schema.Struct({ from: IntegrationCandidateId, to: IntegrationCandidateId })
+  integratorCandidateResourceLocators: Schema.Array(
+    Schema.Struct({ from: IntegratorCandidateResourceLocator, to: IntegratorCandidateResourceLocator })
   ).check(consistentIdentityRenaming),
-  integrationCandidateResourceLocators: Schema.Array(
-    Schema.Struct({ from: IntegrationCandidateResourceLocator, to: IntegrationCandidateResourceLocator })
-  ).check(consistentIdentityRenaming),
-  integrationSessionIds: Schema.Array(Schema.Struct({ from: IntegrationSessionId, to: IntegrationSessionId })).check(
+  integratorSessionIds: Schema.Array(Schema.Struct({ from: IntegratorSessionId, to: IntegratorSessionId })).check(
     consistentIdentityRenaming
   ),
   claimTokens: Schema.Array(Schema.Struct({ from: ClaimToken, to: ClaimToken })).check(consistentIdentityRenaming),

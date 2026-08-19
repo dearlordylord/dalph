@@ -158,29 +158,6 @@ describe("maintained outer Integrator cassettes", () => {
     )
   )
 
-  it.effect("never exposes Integrator-private work as separate Dalph stages", () =>
-    Effect.sync(() => {
-      const publicStoryTags = new Set(["Invoke", "Restart", "Assert"])
-      const forbiddenTerms = [
-        "IntegrationCandidate",
-        "TargetVerification",
-        "CandidateAgent",
-        "Correction",
-        "Continuation"
-      ]
-      for (const cassette of catalogEntries.map(([, value]) => value)) {
-        expect(cassette.story.every(({ _tag }) => publicStoryTags.has(_tag))).toBe(true)
-        expect(JSON.stringify(cassette)).not.toMatch(
-          /IntegrationCandidate|TargetVerification|CandidateAgent|Correction|Continuation/
-        )
-      }
-      const recordedTags: ReadonlyArray<string> = catalogEntries.flatMap(([, cassette]) =>
-        cassette.story.flatMap(({ _tag }) => _tag)
-      )
-      expect(forbiddenTerms.some((term) => recordedTags.includes(term))).toBe(false)
-    })
-  )
-
   it.effect("projects legacy Integrator records and omits unrelated journal events", () =>
     Effect.gen(function* () {
       const result = yield* run(givesOneExactSessionToTheIntegratorAndQualifiesItsReportedCandidate)

@@ -68,8 +68,7 @@ export const memoryEvidenceStoreLayer = Layer.effectContext(
         (current): readonly [MemoryPublication, ReadonlyMap<EvidenceDigest, Uint8Array>] => {
           const existing = current.get(digest)
           if (existing === undefined) {
-            const next = new Map(current)
-            next.set(digest, copy)
+            const next = new Map([...current, [digest, copy] as const])
             return [{ _tag: "Stored" }, next]
           }
           if (equalBytes(existing, copy)) return [{ _tag: "Existing" }, current]

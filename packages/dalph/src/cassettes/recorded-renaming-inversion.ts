@@ -1,9 +1,8 @@
 import type { AttemptId, RunId, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import type {
   ClaimToken,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId,
+  IntegratorCandidateResourceLocator,
+  IntegratorSessionId,
   OperationId
 } from "@dalph/orchestrator"
 import {
@@ -19,11 +18,10 @@ export const invertCassetteIdentityRenaming = (renaming: CassetteIdentityRenamin
   CassetteIdentityRenaming.make({
     attemptIds: invertIdentityRenamings<AttemptId>(renaming.attemptIds),
     claimTokens: invertIdentityRenamings<ClaimToken>(renaming.claimTokens),
-    integrationCandidateIds: invertIdentityRenamings<IntegrationCandidateId>(renaming.integrationCandidateIds),
-    integrationCandidateResourceLocators: invertIdentityRenamings<IntegrationCandidateResourceLocator>(
-      renaming.integrationCandidateResourceLocators
+    integratorCandidateResourceLocators: invertIdentityRenamings<IntegratorCandidateResourceLocator>(
+      renaming.integratorCandidateResourceLocators
     ),
-    integrationSessionIds: invertIdentityRenamings<IntegrationSessionId>(renaming.integrationSessionIds),
+    integratorSessionIds: invertIdentityRenamings<IntegratorSessionId>(renaming.integratorSessionIds),
     operationIds: invertIdentityRenamings<OperationId>(renaming.operationIds),
     runIds: invertIdentityRenamings<RunId>(renaming.runIds),
     taskBranchRefs: invertIdentityRenamings<TaskBranchRef>(renaming.taskBranchRefs),

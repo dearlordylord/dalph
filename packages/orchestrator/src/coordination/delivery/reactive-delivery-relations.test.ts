@@ -357,13 +357,9 @@ it.effect("retains the exact task-work position after a safe report when a later
       yield* appendStartOrContinue(journal, 2)
 
       const integrationResources = yield* makeIntegrationTargetResourceController()
-      const recovery = yield* makeRunRecoveryProjection(
-        runId,
-        integrationTarget,
-        undefined,
-        undefined,
-        integrationResources
-      ).pipe(Effect.provideService(InRunJournal, journal))
+      const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget, integrationResources).pipe(
+        Effect.provideService(InRunJournal, journal)
+      )
       const reconstructed = (yield* journal.state.get).reconstructed
       const firstProjection = yield* readDeliveryProjectionFrom(recovery, reconstructed)
       const repeatedProjection = yield* readDeliveryProjectionFrom(recovery, reconstructed)

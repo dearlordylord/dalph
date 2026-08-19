@@ -37,6 +37,10 @@ separately and are not current implementation authority.
 | `issue-103-github-dry-run-cli.md` | 103 |
 | `issue-203-application-exit-model-mapping.md` | 203 |
 | `issue-204-application-exit-runtime-mapping.md` | 204 |
+| `issue-222-introduce-outer-integrator.md` | 222 |
+| `issue-223-migrate-promotion-and-finality.md` | 223 |
+| `issue-68-recover-or-quarantine-integration-session.md` | 68 |
+| `issue-138-reconcile-blockers-around-promotion.md` | 138 |
 | `issue-224-outer-integrator-application-exit.md` | 224 |
 
 **Describes implemented behavior with an intentionally open owning issue** —
@@ -67,10 +71,6 @@ today.
 | `issue-54-resize-task-admission.md` | 54 |
 | `issue-55-localize-task-conflicts.md` | 55 |
 | `issue-56-queue-accepted-integration.md` | 56 |
-| `issue-222-introduce-outer-integrator.md` | 222 |
-| `issue-223-migrate-promotion-and-finality.md` | 223 |
-| `issue-68-recover-or-quarantine-integration-session.md` | 68 |
-| `issue-138-reconcile-blockers-around-promotion.md` | 138 |
 | `issue-225-remove-legacy-split-integration.md` | 225 |
 | `issue-63-observe-pause-progress.md` | 63 |
 | `issue-65-cancel-or-continue-attempt.md` | 65 |
@@ -92,7 +92,7 @@ until replacement operational scenarios exist.
 | `issue-76-production-evidence-store.md` | 76 | Storage retained; #59 chain element obsolete |
 | `issue-78-qualify-repository-verification-locking.md` | 78 | Implemented and closed completed; workflow fully superseded |
 | `issue-141-integration-finality.md` | 141 | Settlement retained; evidence premise requires reconciliation |
-| `issue-167-controlled-provider-capstone.md` | 167 | Describes current obsolete split-stage runtime |
+| `issue-167-controlled-provider-capstone.md` | 167 | Maintained chronology corrected by #225; original issue remains historical |
 | `issue-207-integration-evidence-exit.md` | 207 | Exit rules retained; boundary families require reconciliation |
 
 **Accepted planning-only Wayfinder** — the owning issue resolves behavior,

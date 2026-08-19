@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AcceptedResult,
@@ -20,59 +20,77 @@ import {
 } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import {
-  CandidateContinuationLimit,
-  CandidateCorrectionLimit,
-  continueIntegrationCandidateConstruction,
   decideResultCommitQualification,
   decideGitFactPreservation,
   decideTargetLineage,
   decideTargetPromotion,
-  deriveRunnableFrontier,
-  deriveIntegrationFrontier,
-  FixtureTarget,
-  InitialControlPolicy,
-  InRunJournal,
-  IntegrationCandidateAgent,
-  IntegrationCandidateAgentReport,
-  IntegrationCandidateGit,
-  IntegrationCandidateGitObservation,
-  GitReadIntentRecordedEvent,
-  IntegrationResponsibilityBeganEvent,
-  IntegrationStartedEvent,
+  PromotionTargetObservation,
+  ResultCommitObservation
+} from "../../../orchestrator/src/workflow/protocols/git-reconciliation/decision.js"
+import { responsibilityDispositionForTargetLineage } from "../../../orchestrator/src/workflow/protocols/git-reconciliation/frontier-adapter.js"
+import { deriveRunnableFrontier } from "../../../orchestrator/src/coordination/frontier/frontier.js"
+import { deriveIntegrationFrontier } from "../../../orchestrator/src/coordination/frontier/integration-frontier.js"
+import { ResponsibilityDisposition } from "../../../orchestrator/src/coordination/frontier/fresh-facts.js"
+import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
+import {
+  TrackerGraphReader,
+  TrackerAdapterReadContext,
+  TrackerAdapterReadError,
+  TrackerAdapterReadFailureReason
+} from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
+import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
+import { InRunJournal, JournalStore } from "../../../orchestrator/src/workflow-journal/store.js"
+import { legacyMemoryJournalStoreLayer } from "../../../orchestrator/src/workflow-journal/adapters/memory-store.js"
+import { JournalPosition } from "../../../orchestrator/src/workflow-journal/identity.js"
+import {
   intentRecordKey,
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
-  JournalPosition,
-  JournalStore,
-  legacyMemoryJournalStoreLayer,
+  outcomeRecordKey
+} from "../../../orchestrator/src/workflow-journal/record-key.js"
+import {
   makeIntegrationTargetResourceController,
   acquireStartedIntegrationTarget,
+  releaseStartedIntegrationTarget
+} from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
+import {
   makeTrackerGraphObservationOperation,
-  makeTargetLineageObservationOperation,
-  latestReconstructedTaskGraph,
-  OperationId,
-  PromotionTargetObservation,
-  projectTrackerSnapshot,
-  releaseStartedIntegrationTarget,
-  reconstructRunState,
-  responsibilityDispositionForTargetLineage,
-  ResponsibilityDisposition,
-  ResultCommitObservation,
-  TaskWorkCapacity,
-  TargetLineageObservation,
-  TargetVerificationPlan,
-  TargetVerificationPlanId,
-  TrackerAdapterReadContext,
-  TrackerAdapterReadError,
-  TrackerAdapterReadFailureReason,
-  TrackerGraphReader,
-  WorkflowInterpreter,
-  controlledWorkflowInterpreterLayer,
-  journaledWorkflowInterpreterLayer,
-  TargetLineageObservedEvent,
-  workflowJournalEventVersion,
-  outcomeRecordKey
-} from "@dalph/orchestrator"
+  makeTargetLineageObservationOperation
+} from "../../../orchestrator/src/workflow/registry/operation.js"
+import {
+  GitReadIntentRecordedEvent,
+  TargetLineageObservedEvent
+} from "../../../orchestrator/src/workflow/registry/event.js"
+import { latestReconstructedTaskGraph } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
+import { reconstructRunState } from "../../../orchestrator/src/coordination/reconstruction/reduce.js"
+import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
+import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
+import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
+import { WorkflowInterpreter } from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
+import { controlledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow/interpretation/layers.js"
+import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
+import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../../orchestrator/src/workflow/protocols/integration-admission/events.js"
+import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
+import {
+  Integrator,
+  IntegratorGit,
+  IntegratorPreparationInput,
+  prepareIntegrationCandidate
+} from "../../../orchestrator/src/workflow/protocols/integrator/protocol.js"
+import {
+  IntegratorCandidateText,
+  IntegratorGitObservation,
+  IntegratorResult,
+  integratorRunCorrelationsEqual
+} from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
+import {
+  deriveCurrentIntegratorState,
+  integratorCorrelationsEqual
+} from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
 
 type Constraint =
   | "NoGitConstraint"
@@ -149,32 +167,29 @@ const makeProductionReconciliationTrace = () => {
     queuedAt: JournalPosition.make(2),
     startedAt: JournalPosition.make(3)
   }
-  const candidateCorrectionLimit = CandidateCorrectionLimit.make(2)
-  const candidateContinuationLimit = CandidateContinuationLimit.make(2)
-  const targetVerificationPlan = TargetVerificationPlan.make({
-    planId: TargetVerificationPlanId.make("git-reconciliation-production-plan"),
-    target: integrationTarget
-  })
+  const reportedCandidate = IntegratorCandidateText.make("git-reconciliation-reported-candidate")
   const candidateForHead = (head: GitCommitSha) => (head === base ? candidate : GitCommitSha.make("5".repeat(40)))
-  const candidateAgent = IntegrationCandidateAgent.of({
-    startOrContinue: (request) =>
+  let gitExpectedTargetHead = base
+  const integrator = Integrator.of({
+    prepare: (request) =>
       Effect.succeed(
-        IntegrationCandidateAgentReport.cases.Submitted.make({
-          candidateCommit: candidateForHead(request.correlation.expectedTargetHead),
-          correlation: request.correlation,
-          reviewManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("9".repeat(64)) })
+        IntegratorResult.cases.PreparedCandidate.make({
+          candidateText: reportedCandidate,
+          correlation: request.correlation
         })
       )
   })
-  const candidateGit = IntegrationCandidateGit.of({
-    readSubmittedCommit: (_repository, submitted) =>
+  const integratorGit = IntegratorGit.of({
+    readCandidate: (_target, candidateText) =>
       Effect.succeed(
-        IntegrationCandidateGitObservation.cases.Commit.make({
-          directParents: [submitted === candidate ? base : advanced, acceptedResult.commit]
+        IntegratorGitObservation.cases.Commit.make({
+          candidateText,
+          commit: candidateForHead(gitExpectedTargetHead),
+          directParents: [gitExpectedTargetHead, acceptedResult.commit]
         })
       )
   })
-  let resource = Effect.runSync(makeIntegrationTargetResourceController())
+  const resource = Effect.runSync(makeIntegrationTargetResourceController())
   const physicalResponsibility = { integrationTarget, queuedAt: started.queuedAt }
   const initialGraphProjection = projectTrackerSnapshot({
     revision: "git-reconciliation-production-initial",
@@ -225,7 +240,7 @@ const makeProductionReconciliationTrace = () => {
     return Context.get(context, WorkflowInterpreter)
   }
   let interpreter = makeJournaledInterpreter()
-  let targetLineage: TargetLineageObservation = TargetLineageObservation.make({
+  const targetLineage: TargetLineageObservation = TargetLineageObservation.make({
     plannedBaseIsAncestorOfTargetHead: true,
     plannedBaseSha: base,
     targetHeadSha: base
@@ -237,6 +252,38 @@ const makeProductionReconciliationTrace = () => {
     event: Parameters<InRunJournal["Service"]["append"]>[2]
   ) => Effect.runSync(journal.append(runId, key, event))
   const records = () => Effect.runSync(journal.read(runId))
+  const appendTargetLineage = (
+    lineageTarget: IntegrationTarget,
+    lineageAttempt: PlannedTaskAttempt,
+    lineage: TargetLineageObservation,
+    label: string
+  ) => {
+    const operation = makeTargetLineageObservationOperation({
+      integrationTarget: lineageTarget,
+      operationId: OperationId.make(`git-reconciliation-production-${label}-${++operationOrdinal}`),
+      plannedAttempt: lineageAttempt,
+      predecessorOperationIds: []
+    })
+    append(
+      intentRecordKey(operation.operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation,
+        version: workflowJournalEventVersion
+      })
+    )
+    return append(
+      outcomeRecordKey(operation.operationId),
+      TargetLineageObservedEvent.make({
+        observation: lineage,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: operation.operationId,
+        plannedAttempt: lineageAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+  }
   const reconstruct = () => {
     const result = reconstructRunState(runId, records())
     if (result._tag !== "ValidReconstructedRun")
@@ -256,9 +303,6 @@ const makeProductionReconciliationTrace = () => {
           : Option.match(currentGraph, { onNone: () => new Set(), onSome: (graph) => new Set(graph.taskIds()) }),
         heldResponsibilityPositions: resourceSnapshot.heldResponsibilityPositions,
         integrationTarget: Option.some(integrationTarget),
-        candidateCorrectionLimit: Option.some(candidateCorrectionLimit),
-        candidateContinuationLimit: Option.some(candidateContinuationLimit),
-        targetVerificationPlan: Option.some(targetVerificationPlan),
         targetLineageByAttemptId: new Map([[productionAttempt.attemptId, targetLineage]]),
         targetPromotionConfigured: true,
         taskClaimAuthorityByAttemptId: new Map([[productionAttempt.attemptId, { _tag: "Exact" as const }]])
@@ -353,121 +397,27 @@ const makeProductionReconciliationTrace = () => {
     }
     return frontier()
   }
-  const targetRead = (head: GitCommitSha, compatible: boolean) => {
-    const operation = makeTargetLineageObservationOperation({
-      integrationTarget,
-      operationId: OperationId.make(`git-reconciliation-production-lineage-${++operationOrdinal}`),
-      plannedAttempt: productionAttempt,
-      predecessorOperationIds: []
+  const integratorProtocol = (
+    integratorResponsibility: typeof started,
+    lineage: TargetLineageObservation,
+    observedAt: JournalPosition
+  ) => {
+    gitExpectedTargetHead = lineage.targetHeadSha
+    const input = IntegratorPreparationInput.make({
+      responsibility: integratorResponsibility,
+      targetLineage: lineage,
+      targetLineageObservedAt: observedAt
     })
-    targetLineage = TargetLineageObservation.make({
-      plannedBaseIsAncestorOfTargetHead: compatible,
-      plannedBaseSha: base,
-      targetHeadSha: head
-    })
-    append(
-      intentRecordKey(operation.operationId),
-      GitReadIntentRecordedEvent.make({
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        operation,
-        version: workflowJournalEventVersion
-      })
-    )
-    append(
-      outcomeRecordKey(operation.operationId),
-      TargetLineageObservedEvent.make({
-        observation: targetLineage,
-        occurrenceClassification: "NonActionOccurrence",
-        operationId: operation.operationId,
-        plannedAttempt: productionAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    return frontier()
-  }
-  const candidateProtocol = (lineage: TargetLineageObservation) =>
-    Effect.runSync(
-      continueIntegrationCandidateConstruction(
-        started,
-        lineage,
-        candidateCorrectionLimit,
-        candidateContinuationLimit
-      ).pipe(
-        Effect.provideService(InRunJournal, journal),
-        Effect.provideService(IntegrationCandidateAgent, candidateAgent),
-        Effect.provideService(IntegrationCandidateGit, candidateGit)
+    return Effect.runSync(
+      Effect.exit(
+        prepareIntegrationCandidate(input).pipe(
+          Effect.provideService(InRunJournal, journal),
+          Effect.provideService(Integrator, integrator),
+          Effect.provideService(IntegratorGit, integratorGit)
+        )
       )
     )
-  const recordUnrelatedSession = () => {
-    const unrelatedAttempt = PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("git-reconciliation-production-unrelated-attempt"),
-      baseSha: base,
-      branch: TaskBranchRef.make("refs/heads/dalph/git-reconciliation-production-unrelated"),
-      executor: TaskExecutorLocator.make("executor:git-reconciliation-production-unrelated"),
-      runId,
-      taskId: TaskId.make("git-reconciliation-production-C"),
-      taskRevision: TaskRevision.make("git-reconciliation-production-unrelated-revision"),
-      worktree: WorktreeLocator.make("/worktrees/git-reconciliation-production-unrelated")
-    })
-    const unrelatedTarget = IntegrationTarget.make({
-      repository: GitRepositoryLocator.make("/repositories/git-reconciliation-production-unrelated.git"),
-      ref: IntegrationTargetRef.make("refs/heads/main")
-    })
-    const unrelatedResult = AcceptedResult.make({
-      commit: acceptedResult.commit,
-      evidenceManifest: acceptedResult.evidenceManifest
-    })
-    const began = append(
-      integrationResponsibilityBeganRecordKey(unrelatedAttempt.attemptId),
-      IntegrationResponsibilityBeganEvent.make({
-        acceptedResult: unrelatedResult,
-        integrationTarget: unrelatedTarget,
-        plannedAttempt: unrelatedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    const startedRecord = append(
-      integrationStartedRecordKey(unrelatedAttempt.attemptId),
-      IntegrationStartedEvent.make({
-        acceptedResult: unrelatedResult,
-        integrationTarget: unrelatedTarget,
-        plannedAttempt: unrelatedAttempt,
-        responsibilityBeganAt: began.position,
-        version: workflowJournalEventVersion
-      })
-    )
-    const unrelated = {
-      _tag: "StartedIntegrationResponsibility" as const,
-      acceptedResult: unrelatedResult,
-      integrationTarget: unrelatedTarget,
-      plannedAttempt: unrelatedAttempt,
-      queuedAt: began.position,
-      startedAt: startedRecord.position
-    }
-    Effect.runSync(
-      continueIntegrationCandidateConstruction(
-        unrelated,
-        TargetLineageObservation.make({
-          plannedBaseIsAncestorOfTargetHead: true,
-          plannedBaseSha: base,
-          targetHeadSha: base
-        }),
-        candidateCorrectionLimit,
-        candidateContinuationLimit
-      ).pipe(
-        Effect.provideService(InRunJournal, journal),
-        Effect.provideService(IntegrationCandidateAgent, candidateAgent),
-        Effect.provideService(IntegrationCandidateGit, candidateGit)
-      )
-    )
-    return records().filter(
-      ({ event }) =>
-        event._tag === "IntegrationCandidateConstructionIntended" &&
-        event.plannedAttempt.taskId === unrelatedAttempt.taskId
-    ).length
   }
-
   Effect.runSync(
     journalStore.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }))
   )
@@ -492,41 +442,81 @@ const makeProductionReconciliationTrace = () => {
   )
   Effect.runSync(resource.acquire(physicalResponsibility))
   Effect.runSync(resource.publishAcceptedOwnership(physicalResponsibility))
-  candidateProtocol(targetLineage)
-
-  return {
-    readGraph,
-    readIncompleteTrackerGraph,
-    appendTargetRead: targetRead,
-    candidateProtocol,
-    recordUnrelatedSession,
-    frontier,
-    records,
-    applyResourceTransition,
-    restart: () => {
-      resource = Effect.runSync(makeIntegrationTargetResourceController())
-      interpreter = makeJournaledInterpreter()
-    },
-    started,
-    targetLineage
+  const initialLineageRecord = appendTargetLineage(integrationTarget, productionAttempt, targetLineage, "lineage")
+  const initialIntegratorResult = integratorProtocol(started, targetLineage, initialLineageRecord.position)
+  if (initialIntegratorResult._tag === "Failure") {
+    return Effect.runSync(Effect.die("production MBT initial Integrator call failed"))
   }
+
+  const qualifiedCandidate = () => {
+    const currentRecords = records()
+    const state = deriveCurrentIntegratorState(currentRecords, started)
+    if (state._tag !== "GitQualifiedPrepared") {
+      return Effect.runSync(Effect.die(`production MBT expected GitQualifiedPrepared, received ${state._tag}`))
+    }
+    const expectedHead = state.run.session.expectedTargetHead
+    const resultRecord = currentRecords.findLast(
+      (record) =>
+        record.event._tag === "IntegratorRunResultRecorded" &&
+        record.event.run.session.sessionId === state.run.session.sessionId &&
+        record.event.run.ordinal === state.run.ordinal
+    )
+    if (
+      resultRecord === undefined ||
+      resultRecord.event._tag !== "IntegratorRunResultRecorded" ||
+      resultRecord.event.result._tag !== "PreparedCandidate" ||
+      resultRecord.event.result.candidateText !== state.candidateText ||
+      !integratorCorrelationsEqual(resultRecord.event.result.correlation, state.run.session) ||
+      resultRecord.position >= state.qualifiedAt
+    ) {
+      return Effect.runSync(Effect.die("production MBT qualified candidate lacks its exact Integrator result"))
+    }
+    const readIntent = currentRecords.findLast(
+      (record) =>
+        record.event._tag === "IntegratorRunCandidateGitReadIntended" &&
+        integratorRunCorrelationsEqual(record.event.run, state.run) &&
+        record.event.candidateText === state.candidateText
+    )
+    const observationRecord = currentRecords.find((record) => record.position === state.qualifiedAt)
+    if (
+      readIntent === undefined ||
+      observationRecord === undefined ||
+      observationRecord.event._tag !== "IntegratorRunCandidateGitObserved" ||
+      readIntent.position >= observationRecord.position ||
+      !integratorRunCorrelationsEqual(observationRecord.event.run, state.run) ||
+      observationRecord.event.candidateText !== state.candidateText ||
+      observationRecord.event.observation._tag !== "Commit"
+    ) {
+      return Effect.runSync(Effect.die("production MBT qualified candidate lacks exact Git observation chronology"))
+    }
+    const observation = observationRecord.event.observation
+    if (
+      expectedHead !== base ||
+      state.candidateCommit !== candidate ||
+      observation.commit !== candidate ||
+      observation.directParents.length !== 2 ||
+      observation.directParents[0] !== expectedHead ||
+      observation.directParents[1] !== acceptedResult.commit
+    ) {
+      return Effect.runSync(Effect.die("production MBT Git qualification did not prove the exact candidate parents"))
+    }
+    return { candidateCommit: state.candidateCommit, expectedHead }
+  }
+
+  return { readGraph, readIncompleteTrackerGraph, qualifiedCandidate, frontier, applyResourceTransition, started }
 }
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
-    candidateVerified: Schema.Boolean,
+    candidateGitQualified: Schema.Boolean,
     candidatePreserved: Schema.Boolean,
     claimPreserved: Schema.Boolean,
     compareAndSetAuthorized: Schema.Boolean,
-    completionAccepted: Schema.Boolean,
-    completionAuthorized: Schema.Boolean,
-    completionWarning: Schema.Boolean,
     compatibleAdvanceObserved: Schema.Boolean,
     constraint: Schema.Unknown,
     decision: Schema.Unknown,
     evidencePreserved: Schema.Boolean,
     exactExpectedHeadObserved: Schema.Boolean,
-    focusedCompletionConfirmed: Schema.Boolean,
     independentTaskEligible: Schema.Boolean,
     independentTaskSelected: Schema.Boolean,
     overwriteAuthorized: Schema.Boolean,
@@ -534,16 +524,9 @@ const SpecProjection = Schema.Struct({
     repairAuthorized: Schema.Boolean,
     resultRejected: Schema.Boolean,
     resultRejection: Schema.Unknown,
-    priorSupersessionCount: ITFBigInt,
-    promotedCandidateAncestryProven: Schema.Boolean,
     promotionProof: Schema.Boolean,
-    reintegrationAuthorized: Schema.Boolean,
-    sessionSuperseded: Schema.Boolean,
     status: Schema.Unknown,
-    successorOrdinal: ITFBigInt,
-    successorStarted: Schema.Boolean,
     trackerBlocker: Schema.Unknown,
-    unrelatedSupersessionCount: ITFBigInt,
     worktreePreserved: Schema.Boolean
   })
 })
@@ -576,36 +559,29 @@ const gitDecisionFromFrontier = (constraint: Constraint, status: Status): string
   return Effect.runSync(Effect.die("production frontier returned no Git reconciliation decision"))
 }
 
+// The default Quint `step` used by this executable replay intentionally stops
+// at the current Integrator/Git/frontier boundary. Pure Quint still checks the
+// target-promotion/finality and blocker-session projections through
+// `gitReconciliationStep`, but this adapter does not manufacture those missing
+// outer-Integrator or target-promotion Journal events.
 const gitReconciliationDriver = defineDriver(
   {
     init: {},
-    acceptCompletionAcrossPrerequisiteRace: {},
-    observeAmbiguousTargetAfterVerification: {},
+    observeAmbiguousTargetAfterGitQualification: {},
     observeCompatibleTargetAdvance: {},
     observeEligibleResultCommit: {},
-    observeExactExpectedTargetWithVerifiedCandidate: {},
-    observeExactTargetWithUnverifiedCandidate: {},
-    observeFreshPromotedCandidateAncestry: {},
-    observeFreshTargetAfterPrePromotionBlocker: {},
+    observeExactExpectedTargetWithGitQualifiedCandidate: {},
+    observeExactTargetWithUnqualifiedCandidate: {},
     observeIncompleteTrackerFacts: {},
     observeIncompatibleTargetRewrite: {},
     observeLostWorktree: {},
     observeMissingResultCommit: {},
-    observePostPromotionDependencyBlocker: {},
     observePrePromotionDependencyBlocker: {},
-    reopenPrePromotionBlockerAfterRestart: {},
     observeNonDescendantResultCommit: {},
     observeRegistrationConflict: {},
-    observeStaleTargetAfterVerification: {},
-    clearDerivedCompletionWarning: {},
-    clearPostPromotionDependencyBlocker: {},
-    clearPrePromotionDependencyBlocker: {},
-    completeAfterPromotedCandidateAncestry: {},
-    recordIntegrationSessionSupersession: {},
-    recordUnrelatedSessionSupersession: {},
+    observeStaleTargetAfterGitQualification: {},
     reportSafelySuspended: {},
-    selectIndependentTask: {},
-    startOneSuccessorCandidate: {}
+    selectIndependentTask: {}
   },
   () => {
     const production = makeProductionReconciliationTrace()
@@ -618,20 +594,9 @@ const gitReconciliationDriver = defineDriver(
     let candidatePreserved = true
     let promotionProof = false
     let trackerBlocker: TrackerBlocker = "NoTrackerBlocker"
-    let priorSupersessionCount = 0
-    let unrelatedSupersessionCount = 0
-    let successorOrdinal = 0
-    let sessionSuperseded = false
-    let successorStarted = false
-    let promotedCandidateAncestryProven = false
-    let completionAuthorized = false
-    let completionAccepted = false
-    let focusedCompletionConfirmed = false
-    let completionWarning = false
-    let reintegrationAuthorized = false
     let independentTaskSelected = false
     let exactExpectedHeadObserved = false
-    let candidateVerified = false
+    let candidateGitQualified = false
     let compareAndSetAuthorized = false
     let overwriteAuthorized = false
     let claimPreserved = true
@@ -676,21 +641,30 @@ const gitReconciliationDriver = defineDriver(
               : "NonDescendantResultCommit"
             : "NoResultRejection"
       })
-    const decidePromotion = (target: PromotionTargetObservation, candidateVerifiedAgainstExpectedHead: boolean) =>
+    const decidePromotion = (
+      target: PromotionTargetObservation,
+      candidateGitQualifiedAgainstExpectedHead: boolean,
+      candidateSha: GitCommitSha = candidate,
+      expectedHeadSha: GitCommitSha = advanced
+    ) =>
       Effect.sync(() => {
         const result = decideTargetPromotion({
-          candidateSha: candidate,
-          candidateVerifiedAgainstExpectedHead,
-          expectedHeadSha: advanced,
+          candidateSha,
+          candidateVerifiedAgainstExpectedHead: candidateGitQualifiedAgainstExpectedHead,
+          expectedHeadSha,
           target
         })
-        decision = result._tag
-        exactExpectedHeadObserved = target._tag === "ExactTargetHead" && target.currentHeadSha === advanced
-        candidateVerified = candidateVerifiedAgainstExpectedHead
+        decision = result._tag === "RejectUnverifiedCandidate" ? "RejectUnqualifiedCandidate" : result._tag
+        exactExpectedHeadObserved = target._tag === "ExactTargetHead" && target.currentHeadSha === expectedHeadSha
+        candidateGitQualified = candidateGitQualifiedAgainstExpectedHead
         compareAndSetAuthorized = result.compareAndSetAuthorized
         overwriteAuthorized = result.overwriteAuthorized
-        promotionProof = result._tag === "PromoteByExactCompareAndSet" && candidateVerifiedAgainstExpectedHead
+        promotionProof = result._tag === "PromoteByExactCompareAndSet" && candidateGitQualifiedAgainstExpectedHead
       })
+    const decideQualifiedPromotion = (target: PromotionTargetObservation) => {
+      const qualified = production.qualifiedCandidate()
+      return decidePromotion(target, true, qualified.candidateCommit, qualified.expectedHead)
+    }
 
     return {
       init: () =>
@@ -704,27 +678,16 @@ const gitReconciliationDriver = defineDriver(
           candidatePreserved = true
           promotionProof = false
           trackerBlocker = "NoTrackerBlocker"
-          priorSupersessionCount = 0
-          unrelatedSupersessionCount = 0
-          successorOrdinal = 0
-          sessionSuperseded = false
-          successorStarted = false
-          promotedCandidateAncestryProven = false
-          completionAuthorized = false
-          completionAccepted = false
-          focusedCompletionConfirmed = false
-          completionWarning = false
-          reintegrationAuthorized = false
           positionHeld = true
           independentTaskSelected = false
           exactExpectedHeadObserved = false
-          candidateVerified = false
+          candidateGitQualified = false
           compareAndSetAuthorized = false
           overwriteAuthorized = false
           applyPreservation(decideGitFactPreservation("NoGitConstraint"))
         }),
-      observeAmbiguousTargetAfterVerification: () =>
-        decidePromotion(PromotionTargetObservation.cases.AmbiguousTargetHead.make({}), true),
+      observeAmbiguousTargetAfterGitQualification: () =>
+        decideQualifiedPromotion(PromotionTargetObservation.cases.AmbiguousTargetHead.make({})),
       observePrePromotionDependencyBlocker: () =>
         Effect.sync(() => {
           const result = production.readGraph("before-promotion-blocker", false, false)
@@ -738,130 +701,12 @@ const gitReconciliationDriver = defineDriver(
             ? "BeforePromotionBlocker"
             : "NoTrackerBlocker"
         }),
-      reopenPrePromotionBlockerAfterRestart: () =>
-        Effect.sync(() => {
-          production.restart()
-          const current = production.frontier()
-          positionHeld = current.held
-          decision = "GitConstraintWait"
-        }),
-      clearPrePromotionDependencyBlocker: () =>
-        Effect.sync(() => {
-          production.readGraph("clear-pre-promotion-edge", true, false)
-          production.applyResourceTransition()
-          const current = production.frontier()
-          positionHeld = current.held
-          exactExpectedHeadObserved = false
-          compareAndSetAuthorized = false
-          overwriteAuthorized = false
-          decision = "RereadTargetBeforePromotion"
-          trackerBlocker = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
-            ? "BeforePromotionBlocker"
-            : "NoTrackerBlocker"
-        }),
-      observeFreshTargetAfterPrePromotionBlocker: () =>
-        Effect.sync(() => {
-          const current = production.appendTargetRead(advanced, true)
-          compatibleAdvanceObserved = current.records.some(
-            ({ event }) => event._tag === "TargetLineageObserved" && event.observation.targetHeadSha === advanced
-          )
-          decision = "ContinueAttempt"
-        }),
-      recordIntegrationSessionSupersession: () =>
-        Effect.sync(() => {
-          production.candidateProtocol(
-            TargetLineageObservation.make({
-              plannedBaseIsAncestorOfTargetHead: true,
-              plannedBaseSha: base,
-              targetHeadSha: advanced
-            })
-          )
-          priorSupersessionCount = production
-            .records()
-            .filter(({ event }) => event._tag === "IntegrationCandidateSessionSuperseded").length
-          sessionSuperseded = priorSupersessionCount === 1
-          decision = "ContinueAttempt"
-        }),
-      recordUnrelatedSessionSupersession: () =>
-        Effect.sync(() => {
-          unrelatedSupersessionCount = production.recordUnrelatedSession()
-        }),
-      startOneSuccessorCandidate: () =>
-        Effect.sync(() => {
-          production.candidateProtocol(
-            TargetLineageObservation.make({
-              plannedBaseIsAncestorOfTargetHead: true,
-              plannedBaseSha: base,
-              targetHeadSha: advanced
-            })
-          )
-          const successorIntents = production
-            .records()
-            .filter(
-              ({ event }) =>
-                event._tag === "IntegrationCandidateConstructionIntended" &&
-                event.plannedAttempt.attemptId === production.started.plannedAttempt.attemptId
-            ).length
-          successorOrdinal = Math.max(0, successorIntents - 1)
-          successorStarted = successorIntents === 2
-          decision = "ContinueAttempt"
-        }),
-      observePostPromotionDependencyBlocker: () =>
-        Effect.sync(() => {
-          const current = production.readGraph("after-promotion-blocker", false, false)
-          production.applyResourceTransition()
-          positionHeld = production.frontier().held
-          exactExpectedHeadObserved = false
-          compareAndSetAuthorized = false
-          overwriteAuthorized = false
-          decision = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
-            ? "GitConstraintWait"
-            : "ContinueAttempt"
-          trackerBlocker = "AfterPromotionBlocker"
-        }),
-      clearPostPromotionDependencyBlocker: () =>
-        Effect.sync(() => {
-          production.readGraph("clear-post-promotion-blocker", false, true)
-          production.applyResourceTransition()
-          positionHeld = production.frontier().held
-          exactExpectedHeadObserved = false
-          compareAndSetAuthorized = false
-          overwriteAuthorized = false
-          decision = "RereadTargetBeforePromotion"
-          trackerBlocker = "NoTrackerBlocker"
-        }),
-      observeFreshPromotedCandidateAncestry: () =>
-        Effect.sync(() => {
-          const current = production.appendTargetRead(candidate, true)
-          promotedCandidateAncestryProven = current.records.some(
-            ({ event }) => event._tag === "TargetLineageObserved" && event.observation.targetHeadSha === candidate
-          )
-          decision = "ContinueAttempt"
-        }),
-      completeAfterPromotedCandidateAncestry: () =>
-        Effect.sync(() => {
-          const current = production.frontier()
-          completionAuthorized = current.frontier.explanations.every(({ _tag }) => _tag !== "IntegrationDependencyWait")
-          decision = "ContinueAttempt"
-        }),
       observeIncompleteTrackerFacts: () =>
         Effect.sync(() => {
           production.readIncompleteTrackerGraph()
           positionHeld = production.frontier().held
           decision = "GitConstraintWait"
           trackerBlocker = "IncompleteTrackerFacts"
-        }),
-      acceptCompletionAcrossPrerequisiteRace: () =>
-        Effect.sync(() => {
-          const current = production.readGraph("completion-race-reopened", false, false)
-          completionAccepted = current.records.some(({ event }) => event._tag === "TaskTrackerFactsObserved")
-          focusedCompletionConfirmed = completionAccepted
-          completionWarning = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
-        }),
-      clearDerivedCompletionWarning: () =>
-        Effect.sync(() => {
-          const current = production.readGraph("completion-race-cleared", false, true)
-          completionWarning = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
         }),
       observeCompatibleTargetAdvance: () =>
         Effect.sync(() => {
@@ -886,9 +731,17 @@ const gitReconciliationDriver = defineDriver(
             resultCommitSha: candidate
           })
         ),
-      observeExactExpectedTargetWithVerifiedCandidate: () =>
-        decidePromotion(PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: advanced }), true),
-      observeExactTargetWithUnverifiedCandidate: () =>
+      observeExactExpectedTargetWithGitQualifiedCandidate: () =>
+        (() => {
+          const qualified = production.qualifiedCandidate()
+          return decidePromotion(
+            PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: qualified.expectedHead }),
+            true,
+            qualified.candidateCommit,
+            qualified.expectedHead
+          )
+        })(),
+      observeExactTargetWithUnqualifiedCandidate: () =>
         decidePromotion(PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: advanced }), false),
       observeIncompatibleTargetRewrite: () =>
         Effect.sync(() => {
@@ -925,8 +778,8 @@ const gitReconciliationDriver = defineDriver(
           })
         ),
       observeRegistrationConflict: () => constrain("RegistrationConflictConstraint"),
-      observeStaleTargetAfterVerification: () =>
-        decidePromotion(PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: rewritten }), true),
+      observeStaleTargetAfterGitQualification: () =>
+        decideQualifiedPromotion(PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: rewritten })),
       reportSafelySuspended: () =>
         Effect.sync(() => {
           status = "SafelySuspended"
@@ -956,19 +809,15 @@ const gitReconciliationDriver = defineDriver(
         }),
       getState: () =>
         Effect.sync(() => ({
-          candidateVerified,
+          candidateGitQualified,
           candidatePreserved,
           claimPreserved,
           compareAndSetAuthorized,
           compatibleAdvanceObserved,
-          completionAccepted,
-          completionAuthorized,
-          completionWarning,
           constraint,
           decision,
           evidencePreserved,
           exactExpectedHeadObserved,
-          focusedCompletionConfirmed,
           independentTaskEligible: true,
           independentTaskSelected,
           overwriteAuthorized,
@@ -976,16 +825,9 @@ const gitReconciliationDriver = defineDriver(
           repairAuthorized,
           resultRejected,
           resultRejection,
-          priorSupersessionCount,
-          promotedCandidateAncestryProven,
           promotionProof,
-          reintegrationAuthorized,
-          sessionSuperseded,
           status,
-          successorOrdinal,
-          successorStarted,
           trackerBlocker,
-          unrelatedSupersessionCount,
           worktreePreserved
         }))
     }
@@ -1012,29 +854,22 @@ quintIt(
             ...state,
             constraint: variantTag(state.constraint),
             decision: variantTag(state.decision),
-            priorSupersessionCount: Number(state.priorSupersessionCount),
             resultRejection: variantTag(state.resultRejection),
             status: variantTag(state.status),
-            successorOrdinal: Number(state.successorOrdinal),
-            trackerBlocker: variantTag(state.trackerBlocker),
-            unrelatedSupersessionCount: Number(state.unrelatedSupersessionCount)
+            trackerBlocker: variantTag(state.trackerBlocker)
           })),
           Effect.orDie
         ),
       (spec, implementation) =>
-        spec.candidateVerified === implementation.candidateVerified &&
+        spec.candidateGitQualified === implementation.candidateGitQualified &&
         spec.candidatePreserved === implementation.candidatePreserved &&
         spec.claimPreserved === implementation.claimPreserved &&
         spec.compareAndSetAuthorized === implementation.compareAndSetAuthorized &&
         spec.compatibleAdvanceObserved === implementation.compatibleAdvanceObserved &&
-        spec.completionAccepted === implementation.completionAccepted &&
-        spec.completionAuthorized === implementation.completionAuthorized &&
-        spec.completionWarning === implementation.completionWarning &&
         spec.constraint === implementation.constraint &&
         spec.decision === implementation.decision &&
         spec.evidencePreserved === implementation.evidencePreserved &&
         spec.exactExpectedHeadObserved === implementation.exactExpectedHeadObserved &&
-        spec.focusedCompletionConfirmed === implementation.focusedCompletionConfirmed &&
         spec.independentTaskEligible === implementation.independentTaskEligible &&
         spec.independentTaskSelected === implementation.independentTaskSelected &&
         spec.overwriteAuthorized === implementation.overwriteAuthorized &&
@@ -1042,16 +877,9 @@ quintIt(
         spec.repairAuthorized === implementation.repairAuthorized &&
         spec.resultRejected === implementation.resultRejected &&
         spec.resultRejection === implementation.resultRejection &&
-        Number(spec.priorSupersessionCount) === implementation.priorSupersessionCount &&
-        spec.promotedCandidateAncestryProven === implementation.promotedCandidateAncestryProven &&
         spec.promotionProof === implementation.promotionProof &&
-        spec.reintegrationAuthorized === implementation.reintegrationAuthorized &&
-        spec.sessionSuperseded === implementation.sessionSuperseded &&
         spec.status === implementation.status &&
-        Number(spec.successorOrdinal) === implementation.successorOrdinal &&
-        spec.successorStarted === implementation.successorStarted &&
         spec.trackerBlocker === implementation.trackerBlocker &&
-        Number(spec.unrelatedSupersessionCount) === implementation.unrelatedSupersessionCount &&
         spec.worktreePreserved === implementation.worktreePreserved
     )
   },

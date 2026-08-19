@@ -54,17 +54,6 @@ import {
   StartedIntegrationResponsibility,
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import {
-  IntegrationCandidateCorrelation,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId
-} from "../../workflow/protocols/integration-candidate-construction/events.js"
-import {
-  CandidateContinuationLimit,
-  CandidateCorrectionLimit,
-  IntegrationCandidateConstructionState
-} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import { IntegratorRunState } from "../../workflow/protocols/integrator/events.js"
 import { TargetPromotionPendingRetry, TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
 import {
@@ -72,12 +61,6 @@ import {
   TargetPromotionStaleObservation,
   TargetPromotionAttemptOrdinal
 } from "../../workflow/protocols/target-promotion/events.js"
-import {
-  TargetVerificationCandidate,
-  TargetVerificationPlanId,
-  targetVerificationCorrelationFor
-} from "../../workflow/protocols/target-verification/events.js"
-import { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   CompletionTaskAuthorizationReadOrdinal,
@@ -546,68 +529,9 @@ describe("#181 ticket-delivery positive and negative space", () => {
       startedAt: JournalPosition.make(3)
     })
     const expectedTargetHead = fixture.promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead
-    const candidateCorrelation = IntegrationCandidateCorrelation.make({
-      acceptanceManifest: queued.acceptedResult.evidenceManifest,
-      acceptedResultCommit: queued.acceptedResult.commit,
-      attemptId: queued.plannedAttempt.attemptId,
-      candidateId: IntegrationCandidateId.make("projection-legacy-candidate"),
-      candidateResource: IntegrationCandidateResourceLocator.make("resource:projection-legacy-candidate"),
-      expectedTargetHead,
-      integrationSessionId: IntegrationSessionId.make("session:projection-legacy-candidate"),
-      integrationTarget: queued.integrationTarget,
-      runId: queued.plannedAttempt.runId
-    })
     const integratorState = IntegratorRunState.cases.RunUnfinished.make({
       run: fixture.promotionCorrelation.qualifiedCandidate.run
     })
-    const candidateStates = [
-      IntegrationCandidateConstructionState.cases.CandidateConstructed.make({
-        acceptedResult: queued.acceptedResult,
-        candidateCommit: candidateCorrelation.acceptedResultCommit,
-        correlation: candidateCorrelation,
-        expectedTargetHead: candidateCorrelation.expectedTargetHead,
-        reviewManifest: queued.acceptedResult.evidenceManifest
-      }),
-      IntegrationCandidateConstructionState.cases.CandidateConstructionInProgress.make({
-        correlation: candidateCorrelation
-      }),
-      IntegrationCandidateConstructionState.cases.CandidateCorrectionLimitReached.make({
-        correctionCount: 1,
-        correctionLimit: CandidateCorrectionLimit.make(1),
-        correlation: candidateCorrelation
-      }),
-      IntegrationCandidateConstructionState.cases.CandidateContinuationLimitReached.make({
-        continuationCount: 1,
-        continuationLimit: CandidateContinuationLimit.make(1),
-        correlation: candidateCorrelation
-      })
-    ]
-    const verificationCandidate = TargetVerificationCandidate.make({
-      candidateCommit: fixture.promotionCorrelation.qualifiedCandidate.candidateCommit,
-      constructedAt: JournalPosition.make(5),
-      correlation: candidateCorrelation,
-      reviewManifest: queued.acceptedResult.evidenceManifest
-    })
-    const verificationCorrelation = targetVerificationCorrelationFor(
-      verificationCandidate,
-      TargetVerificationPlanId.make("projection-legacy-verification")
-    )
-    const verificationStates = [
-      TargetVerificationState.cases.VerificationPending.make({ correlation: verificationCorrelation }),
-      TargetVerificationState.cases.VerificationPassed.make({
-        correlation: verificationCorrelation,
-        manifest: queued.acceptedResult.evidenceManifest
-      }),
-      TargetVerificationState.cases.VerificationStopped.make({
-        correlation: verificationCorrelation,
-        manifest: queued.acceptedResult.evidenceManifest,
-        outcome: "Failed"
-      }),
-      TargetVerificationState.cases.VerificationContradicted.make({
-        expected: verificationCorrelation,
-        received: { ...verificationCorrelation, candidateCommit: GitCommitSha.make("4".repeat(40)) }
-      })
-    ]
     const promotionStates = [
       TargetPromotionState.cases.PromotionPending.make({
         correlation: fixture.promotionCorrelation,
@@ -659,9 +583,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
         recordedAt: JournalPosition.make(4)
       },
       { _tag: "IntegrationFinalitySettlement", settlement },
-      ...candidateStates.map((state) => ({ _tag: "IntegrationCandidate" as const, responsibility: started, state })),
       { _tag: "IntegratorPreparation", responsibility: started, state: integratorState },
-      ...verificationStates.map((state) => ({ _tag: "TargetVerification" as const, responsibility: started, state })),
       ...promotionStates.map((state) => ({ _tag: "TargetPromotion" as const, responsibility: started, state })),
       { _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt: fixture.plannedAttempt } }
     ]
@@ -683,14 +605,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
         "AcceptedAwaitingIntegrationQueue",
         "QueuedIntegration",
         "StartedIntegration",
-        "CandidateConstructedUnsettled",
-        "CandidateWorkActive",
         "IntegratorPreparation",
-        "IntegrationNonConvergencePreserved",
-        "TargetVerificationPending",
-        "TargetVerificationPassed",
-        "TargetVerificationStopped",
-        "TargetVerificationContradicted",
         "TargetPromotionPending",
         "TargetPromotionSucceeded",
         "TargetPromotionStale",

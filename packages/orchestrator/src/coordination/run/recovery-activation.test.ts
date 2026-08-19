@@ -60,22 +60,7 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import {
-  CandidateContinuationLimit,
-  CandidateCorrectionLimit,
-  IntegrationCandidateConstructionIntendedEvent,
-  IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
-  IntegrationSessionId
-} from "../../workflow/protocols/integration-candidate-construction/events.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
-import {
-  TargetVerificationCandidate,
-  TargetVerificationIntendedEvent,
-  TargetVerificationPlan,
-  TargetVerificationPlanId,
-  targetVerificationCorrelationFor
-} from "../../workflow/protocols/target-verification/events.js"
 import {
   TargetPromotionIntendedEvent,
   targetPromotionCorrelationFor
@@ -357,13 +342,8 @@ const executorReport = (position: number, report: PlannedAttemptExecutorReport, 
 
 type PausedIntegrationScenario = {
   readonly responsibility: StartedIntegrationResponsibility
-  readonly transitions: readonly [
-    RunnableFrontierTransition,
-    RunnableFrontierTransition,
-    RunnableFrontierTransition,
-    RunnableFrontierTransition
-  ]
-  readonly intents: readonly [JournalRecord["event"], JournalRecord["event"], JournalRecord["event"]]
+  readonly transitions: readonly [RunnableFrontierTransition]
+  readonly intents: readonly [JournalRecord["event"]]
 }
 
 const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedIntegrationScenario => {
@@ -379,29 +359,8 @@ const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedInt
     queuedAt: JournalPosition.make(7),
     startedAt: JournalPosition.make(startedAt)
   })
-  const candidate = TargetVerificationCandidate.make({
-    candidateCommit: GitCommitSha.make("c".repeat(40)),
-    constructedAt: JournalPosition.make(13),
-    correlation: {
-      acceptanceManifest: acceptedResult.evidenceManifest,
-      acceptedResultCommit: acceptedResult.commit,
-      attemptId: coverageAttempt.attemptId,
-      candidateId: IntegrationCandidateId.make(`paused-integration-candidate-${suffix}`),
-      candidateResource: IntegrationCandidateResourceLocator.make(`paused-integration-resource-${suffix}`),
-      expectedTargetHead: coverageAttempt.baseSha,
-      integrationSessionId: IntegrationSessionId.make(`paused-integration-session-${suffix}`),
-      integrationTarget,
-      runId: coverageRunId
-    },
-    reviewManifest: acceptedResult.evidenceManifest
-  })
-  const plan = TargetVerificationPlan.make({
-    planId: TargetVerificationPlanId.make(`paused-integration-plan-${suffix}`),
-    target: integrationTarget
-  })
-  const verificationCorrelation = targetVerificationCorrelationFor(candidate, plan.planId)
   const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
-    candidateCommit: candidate.candidateCommit,
+    candidateCommit: GitCommitSha.make("c".repeat(40)),
     candidateText: IntegratorCandidateText.make(`refs/candidates/paused-integration-${suffix}`),
     run: {
       ordinal: IntegratorRunOrdinal.make(1),
@@ -421,43 +380,14 @@ const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedInt
     qualifiedAt: JournalPosition.make(14)
   })
   const promotion = targetPromotionCorrelationFor(qualifiedCandidate)
-  const candidateIntent = IntegrationCandidateConstructionIntendedEvent.make({
-    continuationLimit: CandidateContinuationLimit.make(1),
-    correctionLimit: CandidateCorrectionLimit.make(1),
-    correlation: candidate.correlation,
-    plannedAttempt: coverageAttempt,
-    responsibilityBeganAt: responsibility.queuedAt,
-    startedAt: responsibility.startedAt,
-    version: workflowJournalEventVersion
-  })
-  const verificationIntent = TargetVerificationIntendedEvent.make({
-    correlation: verificationCorrelation,
-    version: workflowJournalEventVersion
-  })
   const promotionIntent = TargetPromotionIntendedEvent.make({
     correlation: promotion,
     version: workflowJournalEventVersion
   })
-  const lineage = TargetLineageObservation.make({
-    plannedBaseIsAncestorOfTargetHead: true,
-    plannedBaseSha: coverageAttempt.baseSha,
-    targetHeadSha: coverageAttempt.baseSha
-  })
   return {
     responsibility,
-    transitions: [
-      RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility }),
-      RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-        acceptedCandidateProgressAt: null,
-        continuationLimit: CandidateContinuationLimit.make(1),
-        correctionLimit: CandidateCorrectionLimit.make(1),
-        lineage,
-        responsibility
-      }),
-      RunnableFrontierTransition.RunTargetVerification({ candidate, plan, responsibility }),
-      RunnableFrontierTransition.RunTargetPromotion({ candidate: qualifiedCandidate, responsibility })
-    ],
-    intents: [candidateIntent, verificationIntent, promotionIntent]
+    transitions: [RunnableFrontierTransition.RunTargetPromotion({ candidate: qualifiedCandidate, responsibility })],
+    intents: [promotionIntent]
   }
 }
 
@@ -633,13 +563,7 @@ effectIt.effect(
       for (const graphAfterDirection of [true, false]) {
         const fixture = directionProjectionFixture(direction, graphAfterDirection)
         const resources = yield* makeIntegrationTargetResourceController()
-        const recovery = yield* makeRunRecoveryProjection(
-          coverageRunId,
-          fixture.integrationTarget,
-          undefined,
-          undefined,
-          resources
-        ).pipe(
+        const recovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
           Effect.provideService(
             InRunJournal,
             currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
@@ -662,13 +586,7 @@ effectIt.effect(
         yield* resources.acquire(acquire.responsibility)
         yield* resources.publishAcceptedOwnership(acquire.responsibility)
 
-        const heldRecovery = yield* makeRunRecoveryProjection(
-          coverageRunId,
-          fixture.integrationTarget,
-          undefined,
-          undefined,
-          resources
-        ).pipe(
+        const heldRecovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
           Effect.provideService(
             InRunJournal,
             currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
@@ -713,13 +631,7 @@ effectIt.effect(
             records: [...fixture.reconstructed.workflowHistory.records, coverageRecord(intentPosition, intent)]
           }
         }
-        const restarted = yield* makeRunRecoveryProjection(
-          coverageRunId,
-          fixture.integrationTarget,
-          undefined,
-          undefined,
-          resources
-        ).pipe(
+        const restarted = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
           Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterIntent))
         )
         const restartedProjection = yield* restarted.readDeliveryProjection
@@ -757,8 +669,6 @@ effectIt.effect(
         const afterObservationRecovery = yield* makeRunRecoveryProjection(
           coverageRunId,
           fixture.integrationTarget,
-          undefined,
-          undefined,
           restartedResources
         ).pipe(
           Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterObservation))
@@ -774,8 +684,6 @@ effectIt.effect(
         const heldAfterObservationRecovery = yield* makeRunRecoveryProjection(
           coverageRunId,
           fixture.integrationTarget,
-          undefined,
-          undefined,
           restartedResources
         ).pipe(
           Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterObservation))
@@ -825,8 +733,6 @@ effectIt.effect(
         const graphRefreshRecovery = yield* makeRunRecoveryProjection(
           coverageRunId,
           fixture.integrationTarget,
-          undefined,
-          undefined,
           restartedResources
         ).pipe(
           Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterLaterGraph))
@@ -854,8 +760,6 @@ effectIt.effect(
       const noDirectionRecovery = yield* makeRunRecoveryProjection(
         coverageRunId,
         withoutDirection.integrationTarget,
-        undefined,
-        undefined,
         noDirectionResources
       ).pipe(
         Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, noDirectionState))
@@ -872,13 +776,7 @@ effectIt.effect("requests a fresh direction-bound lineage read for FullRerun bef
   Effect.gen(function* () {
     const fixture = directionProjectionFixture("FullRerun")
     const resources = yield* makeIntegrationTargetResourceController()
-    const recovery = yield* makeRunRecoveryProjection(
-      coverageRunId,
-      fixture.integrationTarget,
-      undefined,
-      undefined,
-      resources
-    ).pipe(
+    const recovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
       Effect.provideService(
         InRunJournal,
         currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
@@ -892,13 +790,7 @@ effectIt.effect("requests a fresh direction-bound lineage read for FullRerun bef
     yield* resources.acquire(acquire.responsibility)
     yield* resources.publishAcceptedOwnership(acquire.responsibility)
 
-    const heldRecovery = yield* makeRunRecoveryProjection(
-      coverageRunId,
-      fixture.integrationTarget,
-      undefined,
-      undefined,
-      resources
-    ).pipe(
+    const heldRecovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
       Effect.provideService(
         InRunJournal,
         currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
@@ -970,13 +862,9 @@ effectIt.effect("fails closed when recovered quarantine-direction evidence is no
     for (const [label, invalidRecords] of invalidHistories) {
       const resources = yield* makeIntegrationTargetResourceController()
       const invalidState = { ...fixture.reconstructed, workflowHistory: { records: invalidRecords } }
-      const recovery = yield* makeRunRecoveryProjection(
-        coverageRunId,
-        fixture.integrationTarget,
-        undefined,
-        undefined,
-        resources
-      ).pipe(Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, invalidState)))
+      const recovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
+        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, invalidState))
+      )
       const projection = yield* recovery.readDeliveryProjection
       expect(
         projection.frontier.transitions.some(
@@ -1410,8 +1298,6 @@ it("reconciles each exact pre-Pause integration intent but filters a post-Pause 
   const runPausedWithTaskPause = coverageRunState(
     [
       coverageRecord(1, beforePause.intents[0]),
-      coverageRecord(2, beforePause.intents[1]),
-      coverageRecord(3, beforePause.intents[2]),
       coverageRecord(10, runPause(1)),
       coverageRecord(
         11,
@@ -1424,9 +1310,7 @@ it("reconciles each exact pre-Pause integration intent but filters a post-Pause 
           version: workflowJournalEventVersion
         })
       ),
-      coverageRecord(12, afterPause.intents[0]),
-      coverageRecord(13, afterPause.intents[1]),
-      coverageRecord(14, afterPause.intents[2])
+      coverageRecord(12, afterPause.intents[0])
     ],
     [],
     coverageRunId
@@ -1436,7 +1320,7 @@ it("reconciles each exact pre-Pause integration intent but filters a post-Pause 
     pause: { run: { _tag: "RunPaused" }, tasks: { _tag: "TaskPauses", taskIds: [coverageAttempt.taskId] } }
   }
 
-  for (const index of [0, 1, 2, 3]) {
+  for (const index of [0]) {
     const beforeTransition = Option.getOrThrow(Option.fromUndefinedOr(beforePause.transitions[index]))
     const afterTransition = Option.getOrThrow(Option.fromUndefinedOr(afterPause.transitions[index]))
     const frontier = filterFrontierForActivePauses(

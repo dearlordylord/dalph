@@ -4,7 +4,6 @@ import {
   type AttemptId,
   type GitCommitSha,
   type GitRepositoryLocator,
-  type IntegrationTarget,
   type IntegrationTargetRef,
   type PlannedAttemptExecutorReport,
   type RunId,
@@ -40,33 +39,21 @@ import {
   type RunPolicyRevision,
   type TaskWorkCapacity,
   type TaskClaimReacquisitionRequestId,
-  type IntegrationCandidateAgentReport,
-  type IntegrationCandidateAgentReportOrdinal,
-  type IntegrationCandidateGitValidationAttemptOrdinal,
-  type CandidateCorrectionLimit,
-  type CandidateContinuationLimit,
-  type IntegrationCandidateCorrelation,
-  type IntegrationCandidateId,
-  IntegrationCandidateResourceLocator,
   type IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
   type IntegrationQuarantineFailureDetail,
-  IntegratorCandidateResourceLocator,
+  type IntegratorCandidateResourceLocator,
   type IntegratorCandidateText,
-  IntegrationSessionId,
+  IntegratorSessionId,
   type IntegratorCorrelation,
   type IntegratorGitObservationType,
   type IntegratorNotPreparedDetail,
   type IntegratorResultType,
   type IntegratorRunCorrelation,
   type IntegratorRunQualifiedCandidate,
-  IntegratorSessionId,
   type JournalPosition,
-  type EvidenceReference,
   type EvidenceDigest,
-  type TargetVerificationPlanId,
-  type TargetVerificationCorrelation,
   type TargetPromotionCorrelation,
   type CompletionTaskClaim,
   type PostPromotionBlockerClearAuthorization,
@@ -86,7 +73,6 @@ import {
   type TargetPromotionAttemptOrdinal,
   type TargetPromotionAttemptLimit,
   targetPromotionRequestIdForCandidate,
-  targetVerificationRequestIdForCandidate,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation,
@@ -128,9 +114,8 @@ type IdentityRenamingMaps = RecordedOperationIdentityMaps & {
 type GeneratedCassetteIdentity =
   | AttemptId
   | ClaimToken
-  | IntegrationCandidateId
-  | IntegrationCandidateResourceLocator
-  | IntegrationSessionId
+  | IntegratorCandidateResourceLocator
+  | IntegratorSessionId
   | OperationId
   | RunId
   | TaskBranchRef
@@ -155,17 +140,11 @@ type PreservedCassetteBrand =
   | PlannedAttemptExecutorCommandProjectionOrdinal
   | PlannedAttemptExecutorStateObservationOrdinal
   | IntegrationTargetRef
-  | IntegrationCandidateAgentReportOrdinal
-  | IntegrationCandidateGitValidationAttemptOrdinal
-  | CandidateCorrectionLimit
-  | CandidateContinuationLimit
   | JournalPosition
-  | EvidenceReference
   | EvidenceDigest
   | IntegratorCandidateText
   | IntegratorNotPreparedDetail
   | IntegrationQuarantineFailureDetail
-  | TargetVerificationPlanId
   | TargetPromotionAttemptOrdinal
   | TargetPromotionAttemptLimit
   | CompletionClaimRequestOrdinal
@@ -294,54 +273,14 @@ const renameAttemptChoiceRequestId = (
 ): AttemptChoiceRequestId =>
   AttemptChoiceRequestId.make({ nonce: requestId.nonce, runId: renamed(requestId.runId, maps.runIds) })
 
-const renameCandidateCorrelation = (
-  correlation: IntegrationCandidateCorrelation,
-  maps: IdentityRenamingMaps
-): IntegrationCandidateCorrelation =>
-  completeFields<IntegrationCandidateCorrelation>({
-    acceptanceManifest: preserveCassetteValue(correlation.acceptanceManifest),
-    acceptedResultCommit: preserveCassetteValue(correlation.acceptedResultCommit),
-    attemptId: renamed(correlation.attemptId, maps.attemptIds),
-    candidateId: renamed(correlation.candidateId, maps.integrationCandidateIds),
-    candidateResource: renamed(correlation.candidateResource, maps.integrationCandidateResourceLocators),
-    expectedTargetHead: preserveCassetteValue(correlation.expectedTargetHead),
-    integrationSessionId: renamed(correlation.integrationSessionId, maps.integrationSessionIds),
-    integrationTarget: completeFields<IntegrationTarget>({
-      repository: preserveCassetteValue(correlation.integrationTarget.repository),
-      ref: preserveCassetteValue(correlation.integrationTarget.ref)
-    }),
-    runId: renamed(correlation.runId, maps.runIds)
-  })
-
-const renameTargetVerificationCorrelation = (
-  correlation: TargetVerificationCorrelation,
-  maps: IdentityRenamingMaps
-): TargetVerificationCorrelation => {
-  const candidateCorrelation = renameCandidateCorrelation(correlation.candidateCorrelation, maps)
-  return completeFields<TargetVerificationCorrelation>({
-    candidateCommit: preserveCassetteValue(correlation.candidateCommit),
-    candidateCorrelation,
-    candidateConstructedAt: preserveCassetteValue(correlation.candidateConstructedAt),
-    planId: preserveCassetteValue(correlation.planId),
-    requestId: targetVerificationRequestIdForCandidate(candidateCorrelation.candidateId),
-    reviewManifest: preserveCassetteValue(correlation.reviewManifest)
-  })
-}
-
 const renameIntegratorCandidateResource = (
   resource: IntegratorCandidateResourceLocator,
   maps: IdentityRenamingMaps
-): IntegratorCandidateResourceLocator =>
-  IntegratorCandidateResourceLocator.make(
-    String(
-      maps.integrationCandidateResourceLocators.get(IntegrationCandidateResourceLocator.make(String(resource))) ??
-        resource
-    )
-  )
+): IntegratorCandidateResourceLocator => maps.integratorCandidateResourceLocators.get(resource) ?? resource
 
 const renameIntegratorSession = (sessionId: IntegratorSessionId, maps: IdentityRenamingMaps): IntegratorSessionId =>
   IntegratorSessionId.make(
-    String(maps.integrationSessionIds.get(IntegrationSessionId.make(String(sessionId))) ?? sessionId)
+    String(maps.integratorSessionIds.get(IntegratorSessionId.make(String(sessionId))) ?? sessionId)
   )
 
 const renameIntegratorCorrelation = (
@@ -587,27 +526,6 @@ const preserveCompletionTaskFocusedReadPurpose = (
         confirmationOrdinal: preserveCassetteValue(value.confirmationOrdinal)
       })
   })
-
-const renameCandidateAgentReport = (
-  report: IntegrationCandidateAgentReport,
-  maps: IdentityRenamingMaps
-): IntegrationCandidateAgentReport => {
-  const correlation = renameCandidateCorrelation(report.correlation, maps)
-  return Match.value(report).pipe(
-    Match.tagsExhaustive({
-      Conflict: (value) => completeFields<typeof value>({ _tag: "Conflict", correlation }),
-      ExitedWithoutCandidate: (value) => completeFields<typeof value>({ _tag: "ExitedWithoutCandidate", correlation }),
-      Submitted: (value) =>
-        completeFields<typeof value>({
-          _tag: "Submitted",
-          candidateCommit: preserveCassetteValue(value.candidateCommit),
-          correlation,
-          reviewManifest: preserveCassetteValue(value.reviewManifest)
-        }),
-      Working: (value) => completeFields<typeof value>({ _tag: "Working", correlation })
-    })
-  )
-}
 
 const renameCompletionClaimDeletionRequest = (
   request: CompletionClaimDeletionRequest,
@@ -913,101 +831,6 @@ const renameRecordedCassetteEntry = (
           initiatedBy: preserveCassetteValue(entry.initiatedBy),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           requestId: renameIntegrationQuarantineDirectionRequestId(entry.requestId, maps)
-        }),
-      IntegrationCandidateConstructionIntended: (candidateEntry) => {
-        const correlation = renameCandidateCorrelation(candidateEntry.correlation, maps)
-        return completeFields<typeof candidateEntry>({
-          _tag: "IntegrationCandidateConstructionIntended",
-          correlation,
-          correctionLimit: preserveCassetteValue(candidateEntry.correctionLimit),
-          continuationLimit: preserveCassetteValue(candidateEntry.continuationLimit),
-          initiatedBy: preserveCassetteValue(candidateEntry.initiatedBy),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
-          plannedAttempt: renamePlannedAttempt(candidateEntry.plannedAttempt, maps)
-        })
-      },
-      IntegrationCandidateSessionSuperseded: (candidateEntry) =>
-        completeFields<typeof candidateEntry>({
-          _tag: "IntegrationCandidateSessionSuperseded",
-          observedTargetHead: preserveCassetteValue(candidateEntry.observedTargetHead),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
-          priorCandidateCommit: preserveCassetteValue(candidateEntry.priorCandidateCommit),
-          priorCorrelation: renameCandidateCorrelation(candidateEntry.priorCorrelation, maps),
-          successorCorrelation: renameCandidateCorrelation(candidateEntry.successorCorrelation, maps)
-        }),
-      IntegrationCandidateAgentReported: (candidateEntry) =>
-        completeFields<typeof candidateEntry>({
-          _tag: "IntegrationCandidateAgentReported",
-          expectedCorrelation: renameCandidateCorrelation(candidateEntry.expectedCorrelation, maps),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
-          ordinal: preserveCassetteValue(candidateEntry.ordinal),
-          report: renameCandidateAgentReport(candidateEntry.report, maps)
-        }),
-      IntegrationCandidateGitObserved: (candidateEntry) =>
-        completeFields<typeof candidateEntry>({
-          _tag: "IntegrationCandidateGitObserved",
-          candidateCommit: preserveCassetteValue(candidateEntry.candidateCommit),
-          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
-          observation: preserveCassetteValue(candidateEntry.observation),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
-        }),
-      IntegrationCandidateConstructed: (candidateEntry) =>
-        completeFields<typeof candidateEntry>({
-          _tag: "IntegrationCandidateConstructed",
-          candidateCommit: preserveCassetteValue(candidateEntry.candidateCommit),
-          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification),
-          reviewManifest: preserveCassetteValue(candidateEntry.reviewManifest)
-        }),
-      IntegrationCandidateGitValidationFailed: (candidateEntry) =>
-        completeFields<typeof candidateEntry>({
-          _tag: "IntegrationCandidateGitValidationFailed",
-          attemptOrdinal: preserveCassetteValue(candidateEntry.attemptOrdinal),
-          candidateCommit: preserveCassetteValue(candidateEntry.candidateCommit),
-          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
-          detail: preserveCassetteValue(candidateEntry.detail),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
-        }),
-      IntegrationCandidateCorrectionLimitReached: (candidateEntry) =>
-        completeFields<typeof candidateEntry>({
-          _tag: "IntegrationCandidateCorrectionLimitReached",
-          correctionCount: preserveCassetteValue(candidateEntry.correctionCount),
-          correctionLimit: preserveCassetteValue(candidateEntry.correctionLimit),
-          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
-        }),
-      IntegrationCandidateContinuationLimitReached: (candidateEntry) =>
-        completeFields<typeof candidateEntry>({
-          _tag: "IntegrationCandidateContinuationLimitReached",
-          continuationCount: preserveCassetteValue(candidateEntry.continuationCount),
-          continuationLimit: preserveCassetteValue(candidateEntry.continuationLimit),
-          correlation: renameCandidateCorrelation(candidateEntry.correlation, maps),
-          occurrenceClassification: preserveCassetteValue(candidateEntry.occurrenceClassification)
-        }),
-      TargetVerificationIntended: (verificationEntry) =>
-        completeFields<typeof verificationEntry>({
-          _tag: "TargetVerificationIntended",
-          correlation: renameTargetVerificationCorrelation(verificationEntry.correlation, maps),
-          initiatedBy: preserveCassetteValue(verificationEntry.initiatedBy),
-          occurrenceClassification: preserveCassetteValue(verificationEntry.occurrenceClassification)
-        }),
-      TargetVerificationEvidenceSealed: (verificationEntry) =>
-        completeFields<typeof verificationEntry>({
-          _tag: "TargetVerificationEvidenceSealed",
-          correlation: renameTargetVerificationCorrelation(verificationEntry.correlation, maps),
-          manifest: {
-            byteLength: verificationEntry.manifest.byteLength,
-            digest: preserveCassetteValue(verificationEntry.manifest.digest)
-          },
-          occurrenceClassification: preserveCassetteValue(verificationEntry.occurrenceClassification),
-          terminal: preserveCassetteValue(verificationEntry.terminal)
-        }),
-      TargetVerificationCorrelationContradicted: (verificationEntry) =>
-        completeFields<typeof verificationEntry>({
-          _tag: "TargetVerificationCorrelationContradicted",
-          expected: renameTargetVerificationCorrelation(verificationEntry.expected, maps),
-          received: renameTargetVerificationCorrelation(verificationEntry.received, maps),
-          occurrenceClassification: preserveCassetteValue(verificationEntry.occurrenceClassification)
         }),
       TargetPromotionIntended: (entry) =>
         completeFields<typeof entry>({
@@ -1523,11 +1346,10 @@ export const renameRecordedCassette = Effect.fn("ScenarioCassette.renameRecorded
   const maps = completeFields<IdentityRenamingMaps>({
     attemptIds: identityRenamingMap<AttemptId>(renaming.attemptIds),
     claimTokens: identityRenamingMap<ClaimToken>(renaming.claimTokens),
-    integrationCandidateIds: identityRenamingMap<IntegrationCandidateId>(renaming.integrationCandidateIds),
-    integrationCandidateResourceLocators: identityRenamingMap<IntegrationCandidateResourceLocator>(
-      renaming.integrationCandidateResourceLocators
+    integratorCandidateResourceLocators: identityRenamingMap<IntegratorCandidateResourceLocator>(
+      renaming.integratorCandidateResourceLocators
     ),
-    integrationSessionIds: identityRenamingMap<IntegrationSessionId>(renaming.integrationSessionIds),
+    integratorSessionIds: identityRenamingMap<IntegratorSessionId>(renaming.integratorSessionIds),
     operationIds: identityRenamingMap<OperationId>(renaming.operationIds),
     runIds: identityRenamingMap<RunId>(renaming.runIds),
     taskBranchRefs: identityRenamingMap<TaskBranchRef>(renaming.taskBranchRefs),

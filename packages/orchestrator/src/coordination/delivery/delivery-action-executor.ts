@@ -36,7 +36,6 @@ import type {
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import type { runIntegrationCandidateConstruction } from "../run/integration-candidate-runtime.js"
 import type {
   IntegratorGitReadFailure,
   prepareIntegrationCandidateRun
@@ -48,11 +47,7 @@ import type {
   recoverTaskClaimReleaseOperation,
   recoverTaskWorktreeOperation
 } from "../frontier/recovery.js"
-import type { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
 import type { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
-import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
-import type { runTargetVerification } from "../../workflow/protocols/target-verification/protocol.js"
-import type { TargetVerificationRuntimeUnavailable } from "./target-verification-boundary.js"
 import type { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import type {
@@ -189,12 +184,6 @@ export type DeliveryActionResult =
       readonly report: PlannedAttemptExecutorReport
     }
   | {
-      readonly _tag: "IntegrationCandidateAdvanced"
-      readonly proposalId: DeliveryProposalId
-      readonly resourceDisposition: "Release" | "Retain"
-      readonly state: IntegrationCandidateConstructionState
-    }
-  | {
       readonly _tag: "TrackerGraphObservationPublished"
       readonly operationId: OperationId
       readonly proposalId: DeliveryProposalId
@@ -220,18 +209,14 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof recoverTaskClaimOperation>
   | EffectFunctionFailure<typeof recoverTaskClaimReleaseOperation>
   | EffectFunctionFailure<typeof recoverTaskWorktreeOperation>
-  | EffectFunctionFailure<typeof runIntegrationCandidateConstruction>
   | EffectFunctionFailure<typeof prepareIntegrationCandidateRun>
   | EffectFunctionFailure<typeof appendChangedHeadRetryQuarantine>
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
-  | EffectFunctionFailure<typeof runTargetVerification>
   | EffectFunctionFailure<typeof runTargetPromotion>
   | EffectFunctionFailure<typeof runCompletionClaimReplacementProtocol>
   | EffectFunctionFailure<typeof runCompletionClaimDeletionProtocol>
   | EffectFunctionFailure<typeof startQueuedIntegration>
-  | IntegrationCandidateBoundaryUnavailable
   | IntegratorBoundaryUnavailable
-  | TargetVerificationRuntimeUnavailable
   | TargetPromotionRuntimeUnavailable
   | IntegrationFinalityRuntimeUnavailable
   | PlannedAttemptExecutorContinuationLimitReached

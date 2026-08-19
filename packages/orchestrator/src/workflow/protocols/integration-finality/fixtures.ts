@@ -47,7 +47,7 @@ import {
   TargetPromotionSuccessObservation,
   targetPromotionCorrelationFor
 } from "../target-promotion/events.js"
-import { EvidenceDigest, EvidenceReference } from "../target-verification/evidence-store.js"
+import { EvidenceDigest, EvidenceReference } from "../evidence-store.js"
 import {
   CompletionTaskClaim,
   CompletionTaskConfirmationReadOrdinal,

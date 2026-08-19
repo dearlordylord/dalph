@@ -19,9 +19,7 @@ import type {
   StartedIntegrationResponsibility,
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
-import type { IntegrationCandidateConstructionState } from "../../workflow/protocols/integration-candidate-construction/protocol.js"
 import type { CurrentIntegratorState } from "../../workflow/protocols/integrator/state.js"
-import type { TargetVerificationState } from "../../workflow/protocols/target-verification/protocol.js"
 import type { TargetPromotionState } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { IntegrationFinalitySettledEvent } from "../../workflow/protocols/integration-finality/events.js"
 import type {
@@ -222,28 +220,7 @@ export type TicketDeliveryStanding =
   | { readonly _tag: "AcceptedAwaitingIntegrationQueue"; readonly accepted: UnqueuedAcceptedResult }
   | { readonly _tag: "QueuedIntegration"; readonly responsibility: QueuedIntegrationResponsibility }
   | { readonly _tag: "StartedIntegration"; readonly responsibility: StartedIntegrationResponsibility }
-  | { readonly _tag: "CandidateWorkActive"; readonly state: IntegrationCandidateConstructionState }
   | { readonly _tag: "IntegratorPreparation"; readonly state: CurrentIntegratorState }
-  | {
-      readonly _tag: "CandidateConstructedUnsettled"
-      readonly state: Extract<IntegrationCandidateConstructionState, { readonly _tag: "CandidateConstructed" }>
-    }
-  | {
-      readonly _tag: "TargetVerificationPending"
-      readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationPending" }>
-    }
-  | {
-      readonly _tag: "TargetVerificationPassed"
-      readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationPassed" }>
-    }
-  | {
-      readonly _tag: "TargetVerificationStopped"
-      readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationStopped" }>
-    }
-  | {
-      readonly _tag: "TargetVerificationContradicted"
-      readonly state: Extract<TargetVerificationState, { readonly _tag: "VerificationContradicted" }>
-    }
   | {
       readonly _tag: "TargetPromotionPending"
       readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionPending" }>
@@ -261,7 +238,6 @@ export type TicketDeliveryStanding =
       readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionNonConvergent" }>
     }
   | { readonly _tag: "IntegrationFinalitySettled"; readonly settlement: IntegrationFinalitySettledEvent }
-  | { readonly _tag: "IntegrationNonConvergencePreserved"; readonly state: IntegrationCandidateConstructionState }
   | { readonly _tag: "IntegrationWait"; readonly wait: IntegrationDeliveryWait }
 
 /** Graph/bound evidence for a retained broad delivery, including its negative space. */
@@ -284,19 +260,9 @@ export type ExactTicketDeliveryEvidence =
     }
   | { readonly _tag: "IntegrationFinalitySettlement"; readonly settlement: IntegrationFinalitySettledEvent }
   | {
-      readonly _tag: "IntegrationCandidate"
-      readonly responsibility: StartedIntegrationResponsibility
-      readonly state: IntegrationCandidateConstructionState
-    }
-  | {
       readonly _tag: "IntegratorPreparation"
       readonly responsibility: StartedIntegrationResponsibility
       readonly state: CurrentIntegratorState
-    }
-  | {
-      readonly _tag: "TargetVerification"
-      readonly responsibility: StartedIntegrationResponsibility
-      readonly state: TargetVerificationState
     }
   | {
       readonly _tag: "TargetPromotion"

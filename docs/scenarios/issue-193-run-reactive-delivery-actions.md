@@ -2,6 +2,11 @@
 
 Issue: [#193](https://github.com/dearlordylord/dalph/issues/193)
 
+Status: implemented. The integration-agent continuation subsection is retained
+only as historical evidence and was superseded by the one outer Integrator
+boundary in issues #222, #223, and #225. It does not describe current runtime
+behavior or current acceptance tests.
+
 No person manually starts the process-local scheduling below. A maintainer can
 see the resulting GitHub request, integration-agent request, typed failure, or
 Run completion, but cannot see Dalph's in-memory proposal owner.
@@ -103,7 +108,12 @@ reorder queued proposals globally.
 - `does not repeat one started-integration lineage read after only its causal route changes while live`
 - `runs a stopped-attempt claim read after the distinct continuation-claim read settles`
 
-## A journaled integration-agent report selects the next exact continuation
+## Historical: a journaled integration-agent report selected the next exact continuation
+
+This subsection records the workflow removed by issue #225. Current Dalph
+records one exact outer Integrator run result, qualifies its reported candidate
+with Git, and uses an explicit quarantine disposition for conclusive
+non-success. No candidate-correction or continuation action remains.
 
 ### Starting situation
 

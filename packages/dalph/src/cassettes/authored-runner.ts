@@ -20,7 +20,7 @@ import {
 import {
   AcceptedResultEvidenceManifest,
   type AttemptId,
-  GitCommitSha,
+  type GitCommitSha,
   type IntegrationTarget,
   PlannedAttemptExecutorReport,
   type PlannedTaskAttempt,
@@ -41,8 +41,6 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
-  CandidateCorrectionLimit,
-  CandidateContinuationLimit,
   CompletionClaimBoundary,
   CompletionTaskBoundary,
   type CompletionTaskRequest,
@@ -60,13 +58,6 @@ import {
   freshWorkflowRunId,
   GitTargetLineage,
   GitTargetLineageReadFailure,
-  IntegrationCandidateAgent,
-  IntegrationCandidateAgentFailure,
-  IntegrationCandidateAgentReport,
-  IntegrationCandidateResourceLocator,
-  IntegrationCandidateGit,
-  IntegrationReviewManifest,
-  IntegrationCandidateGitReadFailure,
   Integrator,
   IntegratorCorrelation,
   IntegratorGit,
@@ -99,13 +90,6 @@ import {
   taskWorkCapacityControlLayer,
   type TaskWorkCapacity,
   TargetLineageObservation,
-  TargetVerificationArtifact,
-  TargetVerificationBoundary,
-  TargetVerificationBoundaryFailure,
-  TargetVerificationCorrelation,
-  TargetVerificationPlan,
-  TargetVerificationRequestId,
-  TargetVerificationTerminal,
   TargetPromotionCompareAndSetFailure,
   TargetPromotionCompareAndSetResult,
   TargetPromotionRequest,
@@ -116,8 +100,6 @@ import {
   memoryEvidenceStoreLayer,
   EvidenceStore,
   type EvidenceStoreFailure,
-  EvidenceDigest,
-  EvidenceReference,
   TestGitWorktree,
   TrackerMutation,
   type TrackerRevision,
@@ -149,8 +131,6 @@ import {
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
-
-const evidenceDigestHexLength = 64
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -828,7 +808,6 @@ const proposalActionLabels = {
   ContinuePlannedAttemptExecutorWork: "Tell the executor to continue the exact planned attempt",
   ContinuePlannedAttemptExecutorWorkAfterCurrentFacts:
     "Authorize current tracker and Git facts, then tell the executor to continue the exact planned attempt",
-  ContinueStartedIntegrationCandidate: "Ask the candidate agent to continue the exact started integration",
   FixIntegratorSuccessorSession: "Fix the one FullRerun successor after the operator direction and fresh Git lineage",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
   ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",
@@ -868,7 +847,6 @@ const proposalActionLabels = {
   RetryStoppedAttemptClaimRelease: "Retry the exact stopped-attempt claim release",
   RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",
   RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
-  RunTargetVerification: "Run the configured checks for the exact candidate commit",
   StartPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
   StartQueuedIntegration: "Start the exact queued integration responsibility",
   SuspendPlannedAttemptExecutorWork: "Request safe suspension of the exact planned-attempt executor work",
@@ -1137,10 +1115,7 @@ export const evaluateAuthoredObservationCapture: (
     } satisfies AuthoredObservationMoment
   })
 
-const minimumCorrectionExhaustionValidationCount = 2
 const latestArrayElementIndex = -1
-const authoredCandidateContinuationLimit = 2
-const gitCommitHexLength = 40
 const authoredSettlementYieldTurns = 10
 
 const operatorControlFailureMatches = (
@@ -1334,59 +1309,6 @@ const handleAuthoredTaskClaimJournalEvent = (request: {
     return true
   })
 
-type TargetVerificationStoryResult = Extract<
-  AuthoredCassetteStoryItem,
-  { readonly _tag: "TargetVerificationReturned" }
->["result"]
-
-const targetVerificationArtifactsFrom = (
-  result: TargetVerificationStoryResult
-): ReadonlyArray<TargetVerificationArtifact> =>
-  result._tag === "CorrelationContradiction"
-    ? []
-    : result.artifacts.map(({ content, name }) =>
-        TargetVerificationArtifact.make({ bytes: new TextEncoder().encode(content), name })
-      )
-
-const foreignTargetVerificationTerminalFrom = (
-  correlation: TargetVerificationCorrelation
-): TargetVerificationTerminal =>
-  TargetVerificationTerminal.cases.Failed.make({
-    artifacts: [],
-    correlation: TargetVerificationCorrelation.make({
-      ...correlation,
-      candidateCommit: GitCommitSha.make("f".repeat(gitCommitHexLength)),
-      requestId: TargetVerificationRequestId.make(`${correlation.requestId}:foreign`),
-      reviewManifest: correlation.reviewManifest
-    })
-  })
-
-const passedTargetVerificationTerminalFrom = (
-  artifacts: ReadonlyArray<TargetVerificationArtifact>,
-  correlation: TargetVerificationCorrelation
-): TargetVerificationTerminal => {
-  const [first, ...rest] = artifacts
-  /* v8 ignore next -- @preserve Authored Passed verification results require at least one declared artifact; non-passing terminals use their distinct cases. */
-  return first === undefined
-    ? TargetVerificationTerminal.cases.Failed.make({ artifacts: [], correlation })
-    : TargetVerificationTerminal.cases.Passed.make({ artifacts: [first, ...rest], correlation })
-}
-
-const targetVerificationTerminalFrom = (
-  result: TargetVerificationStoryResult,
-  correlation: TargetVerificationCorrelation
-): TargetVerificationTerminal => {
-  const artifacts = targetVerificationArtifactsFrom(result)
-  if (result._tag === "CorrelationContradiction") return foreignTargetVerificationTerminalFrom(correlation)
-  return Match.valueTags(result, {
-    Failed: () => TargetVerificationTerminal.cases.Failed.make({ artifacts, correlation }),
-    Killed: () => TargetVerificationTerminal.cases.Killed.make({ artifacts, correlation }),
-    Partial: () => TargetVerificationTerminal.cases.Partial.make({ artifacts, correlation }),
-    Passed: () => passedTargetVerificationTerminalFrom(artifacts, correlation),
-    TimedOut: () => TargetVerificationTerminal.cases.TimedOut.make({ artifacts, correlation })
-  })
-}
-
 /** Decodes and drives one story through the ordinary production delivery program. */
 const runAuthoredScenarioCassetteWith = (request: {
   readonly input: unknown
@@ -1483,51 +1405,8 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
           })
       })
-      const candidateOutcomeRecorded = yield* Deferred.make<void>()
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
-      const targetVerificationStory = cassette.story.some((item) => item._tag === "TargetVerificationReturned")
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
-      const hasAuthoredIntegratorRequest = cassette.story.some((item) => item._tag === "IntegratorRequestReceived")
-      const authoredIntegratorResult = cassette.story.find((item) => item._tag === "IntegratorResultReturned")
-      const hasAuthoredIntegratorGitObservation = cassette.story.some(
-        (item) => item._tag === "IntegratorGitObservationReturned"
-      )
-      const legacyCandidateTerminalEventTag = targetVerificationStory
-        ? cassette.story.some(
-            (item) => item._tag === "TargetVerificationReturned" && item.result._tag === "CorrelationContradiction"
-          )
-          ? "TargetVerificationCorrelationContradicted"
-          : "TargetVerificationEvidenceSealed"
-        : cassette.story.some(
-              (item) =>
-                item._tag === "IntegrationCandidateAgentReported" && item.report._tag === "CorrelationContradiction"
-            )
-          ? "IntegrationCandidateAgentReported"
-          : cassette.story.some(
-                (item) =>
-                  item._tag === "ExpectedBehavior" &&
-                  item.orchestration?.some((evidence) => evidence._tag === "IntegrationCandidateConstructed")
-              )
-            ? "IntegrationCandidateConstructed"
-            : cassette.story.filter((item) => item._tag === "IntegrationCandidateGitValidationReturned").length >=
-                minimumCorrectionExhaustionValidationCount
-              ? "IntegrationCandidateCorrectionLimitReached"
-              : cassette.story.filter(
-                    (item) => item._tag === "IntegrationCandidateAgentReported" && item.report._tag !== "Submitted"
-                  ).length >= authoredCandidateContinuationLimit
-                ? "IntegrationCandidateContinuationLimitReached"
-                : cassette.story.some((item) => item._tag === "IntegrationCandidateAgentReported")
-                  ? "IntegrationCandidateAgentReported"
-                  : undefined
-      const candidateTerminalEventTag = !hasAuthoredIntegratorRequest
-        ? legacyCandidateTerminalEventTag
-        : authoredIntegratorResult === undefined
-          ? "IntegratorSessionFixed"
-          : authoredIntegratorResult.result._tag === "NotPrepared"
-            ? "IntegratorRunResultRecorded"
-            : hasAuthoredIntegratorGitObservation
-              ? "IntegratorRunCandidateGitObserved"
-              : "IntegratorRunCandidateGitReadIntended"
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
@@ -1588,36 +1467,6 @@ const runAuthoredScenarioCassetteWith = (request: {
           correlation: report.correlation,
           result: { _tag: "Accepted", acceptedResult: { commit: acceptedResult.commit, evidenceManifest } }
         })
-      })
-      const verificationPlan =
-        command.verificationPlanId === null
-          ? undefined
-          : TargetVerificationPlan.make({ planId: command.verificationPlanId, target: command.integrationTarget })
-      const verificationReports = yield* Ref.make<ReadonlyMap<string, TargetVerificationTerminal>>(new Map())
-      const targetVerificationBoundary = TargetVerificationBoundary.of({
-        runOrResume: (request) =>
-          Ref.get(verificationReports).pipe(
-            Effect.flatMap((reports) => {
-              const existing = reports.get(request.requestId)
-              /* v8 ignore start -- @preserve The journaled verification protocol settles its exact request before another delivery can select it; this cache is a fail-safe for an invalid duplicate boundary call. */
-              if (existing !== undefined) return Effect.succeed(existing)
-              /* v8 ignore stop -- @preserve */
-              return cursor.consumeTargetVerificationReturned.pipe(
-                Effect.mapError(
-                  /* v8 ignore next -- @preserve Maintained verification cassettes supply the declared wrapper return; generic cursor mismatch behavior is tested at the cursor seam. */
-                  (failure) =>
-                    new TargetVerificationBoundaryFailure({
-                      detail: `${failure._tag} at story position ${failure.storyPosition}`,
-                      requestId: request.requestId
-                    })
-                ),
-                Effect.map((item) => targetVerificationTerminalFrom(item.result, request)),
-                Effect.tap((terminal) =>
-                  Ref.update(verificationReports, (current) => new Map(current).set(request.requestId, terminal))
-                )
-              )
-            })
-          )
       })
       const targetPromotionGit = {
         compareAndSet: (request: Parameters<TargetPromotionGitService["compareAndSet"]>[0]) =>
@@ -1722,9 +1571,6 @@ const runAuthoredScenarioCassetteWith = (request: {
         event: AuthoredJournalAppendEvent
       ): Effect.Effect<void> =>
         Effect.gen(function* () {
-          if (candidateTerminalEventTag !== undefined && event._tag === candidateTerminalEventTag) {
-            yield* Deferred.succeed(candidateOutcomeRecorded, undefined)
-          }
           yield* pauseAtAuthoredJournalBoundary(event)
           if (!isExecutorLifecycleAppend(event)) return
           const firstDurableAppend = yield* Ref.modify(observedExecutorLifecycleKeys, (observed) => {
@@ -1995,123 +1841,6 @@ const runAuthoredScenarioCassetteWith = (request: {
             worktreeRoot: command.worktreeRoot
           })
         )
-      const candidateLayer = Layer.merge(
-        Layer.succeed(
-          IntegrationCandidateAgent,
-          IntegrationCandidateAgent.of({
-            startOrContinue: (request) =>
-              cursor.consumeIntegrationCandidateAgentReport(request.correlation.attemptId).pipe(
-                Effect.mapError(
-                  (failure) =>
-                    new IntegrationCandidateAgentFailure({
-                      detail: `${failure._tag} at story position ${failure.storyPosition}`,
-                      integrationSessionId: request.correlation.integrationSessionId
-                    })
-                ),
-                Effect.flatMap((candidateReport) => {
-                  /* v8 ignore next -- @preserve Accepted authored candidate stories declare every report; this diagnostic keeps malformed runtime re-entry total. */
-                  if (Option.isNone(candidateReport)) {
-                    return Context.get(sharedContext, JournalStore)
-                      .read(runId)
-                      .pipe(
-                        Effect.orDie,
-                        Effect.flatMap((candidateRecords) =>
-                          Effect.die(
-                            `candidate frontier invoked the agent without an authored report for ${JSON.stringify(request.correlation)} at ${request.candidateResource}: ${candidateRecords
-                              .filter(({ event }) => event._tag.startsWith("IntegrationCandidate"))
-                              .map(({ event }) => JSON.stringify(event))
-                              .join(",")}`
-                          )
-                        )
-                      )
-                  }
-                  const authored = candidateReport.value.report
-                  return Match.value(authored).pipe(
-                    Match.tagsExhaustive({
-                      Submitted: ({ candidateCommit }) =>
-                        evidenceStore
-                          .put(
-                            new TextEncoder().encode(
-                              JSON.stringify(
-                                IntegrationReviewManifest.make({
-                                  candidateCommit,
-                                  correlation: request.correlation,
-                                  formatVersion: 1,
-                                  outcome: "Passed",
-                                  predecessor: request.correlation.acceptanceManifest
-                                })
-                              )
-                            )
-                          )
-                          .pipe(
-                            Effect.orElseSucceed(() =>
-                              EvidenceReference.make({
-                                byteLength: 0,
-                                digest: EvidenceDigest.make("0".repeat(evidenceDigestHexLength))
-                              })
-                            ),
-                            Effect.map((reviewManifest) =>
-                              IntegrationCandidateAgentReport.cases.Submitted.make({
-                                candidateCommit,
-                                correlation: request.correlation,
-                                reviewManifest
-                              })
-                            )
-                          ),
-                      Conflict: () =>
-                        Effect.succeed(
-                          IntegrationCandidateAgentReport.cases.Conflict.make({ correlation: request.correlation })
-                        ),
-                      CorrelationContradiction: () =>
-                        Effect.succeed(
-                          IntegrationCandidateAgentReport.cases.Working.make({
-                            correlation: {
-                              ...request.correlation,
-                              candidateResource: IntegrationCandidateResourceLocator.make(
-                                "/candidate-resources/authored-foreign"
-                              )
-                            }
-                          })
-                        ),
-                      ExitedWithoutCandidate: () =>
-                        Effect.succeed(
-                          IntegrationCandidateAgentReport.cases.ExitedWithoutCandidate.make({
-                            correlation: request.correlation
-                          })
-                        ),
-                      Working: () =>
-                        Effect.succeed(
-                          IntegrationCandidateAgentReport.cases.Working.make({ correlation: request.correlation })
-                        )
-                    })
-                  )
-                })
-              )
-          })
-        ),
-        Layer.succeed(
-          IntegrationCandidateGit,
-          IntegrationCandidateGit.of({
-            readSubmittedCommit: (repository, candidateCommit) =>
-              cursor.consumeIntegrationCandidateGitValidation(repository, candidateCommit).pipe(
-                Effect.map(({ observation }) => observation),
-                Effect.mapError(
-                  (failure) =>
-                    new IntegrationCandidateGitReadFailure({
-                      candidateCommit,
-                      detail: `${failure._tag}: ${
-                        /* v8 ignore next -- @preserve The generic interaction-mismatch rendering is exercised at the shared authored cursor boundary. */
-                        failure._tag === "AuthoredIntegrationCandidateGitValidationFailure"
-                          ? failure.detail
-                          : "interaction mismatch"
-                      } at story position ${failure.storyPosition}`,
-                      repository
-                    })
-                )
-              )
-          })
-        )
-      )
       const integratorLayer = Layer.merge(
         Layer.succeed(
           Integrator,
@@ -2171,17 +1900,11 @@ const runAuthoredScenarioCassetteWith = (request: {
         const activationLayer = validatedRunActivationLayer(
           runId,
           command.integrationTarget,
-          CandidateCorrectionLimit.make(1),
-          CandidateContinuationLimit.make(authoredCandidateContinuationLimit),
-          verificationPlan === undefined
-            ? undefined
-            : { boundary: targetVerificationBoundary, evidenceStore, plan: verificationPlan },
           command.targetPromotionConfigured === true || targetPromotionStory ? { git: targetPromotionGit } : undefined,
           completionFinalityConfigured ? completionClaimBoundary : undefined,
           completionTaskConfigured ? completionTaskBoundary : undefined,
           evidenceStore
         ).pipe(
-          Layer.provide(candidateLayer),
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
           Layer.provide(controlPolicyLayer),
@@ -2936,14 +2659,6 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
           )
         )
-        if (candidateTerminalEventTag !== undefined) {
-          yield* Effect.raceFirst(
-            Deferred.await(candidateOutcomeRecorded),
-            Fiber.join(coordinator).pipe(
-              Effect.andThen(Effect.die(`coordinator stopped before recording ${candidateTerminalEventTag}`))
-            )
-          )
-        }
         for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
         const coordinatorExitAtAssertions = coordinator.pollUnsafe()
         yield* Fiber.interrupt(coordinator)

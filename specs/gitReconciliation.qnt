@@ -1,7 +1,7 @@
 // Models issue #139's provider-neutral Git decisions plus issue #138's
-// blocker chronology. Concrete candidate construction, verification, and ref
-// mutation remain owned by their existing protocols; this model records the
-// authority and preservation decisions around those boundaries.
+// blocker chronology. The outer Integrator reports candidate text, Git
+// qualifies its exact ordered parents, and ref mutation remains at its own
+// boundary; this model records the authority and preservation decisions.
 module gitReconciliation {
   type AttemptStatus = Running | SafelySuspended
   type GitConstraint =
@@ -19,7 +19,7 @@ module gitReconciliation {
     | PromoteByExactCompareAndSet
     | ReconcileCandidateFromCurrentTarget
     | RereadTargetBeforePromotion
-    | RejectUnverifiedCandidate
+    | RejectUnqualifiedCandidate
 
   type ResultRejection = NoResultRejection | MissingResultCommit | NonDescendantResultCommit
   type TrackerBlocker = NoTrackerBlocker | BeforePromotionBlocker | AfterPromotionBlocker | IncompleteTrackerFacts
@@ -41,7 +41,7 @@ module gitReconciliation {
     independentTaskEligible: bool,
     independentTaskSelected: bool,
     exactExpectedHeadObserved: bool,
-    candidateVerified: bool,
+    candidateGitQualified: bool,
     candidatePreserved: bool,
     promotionProof: bool,
     trackerBlocker: TrackerBlocker,
@@ -78,7 +78,7 @@ module gitReconciliation {
       independentTaskEligible: true,
       independentTaskSelected: false,
       exactExpectedHeadObserved: false,
-      candidateVerified: false,
+      candidateGitQualified: false,
       candidatePreserved: true,
       promotionProof: false,
       trackerBlocker: NoTrackerBlocker,
@@ -338,49 +338,49 @@ module gitReconciliation {
     },
   }
 
-  action observeExactExpectedTargetWithVerifiedCandidate: bool = all {
+  action observeExactExpectedTargetWithGitQualifiedCandidate: bool = all {
     state.decision == ResultCommitEligible,
     state' = {
       ...state,
       decision: PromoteByExactCompareAndSet,
       exactExpectedHeadObserved: true,
-      candidateVerified: true,
+      candidateGitQualified: true,
       compareAndSetAuthorized: true,
       promotionProof: true,
     },
   }
 
-  action observeStaleTargetAfterVerification: bool = all {
+  action observeStaleTargetAfterGitQualification: bool = all {
     state.decision == ResultCommitEligible,
     state' = {
       ...state,
       decision: ReconcileCandidateFromCurrentTarget,
       exactExpectedHeadObserved: false,
-      candidateVerified: true,
+      candidateGitQualified: true,
       compareAndSetAuthorized: false,
       overwriteAuthorized: false,
     },
   }
 
-  action observeAmbiguousTargetAfterVerification: bool = all {
+  action observeAmbiguousTargetAfterGitQualification: bool = all {
     state.decision == ResultCommitEligible,
     state' = {
       ...state,
       decision: RereadTargetBeforePromotion,
       exactExpectedHeadObserved: false,
-      candidateVerified: true,
+      candidateGitQualified: true,
       compareAndSetAuthorized: false,
       overwriteAuthorized: false,
     },
   }
 
-  action observeExactTargetWithUnverifiedCandidate: bool = all {
+  action observeExactTargetWithUnqualifiedCandidate: bool = all {
     state.decision == ResultCommitEligible,
     state' = {
       ...state,
-      decision: RejectUnverifiedCandidate,
+      decision: RejectUnqualifiedCandidate,
       exactExpectedHeadObserved: true,
-      candidateVerified: false,
+      candidateGitQualified: false,
       compareAndSetAuthorized: false,
       overwriteAuthorized: false,
     },
@@ -395,7 +395,7 @@ module gitReconciliation {
       state.decision == PromoteByExactCompareAndSet,
       state.decision == ReconcileCandidateFromCurrentTarget,
       state.decision == RereadTargetBeforePromotion,
-      state.decision == RejectUnverifiedCandidate,
+      state.decision == RejectUnqualifiedCandidate,
     },
     state' = state,
   }
@@ -472,19 +472,19 @@ module gitReconciliation {
     state.decision != PromoteByExactCompareAndSet
       or and {
         state.exactExpectedHeadObserved,
-        state.candidateVerified,
+        state.candidateGitQualified,
         state.compareAndSetAuthorized,
         not(state.overwriteAuthorized),
       }
 
-  val unverifiedCandidateNeverPromotes: bool =
-    state.candidateVerified
+  val unqualifiedCandidateNeverPromotes: bool =
+    state.candidateGitQualified
       or not(state.compareAndSetAuthorized)
 
   val exactCompareAndSetReached: bool = state.decision == PromoteByExactCompareAndSet
   val staleTargetReconciliationReached: bool = state.decision == ReconcileCandidateFromCurrentTarget
   val ambiguousTargetRereadReached: bool = state.decision == RereadTargetBeforePromotion
-  val unverifiedCandidateRejectionReached: bool = state.decision == RejectUnverifiedCandidate
+  val unqualifiedCandidateRejectionReached: bool = state.decision == RejectUnqualifiedCandidate
   val prePromotionBlockerReached: bool = state.trackerBlocker == BeforePromotionBlocker
   val prePromotionRereadReached: bool =
     state.decision == RereadTargetBeforePromotion and not(state.promotionProof)
@@ -543,29 +543,33 @@ module gitReconciliation {
     observeEligibleResultCommit,
     observeMissingResultCommit,
     observeNonDescendantResultCommit,
-    observeExactExpectedTargetWithVerifiedCandidate,
-    observeStaleTargetAfterVerification,
-    observeAmbiguousTargetAfterVerification,
-    observeExactTargetWithUnverifiedCandidate,
+    observeExactExpectedTargetWithGitQualifiedCandidate,
+    observeStaleTargetAfterGitQualification,
+    observeAmbiguousTargetAfterGitQualification,
+    observeExactTargetWithUnqualifiedCandidate,
     observePrePromotionDependencyBlocker,
-    clearPrePromotionDependencyBlocker,
+    observeIncompleteTrackerFacts,
+  }
+
+  // The executable MBT step above stops at the current production-backed
+  // Integrator/Git/frontier boundary. It deliberately does not claim that
+  // this fixture records target-promotion/finality events, target-lineage
+  // changes after a blocker, or outer-Integrator session succession. The
+  // complete pure-Quint profile below retains those issue #138 projection
+  // actions for their invariants, witnesses, and negative controls.
+  action gitReconciliationStep: bool = any {
+    step,
     observeFreshTargetAfterPrePromotionBlocker,
-    recordIntegrationSessionSupersession,
-    recordUnrelatedSessionSupersession,
-    startOneSuccessorCandidate,
+    clearPrePromotionDependencyBlocker,
     observePostPromotionDependencyBlocker,
     clearPostPromotionDependencyBlocker,
     observeFreshPromotedCandidateAncestry,
     completeAfterPromotedCandidateAncestry,
-    observeIncompleteTrackerFacts,
     acceptCompletionAcrossPrerequisiteRace,
     clearDerivedCompletionWarning,
-  }
-
-  // Exhaustive safety checking must extend settled traces to its fixed bound;
-  // executable model traces retain only real issue #139 actions.
-  action verificationStep: bool = any {
-    step,
+    recordIntegrationSessionSupersession,
+    recordUnrelatedSessionSupersession,
+    startOneSuccessorCandidate,
     awaitOwnedFollowup,
   }
 }

@@ -2,7 +2,8 @@
 
 Issue: [Migrate promotion and finality to Integrator evidence](https://github.com/dearlordylord/dalph/issues/223)
 
-Status: accepted on 2026-08-14 and blocked by issue #222. This scenario
+Status: implemented and closed. Issue #222 supplied the required outer
+Integrator boundary before this scenario was implemented. This scenario
 replaces the obsolete target-verification premise in issues #60, #61, #76,
 and #141. Their exact compare-and-set, reconciliation, tracker-completion,
 claim-cleanup, and dependant-release behavior remains in force.
@@ -90,7 +91,7 @@ candidate, session, claim, or request.
 
 - `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::promotes exact M once and records its Integrator correlation and ancestry`
 - `packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts::successful preparation returns only the Git-qualified canonical M`
-- `packages/dalph/test/cassettes/scenario.test.ts::records one outer Integrator result and exact Git parents for M`
+- `packages/dalph/test/cassettes/integrator-cassette.execution.test.ts::gives one exact session to the Integrator and qualifies its reported candidate`
 - `packages/dalph/test/cassettes/scenario.test.ts::promotes Git-qualified M by exact compare-and-set and records exact ancestry`
 - `packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts::requires exact promotion success and Integrator run before replacing the active claim`
 - `packages/dalph/test/cassettes/scenario.test.ts::replaces the exact active claim with a promotion-bound completion claim`
@@ -100,7 +101,7 @@ candidate, session, claim, or request.
 - `packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts::deletes only the exact completion claim after actual fresh success and settles once`
 - `packages/dalph/test/cassettes/scenario.test.ts::Dalph confirms A before a later graph read releases B`
 - `packages/orchestrator/src/coordination/delivery/delivery.test.ts::keeps B out of actual proposals after settlement until focused A success precedes the releasing graph`
-- `packages/dalph/test/cassettes/recorded-outer-integrator.test.ts::records and round-trips every outer Integrator occurrence with causal correlation and renaming`
+- `packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts::keeps maintained authored and recorded catalogs and public exports free of legacy integration tags`
 - Negative controls: `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::process success cannot authorize promotion without an Integrator result`, `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::candidate resource HEAD cannot authorize promotion without an Integrator report`, `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::equivalent content cannot authorize promotion without exact M ancestry`, and `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::legacy target-verification evidence cannot authorize promotion`.
 - Deferred: #68 owns a conclusive non-success's stale-session and successor-session direction; #138 owns full tracker-blocker reconciliation; #225 owns removal of the remaining legacy implementation. This scenario asserts only the successful Integrator/Git/promotion/finality path and its forbidden alternatives.
 
@@ -209,11 +210,11 @@ mutation.
 - `packages/dalph/test/cassettes/scenario.test.ts::delegates changed H after a cleared blocker without reusing M or creating S2`
 - `packages/dalph/test/cassettes/scenario.test.ts::restarts after a durable blocker read with the candidate and queue history intact`
 - `packages/dalph/test/cassettes/scenario.test.ts::durably waits after an unreadable blocker restart read and resumes only on later complete facts`
-- `packages/dalph/test/cassettes/scenario.test.ts::preserves promotion proof and waits before tracker completion on a new blocker`
-- `packages/dalph/test/cassettes/scenario.test.ts::preserves promoted M across a post-promotion blocker and resumes its same finality proof after clear`
-- `packages/orchestrator/src/workflow/protocols/integration-admission/protocol.test.ts::preserves same-target order while a blocker wait leaves another target usable`
+- `packages/dalph/test/cassettes/scenario.test.ts::preserves promotion proof and releases target ownership before tracker completion on a new blocker`
+- `packages/dalph/test/cassettes/scenario.test.ts::reconstructs a post-promotion blocker without repeating Git promotion`
+- `packages/dalph/test/cassettes/scenario.test.ts::keeps another target usable while M promotion waits and releases only M when it settles`
 - `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts::keeps A as an unreadable Git wait while independent B executes its proposal`
-- Negative controls: `packages/orchestrator/src/workflow/protocols/integration-admission/protocol.test.ts::releases stale and non-convergent promotions from the exact held responsibility` and `packages/orchestrator/src/coordination/delivery/recovered-settlement-relation.test.ts::legacy candidate construction cannot authorize an outer Integrator release`.
+- Negative controls: `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::records a stale promotion when the first complete read has moved beyond H without M` and `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::records non-convergence after three ambiguous attempts and sends no fourth request`.
 - Deferred: #138 owns the complete blocker state machine and its successor handling; #68 owns changed-H stale/successor disposition. #223 preserves the exact session, qualified M, evidence, and promotion proof and never rolls Git back, reruns the Integrator, or admits same-target work past A.
 
 ## A lost task-completion response is reconciled before Q repeats
@@ -354,16 +355,14 @@ issue #76 storage contract; this issue changes only the evidence consumer.
 
 ### Scenario-to-test mapping
 
-- `packages/orchestrator/src/workflow/protocols/target-verification/evidence-store.test.ts::stores immutable bytes idempotently and publishes concurrent same-content writes once`
-- `packages/orchestrator/src/workflow/protocols/target-verification/evidence-store.test.ts::does not expose partial bytes after an interrupted filesystem publication`
-- `packages/orchestrator/src/workflow/protocols/target-verification/evidence-store.test.ts::reopens an interrupted publication and republishes the same complete object`
-- `packages/orchestrator/src/workflow/protocols/target-verification/evidence-store.test.ts::reopens a published object with the same reference and bytes`
-- `packages/orchestrator/src/workflow/protocols/target-verification/evidence-chain.test.ts::validates the exact predecessor for every reopened sealed manifest`
-- `packages/orchestrator/src/workflow/protocols/target-verification/evidence-chain.test.ts::rejects a missing, foreign, or root predecessor before downstream work`
+- `packages/orchestrator/src/workflow/protocols/evidence-store.test.ts::stores immutable bytes idempotently and publishes concurrent same-content writes once`
+- `packages/orchestrator/src/workflow/protocols/evidence-store.test.ts::does not expose partial bytes after an interrupted filesystem publication`
+- `packages/orchestrator/src/workflow/protocols/evidence-store.test.ts::reopens an interrupted publication and republishes the same complete object`
+- `packages/orchestrator/src/workflow/protocols/evidence-store.test.ts::reopens a published object with the same reference and bytes`
 - `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::rereads accepted-result and Integrator-returned evidence before task completion`
 - `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::malformed, missing, and foreign accepted-result evidence stop before tracker completion mutation`
 - `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts::legacy target-verification evidence cannot authorize promotion`
-- `packages/orchestrator/src/workflow/protocols/integration-admission/protocol.test.ts::does not let legacy passed verification authorize outer promotion`
+- `packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts::keeps maintained authored and recorded catalogs and public exports free of legacy integration tags`
 - `packages/orchestrator/src/workflow/protocols/integration-admission/accepted-result-evidence.property.test.ts::rejects every generated corrupted acceptance envelope before integration admission`
 - Negative controls: `packages/orchestrator/src/workflow/protocols/integration-admission/accepted-result-evidence.test.ts::waits when acceptance evidence is unavailable without consuming integration` and `packages/orchestrator/src/workflow/protocols/integration-admission/accepted-result-evidence.test.ts::exposes malformed or mismatched acceptance bytes as a task-local conflict`.
-- Deferred: #76 owns generic atomic evidence-store publication and filesystem recovery; #225 owns deletion of the remaining legacy target-verification/candidate-agent implementation. #223 only consumes exact accepted-result and Integrator-returned references and never manufactures evidence from a Journal row or legacy manifest.
+- Implemented dependency: #76 owns generic atomic evidence-store publication and filesystem recovery; #225 deleted the remaining legacy target-verification/candidate-agent implementation. #223 only consumes exact accepted-result and Integrator-returned references and never manufactures evidence from a Journal row or legacy manifest.

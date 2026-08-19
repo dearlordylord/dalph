@@ -1,6 +1,5 @@
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
 import { Effect, Match, Schema } from "effect"
-import { evidenceReferenceEquals } from "@dalph/contracts"
 import {
   AttemptChoiceAppliedEvent,
   AttemptRestartAuthorityReadFailedEvent,
@@ -14,21 +13,9 @@ import {
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantinedEvent,
   IntegratorJournalEvent,
-  IntegrationCandidateAgentReportedEvent,
-  IntegrationCandidateConstructedEvent,
-  IntegrationCandidateConstructionIntendedEvent,
-  IntegrationCandidateSessionSupersededEvent,
-  IntegrationCandidateGitObservedEvent,
-  IntegrationCandidateGitValidationFailedEvent,
-  IntegrationCandidateCorrectionLimitReachedEvent,
-  IntegrationCandidateContinuationLimitReachedEvent,
-  integrationCandidateCorrelationEquals,
   JournalPosition,
   PlannedAttemptContinuationAuthorizedEvent,
   PlannedAttemptReplacedEvent,
-  TargetVerificationCorrelationContradictedEvent,
-  TargetVerificationEvidenceSealedEvent,
-  TargetVerificationIntendedEvent,
   TargetPromotionIntendedEvent,
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionObservedSuccessEvent,
@@ -215,166 +202,6 @@ const recordIntegrationEntry = (
   occurrenceClassification: "InitiatedAction",
   plannedAttempt: event.plannedAttempt
 })
-
-type CandidateConstructionEvent = Extract<
-  WorkflowJournalEvent,
-  {
-    readonly _tag:
-      | "IntegrationCandidateAgentReported"
-      | "IntegrationCandidateConstructed"
-      | "IntegrationCandidateConstructionIntended"
-      | "IntegrationCandidateSessionSuperseded"
-      | "IntegrationCandidateGitObserved"
-      | "IntegrationCandidateGitValidationFailed"
-      | "IntegrationCandidateCorrectionLimitReached"
-      | "IntegrationCandidateContinuationLimitReached"
-  }
->
-
-type RecordedCandidateConstructionEntry = Extract<
-  RecordedCassetteEntry,
-  { readonly _tag: CandidateConstructionEvent["_tag"] }
->
-
-const isCandidateConstructionEvent = (event: WorkflowJournalEvent): event is CandidateConstructionEvent =>
-  event._tag === "IntegrationCandidateAgentReported" ||
-  event._tag === "IntegrationCandidateConstructed" ||
-  event._tag === "IntegrationCandidateConstructionIntended" ||
-  event._tag === "IntegrationCandidateSessionSuperseded" ||
-  event._tag === "IntegrationCandidateGitObserved" ||
-  event._tag === "IntegrationCandidateGitValidationFailed" ||
-  event._tag === "IntegrationCandidateCorrectionLimitReached" ||
-  event._tag === "IntegrationCandidateContinuationLimitReached"
-
-const isRecordedCandidateConstructionEntry = (
-  entry: RecordedCassetteEntry
-): entry is RecordedCandidateConstructionEntry =>
-  new Set([
-    "IntegrationCandidateAgentReported",
-    "IntegrationCandidateConstructed",
-    "IntegrationCandidateConstructionIntended",
-    "IntegrationCandidateSessionSuperseded",
-    "IntegrationCandidateGitObserved",
-    "IntegrationCandidateGitValidationFailed",
-    "IntegrationCandidateCorrectionLimitReached",
-    "IntegrationCandidateContinuationLimitReached"
-  ]).has(entry._tag)
-
-const recordCandidateConstructionEntry = (event: CandidateConstructionEvent): RecordedCandidateConstructionEntry =>
-  Match.value(event).pipe(
-    Match.tagsExhaustive({
-      IntegrationCandidateConstructionIntended: (value): RecordedCandidateConstructionEntry => ({
-        _tag: value._tag,
-        correlation: value.correlation,
-        correctionLimit: value.correctionLimit,
-        continuationLimit: value.continuationLimit,
-        initiatedBy: coordinator(),
-        occurrenceClassification: "InitiatedAction",
-        plannedAttempt: value.plannedAttempt
-      }),
-      IntegrationCandidateSessionSuperseded: (value): RecordedCandidateConstructionEntry => ({
-        _tag: value._tag,
-        observedTargetHead: value.observedTargetHead,
-        occurrenceClassification: "NonActionOccurrence",
-        priorCandidateCommit: value.priorCandidateCommit,
-        priorCorrelation: value.priorCorrelation,
-        successorCorrelation: value.successorCorrelation
-      }),
-      IntegrationCandidateAgentReported: (value): RecordedCandidateConstructionEntry => ({
-        _tag: value._tag,
-        expectedCorrelation: value.expectedCorrelation,
-        occurrenceClassification: "NonActionOccurrence",
-        ordinal: value.ordinal,
-        report: value.report
-      }),
-      IntegrationCandidateGitObserved: (value): RecordedCandidateConstructionEntry => ({
-        _tag: value._tag,
-        candidateCommit: value.candidateCommit,
-        correlation: value.correlation,
-        observation: value.observation,
-        occurrenceClassification: "NonActionOccurrence"
-      }),
-      IntegrationCandidateConstructed: (value): RecordedCandidateConstructionEntry => ({
-        _tag: value._tag,
-        candidateCommit: value.candidateCommit,
-        correlation: value.correlation,
-        occurrenceClassification: "NonActionOccurrence",
-        reviewManifest: value.reviewManifest
-      }),
-      IntegrationCandidateGitValidationFailed: (value): RecordedCandidateConstructionEntry => ({
-        _tag: value._tag,
-        attemptOrdinal: value.attemptOrdinal,
-        candidateCommit: value.candidateCommit,
-        correlation: value.correlation,
-        detail: value.detail,
-        occurrenceClassification: "NonActionOccurrence"
-      }),
-      IntegrationCandidateCorrectionLimitReached: (value): RecordedCandidateConstructionEntry => ({
-        _tag: value._tag,
-        correctionCount: value.correctionCount,
-        correctionLimit: value.correctionLimit,
-        correlation: value.correlation,
-        occurrenceClassification: "NonActionOccurrence"
-      }),
-      IntegrationCandidateContinuationLimitReached: (value): RecordedCandidateConstructionEntry => ({
-        _tag: value._tag,
-        continuationCount: value.continuationCount,
-        continuationLimit: value.continuationLimit,
-        correlation: value.correlation,
-        occurrenceClassification: "NonActionOccurrence"
-      })
-    })
-  )
-
-type TargetVerificationEvent = Extract<
-  WorkflowJournalEvent,
-  {
-    readonly _tag:
-      | "TargetVerificationIntended"
-      | "TargetVerificationEvidenceSealed"
-      | "TargetVerificationCorrelationContradicted"
-  }
->
-
-type RecordedTargetVerificationEntry = Extract<
-  RecordedCassetteEntry,
-  { readonly _tag: TargetVerificationEvent["_tag"] }
->
-
-const isTargetVerificationEvent = (event: WorkflowJournalEvent): event is TargetVerificationEvent =>
-  event._tag === "TargetVerificationIntended" ||
-  event._tag === "TargetVerificationEvidenceSealed" ||
-  event._tag === "TargetVerificationCorrelationContradicted"
-
-const isRecordedTargetVerificationEntry = (entry: RecordedCassetteEntry): entry is RecordedTargetVerificationEntry =>
-  entry._tag === "TargetVerificationIntended" ||
-  entry._tag === "TargetVerificationEvidenceSealed" ||
-  entry._tag === "TargetVerificationCorrelationContradicted"
-
-const recordTargetVerificationEntry = (event: TargetVerificationEvent): RecordedTargetVerificationEntry =>
-  Match.value(event).pipe(
-    Match.tagsExhaustive({
-      TargetVerificationIntended: (value): RecordedTargetVerificationEntry => ({
-        _tag: value._tag,
-        correlation: value.correlation,
-        initiatedBy: coordinator(),
-        occurrenceClassification: "InitiatedAction"
-      }),
-      TargetVerificationEvidenceSealed: (value): RecordedTargetVerificationEntry => ({
-        _tag: value._tag,
-        correlation: value.correlation,
-        manifest: value.manifest,
-        occurrenceClassification: "NonActionOccurrence",
-        terminal: value.terminal
-      }),
-      TargetVerificationCorrelationContradicted: (value): RecordedTargetVerificationEntry => ({
-        _tag: value._tag,
-        expected: value.expected,
-        occurrenceClassification: "NonActionOccurrence",
-        received: value.received
-      })
-    })
-  )
 
 type TargetPromotionEvent = Extract<WorkflowJournalEvent, { readonly _tag: `TargetPromotion${string}` }>
 type RecordedTargetPromotionEntry = Extract<RecordedCassetteEntry, { readonly _tag: TargetPromotionEvent["_tag"] }>
@@ -614,26 +441,13 @@ const recordIntegrationFinalityEntry = (event: IntegrationFinalityEvent): Record
     })
   )
 
-type IntegrationPreparationEvent =
-  | CandidateConstructionEvent
-  | TargetVerificationEvent
-  | TargetPromotionEvent
-  | IntegrationFinalityEvent
-type RecordedIntegrationPreparationEntry =
-  | RecordedCandidateConstructionEntry
-  | RecordedTargetVerificationEntry
-  | RecordedTargetPromotionEntry
-  | RecordedIntegrationFinalityEntry
+type IntegrationPreparationEvent = TargetPromotionEvent | IntegrationFinalityEvent
+type RecordedIntegrationPreparationEntry = RecordedTargetPromotionEntry | RecordedIntegrationFinalityEntry
 
 const isIntegrationPreparationEvent = (event: WorkflowJournalEvent): event is IntegrationPreparationEvent =>
-  isCandidateConstructionEvent(event) ||
-  isTargetVerificationEvent(event) ||
-  isTargetPromotionEvent(event) ||
-  isIntegrationFinalityTagged(event)
+  isTargetPromotionEvent(event) || isIntegrationFinalityTagged(event)
 
 const recordIntegrationPreparationEntry = (event: IntegrationPreparationEvent): RecordedIntegrationPreparationEntry => {
-  if (isCandidateConstructionEvent(event)) return recordCandidateConstructionEntry(event)
-  if (isTargetVerificationEvent(event)) return recordTargetVerificationEntry(event)
   if (isTargetPromotionEvent(event)) return recordTargetPromotionEntry(event)
   return recordIntegrationFinalityEntry(event)
 }
@@ -641,10 +455,7 @@ const recordIntegrationPreparationEntry = (event: IntegrationPreparationEvent): 
 const isRecordedIntegrationPreparationEntry = (
   entry: RecordedCassetteEntry
 ): entry is RecordedIntegrationPreparationEntry =>
-  isRecordedCandidateConstructionEntry(entry) ||
-  isRecordedTargetVerificationEntry(entry) ||
-  isRecordedTargetPromotionEntry(entry) ||
-  isIntegrationFinalityTagged(entry)
+  isRecordedTargetPromotionEntry(entry) || isIntegrationFinalityTagged(entry)
 
 type TaskBoundaryEvent = Extract<
   WorkflowJournalEvent,
@@ -1243,184 +1054,6 @@ const priorEntryPosition = (
   return JournalPosition.make(priorIndex + 1)
 }
 
-const eventForCandidateConstructionEntry = (
-  entry: RecordedCandidateConstructionEntry,
-  entries: ReadonlyArray<RecordedCassetteEntry>,
-  index: number
-): WorkflowJournalEvent =>
-  Match.valueTags(entry, {
-    IntegrationCandidateConstructionIntended: (value) =>
-      IntegrationCandidateConstructionIntendedEvent.make({
-        correlation: value.correlation,
-        correctionLimit: value.correctionLimit,
-        continuationLimit: value.continuationLimit,
-        plannedAttempt: value.plannedAttempt,
-        responsibilityBeganAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationResponsibilityBegan" &&
-            candidate.plannedAttempt.attemptId === value.correlation.attemptId,
-          "IntegrationCandidateConstructionIntended requires IntegrationResponsibilityBegan"
-        ),
-        startedAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationStarted" &&
-            candidate.plannedAttempt.attemptId === value.correlation.attemptId,
-          "IntegrationCandidateConstructionIntended requires IntegrationStarted"
-        ),
-        version: workflowJournalEventVersion
-      }),
-    IntegrationCandidateSessionSuperseded: (value) =>
-      IntegrationCandidateSessionSupersededEvent.make({
-        observedTargetHead: value.observedTargetHead,
-        priorCandidateCommit: value.priorCandidateCommit,
-        priorCorrelation: value.priorCorrelation,
-        responsibilityBeganAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationResponsibilityBegan" &&
-            candidate.plannedAttempt.attemptId === value.priorCorrelation.attemptId &&
-            candidate.acceptedResult.commit === value.priorCorrelation.acceptedResultCommit &&
-            evidenceReferenceEquals(
-              candidate.acceptedResult.evidenceManifest,
-              value.priorCorrelation.acceptanceManifest
-            ) &&
-            candidate.integrationTarget.repository === value.priorCorrelation.integrationTarget.repository &&
-            candidate.integrationTarget.ref === value.priorCorrelation.integrationTarget.ref,
-          "IntegrationCandidateSessionSuperseded requires matching prior IntegrationResponsibilityBegan"
-        ),
-        startedAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationStarted" &&
-            candidate.plannedAttempt.attemptId === value.priorCorrelation.attemptId &&
-            candidate.acceptedResult.commit === value.priorCorrelation.acceptedResultCommit &&
-            evidenceReferenceEquals(
-              candidate.acceptedResult.evidenceManifest,
-              value.priorCorrelation.acceptanceManifest
-            ) &&
-            candidate.integrationTarget.repository === value.priorCorrelation.integrationTarget.repository &&
-            candidate.integrationTarget.ref === value.priorCorrelation.integrationTarget.ref,
-          "IntegrationCandidateSessionSuperseded requires matching prior IntegrationStarted"
-        ),
-        successorCorrelation: value.successorCorrelation,
-        version: workflowJournalEventVersion
-      }),
-    IntegrationCandidateAgentReported: (value) =>
-      IntegrationCandidateAgentReportedEvent.make({
-        expectedCorrelation: value.expectedCorrelation,
-        ordinal: value.ordinal,
-        report: value.report,
-        version: workflowJournalEventVersion
-      }),
-    IntegrationCandidateGitObserved: (value) =>
-      IntegrationCandidateGitObservedEvent.make({
-        candidateCommit: value.candidateCommit,
-        correlation: value.correlation,
-        observation: value.observation,
-        submissionAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationCandidateAgentReported" &&
-            candidate.report._tag === "Submitted" &&
-            candidate.report.candidateCommit === value.candidateCommit &&
-            candidate.report.correlation.candidateId === value.correlation.candidateId,
-          "IntegrationCandidateGitObserved requires its matching submitted report"
-        ),
-        version: workflowJournalEventVersion
-      }),
-    IntegrationCandidateConstructed: (value) =>
-      IntegrationCandidateConstructedEvent.make({
-        candidateCommit: value.candidateCommit,
-        correlation: value.correlation,
-        gitObservationAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationCandidateGitObserved" &&
-            candidate.candidateCommit === value.candidateCommit &&
-            candidate.correlation.candidateId === value.correlation.candidateId,
-          "IntegrationCandidateConstructed requires its matching Git observation"
-        ),
-        reviewManifest: value.reviewManifest,
-        version: workflowJournalEventVersion
-      }),
-    IntegrationCandidateGitValidationFailed: (value) =>
-      IntegrationCandidateGitValidationFailedEvent.make({
-        attemptOrdinal: value.attemptOrdinal,
-        candidateCommit: value.candidateCommit,
-        correlation: value.correlation,
-        detail: value.detail,
-        submissionAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationCandidateAgentReported" &&
-            candidate.report._tag === "Submitted" &&
-            candidate.report.candidateCommit === value.candidateCommit &&
-            candidate.report.correlation.candidateId === value.correlation.candidateId,
-          "IntegrationCandidateGitValidationFailed requires its matching submitted report"
-        ),
-        version: workflowJournalEventVersion
-      }),
-    IntegrationCandidateCorrectionLimitReached: (value) =>
-      IntegrationCandidateCorrectionLimitReachedEvent.make({
-        correctionCount: value.correctionCount,
-        correctionLimit: value.correctionLimit,
-        correlation: value.correlation,
-        invalidObservationAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationCandidateGitObserved" &&
-            candidate.correlation.candidateId === value.correlation.candidateId,
-          "IntegrationCandidateCorrectionLimitReached requires its invalid Git observation"
-        ),
-        version: workflowJournalEventVersion
-      }),
-    IntegrationCandidateContinuationLimitReached: (value) =>
-      IntegrationCandidateContinuationLimitReachedEvent.make({
-        continuationCount: value.continuationCount,
-        continuationLimit: value.continuationLimit,
-        correlation: value.correlation,
-        lastReportAt: priorEntryPosition(
-          entries,
-          index,
-          (candidate) =>
-            candidate._tag === "IntegrationCandidateAgentReported" &&
-            candidate.report._tag !== "Submitted" &&
-            candidate.report.correlation.candidateId === value.correlation.candidateId,
-          "IntegrationCandidateContinuationLimitReached requires its prior candidate report"
-        ),
-        version: workflowJournalEventVersion
-      })
-  })
-
-const eventForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry): WorkflowJournalEvent =>
-  Match.valueTags(entry, {
-    TargetVerificationIntended: (value) =>
-      TargetVerificationIntendedEvent.make({ correlation: value.correlation, version: workflowJournalEventVersion }),
-    TargetVerificationEvidenceSealed: (value) =>
-      TargetVerificationEvidenceSealedEvent.make({
-        correlation: value.correlation,
-        manifest: value.manifest,
-        terminal: value.terminal,
-        version: workflowJournalEventVersion
-      }),
-    TargetVerificationCorrelationContradicted: (value) =>
-      TargetVerificationCorrelationContradictedEvent.make({
-        expected: value.expected,
-        received: value.received,
-        version: workflowJournalEventVersion
-      })
-  })
-
 const eventForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): WorkflowJournalEvent =>
   Match.valueTags(entry, {
     TargetPromotionIntended: (value) =>
@@ -1590,13 +1223,7 @@ const eventForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntr
       })
   })
 
-const eventForIntegrationPreparationEntry = (
-  entry: RecordedIntegrationPreparationEntry,
-  entries: ReadonlyArray<RecordedCassetteEntry>,
-  index: number
-): WorkflowJournalEvent => {
-  if (isRecordedCandidateConstructionEntry(entry)) return eventForCandidateConstructionEntry(entry, entries, index)
-  if (isRecordedTargetVerificationEntry(entry)) return eventForTargetVerificationEntry(entry)
+const eventForIntegrationPreparationEntry = (entry: RecordedIntegrationPreparationEntry): WorkflowJournalEvent => {
   if (isRecordedTargetPromotionEntry(entry)) return eventForTargetPromotionEntry(entry)
   return eventForIntegrationFinalityEntry(entry)
 }
@@ -1628,7 +1255,7 @@ const eventForOtherRecordedEntry = (
   }
   if (isRecordedOuterIntegratorEntry(entry)) return eventForOuterIntegratorEntry(entry)
   if (isRecordedIntegrationQuarantineEntry(entry)) return eventForIntegrationQuarantineEntry(entry)
-  if (isRecordedIntegrationPreparationEntry(entry)) return eventForIntegrationPreparationEntry(entry, entries, index)
+  if (isRecordedIntegrationPreparationEntry(entry)) return eventForIntegrationPreparationEntry(entry)
   if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return eventForTrackerEntry(entry)
@@ -1783,39 +1410,6 @@ const lyricForIntegrationQuarantineEntry = (entry: RecordedIntegrationQuarantine
       `Dalph quarantined Integrator session ${value.correlation.sessionId} on ${value.basis._tag} evidence.`
   })
 
-// eslint-disable-next-line complexity -- Every closed candidate occurrence receives one concrete actor-first lyric.
-const lyricForCandidateConstructionEntry = (entry: RecordedCandidateConstructionEntry): string =>
-  Match.valueTags(entry, {
-    IntegrationCandidateConstructionIntended: (value) =>
-      `Dalph coordinator began candidate ${value.correlation.candidateId} in session ${value.correlation.integrationSessionId}.`,
-    IntegrationCandidateSessionSuperseded: (value) =>
-      `Dalph preserved candidate ${value.priorCandidateCommit} and superseded its stale session for target ${value.observedTargetHead}.`,
-    IntegrationCandidateAgentReported: (value) =>
-      integrationCandidateCorrelationEquals(value.expectedCorrelation, value.report.correlation)
-        ? `The integration agent reported ${value.report._tag} for session ${value.report.correlation.integrationSessionId}.`
-        : `The integration agent returned an infrastructure correlation contradiction for expected session ${value.expectedCorrelation.integrationSessionId}; Dalph preserved the involved candidate resources.`,
-    IntegrationCandidateGitObserved: (value) =>
-      `Git reported ${value.observation._tag} for submitted commit ${value.candidateCommit}.`,
-    IntegrationCandidateConstructed: (value) =>
-      `Git proved candidate ${value.candidateCommit} has the exact ordered parents selected for the session.`,
-    IntegrationCandidateGitValidationFailed: (value) =>
-      `Git could not validate submitted commit ${value.candidateCommit}: ${value.detail}`,
-    IntegrationCandidateCorrectionLimitReached: (value) =>
-      `Candidate session ${value.correlation.integrationSessionId} stopped after ${value.correctionCount} correction attempts.`,
-    IntegrationCandidateContinuationLimitReached: (value) =>
-      `Candidate session ${value.correlation.integrationSessionId} stopped after ${value.continuationCount} automatic agent continuations.`
-  })
-
-const lyricForTargetVerificationEntry = (entry: RecordedTargetVerificationEntry): string =>
-  Match.valueTags(entry, {
-    TargetVerificationIntended: (value) =>
-      `Dalph coordinator fixed verification request ${value.correlation.requestId} to plan ${value.correlation.planId}.`,
-    TargetVerificationEvidenceSealed: (value) =>
-      `The target repository's public verification wrapper returned ${value.terminal} for candidate ${value.correlation.candidateCommit}.`,
-    TargetVerificationCorrelationContradicted: (value) =>
-      `Dalph stopped verification request ${value.expected.requestId} after the wrapper returned a foreign correlation.`
-  })
-
 const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): string =>
   Match.valueTags(entry, {
     TargetPromotionIntended: (value) =>
@@ -1873,8 +1467,6 @@ const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntr
   })
 
 const lyricForIntegrationPreparationEntry = (entry: RecordedIntegrationPreparationEntry): string => {
-  if (isRecordedCandidateConstructionEntry(entry)) return lyricForCandidateConstructionEntry(entry)
-  if (isRecordedTargetVerificationEntry(entry)) return lyricForTargetVerificationEntry(entry)
   if (isRecordedTargetPromotionEntry(entry)) return lyricForTargetPromotionEntry(entry)
   return lyricForIntegrationFinalityEntry(entry)
 }
@@ -1900,13 +1492,11 @@ const lyricForClaimAcquisitionEntry = (entry: RecordedClaimAcquisitionEntry): st
 const lyricForTaskBoundaryEntry = (
   entry: Exclude<
     RecordedCassetteEntry,
-    | RecordedCandidateConstructionEntry
     | RecordedAttemptStopEntry
     | RecordedExecutorEntry
     | RecordedGitObservationEntry
     | RecordedRunEntry
     | RecordedTrackerEntry
-    | RecordedTargetVerificationEntry
     | RecordedTargetPromotionEntry
     | RecordedIntegrationFinalityEntry
     | RecordedOuterIntegratorEntry

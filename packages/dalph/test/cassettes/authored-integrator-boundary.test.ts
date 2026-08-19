@@ -233,24 +233,3 @@ it.effect("returns a typed Git failure for the exact reported candidate", () =>
     }
   })
 )
-
-it.effect("does not treat a legacy candidate-agent report as an outer Integrator result", () =>
-  Effect.gen(function* () {
-    const cursor = yield* makeStoryCursor([
-      AuthoredCassetteStoryItem.cases.IntegrationCandidateAgentReported.make({
-        attemptId,
-        report: { _tag: "Submitted", candidateCommit: sha("d") }
-      })
-    ])
-    const result = yield* cursor.consumeIntegratorRequest(correlation).pipe(Effect.exit)
-    expect(Exit.isFailure(result)).toBe(true)
-    if (Exit.isFailure(result)) {
-      const reason = result.cause.reasons[0]
-      expect(reason).toBeDefined()
-      if (reason !== undefined) {
-        expect(Cause.isFailReason(reason)).toBe(true)
-        if (Cause.isFailReason(reason)) expect(reason.error).toBeInstanceOf(AuthoredCassetteInteractionMismatch)
-      }
-    }
-  })
-)

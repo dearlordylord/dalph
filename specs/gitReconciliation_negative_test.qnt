@@ -86,7 +86,7 @@ module gitReconciliationNegativeTest {
   run staleOverwriteIsDetectedTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeStaleTargetAfterVerification)
+      .then(observeStaleTargetAfterGitQualification)
       .then(overwriteStaleTarget)
       .expect(not(staleTargetNeverOverwrites))
   }
@@ -108,7 +108,7 @@ module gitReconciliationNegativeTest {
   run postPromotionRollbackIsDetectedTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .then(observePostPromotionDependencyBlocker)
       .then(promoteWhilePostPromotionBlockerWaits)
       .expect(not(postPromotionBlockerNeverRollsBack))
@@ -144,7 +144,7 @@ module gitReconciliationNegativeTest {
   run completionWithoutFreshAncestryIsDetectedTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .then(completeWithoutFreshPromotedAncestry)
       .expect(not(clearedPromotionRequiresFreshAncestry))
   }
@@ -152,7 +152,7 @@ module gitReconciliationNegativeTest {
   run completionDuringPostPromotionBlockerIsDetectedTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .then(observePostPromotionDependencyBlocker)
       .then(completeWhilePostPromotionBlockerWaits)
       .expect(not(clearedPromotionRequiresFreshAncestry))
@@ -161,7 +161,7 @@ module gitReconciliationNegativeTest {
   run reintegrationAfterPromotionIsDetectedTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .then(reintegrateAfterPromotion)
       .expect(not(clearedPromotionNeverReintegrates))
   }
@@ -182,7 +182,7 @@ module gitReconciliationNegativeTest {
   run stalePromotionAuthorizationAfterAmbiguousReadIsDetectedTest = {
     init
       .then(observeEligibleResultCommit)
-      .then(observeExactExpectedTargetWithVerifiedCandidate)
+      .then(observeExactExpectedTargetWithGitQualifiedCandidate)
       .then(observePostPromotionDependencyBlocker)
       .then(clearPostPromotionDependencyBlocker)
       .then(restorePromotionAuthorizationAfterAmbiguousRead)

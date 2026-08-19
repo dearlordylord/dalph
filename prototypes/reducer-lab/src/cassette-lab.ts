@@ -79,7 +79,7 @@ const cassetteCategoryMetadata = {
     runnerName: "runApplicationExitProtocolCassette"
   },
   Authored: {
-    controlledBoundaries: "tracker, claims, Git, executor, journal, verification, and promotion",
+    controlledBoundaries: "tracker, claims, Git, executor, journal, and promotion",
     itemName: "interactions",
     label: "Authored coordinator stories",
     runnerName: "runAuthoredScenarioCassette"

@@ -37,7 +37,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
-import { EvidenceStore, EvidenceStoreFailure, memoryEvidenceStoreLayer } from "../target-verification/evidence-store.js"
+import { EvidenceStore, EvidenceStoreFailure, memoryEvidenceStoreLayer } from "../evidence-store.js"
 import {
   AcceptedResultEvidenceConflict,
   AcceptedResultEvidenceUnavailable,

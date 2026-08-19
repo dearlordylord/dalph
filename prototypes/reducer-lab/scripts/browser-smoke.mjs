@@ -3,7 +3,7 @@ import { chromium } from "playwright"
 
 const labUrl = process.env.REDUCER_LAB_URL ?? "http://determined_johnson.orb.local:4173/"
 const terminalTimeoutMs = 180_000
-const insecureOriginCassette = "authored:candidateCorrectionAfterUnreadableGit"
+const insecureOriginCassette = "authored:unreadableTaskUnpauseRejected"
 const applicationExitCassette = "application-exit:drainFailure"
 const codexExecutorCassette = "codex-executor:lostTurnResponseReconciled"
 const framedCassette = "authored:dependentTasksCompleteInOneRun"
@@ -544,7 +544,7 @@ try {
   await selectCassette(page, linkedDeliveryStoryCassette)
   assert.match(
     await page.locator("#selected-cassette .delivery-story-scope").textContent() ?? "",
-    /rejected candidate, verification, and integration split.*historical regression evidence.*one outer Integrator session/u
+    /one outer Integrator session.*supporting delivery evidence/u
   )
   await page.evaluate(() => {
     globalThis.__linkedDeliveryStoryTrace = []

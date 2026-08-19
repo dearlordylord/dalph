@@ -221,33 +221,35 @@ issue-57 facts—explicit candidate reporting, exact ordered parents, fixed
 session, lineage gates, and preservation—behind the outer Integrator. Issue
 59's separate verification stage is superseded: repository checks belong
 inside the Integrator. Issue 60's exact compare-and-set and Git reconciliation
-remain required. The existing accepted-result integration model still encodes
-the obsolete split and is not evidence for the corrected boundary until
-replaced.
+remain required. The accepted-result integration model now represents the
+outer Integrator result, Git qualification, promotion, quarantine, and
+operator-authorized successor behavior without the obsolete split.
 
 **D26 Candidate shape.** An integration candidate has exactly two ordered direct
 parents: the fixed expected target head first, the immutable accepted result
 second. The Integrator must name the candidate explicitly; the order is never
 reversed and a newer head is never substituted.
-→ Replacement model required; historical shape checks are supporting evidence only.
+→ `outerIntegratorReportsOneExplicitCandidateTest` and
+`exactGitParentsQualifyReportedCandidateTest`.
 
 **D27 Promotion by compare-and-set against the exact expected head.** A stale
 head selects reconciliation and an ambiguous head requires a reread. Neither
 authorizes a force update, a reset, or a rewrite. A prepared candidate is never
 reused against a different head; any later Integrator session receives its own
 freshly qualified head.
-→ The compare-and-set and reconciliation tests remain supporting evidence;
-the stale-head portion of `acceptedResultIntegration` must be replaced because
-that model exposes the Integrator's internal stages.
+→ `exactCandidatePromotesWithDirectCompareAndSetTest`,
+`changedHeadMakesPromotionStaleAndPreservesCandidateTest`, and
+`ambiguousPromotionRequiresFreshGitBeforeRetryTest`.
 
 **D28 A prepared candidate is Git-qualified before promotion.** Dalph may offer
 only the commit explicitly reported by the Integrator after Git proves its
 ordered direct parents are `[H, C]`. Integrator process success, a free-form
 message, the newest resource commit, or a clean tree does not identify that
 commit or prove its lineage.
-→ Replacement model required. The historical sealed-verification premise is
-not evidence for this boundary; `integrationFinality` may consume only the
-replacement's exact promotion proof.
+→ `exactGitParentsQualifyReportedCandidateTest`,
+`unreportedCandidateCannotAuthorizePromotionTest`, and
+`legacyVerificationCannotAuthorizePromotionTest`. `integrationFinality`
+consumes only the exact promotion proof.
 
 ## Process and durability
 
@@ -423,14 +425,12 @@ equal to the Run-recovery projection before giving it to admission.
 
 ## Serialized integration
 
-**Serialized integration is under boundary correction.** The issue 56 queue
-and exact-head promotion rules below remain required. Production and the
-`acceptedResultIntegration` model still expose the superseded issue 57/59
-candidate-agent and verification stages, so they are regression evidence for
-the old runtime, not conformance evidence for the corrected outer Integrator.
-Issue 222 and issue 68 provide the replacement operational scenarios. Issue 60
-retains valid Git behavior but requires scenario reconciliation; issue 138 now
-has a corrected blocker scenario and is blocked by the migration.
+**Serialized integration uses one outer Integrator boundary.** The issue 56
+queue and exact-head promotion rules below remain required. Dalph records the
+Integrator's exact run and explicit result, asks Git to qualify the reported
+candidate, and promotes only from that proof. The former candidate-agent and
+target-verification stages are historical and provide no current authority.
+Issues 222, 68, 138, 224, and 225 provide the accepted operational scenarios.
 
 **D41 Integration admission is a distinct resource from task-work capacity.**
 Queued or started integration is not counted against task-work capacity, and
@@ -516,7 +516,8 @@ unreadable fresh fact authorizes no successor.
 → `taskFactReconciliation` must state the late-`Accepted` preservation,
 fresh-facts guard, and atomic replacement; the issue #56 scenario and its
 replacement outer-Integrator seam must keep the result outside integration;
-the historical `acceptedResultIntegration` model cannot prove this boundary.
+the accepted-result integration model keeps the late result as evidence only
+in `lateAcceptedAfterRestartRemainsEvidenceOnlyTest`.
 
 **D49 Operator request identity is exact.** Exact redelivery of a request returns
 its recorded result rather than acting twice. Reuse of a request identity for a

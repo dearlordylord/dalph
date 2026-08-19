@@ -143,9 +143,9 @@ unfinished session to the Integrator automatically.
 
 See [issue #222](https://github.com/dearlordylord/dalph/issues/222), [issue
 #68](https://github.com/dearlordylord/dalph/issues/68), and ADR 0014. The
-historical #57 candidate-agent scenario, #59 target-verification scenario, and current
-accepted-result integration model still encode the superseded split-stage
-design and must not be used as implementation authority until replaced.
+historical #57 candidate-agent and #59 target-verification scenarios record the
+superseded split-stage design. The accepted-result integration model now uses
+the outer Integrator, explicit result, and Git-qualification boundary.
 
 ## Exact-head promotion
 

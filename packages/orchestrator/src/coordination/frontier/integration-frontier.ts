@@ -13,11 +13,6 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import type { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
-import {
-  type CandidateCorrectionLimit,
-  type CandidateContinuationLimit
-} from "../../workflow/protocols/integration-candidate-construction/protocol.js"
-import { type TargetVerificationPlan } from "../../workflow/protocols/target-verification/events.js"
 import { claimAuthorityWaitsFor, queuedTargetWaitsFor } from "./integration-claim-waits.js"
 import { deriveStartedIntegrationFrontier } from "./integration-frontier-transitions.js"
 export { integrationFinalityTransitionsFor } from "./integration-finality-frontier.js"
@@ -29,12 +24,9 @@ export interface IntegrationFrontierRuntimeFacts {
   readonly currentTrackerTaskIds: ReadonlySet<TaskId>
   readonly heldResponsibilityPositions: ReadonlySet<JournalPosition>
   readonly integrationTarget: Option.Option<IntegrationTarget>
-  readonly candidateCorrectionLimit?: Option.Option<CandidateCorrectionLimit>
-  readonly candidateContinuationLimit?: Option.Option<CandidateContinuationLimit>
   readonly targetLineageByAttemptId?: ReadonlyMap<AttemptId, TargetLineageObservation>
   /** Attempts whose current graph authority is newer than their last Git target-lineage observation. */
   readonly targetLineageRefreshRequiredAttemptIds?: ReadonlySet<AttemptId>
-  readonly targetVerificationPlan?: Option.Option<TargetVerificationPlan>
   readonly targetPromotionConfigured?: boolean
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
   readonly activeClaimByAttemptId?: ReadonlyMap<AttemptId, ActiveTaskClaim>
@@ -47,11 +39,8 @@ const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
   activeResponsibilityPositions: new Set(),
   heldResponsibilityPositions: new Set(),
   integrationTarget: Option.none(),
-  candidateCorrectionLimit: Option.none(),
-  candidateContinuationLimit: Option.none(),
   targetLineageByAttemptId: new Map(),
   targetLineageRefreshRequiredAttemptIds: new Set(),
-  targetVerificationPlan: Option.none(),
   targetPromotionConfigured: false,
   taskClaimAuthorityByAttemptId: new Map()
 }

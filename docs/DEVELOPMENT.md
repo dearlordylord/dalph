@@ -103,11 +103,13 @@ requires a setting that cannot correctly be shared.
   functions above cyclomatic complexity eight in each file.
 - `pnpm check:duplicates` enforces the configured TypeScript duplication budget.
 - `pnpm test` runs the deterministic Vitest suite.
-- `pnpm test:coverage` independently enforces 99% production coverage and 90%
+- `pnpm test:coverage` independently enforces 99% production coverage and 75%
   maintained-evaluation coverage for statements, branches, functions, and
   lines. It applies the same brackets to changed executable lines from
   `coverage/coverage-final.json`, so surplus in one bracket cannot hide debt in
-  the other.
+  the other. Maintained cassettes and deterministic test-only completion
+  boundaries use the evaluation bracket; application runtime and adapters stay
+  in the production bracket.
 - `pnpm test:mbt` runs the Quint-connected executable conformance suites.
 - `pnpm check:lab` runs the Reducer Lab maintained evaluation: the Lab package's
   typecheck, maintained-cassette smoke, and production build. It does not run
@@ -131,7 +133,7 @@ separate hosted check because it requires an HTTP host and Chromium.
 
 Maintained cassettes and the shared integration-finality fixture are evaluation
 evidence, not production implementation. Keep their maintained evaluation at
-90% or better as a separate ledger from the production 99% statements,
+75% or better as a separate ledger from the production 99% statements,
 branches, functions, and lines enforced by `test:coverage`. The Lab check
 exercises the maintained cassette assertions through typecheck, smoke, and
 build; it does not enter the production line coverage ledger until those

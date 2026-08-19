@@ -16,7 +16,6 @@ import {
   ClaimOwner,
   ControlDirection,
   InitialControlPolicy,
-  IntegrationCandidateGitObservation,
   IntegratorCandidateText,
   IntegratorCorrelation,
   IntegratorGitObservation,
@@ -29,8 +28,6 @@ import {
   TaskClaimObservation,
   TaskClaimReacquisitionRequestId,
   TargetLineageObservation,
-  TargetVerificationArtifactName,
-  TargetVerificationPlanId,
   TargetPromotionAttemptOrdinal,
   TargetPromotionRequest,
   TargetPromotionTerminalBasis,
@@ -138,20 +135,6 @@ export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
     integrationTarget: IntegrationTarget,
     taskId: TaskId
   },
-  IntegrationCandidateConstructed: {
-    acceptedResultCommit: GitCommitSha,
-    attemptId: AttemptId,
-    candidateCommit: GitCommitSha,
-    expectedTargetHead: GitCommitSha,
-    taskId: TaskId
-  },
-  TargetVerificationPassed: { candidateCommit: GitCommitSha, planId: TargetVerificationPlanId, taskId: TaskId },
-  TargetVerificationStopped: {
-    candidateCommit: GitCommitSha,
-    outcome: Schema.Literals(["Failed", "Killed", "Partial", "TimedOut"]),
-    planId: TargetVerificationPlanId,
-    taskId: TaskId
-  },
   TargetPromotionSucceeded: {
     basis: TargetPromotionTerminalBasis,
     candidateCommit: GitCommitSha,
@@ -228,25 +211,8 @@ const RunCoordinatorFields = {
   integrationTarget: IntegrationTarget,
   targetPromotionConfigured: Schema.optionalKey(Schema.Boolean),
   target: TrackerTarget,
-  verificationPlanId: Schema.NullOr(TargetVerificationPlanId),
   worktreeRoot: WorktreeLocator
 }
-
-/** One byte object returned by the authored public verification wrapper. */
-const AuthoredTargetVerificationArtifact = Schema.Struct({
-  content: Schema.String,
-  name: TargetVerificationArtifactName
-})
-
-/** A terminal public-wrapper result; correlation is supplied by Dalph's request. */
-const AuthoredTargetVerificationResult = Schema.TaggedUnion({
-  CorrelationContradiction: {},
-  Failed: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) },
-  Killed: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) },
-  Partial: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) },
-  Passed: { artifacts: Schema.NonEmptyArray(AuthoredTargetVerificationArtifact) },
-  TimedOut: { artifacts: Schema.Array(AuthoredTargetVerificationArtifact) }
-})
 
 const AuthoredPauseCoverage = Schema.TaggedUnion({
   ExactTaskPauseCoverage: {},
@@ -751,28 +717,6 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   IntegratorGitObservationReturned: { candidateText: IntegratorCandidateText, observation: IntegratorGitObservation },
   /** Git cannot read the explicitly reported candidate text. */
   IntegratorGitObservationFailed: { candidateText: IntegratorCandidateText, detail: Schema.String },
-  IntegrationCandidateAgentReported: {
-    attemptId: AttemptId,
-    report: Schema.TaggedUnion({
-      Conflict: {},
-      CorrelationContradiction: {},
-      ExitedWithoutCandidate: {},
-      Submitted: { candidateCommit: GitCommitSha },
-      Working: {}
-    })
-  },
-  IntegrationCandidateGitValidationFailed: {
-    candidateCommit: GitCommitSha,
-    detail: Schema.String,
-    repository: GitRepositoryLocator
-  },
-  IntegrationCandidateGitValidationReturned: {
-    candidateCommit: GitCommitSha,
-    observation: IntegrationCandidateGitObservation,
-    repository: GitRepositoryLocator
-  },
-  /** The repository's public wrapper returns one terminal result for the selected plan. */
-  TargetVerificationReturned: { result: AuthoredTargetVerificationResult },
   /** Git's exact H -> M compare-and-set result, or its lost response. */
   TargetPromotionCompareAndSetReturned: {
     result: Schema.TaggedUnion({ Applied: {}, RejectedExpectedHead: { observedHeadSha: GitCommitSha } })
@@ -959,12 +903,6 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "IntegratorGitObservationReturned",
     "IntegratorGitObservationFailed"
   ],
-  IntegrationCandidateConstruction: [
-    "IntegrationCandidateAgentReported",
-    "IntegrationCandidateGitValidationFailed",
-    "IntegrationCandidateGitValidationReturned"
-  ],
-  TargetVerification: ["TargetVerificationReturned"],
   TargetPromotion: [
     "TargetPromotionCompareAndSetReturned",
     "TargetPromotionCompareAndSetResponseLost",

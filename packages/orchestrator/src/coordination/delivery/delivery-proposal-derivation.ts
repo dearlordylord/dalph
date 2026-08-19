@@ -154,8 +154,6 @@ const settlementTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
   "QueueAcceptedResultIntegrationResponsibility",
   "StartQueuedIntegration",
   "AcquireStartedIntegrationTarget",
-  "ContinueStartedIntegrationCandidate",
-  "RunTargetVerification",
   "RunTargetPromotion",
   "ObservePromotedCandidateAncestryAfterBlockerClear",
   "ReplacePromotedTaskClaim",

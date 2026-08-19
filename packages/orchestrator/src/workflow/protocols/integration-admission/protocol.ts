@@ -18,7 +18,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
 import { acceptedResultEquivalence, integrationResponsibilityEquivalence } from "./responsibility.js"
 import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
-import { EvidenceReference, EvidenceStore, EvidenceStoreFailure } from "../target-verification/evidence-store.js"
+import { EvidenceReference, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
 
 /**
  * Exists only before the exact integration-start occurrence. It is derived

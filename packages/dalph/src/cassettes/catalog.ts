@@ -190,7 +190,6 @@ export const singletonTaskCompletesAuthoredCassette: ScenarioCassette = Schema.d
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" },
       target: "cassette-target",
-      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -501,7 +500,6 @@ export const staleTaskPauseRejectedAuthoredCassette: ScenarioCassette = Schema.d
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" },
       target: "cassette-target",
-      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes"
     },
     { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
@@ -879,7 +877,6 @@ const groupingFactsAddedBeforeRunningA = [
     executor: "executor:cassette",
     integrationTarget: { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" },
     target: "cassette-target",
-    verificationPlanId: null,
     worktreeRoot: "/dalph/cassettes"
   },
   { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -2414,7 +2411,6 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/pipeline.git", ref: "refs/heads/master" },
       target: "pipeline-cassette-target",
-      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/pipeline"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "pipeline-cassette-target" } },
@@ -2650,7 +2646,6 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette: ScenarioCass
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
       target: "cassette-target",
-      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/integration"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -2764,53 +2759,53 @@ export const changedAttemptRestartPastIntegrationRejectedAuthoredCassette: Scena
   ]
 })
 
-const candidateScenarioExpectedBehaviorFrom = (
+const integratorScenarioExpectedBehaviorFrom = (
   item: Extract<AuthoredCassetteStoryItem, { readonly _tag: "ExpectedBehavior" }>,
-  candidateStory: ReadonlyArray<unknown>
+  integratorStory: ReadonlyArray<unknown>
 ): ReadonlyArray<unknown> => [
   { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
-  ...candidateStory,
+  ...integratorStory,
   item
 ]
 
-const candidateScenarioStoryItemsFrom = (
+const integratorScenarioStoryItemsFrom = (
   item: AuthoredCassetteStoryItem,
-  candidateStory: ReadonlyArray<unknown>
+  integratorStory: ReadonlyArray<unknown>
 ): ReadonlyArray<unknown> => {
   if (item._tag === "TrackerGraphReadReturned" && item.graph.revision === acceptedResultBlockedGraph.revision) {
     return [{ ...item, graph: singletonGraph }]
   }
   if (item._tag !== "ExpectedBehavior") return [item]
-  return candidateScenarioExpectedBehaviorFrom(item, candidateStory)
+  return integratorScenarioExpectedBehaviorFrom(item, integratorStory)
 }
 
-const candidateScenarioFrom = (name: string, candidateStory: ReadonlyArray<unknown>) => {
+const integratorScenarioFrom = (name: string, integratorStory: ReadonlyArray<unknown>) => {
   const baseStory = acceptedResultRestartsIntoIntegrationAuthoredCassette.story
   return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
     name,
-    story: baseStory.flatMap((item) => candidateScenarioStoryItemsFrom(item, candidateStory))
+    story: baseStory.flatMap((item) => integratorScenarioStoryItemsFrom(item, integratorStory))
   })
 }
 
-const outerCandidateExpectedHead = "1111111111111111111111111111111111111111"
-const outerCandidateAcceptedCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-const outerCandidateText = "refs/heads/dalph/integrator-candidate-A"
-const outerCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
-const outerCandidateSessionSuffix =
-  `$authored-run:attempt:A:0:23:27:${outerCandidateExpectedHead}:${outerCandidateAcceptedCommit}` +
+const outerIntegratorExpectedHead = "1111111111111111111111111111111111111111"
+const outerIntegratorAcceptedCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const outerIntegratorCandidateText = "refs/heads/dalph/integrator-candidate-A"
+const outerIntegratorCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
+const outerIntegratorSessionSuffix =
+  `$authored-run:attempt:A:0:23:27:${outerIntegratorExpectedHead}:${outerIntegratorAcceptedCommit}` +
   ":/dalph/cassettes/integration.git:refs/heads/master"
-const outerCandidateCorrelationA = {
+const outerIntegratorCorrelationA = {
   acceptedResult: {
-    commit: outerCandidateAcceptedCommit,
+    commit: outerIntegratorAcceptedCommit,
     evidenceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
   },
-  candidateResource: `integrator-resource:${outerCandidateSessionSuffix}`,
-  expectedTargetHead: outerCandidateExpectedHead,
+  candidateResource: `integrator-resource:${outerIntegratorSessionSuffix}`,
+  expectedTargetHead: outerIntegratorExpectedHead,
   integrationTarget: { repository: "/dalph/cassettes/integration.git", ref: "refs/heads/master" },
   plannedAttempt: {
     attemptId: "attempt:A:0",
-    baseSha: outerCandidateExpectedHead,
+    baseSha: outerIntegratorExpectedHead,
     branch: "refs/heads/dalph/attempt-A-0",
     executor: "executor:cassette",
     runId: "$authored-run",
@@ -2820,101 +2815,31 @@ const outerCandidateCorrelationA = {
     worktree: "/dalph/cassettes/integration/attempt-A-0"
   },
   queuedAt: 22,
-  sessionId: `integrator-session:${outerCandidateSessionSuffix}`,
+  sessionId: `integrator-session:${outerIntegratorSessionSuffix}`,
   startedAt: 23,
   targetLineageObservedAt: 27
 } as const
 
 const outerIntegratorRequestForA = {
   _tag: "IntegratorRequestReceived" as const,
-  correlation: outerCandidateCorrelationA
+  correlation: outerIntegratorCorrelationA
 }
-const outerIntegratorNotPreparedForA = (detail: string) => [
-  outerIntegratorRequestForA,
-  { _tag: "IntegratorResultReturned" as const, result: { _tag: "NotPrepared" as const, detail } }
-]
-const outerIntegratorPreparedForA = (candidateText = outerCandidateText) => [
+const outerIntegratorPreparedForA = (candidateText = outerIntegratorCandidateText) => [
   outerIntegratorRequestForA,
   { _tag: "IntegratorResultReturned" as const, result: { _tag: "PreparedCandidate" as const, candidateText } }
 ]
 const outerIntegratorGitCommitForA = (
-  candidateText = outerCandidateText,
-  commit = outerCandidateCommit,
-  directParents: ReadonlyArray<string> = [outerCandidateExpectedHead, outerCandidateAcceptedCommit]
+  candidateText = outerIntegratorCandidateText,
+  commit = outerIntegratorCandidateCommit,
+  directParents: ReadonlyArray<string> = [outerIntegratorExpectedHead, outerIntegratorAcceptedCommit]
 ) => ({
   _tag: "IntegratorGitObservationReturned" as const,
   candidateText,
   observation: { _tag: "Commit" as const, candidateText, commit, directParents }
 })
 
-/** A non-submitting outer Integrator report remains terminal without exposing private correction stages. */
-export const candidateConflictRecoveryAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "outer Integrator returns NotPrepared without exposing private conflict handling",
-  outerIntegratorNotPreparedForA("outer Integrator completed without a prepared candidate")
-)
-
-/** An unreadable Git qualification is retried after an explicit activation boundary without rerunning Integrator. */
-const candidateCorrectionAfterUnreadableGitBase = candidateScenarioFrom(
-  "outer Integrator rereads unreadable Git without rerunning the session",
-  [
-    ...outerIntegratorPreparedForA(),
-    {
-      _tag: "IntegratorGitObservationFailed",
-      candidateText: outerCandidateText,
-      detail: "repository temporarily unreadable"
-    },
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
-    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
-    outerIntegratorGitCommitForA(),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    }
-  ]
-)
-export const candidateCorrectionAfterUnreadableGitAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
-  ...candidateCorrectionAfterUnreadableGitBase,
-  startingFacts: {
-    ...candidateCorrectionAfterUnreadableGitBase.startingFacts,
-    targetLineageObservations: [
-      {
-        plannedBaseIsAncestorOfTargetHead: true,
-        plannedBaseSha: outerCandidateExpectedHead,
-        targetHeadSha: outerCandidateExpectedHead
-      },
-      {
-        plannedBaseIsAncestorOfTargetHead: true,
-        plannedBaseSha: outerCandidateExpectedHead,
-        targetHeadSha: outerCandidateExpectedHead
-      }
-    ]
-  }
-})
-
-/** A non-submitting outer Integrator result is terminal and leaves Git uncalled. */
-export const candidateVerificationFailureAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "outer Integrator returns NotPrepared without exposing private checks",
-  outerIntegratorNotPreparedForA("outer Integrator concluded that no candidate was prepared")
-)
-
-/** A non-submitting correlation contradiction is retained without exposing provider-private checks. */
-export const candidateVerificationContradictionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "outer Integrator NotPrepared result leaves Git uncalled",
-  outerIntegratorNotPreparedForA("outer Integrator returned a conclusive non-success")
-)
-
 /** One outer Integrator submission and exact Git parents authorize promotion. */
-const candidatePreparedAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
+const integratorPreparedAuthoredCassette: ScenarioCassette = integratorScenarioFrom(
   "outer Integrator reports one Git-qualified candidate",
   [...outerIntegratorPreparedForA(), outerIntegratorGitCommitForA()]
 )
@@ -2923,9 +2848,9 @@ const candidatePreparedAuthoredCassette: ScenarioCassette = candidateScenarioFro
 export const taskPauseFinishesHeldIntegrationAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...candidatePreparedAuthoredCassette,
+  ...integratorPreparedAuthoredCassette,
   name: "Alice pauses task A after its integration target is held",
-  story: candidatePreparedAuthoredCassette.story.flatMap((item) =>
+  story: integratorPreparedAuthoredCassette.story.flatMap((item) =>
     item._tag === "IntegratorGitObservationReturned"
       ? [
           item,
@@ -3158,7 +3083,6 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
       executor: "executor:cassette",
       integrationTarget: { repository: "/dalph/cassettes/pause-boundaries.git", ref: "refs/heads/master" },
       target: "cassette-target",
-      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/pause-boundaries"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -3349,9 +3273,9 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
 
 const promotionScenarioFrom = (name: string, promotionStory: ReadonlyArray<unknown>, promotionEvidence: unknown) =>
   Schema.decodeUnknownSync(AuthoredScenarioCassette)({
-    ...candidatePreparedAuthoredCassette,
+    ...integratorPreparedAuthoredCassette,
     name,
-    story: candidatePreparedAuthoredCassette.story.flatMap((item) =>
+    story: integratorPreparedAuthoredCassette.story.flatMap((item) =>
       item._tag !== "ExpectedBehavior"
         ? [item]
         : [
@@ -3425,9 +3349,9 @@ const issue138PostPromotionBlockerGraph = {
 /** A complete new blocker read preserves the Git-qualified candidate before promotion. */
 export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)(
   {
-    ...candidatePreparedAuthoredCassette,
+    ...integratorPreparedAuthoredCassette,
     name: "a new prerequisite preserves the Git-qualified candidate before promotion",
-    story: candidatePreparedAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    story: integratorPreparedAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
       if (item._tag === "RunCoordinator") return [{ ...item, targetPromotionConfigured: true }]
       if (item._tag === "IntegratorGitObservationReturned") return [item, { _tag: "CoordinatorProcessDies" }]
       return item._tag !== "ExpectedBehavior"
@@ -4623,7 +4547,6 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       executor: "executor:double-diamond",
       integrationTarget: { repository: "/dalph/cassettes/double-diamond.git", ref: "refs/heads/master" },
       target: "double-diamond-target",
-      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/double-diamond"
     },
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.initialAEligible, [
@@ -4813,7 +4736,6 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       executor: "executor:five-task-diamond",
       integrationTarget: { repository: "/dalph/cassettes/five-task-diamond.git", ref: "refs/heads/master" },
       target: "double-diamond-target",
-      verificationPlanId: null,
       worktreeRoot: "/dalph/cassettes/five-task-diamond"
     },
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(fiveTaskDiamondGraphs.noneComplete, [
@@ -5007,25 +4929,6 @@ export const targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassett
     }
   )
 
-/** Two definitive invalid submissions exhaust the accepted one-correction cassette policy. */
-export const candidateCorrectionExhaustionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "Git rejects an invalid candidate without a correction attempt",
-  [
-    ...outerIntegratorPreparedForA("refs/heads/dalph/missing-integrator-candidate-A"),
-    {
-      _tag: "IntegratorGitObservationReturned",
-      candidateText: "refs/heads/dalph/missing-integrator-candidate-A",
-      observation: { _tag: "Missing", candidateText: "refs/heads/dalph/missing-integrator-candidate-A" }
-    }
-  ]
-)
-
-/** A misrouted response is preserved as a correlation contradiction and never reaches Git. */
-export const candidateCorrelationContradictionAuthoredCassette: ScenarioCassette = candidateScenarioFrom(
-  "outer Integrator conclusive non-success stops before Git",
-  outerIntegratorNotPreparedForA("outer Integrator returned no promotion candidate")
-)
-
 /** Public catalog consumed by acceptance tests, documentation, and Reducer Lab. */
 const defineAuthoredCassetteCatalog = <const Name extends string>(
   catalog: Readonly<Record<Name, AuthoredScenarioCassette>>
@@ -5034,13 +4937,6 @@ const defineAuthoredCassetteCatalog = <const Name extends string>(
 type MaintainedAuthoredCassetteName =
   | "acceptedResultRestartsIntoIntegration"
   | "postIntegrationAttemptChoiceRejected"
-  | "candidateConflictRecovery"
-  | "candidateCorrectionAfterUnreadableGit"
-  | "candidateCorrectionExhaustion"
-  | "candidateCorrelationContradiction"
-  | "candidateVerificationFailure"
-  | "candidateVerificationContradiction"
-  | "candidateVerificationPassed"
   | "prePromotionBlocker"
   | "prePromotionBlockerClearAndSupersession"
   | "prePromotionBlockerClearAtCurrentHead"
@@ -5105,13 +5001,6 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
   defineAuthoredCassetteCatalog({
     acceptedResultRestartsIntoIntegration: acceptedResultRestartsIntoIntegrationAuthoredCassette,
     postIntegrationAttemptChoiceRejected: postIntegrationAttemptChoiceRejectedAuthoredCassette,
-    candidateConflictRecovery: candidateConflictRecoveryAuthoredCassette,
-    candidateCorrectionAfterUnreadableGit: candidateCorrectionAfterUnreadableGitAuthoredCassette,
-    candidateCorrectionExhaustion: candidateCorrectionExhaustionAuthoredCassette,
-    candidateCorrelationContradiction: candidateCorrelationContradictionAuthoredCassette,
-    candidateVerificationFailure: candidateVerificationFailureAuthoredCassette,
-    candidateVerificationContradiction: candidateVerificationContradictionAuthoredCassette,
-    candidateVerificationPassed: candidatePreparedAuthoredCassette,
     prePromotionBlocker: prePromotionBlockerAuthoredCassette,
     prePromotionBlockerClearAndSupersession: prePromotionBlockerClearAndSupersessionAuthoredCassette,
     prePromotionBlockerClearAtCurrentHead: prePromotionBlockerClearAtCurrentHeadAuthoredCassette,

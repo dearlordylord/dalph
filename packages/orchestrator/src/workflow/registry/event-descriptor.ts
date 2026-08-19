@@ -30,14 +30,6 @@ import {
   integratorRunStartedRecordKey,
   integratorResultRecordedRecordKey,
   integratorSessionFixedRecordKey,
-  integrationCandidateAgentReportRecordKey,
-  integrationCandidateConstructedRecordKey,
-  integrationCandidateConstructionIntentRecordKey,
-  integrationCandidateSessionSupersededRecordKey,
-  integrationCandidateGitObservationRecordKey,
-  integrationCandidateGitValidationFailureRecordKey,
-  integrationCandidateCorrectionLimitReachedRecordKey,
-  integrationCandidateContinuationLimitReachedRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
@@ -49,9 +41,6 @@ import {
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey,
   taskWorkCapacityPolicyRecordKey,
-  targetVerificationCorrelationContradictedRecordKey,
-  targetVerificationEvidenceSealedRecordKey,
-  targetVerificationIntentRecordKey,
   targetPromotionAttemptIntentRecordKey,
   targetPromotionIntentRecordKey,
   targetPromotionNonConvergenceRecordKey,
@@ -397,54 +386,6 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     IntegratorRunCandidateGitObserved: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorRunCandidateGitObservedRecordKey(event.run, event.candidateText)
-    }),
-    IntegrationCandidateConstructionIntended: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateConstructionIntentRecordKey(event.correlation)
-    }),
-    IntegrationCandidateSessionSuperseded: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateSessionSupersededRecordKey(event.priorCorrelation, event.successorCorrelation)
-    }),
-    IntegrationCandidateAgentReported: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateAgentReportRecordKey(event.expectedCorrelation, event.ordinal)
-    }),
-    IntegrationCandidateGitObserved: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateGitObservationRecordKey(event.correlation, event.submissionAt)
-    }),
-    IntegrationCandidateConstructed: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateConstructedRecordKey(event.correlation)
-    }),
-    IntegrationCandidateGitValidationFailed: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateGitValidationFailureRecordKey(
-        event.correlation,
-        event.submissionAt,
-        event.attemptOrdinal
-      )
-    }),
-    IntegrationCandidateCorrectionLimitReached: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateCorrectionLimitReachedRecordKey(event.correlation)
-    }),
-    IntegrationCandidateContinuationLimitReached: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: integrationCandidateContinuationLimitReachedRecordKey(event.correlation)
-    }),
-    TargetVerificationIntended: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: targetVerificationIntentRecordKey(event.correlation.requestId)
-    }),
-    TargetVerificationEvidenceSealed: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: targetVerificationEvidenceSealedRecordKey(event.correlation.requestId)
-    }),
-    TargetVerificationCorrelationContradicted: (event) => ({
-      _tag: "GenericEventDescriptor",
-      expectedKey: targetVerificationCorrelationContradictedRecordKey(event.expected.requestId)
     }),
     TargetPromotionIntended: (event) => ({
       _tag: "GenericEventDescriptor",

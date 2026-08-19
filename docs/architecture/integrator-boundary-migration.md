@@ -1,8 +1,9 @@
 # Outer Integrator boundary migration
 
-Status: accepted architecture correction on 2026-08-14. Issue #222 implements
-the expand step beside the legacy pipeline; issues #223, #68, #224, and #225
-own the remaining runtime migration and legacy removal.
+Status: implementation migration. Issues #222, #223, #68, #138, and #224
+establish the outer boundary, run-bound promotion/finality, recovery, blocker
+reconciliation, and graceful Exit behavior. Issue #225 removes the remaining
+legacy pipeline and evaluation vocabulary.
 
 ## The corrected user story
 
@@ -33,20 +34,22 @@ The old design split one Integrator into Dalph-owned candidate-agent,
 correction, repository-verification, evidence-sealing, and promotion phases.
 That split originated in issue #30 and was implemented by issues #57, #59, and
 #78. Those issues are closed completed as truthful historical records; issues
-#222 and #225 own correction and removal. Issue #68 remains open because its
-recovery and operator behavior is still required at the outer boundary.
+#222 and #225 own correction and removal. Issue #68 supplies the implemented
+recovery and operator behavior at the outer boundary.
 
 The following checked-in areas describe or implement the rejected split and
 must be replaced rather than renamed:
 
-- `workflow/protocols/integration-candidate/` and candidate-agent progress;
+- `workflow/protocols/integration-candidate-construction/` and candidate-agent
+  progress;
 - `workflow/protocols/target-verification/` and
   `authorities/verification/`;
 - integration-frontier transitions that emit `RunTargetVerification` or wait
   for a verification plan;
 - Journal events, cassettes, and fixtures dedicated to candidate-agent reports
   or target-verification intents/results;
-- `specs/acceptedResultIntegration.qnt` and its test/negative-test modules;
+- legacy Git-reconciliation adapters and model vocabulary that invoke those
+  stages;
 - integration-finality inputs that require a `TargetVerificationManifest`.
 
 The following behavior remains and should be built upon:
@@ -72,11 +75,11 @@ The following behavior remains and should be built upon:
 | #68: Full rerun | One recorded direction preserves S and creates/restores at most one S2 at fresh H2 | Automatic candidate rebuild inside the old session |
 | Promotion | Only Integrator-reported, Git-qualified M reaches exact-head CAS | A sealed target-verification manifest as promotion authority |
 
-The corrective implementation graph is #222 → #223 → #68, with #224 after
-#223 and final legacy removal in #225 after #68 and #224. Unstarted blocker work
-#138 is rewritten in place and waits for #223 and #68. The completed issues
-remain historical records rather than being reopened or repurposed.
+The corrective implementation graph was #222 → #223 → #68, with #224 after
+#223, #138 after #223/#68, and final legacy removal in #225 after #68 and #224.
+The completed issues remain historical records rather than being reopened or
+repurposed.
 
-Before the Quint model is changed, read `docs/QUINT-GUIDE.md`; the replacement
-model must have a negative control proving that a Dalph-owned verification
-phase or an unreported candidate cannot enable promotion.
+The accepted-result Quint model has negative controls proving that legacy
+verification evidence or an unreported candidate cannot enable promotion.
+Read `docs/QUINT-GUIDE.md` before changing it or its conformance adapter.

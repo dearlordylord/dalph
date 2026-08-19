@@ -56,7 +56,7 @@ import {
   taskTrackerFactsObservedEvent,
   type FocusedTaskCompletionFactsObserved
 } from "../../task-tracker-facts/observation.js"
-import { EvidenceStore } from "../target-verification/evidence-store.js"
+import { EvidenceStore } from "../evidence-store.js"
 import {
   TargetPromotionGit,
   targetPromotionAcceptedResultOf,

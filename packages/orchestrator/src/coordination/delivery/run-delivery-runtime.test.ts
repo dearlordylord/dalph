@@ -23,7 +23,7 @@ import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.j
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
-import { IntegrationCandidateBoundaryUnavailable } from "./integration-candidate-boundary.js"
+import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
@@ -1449,7 +1449,7 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
       }
     }
     const relation = yield* dynamicEvaluationSignal(withProposals(yield* baseEvaluation, [acquired]))
-    const actionFailure = new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" })
+    const actionFailure = new IntegratorBoundaryUnavailable({ boundary: "Integrator" })
     const integrationTargets = yield* makeIntegrationTargetResourceController()
     const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
 
@@ -1564,7 +1564,7 @@ it.effect("returns the exact action failure after rolling back its process-local
     const actionProposal = proposal(0, TaskId.make("action-failure"))
     const initial = withProposals(yield* baseEvaluation, [actionProposal], 1)
     const relation = yield* dynamicEvaluationSignal(initial)
-    const actionFailure = new IntegrationCandidateBoundaryUnavailable({ boundary: "Agent" })
+    const actionFailure = new IntegratorBoundaryUnavailable({ boundary: "Integrator" })
     const executor = DeliveryActionExecutor.of({ execute: () => Effect.fail(actionFailure) })
 
     const failure = yield* runDeliveryRuntimeDecision(relation).pipe(

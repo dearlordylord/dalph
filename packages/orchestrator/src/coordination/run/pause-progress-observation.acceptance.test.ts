@@ -449,13 +449,7 @@ const publishJournaledRuntimeObservation = Effect.fn("PauseProgressAcceptance.pu
     const journal = yield* Journal
     const publication = yield* DeliveryRuntimeObservationPublication
     const resources = yield* DeliveryRuntimeResources
-    const recovery = yield* makeRunRecoveryProjection(
-      runId,
-      undefined,
-      undefined,
-      undefined,
-      resources.integrationTargets
-    )
+    const recovery = yield* makeRunRecoveryProjection(runId, undefined, resources.integrationTargets)
     const relations = yield* makeReactiveDeliveryRelationsLayer(
       runId,
       target,

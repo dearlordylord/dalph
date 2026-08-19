@@ -22,7 +22,7 @@
       "count": 1
     },
     "import-x/no-unused-modules": {
-      "count": 3
+      "count": 2
     }
   },
   "packages/dalph/src/cassettes/authored-domain.ts": {
@@ -86,11 +86,6 @@
   },
   "packages/orchestrator/src/authorities/coordinator-ownership/ownership.ts": {
     "functional/no-mixed-types": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/authorities/git/integration-candidate.ts": {
-    "functional/immutable-data": {
       "count": 1
     }
   },
@@ -348,21 +343,6 @@
   },
   "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.ts": {
     "import-x/no-unused-modules": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/target-verification/evidence-store.ts": {
-    "functional/immutable-data": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/target-verification/protocol.test.ts": {
-    "functional/no-throw-statements": {
-      "count": 2
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/target-verification/protocol.ts": {
-    "functional/immutable-data": {
       "count": 1
     }
   },

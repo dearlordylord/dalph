@@ -15,8 +15,6 @@ describe("application Exit integration boundary classification", () => {
   })
 
   it.each([
-    "ContinueStartedIntegrationCandidate",
-    "RunTargetVerification",
     "ReplacePromotedTaskClaim",
     "CompletePromotedTask",
     "ObserveFocusedTaskCompletion",
