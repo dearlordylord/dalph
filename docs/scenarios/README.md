@@ -43,6 +43,7 @@ separately and are not current implementation authority.
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |
 | `issue-224-outer-integrator-application-exit.md` | 224 |
 | `issue-225-remove-legacy-split-integration.md` | 225 |
+| `issue-142-qualify-recovery-prefix-harness.md` | 142 |
 
 **Describes implemented behavior with an intentionally open owning issue** —
 the implementation evidence and post-implementation choices audit are recorded
