@@ -5,33 +5,19 @@ import { Activity, Workflow, WorkflowEngine } from "effect/unstable/workflow"
 import { describe, expect, it } from "vitest"
 import {
   CurrentTaskFactsRefresh,
-  ExactTaskClaimReconciliation,
+  ExactTaskClaimRecovery,
   recoverCurrentRunDecision
 } from "../src/domain-colored-computation.ts"
 import { fixture } from "../src/contracts.ts"
 
 describe("Effect Workflow placement beneath Dalph domain colours", () => {
-  it("keeps the seven-line delivery description outside Workflow", async () => {
+  it("keeps Workflow vocabulary out of the seven-line delivery description", async () => {
     const deliverySource = await readFile(
       fileURLToPath(
         new URL("../../../packages/orchestrator/src/coordination/delivery/delivery.ts", import.meta.url)
       ),
       "utf8"
     )
-    const deliveryBody = deliverySource.slice(deliverySource.indexOf("export const delivery"))
-
-    expect(deliveryBody).toBe(`export const delivery = Effect.gen(function* () {
-  const trackerGraph = yield* TrackerGraphRelation
-
-  const graph = trackerGraph.signal
-  const frontier = mapCurrentSignal(graph, frontierOf)
-  const tickets = yield* boundedParallelTickets(frontier)
-  const responsibilities = yield* executorResponsibilities(tickets)
-  const settlements = yield* deliverySettlements(responsibilities)
-
-  return yield* reflectDeliverySettlements(settlements)
-})
-`)
     expect(deliverySource).not.toMatch(/effect\/unstable\/workflow|\b(?:Activity|WorkflowEngine)\b/)
   })
 
@@ -40,9 +26,9 @@ describe("Effect Workflow placement beneath Dalph domain colours", () => {
     const result = await Effect.runPromise(
       recoverCurrentRunDecision.pipe(
         Effect.provideService(
-          ExactTaskClaimReconciliation,
-          ExactTaskClaimReconciliation.of({
-            exactClaim: Effect.sync(() => {
+          ExactTaskClaimRecovery,
+          ExactTaskClaimRecovery.of({
+            recoverExactClaim: Effect.sync(() => {
               calls.push("reconcile exact task claim")
               return fixture.claim
             })
@@ -74,8 +60,8 @@ describe("Effect Workflow placement beneath Dalph domain colours", () => {
     const result = await Effect.runPromise(
       recoverCurrentRunDecision.pipe(
         Effect.provideService(
-          ExactTaskClaimReconciliation,
-          ExactTaskClaimReconciliation.of({ exactClaim: Effect.succeed(null) })
+          ExactTaskClaimRecovery,
+          ExactTaskClaimRecovery.of({ recoverExactClaim: Effect.succeed(null) })
         ),
         Effect.provideService(
           CurrentTaskFactsRefresh,
@@ -88,23 +74,33 @@ describe("Effect Workflow placement beneath Dalph domain colours", () => {
   })
 
   it("requires one stable Activity name per durable domain action", async () => {
-    let calls = 0
+    let firstActionCalls = 0
+    let secondActionCalls = 0
     const probe = Workflow.make("DomainActionIdentityProbe", {
       error: Schema.Never,
       idempotencyKey: ({ runId }) => runId,
       payload: { runId: Schema.NonEmptyString },
       success: Schema.Int
     })
-    const action = Activity.make({
+    const firstAction = Activity.make({
       error: Schema.Never,
-      execute: Effect.sync(() => ++calls),
+      execute: Effect.sync(() => ++firstActionCalls),
+      name: "ExecuteDomainAction",
+      success: Schema.Int
+    })
+    const secondAction = Activity.make({
+      error: Schema.Never,
+      execute: Effect.sync(() => {
+        secondActionCalls += 1
+        return 2
+      }),
       name: "ExecuteDomainAction",
       success: Schema.Int
     })
     const handler = probe.toLayer(() =>
       Effect.gen(function* () {
-        yield* action
-        return yield* action
+        yield* firstAction
+        return yield* secondAction
       })
     )
     const runtime = handler.pipe(Layer.provideMerge(WorkflowEngine.layerMemory))
@@ -114,6 +110,7 @@ describe("Effect Workflow placement beneath Dalph domain colours", () => {
     )
 
     expect(result).toBe(1)
-    expect(calls).toBe(1)
+    expect(firstActionCalls).toBe(1)
+    expect(secondActionCalls).toBe(0)
   })
 })

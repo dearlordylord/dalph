@@ -20,7 +20,7 @@ import {
 } from "../controlled-world.ts"
 import {
   CurrentTaskFactsRefresh,
-  ExactTaskClaimReconciliation,
+  ExactTaskClaimRecovery,
   recoverCurrentRunDecision
 } from "../domain-colored-computation.ts"
 
@@ -183,8 +183,8 @@ export const runEffectWorkflow = async (input: EffectWorkflowInput): Promise<Eff
       }
       return yield* recoverCurrentRunDecision.pipe(
         Effect.provideService(
-          ExactTaskClaimReconciliation,
-          ExactTaskClaimReconciliation.of({ exactClaim })
+          ExactTaskClaimRecovery,
+          ExactTaskClaimRecovery.of({ recoverExactClaim: exactClaim })
         ),
         Effect.provideService(CurrentTaskFactsRefresh, CurrentTaskFactsRefresh.of({ currentTaskFacts }))
       )

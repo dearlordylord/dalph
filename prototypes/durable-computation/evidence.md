@@ -252,9 +252,10 @@ child-process suite remains green with the Workflow adapter supplying the two
 domain ports.
 
 The extension also found one concrete integration constraint. Within one
-Workflow execution, yielding the same named Activity twice reuses its first
-stored result. A focused executable probe observes one underlying call and the
-same result twice. A production adapter therefore cannot name every proposal
+Workflow execution, two separately constructed Activities with the same name
+collide: the second yield reuses the first stored result without executing its
+own implementation. A focused executable probe uses independent counters to
+prove that behavior. A production adapter therefore cannot name every proposal
 `ExecuteAction`; each materialized domain action needs one stable durable name.
 The claim Activity now includes its exact `OperationId`.
 

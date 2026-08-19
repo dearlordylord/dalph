@@ -35,8 +35,10 @@ export const delivery = Effect.gen(function* () {
 
 Every line is description-coloured. Planning, reconciliation, action, runtime,
 establishment, and stabilization stay behind separately named compositions.
-The source guard in `domain-colors.test.ts` imports the production file from
-the pinned worktree and requires this exact body to remain unchanged.
+The existing production source guard requires this exact body to remain
+unchanged. `domain-colors.test.ts` adds the narrower evaluation assertion that
+the production file imports no Workflow implementation and names no Activity
+or Workflow engine.
 
 ## Shape A: preserve `delivery`, put Workflow below domain ports
 
@@ -44,8 +46,8 @@ The tracer-bullet decision now reads:
 
 ```ts
 export const recoverCurrentRunDecision = Effect.gen(function* () {
-  const claims = yield* ExactTaskClaimReconciliation
-  const exactClaim = yield* claims.exactClaim
+  const claims = yield* ExactTaskClaimRecovery
+  const exactClaim = yield* claims.recoverExactClaim
   if (exactClaim === null) return "Wait"
 
   const tasks = yield* CurrentTaskFactsRefresh
@@ -65,7 +67,7 @@ The Workflow adapter supplies those ports:
 ```text
 Dalph Run Workflow handler                         infrastructure/runtime
   recoverCurrentRunDecision                       domain composition
-    ExactTaskClaimReconciliation.exactClaim       reconciliation port
+    ExactTaskClaimRecovery.recoverExactClaim      recovery action port
       ReconcileExactTaskClaimV1/<OperationId>     durable Activity
     CurrentTaskFactsRefresh.currentTaskFacts      fresh owning-boundary read
 ```
@@ -94,11 +96,12 @@ Workflow payloads or results.
 ### Constraints exposed by the executable spike
 
 1. **One stable Activity identity per durable domain action.** In the pinned
-   engine, invoking the same Activity name twice in one execution reuses the
-   first result. `domain-colors.test.ts` proves this with a counter: two yields
-   of `ExecuteDomainAction` execute once and both observe result `1`. A generic
-   Activity named only `ExecuteAction` is therefore incorrect. The candidate
-   claim Activity now includes its exact `OperationId` in the name.
+   engine, two separately constructed Activities with the same name in one
+   execution collide: the second yield reuses the first result and never runs
+   its own implementation. `domain-colors.test.ts` proves this with independent
+   counters. A generic Activity named only `ExecuteAction` is therefore
+   incorrect. The candidate claim Activity now includes its exact `OperationId`
+   in the name.
 2. **Replay must republish accepted domain facts.** Reusing an Activity result
    is not enough. The adapter must publish the decoded claim, attempt, Git, or
    integration result through the same current domain input that causes the
@@ -175,6 +178,5 @@ machinery than the rewrite duplicates.
 | The successor asks GitHub for current task facts before deciding. | `reads fresh GitHub facts when Workflow replays after ordinary downtime` |
 | The domain composition says reconcile, refresh, and decide without Workflow/storage vocabulary. | `expresses the recovered decision without Workflow or storage vocabulary` |
 | A foreign or absent exact claim stops before the current-decision read. | `waits without refreshing task facts when the exact claim cannot be reconciled` |
-| The protected seven-line description remains outside Workflow. | `keeps the seven-line delivery description outside Workflow` |
+| The protected seven-line description remains outside Workflow; production's existing exact source guard continues to own its body. | `keeps Workflow vocabulary out of the seven-line delivery description`; `keeps quiescence probes out of action planning and former scheduler runtime code` |
 | Repeated durable actions cannot share one generic Activity name. | `requires one stable Activity name per durable domain action` |
-

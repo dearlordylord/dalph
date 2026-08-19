@@ -1,15 +1,15 @@
 import { Context, Effect } from "effect"
 import type { ExactClaim, RecoveredDecision } from "./contracts.ts"
 
-export interface ExactTaskClaimReconciliationService {
-  readonly exactClaim: Effect.Effect<ExactClaim | null>
+export interface ExactTaskClaimRecoveryService {
+  readonly recoverExactClaim: Effect.Effect<ExactClaim | null>
 }
 
-/** Checks the task tracker before deciding whether the exact claim request is settled. */
-export class ExactTaskClaimReconciliation extends Context.Service<
-  ExactTaskClaimReconciliation,
-  ExactTaskClaimReconciliationService
->()("@dalph/prototype/ExactTaskClaimReconciliation") {}
+/** Reads the tracker and, only from an absent claim, performs the already-authorized exact claim request. */
+export class ExactTaskClaimRecovery extends Context.Service<
+  ExactTaskClaimRecovery,
+  ExactTaskClaimRecoveryService
+>()("@dalph/prototype/ExactTaskClaimRecovery") {}
 
 export interface CurrentTaskFacts {
   readonly lifecycle: "Open" | "Closed"
@@ -30,10 +30,10 @@ export class CurrentTaskFactsRefresh extends Context.Service<
 export const recoverCurrentRunDecision: Effect.Effect<
   RecoveredDecision,
   never,
-  CurrentTaskFactsRefresh | ExactTaskClaimReconciliation
+  CurrentTaskFactsRefresh | ExactTaskClaimRecovery
 > = Effect.gen(function* () {
-  const claims = yield* ExactTaskClaimReconciliation
-  const exactClaim = yield* claims.exactClaim
+  const claims = yield* ExactTaskClaimRecovery
+  const exactClaim = yield* claims.recoverExactClaim
   if (exactClaim === null) return "Wait"
 
   const tasks = yield* CurrentTaskFactsRefresh
