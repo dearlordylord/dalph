@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data, max-lines -- The closed occurrence schema, relationship validation, and journal projection share one exhaustive boundary. */
-import { Effect, Option, Schema } from "effect"
+import { Effect, Match, Option, Schema } from "effect"
 import {
   AttemptId,
   PlannedTaskAttempt,
@@ -725,6 +725,266 @@ const projectDirectOccurrence = (
   )
 }
 
+type TrackerReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerReadIntentRecorded" }>
+type GitReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "GitReadIntentRecorded" }>
+type GitObservationJournalEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
+>
+
+const gitObservationJournalEventTags = {
+  PlannedAttemptWorktreeObserved: true,
+  TargetLineageObserved: true
+} satisfies Record<GitObservationJournalEvent["_tag"], true>
+
+const isGitObservationJournalEvent = (event: WorkflowJournalEvent): event is GitObservationJournalEvent =>
+  Object.hasOwn(gitObservationJournalEventTags, event._tag)
+
+type ProjectionContext = {
+  readonly occurrences: Array<WorkflowOccurrence>
+  readonly trackerReadIntents: Map<string, TrackerReadIntentJournalEvent>
+  readonly gitReadIntents: Map<string, GitReadIntentJournalEvent>
+  readonly executorResponsibilities: Set<string>
+}
+
+type ProjectionError =
+  | TrackerOutcomeWithoutReadIntent
+  | GitOutcomeWithoutReadIntent
+  | ExecutorReportWithoutResponsibilityBegan
+
+const projectTrackerReadIntent = (
+  record: JournalRecord,
+  event: TrackerReadIntentJournalEvent,
+  trackerReadIntents: Map<string, TrackerReadIntentJournalEvent>
+): TaskTrackerReadInitiated => {
+  trackerReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
+  return TaskTrackerReadInitiated.make({
+    initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    operation: event.operation,
+    recordedAt: record.position,
+    runId: record.runId
+  })
+}
+
+const projectGitReadIntent = (
+  record: JournalRecord,
+  event: GitReadIntentJournalEvent,
+  gitReadIntents: Map<string, GitReadIntentJournalEvent>
+): GitReadInitiated => {
+  gitReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
+  return GitReadInitiated.make({
+    initiatedBy: event.initiatedBy,
+    occurrenceClassification: event.occurrenceClassification,
+    operation: event.operation,
+    recordedAt: record.position,
+    runId: record.runId
+  })
+}
+
+const projectGitObservation = (
+  record: JournalRecord,
+  event: GitObservationJournalEvent,
+  gitReadIntents: ReadonlyMap<string, GitReadIntentJournalEvent>
+): Effect.Effect<WorkflowOccurrence, GitOutcomeWithoutReadIntent> =>
+  Match.valueTags(event, {
+    PlannedAttemptWorktreeObserved: (value) => {
+      const intent = gitReadIntents.get(relationshipKey(record.runId, value.operationId))
+      if (intent?.operation._tag !== "ReadTaskWorktree") {
+        return Effect.fail(
+          new GitOutcomeWithoutReadIntent({
+            operationId: value.operationId,
+            position: record.position,
+            runId: record.runId
+          })
+        )
+      }
+      return Effect.succeed(
+        PlannedAttemptWorktreeObserved.make({
+          observation: value.observation,
+          occurrenceClassification: value.occurrenceClassification,
+          originatingActionOperationId: value.operationId,
+          recordedAt: record.position,
+          runId: record.runId
+        })
+      )
+    },
+    TargetLineageObserved: (value) => {
+      const intent = gitReadIntents.get(relationshipKey(record.runId, value.operationId))
+      if (intent?.operation._tag !== "ReadTargetLineage") {
+        return Effect.fail(
+          new GitOutcomeWithoutReadIntent({
+            operationId: value.operationId,
+            position: record.position,
+            runId: record.runId
+          })
+        )
+      }
+      return Effect.succeed(
+        TargetLineageObserved.make({
+          observation: value.observation,
+          occurrenceClassification: value.occurrenceClassification,
+          originatingActionOperationId: value.operationId,
+          plannedAttempt: value.plannedAttempt,
+          recordedAt: record.position,
+          runId: record.runId
+        })
+      )
+    }
+  })
+
+const projectTrackerFactsObservation = (
+  record: JournalRecord,
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>,
+  trackerReadIntents: ReadonlyMap<string, TrackerReadIntentJournalEvent>
+): Effect.Effect<TaskTrackerFactsObserved, TrackerOutcomeWithoutReadIntent> => {
+  const intent = trackerReadIntents.get(relationshipKey(record.runId, event.operationId))
+  if (intent === undefined) {
+    return Effect.fail(
+      new TrackerOutcomeWithoutReadIntent({
+        operationId: event.operationId,
+        position: record.position,
+        runId: record.runId
+      })
+    )
+  }
+  return Effect.succeed(
+    TaskTrackerFactsObserved.make({
+      evidence: event.observation,
+      occurrenceClassification: "NonActionOccurrence",
+      originatingActionOperationId: event.operationId,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectExecutorReport = (
+  record: JournalRecord,
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptExecutorWorkReported" }>,
+  executorResponsibilities: ReadonlySet<string>
+): Effect.Effect<PlannedAttemptExecutorWorkReported, ExecutorReportWithoutResponsibilityBegan> => {
+  if (!executorResponsibilities.has(relationshipKey(record.runId, event.report.correlation.attemptId))) {
+    return Effect.fail(
+      new ExecutorReportWithoutResponsibilityBegan({
+        attemptId: event.report.correlation.attemptId,
+        position: record.position,
+        runId: record.runId
+      })
+    )
+  }
+  return Effect.succeed(
+    PlannedAttemptExecutorWorkReported.make({
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: event.ordinal,
+      recordedAt: record.position,
+      report: event.report,
+      runId: record.runId
+    })
+  )
+}
+
+const exactTaskFactsRestartIntentMatches = (
+  intent: TrackerReadIntentJournalEvent | undefined,
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptRestartAuthorityReadFailed" }>
+): boolean => {
+  if (intent === undefined) return false
+  const operation = intent.operation
+  return (
+    event.failure._tag === "AttemptRestartTaskFactsReadFailure" &&
+    ((operation._tag === "ReadTrackerGraph" &&
+      operation.readShape.explicitlyCoveredTaskIds.includes(event.subject.plannedAttempt.taskId)) ||
+      (operation._tag === "ReadTaskWorkSpecification" && operation.taskId === event.subject.plannedAttempt.taskId)) &&
+    taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(event.failure.target)
+  )
+}
+
+const exactGitRestartIntentMatches = (
+  intent: GitReadIntentJournalEvent | undefined,
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptRestartAuthorityReadFailed" }>
+): boolean => {
+  if (
+    intent === undefined ||
+    !plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.subject.plannedAttempt)
+  ) {
+    return false
+  }
+  return event.failure._tag === "GitWorktreeReadFailure"
+    ? intent.operation._tag === "ReadTaskWorktree"
+    : event.failure._tag === "GitTargetLineageReadFailure" &&
+        intent.operation._tag === "ReadTargetLineage" &&
+        intent.operation.integrationTarget.repository === event.failure.target.repository &&
+        intent.operation.integrationTarget.ref === event.failure.target.ref
+}
+
+const restartFailureHasExactReadIntent = (
+  record: JournalRecord,
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptRestartAuthorityReadFailed" }>,
+  trackerReadIntents: ReadonlyMap<string, TrackerReadIntentJournalEvent>,
+  gitReadIntents: ReadonlyMap<string, GitReadIntentJournalEvent>
+): boolean => {
+  const relationship = relationshipKey(record.runId, event.operationId)
+  return (
+    exactTaskFactsRestartIntentMatches(trackerReadIntents.get(relationship), event) ||
+    exactGitRestartIntentMatches(gitReadIntents.get(relationship), event)
+  )
+}
+
+const projectRestartFailure = (
+  record: JournalRecord,
+  event: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptRestartAuthorityReadFailed" }>,
+  trackerReadIntents: ReadonlyMap<string, TrackerReadIntentJournalEvent>,
+  gitReadIntents: ReadonlyMap<string, GitReadIntentJournalEvent>
+): Effect.Effect<AttemptRestartAuthorityReadFailed, TrackerOutcomeWithoutReadIntent | GitOutcomeWithoutReadIntent> => {
+  if (!restartFailureHasExactReadIntent(record, event, trackerReadIntents, gitReadIntents)) {
+    const Failure =
+      event.failure._tag === "AttemptRestartTaskFactsReadFailure"
+        ? TrackerOutcomeWithoutReadIntent
+        : GitOutcomeWithoutReadIntent
+    return Effect.fail(new Failure({ operationId: event.operationId, position: record.position, runId: record.runId }))
+  }
+  return Effect.succeed(
+    AttemptRestartAuthorityReadFailed.make({
+      failure: event.failure,
+      occurrenceClassification: event.occurrenceClassification,
+      originatingActionOperationId: event.operationId,
+      recordedAt: record.position,
+      requestId: event.requestId,
+      runId: record.runId,
+      subject: event.subject
+    })
+  )
+}
+
+const projectJournalRecord = (
+  record: JournalRecord,
+  context: ProjectionContext
+): Effect.Effect<WorkflowOccurrence | void, ProjectionError> => {
+  const event = record.event
+  if (isDirectlyProjectedJournalEvent(event)) {
+    projectDirectOccurrence(record, event, context.executorResponsibilities, context.occurrences)
+    return Effect.void
+  }
+  if (event._tag === "TaskTrackerReadIntentRecorded") {
+    return Effect.succeed(projectTrackerReadIntent(record, event, context.trackerReadIntents))
+  }
+  if (event._tag === "GitReadIntentRecorded") {
+    return Effect.succeed(projectGitReadIntent(record, event, context.gitReadIntents))
+  }
+  if (isGitObservationJournalEvent(event)) return projectGitObservation(record, event, context.gitReadIntents)
+  if (event._tag === "AttemptRestartAuthorityReadFailed") {
+    return projectRestartFailure(record, event, context.trackerReadIntents, context.gitReadIntents)
+  }
+  if (event._tag === "TaskTrackerFactsObserved") {
+    return projectTrackerFactsObservation(record, event, context.trackerReadIntents)
+  }
+  if (event._tag === "PlannedAttemptExecutorWorkReported") {
+    return projectExecutorReport(record, event, context.executorResponsibilities)
+  }
+  void noOccurrence(event)
+  return Effect.void
+}
+
 /**
  * Projects immutable journal records in one pass. Missing relationships fail
  * before any partial semantic projection becomes visible.
@@ -733,176 +993,16 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
   records: ReadonlyArray<JournalRecord>
 ) {
   const occurrences: Array<WorkflowOccurrence> = []
-  const trackerReadIntents = new Map<
-    string,
-    Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerReadIntentRecorded" }>
-  >()
-  const gitReadIntents = new Map<string, Extract<WorkflowJournalEvent, { readonly _tag: "GitReadIntentRecorded" }>>()
-  const executorResponsibilities = new Set<string>()
+  const context: ProjectionContext = {
+    executorResponsibilities: new Set<string>(),
+    gitReadIntents: new Map<string, GitReadIntentJournalEvent>(),
+    occurrences,
+    trackerReadIntents: new Map<string, TrackerReadIntentJournalEvent>()
+  }
 
   for (const record of records) {
-    const event = record.event
-    if (isDirectlyProjectedJournalEvent(event)) {
-      projectDirectOccurrence(record, event, executorResponsibilities, occurrences)
-      continue
-    }
-    if (event._tag === "TaskTrackerReadIntentRecorded") {
-      trackerReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
-      occurrences.push(
-        TaskTrackerReadInitiated.make({
-          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-          occurrenceClassification: "InitiatedAction",
-          operation: event.operation,
-          recordedAt: record.position,
-          runId: record.runId
-        })
-      )
-      continue
-    }
-    if (event._tag === "GitReadIntentRecorded") {
-      gitReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
-      occurrences.push(
-        GitReadInitiated.make({
-          initiatedBy: event.initiatedBy,
-          occurrenceClassification: event.occurrenceClassification,
-          operation: event.operation,
-          recordedAt: record.position,
-          runId: record.runId
-        })
-      )
-      continue
-    }
-    if (event._tag === "PlannedAttemptWorktreeObserved") {
-      const intent = gitReadIntents.get(relationshipKey(record.runId, event.operationId))
-      if (intent?.operation._tag !== "ReadTaskWorktree") {
-        return yield* new GitOutcomeWithoutReadIntent({
-          operationId: event.operationId,
-          position: record.position,
-          runId: record.runId
-        })
-      }
-      occurrences.push(
-        PlannedAttemptWorktreeObserved.make({
-          observation: event.observation,
-          occurrenceClassification: event.occurrenceClassification,
-          originatingActionOperationId: event.operationId,
-          recordedAt: record.position,
-          runId: record.runId
-        })
-      )
-      continue
-    }
-    if (event._tag === "TargetLineageObserved") {
-      const intent = gitReadIntents.get(relationshipKey(record.runId, event.operationId))
-      if (intent?.operation._tag !== "ReadTargetLineage") {
-        return yield* new GitOutcomeWithoutReadIntent({
-          operationId: event.operationId,
-          position: record.position,
-          runId: record.runId
-        })
-      }
-      occurrences.push(
-        TargetLineageObserved.make({
-          observation: event.observation,
-          occurrenceClassification: event.occurrenceClassification,
-          originatingActionOperationId: event.operationId,
-          plannedAttempt: event.plannedAttempt,
-          recordedAt: record.position,
-          runId: record.runId
-        })
-      )
-      continue
-    }
-    if (event._tag === "AttemptRestartAuthorityReadFailed") {
-      const relationship = relationshipKey(record.runId, event.operationId)
-      const exactTaskFactsIntent = () => {
-        const intent = trackerReadIntents.get(relationship)
-        if (intent === undefined) return false
-        const operation = intent.operation
-        return (
-          event.failure._tag === "AttemptRestartTaskFactsReadFailure" &&
-          ((operation._tag === "ReadTrackerGraph" &&
-            operation.readShape.explicitlyCoveredTaskIds.includes(event.subject.plannedAttempt.taskId)) ||
-            (operation._tag === "ReadTaskWorkSpecification" &&
-              operation.taskId === event.subject.plannedAttempt.taskId)) &&
-          taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(event.failure.target)
-        )
-      }
-      const exactGitIntent = () => {
-        const intent = gitReadIntents.get(relationship)
-        if (
-          intent === undefined ||
-          !plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.subject.plannedAttempt)
-        ) {
-          return false
-        }
-        return event.failure._tag === "GitWorktreeReadFailure"
-          ? intent.operation._tag === "ReadTaskWorktree"
-          : event.failure._tag === "GitTargetLineageReadFailure" &&
-              intent.operation._tag === "ReadTargetLineage" &&
-              intent.operation.integrationTarget.repository === event.failure.target.repository &&
-              intent.operation.integrationTarget.ref === event.failure.target.ref
-      }
-      if (!exactTaskFactsIntent() && !exactGitIntent()) {
-        const Failure =
-          event.failure._tag === "AttemptRestartTaskFactsReadFailure"
-            ? TrackerOutcomeWithoutReadIntent
-            : GitOutcomeWithoutReadIntent
-        return yield* new Failure({ operationId: event.operationId, position: record.position, runId: record.runId })
-      }
-      occurrences.push(
-        AttemptRestartAuthorityReadFailed.make({
-          failure: event.failure,
-          occurrenceClassification: event.occurrenceClassification,
-          originatingActionOperationId: event.operationId,
-          recordedAt: record.position,
-          requestId: event.requestId,
-          runId: record.runId,
-          subject: event.subject
-        })
-      )
-      continue
-    }
-    if (event._tag === "TaskTrackerFactsObserved") {
-      const intent = trackerReadIntents.get(relationshipKey(record.runId, event.operationId))
-      if (intent === undefined) {
-        return yield* new TrackerOutcomeWithoutReadIntent({
-          operationId: event.operationId,
-          position: record.position,
-          runId: record.runId
-        })
-      }
-      occurrences.push(
-        TaskTrackerFactsObserved.make({
-          evidence: event.observation,
-          occurrenceClassification: "NonActionOccurrence",
-          originatingActionOperationId: event.operationId,
-          recordedAt: record.position,
-          runId: record.runId
-        })
-      )
-      continue
-    }
-    if (event._tag === "PlannedAttemptExecutorWorkReported") {
-      if (!executorResponsibilities.has(relationshipKey(record.runId, event.report.correlation.attemptId))) {
-        return yield* new ExecutorReportWithoutResponsibilityBegan({
-          attemptId: event.report.correlation.attemptId,
-          position: record.position,
-          runId: record.runId
-        })
-      }
-      occurrences.push(
-        PlannedAttemptExecutorWorkReported.make({
-          occurrenceClassification: "NonActionOccurrence",
-          ordinal: event.ordinal,
-          recordedAt: record.position,
-          report: event.report,
-          runId: record.runId
-        })
-      )
-      continue
-    }
-    void noOccurrence(event)
+    const occurrence = yield* projectJournalRecord(record, context)
+    if (occurrence !== undefined) occurrences.push(occurrence)
   }
 
   return yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({

@@ -530,18 +530,10 @@ const qualifiedIntegratorProgressTransitionsFor = (
         })
       ]
 
-const startedIntegrationProgressTransitionFor = (
-  runState: ReconstructedRunState,
-  runtimeFacts: IntegrationFrontierRuntimeFacts,
+const explicitRetryProgressTransitionsFor = (
   responsibility: StartedIntegrationResponsibility,
-  integratorState: CurrentIntegratorState,
-  held: boolean,
   retryProgress: RetryIntegratorProgress
-): ReadonlyArray<RunnableFrontierTransitionType> => {
-  // A fixed Integrator session or qualified candidate may outlive a released
-  // process-local target position. The unfinished outer boundary reuses S's
-  // durable H; only later promotion requires current target authority.
-  if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+): ReadonlyArray<RunnableFrontierTransitionType> | undefined => {
   if (retryProgress._tag === "AwaitingLineage") return []
   if (retryProgress._tag === "SuccessorReady") {
     return [RunnableFrontierTransition.FixIntegratorSuccessorSession({ input: retryProgress.input, responsibility })]
@@ -560,16 +552,32 @@ const startedIntegrationProgressTransitionFor = (
       })
     ]
   }
-  if (retryProgress._tag === "Authorized") {
-    return [
-      RunnableFrontierTransition.RunIntegrator({
-        lineage: retryProgress.lineage.observation,
-        lineageObservedAt: retryProgress.lineage.observedAt,
-        responsibility,
-        run: retryProgress.run
-      })
-    ]
-  }
+  return retryProgress._tag === "Authorized"
+    ? [
+        RunnableFrontierTransition.RunIntegrator({
+          lineage: retryProgress.lineage.observation,
+          lineageObservedAt: retryProgress.lineage.observedAt,
+          responsibility,
+          run: retryProgress.run
+        })
+      ]
+    : undefined
+}
+
+const startedIntegrationProgressTransitionFor = (
+  runState: ReconstructedRunState,
+  runtimeFacts: IntegrationFrontierRuntimeFacts,
+  responsibility: StartedIntegrationResponsibility,
+  integratorState: CurrentIntegratorState,
+  held: boolean,
+  retryProgress: RetryIntegratorProgress
+): ReadonlyArray<RunnableFrontierTransitionType> => {
+  // A fixed Integrator session or qualified candidate may outlive a released
+  // process-local target position. The unfinished outer boundary reuses S's
+  // durable H; only later promotion requires current target authority.
+  if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+  const retryTransitions = explicitRetryProgressTransitionsFor(responsibility, retryProgress)
+  if (retryTransitions !== undefined) return retryTransitions
   if (integratorState._tag === "GitQualifiedPrepared") {
     return qualifiedIntegratorProgressTransitionsFor(runtimeFacts, responsibility, integratorState)
   }

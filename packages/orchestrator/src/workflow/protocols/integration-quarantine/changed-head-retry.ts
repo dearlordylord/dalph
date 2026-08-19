@@ -100,6 +100,36 @@ const validateHistory = (
     : undefined
 }
 
+type ExistingChangedHeadResolution =
+  | { readonly _tag: "Record"; readonly record: ChangedHeadQuarantineRecord }
+  | { readonly _tag: "Issue"; readonly detail: string }
+
+const historyWithoutKeyWinner = (
+  records: ReadonlyArray<JournalRecord>,
+  existing: JournalRecord | undefined
+): ReadonlyArray<JournalRecord> => (existing === undefined ? records : records.filter((record) => record !== existing))
+
+const existingChangedHeadResolution = (
+  records: ReadonlyArray<JournalRecord>,
+  existing: JournalRecord | undefined,
+  session: IntegratorSessionCorrelation,
+  basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "RetryTargetHeadChanged" }>
+): ExistingChangedHeadResolution | undefined => {
+  if (existing !== undefined) {
+    return sameChangedHeadEvidence(existing, session, basis)
+      ? { _tag: "Record", record: existing }
+      : { _tag: "Issue", detail: "Changed-head quarantine key contains a foreign or contradictory event" }
+  }
+  const duplicates = records.filter((record) => sameChangedHeadEvidence(record, session, basis))
+  /* v8 ignore next -- @preserve retryRelationFor rejects any same-session changed-head quarantine before this duplicate-history guard can be reached. */
+  if (duplicates.length > 1) {
+    return { _tag: "Issue", detail: "Journal history contains duplicate changed-head quarantine evidence" }
+  }
+  const duplicate = duplicates[0]
+  /* v8 ignore next -- @preserve retryRelationFor rejects an equivalent same-session quarantine before this malformed-key fallback can be reached. */
+  return duplicate === undefined ? undefined : { _tag: "Record", record: duplicate }
+}
+
 /**
  * Records the non-action Q2 quarantine after Retry's fresh target-lineage read
  * proves that the preserved session S can no longer use its fixed head.
@@ -121,15 +151,12 @@ export const appendChangedHeadRetryQuarantine = Effect.fn("IntegrationQuarantine
     })
     const key = integrationQuarantinedRecordKey(request.session.sessionId, basis)
     const existing = records.find((record) => record.key === key)
-    const issue = validateHistory(
-      existing === undefined ? records : records.filter((record) => record !== existing),
-      request
-    )
+    const issue = validateHistory(historyWithoutKeyWinner(records, existing), request)
     if (issue !== undefined) return yield* reject(request.session, issue)
-    if (existing !== undefined) {
-      return sameChangedHeadEvidence(existing, request.session, basis)
-        ? existing
-        : yield* reject(request.session, "Changed-head quarantine key contains a foreign or contradictory event")
+    const resolution = existingChangedHeadResolution(records, existing, request.session, basis)
+    if (resolution?._tag === "Issue") return yield* reject(request.session, resolution.detail)
+    if (resolution?._tag === "Record") {
+      return resolution.record
     }
 
     const event = IntegrationQuarantinedEvent.make({
@@ -138,15 +165,6 @@ export const appendChangedHeadRetryQuarantine = Effect.fn("IntegrationQuarantine
       occurrenceClassification: "NonActionOccurrence",
       version: workflowJournalEventVersion
     })
-
-    const duplicateEvidence = records.filter((record) => sameChangedHeadEvidence(record, request.session, basis))
-    /* v8 ignore next -- @preserve retryRelationFor rejects any same-session changed-head quarantine before this duplicate-history guard can be reached. */
-    if (duplicateEvidence.length > 1) {
-      return yield* reject(request.session, "Journal history contains duplicate changed-head quarantine evidence")
-    }
-    const duplicate = duplicateEvidence[0]
-    /* v8 ignore next -- @preserve retryRelationFor rejects an equivalent same-session quarantine before this malformed-key fallback can be reached. */
-    if (duplicateEvidence.length === 1 && duplicate !== undefined) return duplicate
 
     const appended = yield* journal.append(runId, key, event).pipe(
       Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>

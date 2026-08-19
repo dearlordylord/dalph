@@ -195,18 +195,21 @@ const providerFailureIsFromRunOne = (
 ): boolean => {
   const run = runOneFor(quarantine)
   const absence = records.find(({ position }) => position === basis.ownedActivityProvenAbsentAt)
-  return (
-    absence !== undefined &&
-    absence.position < quarantine.position &&
-    absence.runId === run.session.plannedAttempt.runId &&
-    absence.event._tag === "IntegrationProviderRunActivityAbsent" &&
-    absence.event.detail === basis.detail &&
-    integratorCorrelationsEqual(absence.event.correlation, run.session) &&
-    absence.key === integrationProviderRunActivityAbsentRecordKey(run) &&
-    integratorRunCorrelationsEqual(absence.event.run, run) &&
-    runStartFor(records, run, absence.position) !== undefined
-  )
+  if (absence === undefined || absence.position >= quarantine.position) return false
+  return providerAbsenceMatchesRunOne(absence, run, basis) && runStartFor(records, run, absence.position) !== undefined
 }
+
+const providerAbsenceMatchesRunOne = (
+  absence: JournalRecord,
+  run: IntegratorRunCorrelation,
+  basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ProviderRunFailure" }>
+): boolean =>
+  absence.runId === run.session.plannedAttempt.runId &&
+  absence.event._tag === "IntegrationProviderRunActivityAbsent" &&
+  absence.event.detail === basis.detail &&
+  integratorCorrelationsEqual(absence.event.correlation, run.session) &&
+  absence.key === integrationProviderRunActivityAbsentRecordKey(run) &&
+  integratorRunCorrelationsEqual(absence.event.run, run)
 
 /** Retry is allowed only from the first quarantine's exact run-one evidence. */
 const retryIsEligible = (records: ReadonlyArray<JournalRecord>, quarantine: QuarantineRecord): boolean => {
@@ -227,6 +230,95 @@ const quarantineBelongsToSuccessor = (records: ReadonlyArray<JournalRecord>, qua
       integratorCorrelationsEqual(event.successor, quarantine.event.correlation)
   )
 
+const reconcileExistingRequest = (
+  records: ReadonlyArray<JournalRecord>,
+  request: ApplyIntegrationQuarantineDirectionRequest
+): Effect.Effect<
+  IntegrationQuarantineDirectionApplicationResult | void,
+  IntegrationQuarantineDirectionRequestIdentityContradiction
+> => {
+  const existing = appliedRecordsForRequest(records, request.requestId)[0]
+  if (existing === undefined) return Effect.void
+  return sameIntegrationQuarantineDirectionFingerprint(existing.event.fingerprint, request.fingerprint)
+    ? Effect.succeed(resultFor(existing))
+    : Effect.fail(
+        new IntegrationQuarantineDirectionRequestIdentityContradiction({
+          existingPosition: existing.position,
+          requestId: request.requestId,
+          runId: request.requestId.runId
+        })
+      )
+}
+
+const requireQuarantine = (
+  records: ReadonlyArray<JournalRecord>,
+  request: ApplyIntegrationQuarantineDirectionRequest
+): Effect.Effect<QuarantineRecord, IntegrationQuarantineDirectionNotAvailable> => {
+  const quarantine = quarantineRecordForFingerprint(records, request.fingerprint)
+  if (quarantine !== undefined) return Effect.succeed(quarantine)
+  const samePosition = records.some(({ position }) => position === request.fingerprint.quarantineAt)
+  return Effect.fail(
+    new IntegrationQuarantineDirectionNotAvailable({
+      fingerprint: request.fingerprint,
+      reason: samePosition ? "SessionMismatch" : "MissingQuarantine",
+      runId: request.requestId.runId
+    })
+  )
+}
+
+const ensureDirectionAvailable = (
+  records: ReadonlyArray<JournalRecord>,
+  request: ApplyIntegrationQuarantineDirectionRequest,
+  quarantine: QuarantineRecord
+): Effect.Effect<
+  void,
+  | IntegrationQuarantineDirectionAlreadyApplied
+  | IntegrationQuarantineDirectionNotAvailable
+  | IntegrationQuarantineDirectionRequestRunMismatch
+> => {
+  const runId = request.requestId.runId
+  const subjectRunId = integrationQuarantineDirectionRunId(quarantine.event.correlation)
+  if (subjectRunId !== runId) {
+    return Effect.fail(
+      new IntegrationQuarantineDirectionRequestRunMismatch({
+        requestId: request.requestId,
+        boundRunId: runId,
+        subjectRunId
+      })
+    )
+  }
+  const existingSubject = appliedRecordsForSubject(records, request.fingerprint)[0]
+  if (existingSubject !== undefined) {
+    return Effect.fail(
+      new IntegrationQuarantineDirectionAlreadyApplied({
+        existingPosition: existingSubject.position,
+        requestId: request.requestId,
+        runId,
+        winningFingerprint: existingSubject.event.fingerprint,
+        winningRequestId: existingSubject.event.requestId
+      })
+    )
+  }
+  if (quarantineBelongsToSuccessor(records, quarantine)) {
+    return Effect.fail(
+      new IntegrationQuarantineDirectionNotAvailable({
+        fingerprint: request.fingerprint,
+        reason: "SuccessorGenerationLimitReached",
+        runId
+      })
+    )
+  }
+  return request.fingerprint.direction === "Retry" && !retryIsEligible(records, quarantine)
+    ? Effect.fail(
+        new IntegrationQuarantineDirectionNotAvailable({
+          fingerprint: request.fingerprint,
+          reason: "RetryLimitReached",
+          runId
+        })
+      )
+    : Effect.void
+}
+
 /** Builds the narrow Journal-backed control for use both during and between Run activations. */
 export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQuarantineDirectionControl.make")(
   function* (journal: InRunJournal["Service"]) {
@@ -239,62 +331,10 @@ export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQ
       const records = yield* journal.read(runId)
       if (!runHasBegan(records)) return yield* new WorkflowRunNotBegan({ runId })
 
-      const existingRequest = appliedRecordsForRequest(records, request.requestId)[0]
-      if (existingRequest !== undefined) {
-        if (sameIntegrationQuarantineDirectionFingerprint(existingRequest.event.fingerprint, request.fingerprint)) {
-          return resultFor(existingRequest)
-        }
-        return yield* new IntegrationQuarantineDirectionRequestIdentityContradiction({
-          existingPosition: existingRequest.position,
-          requestId: request.requestId,
-          runId
-        })
-      }
-
-      const quarantine = quarantineRecordForFingerprint(records, request.fingerprint)
-      if (quarantine === undefined) {
-        const samePosition = records.find(({ position }) => position === request.fingerprint.quarantineAt)
-        return yield* new IntegrationQuarantineDirectionNotAvailable({
-          fingerprint: request.fingerprint,
-          reason: samePosition === undefined ? "MissingQuarantine" : "SessionMismatch",
-          runId
-        })
-      }
-      const subjectRunId = integrationQuarantineDirectionRunId(quarantine.event.correlation)
-      if (subjectRunId !== runId) {
-        return yield* new IntegrationQuarantineDirectionRequestRunMismatch({
-          boundRunId: runId,
-          requestId: request.requestId,
-          subjectRunId
-        })
-      }
-
-      const existingSubject = appliedRecordsForSubject(records, request.fingerprint)[0]
-      if (existingSubject !== undefined) {
-        return yield* new IntegrationQuarantineDirectionAlreadyApplied({
-          existingPosition: existingSubject.position,
-          requestId: request.requestId,
-          runId,
-          winningFingerprint: existingSubject.event.fingerprint,
-          winningRequestId: existingSubject.event.requestId
-        })
-      }
-
-      if (quarantineBelongsToSuccessor(records, quarantine)) {
-        return yield* new IntegrationQuarantineDirectionNotAvailable({
-          fingerprint: request.fingerprint,
-          reason: "SuccessorGenerationLimitReached",
-          runId
-        })
-      }
-
-      if (request.fingerprint.direction === "Retry" && !retryIsEligible(records, quarantine)) {
-        return yield* new IntegrationQuarantineDirectionNotAvailable({
-          fingerprint: request.fingerprint,
-          reason: "RetryLimitReached",
-          runId
-        })
-      }
+      const existingRequest = yield* reconcileExistingRequest(records, request)
+      if (existingRequest !== undefined) return existingRequest
+      const quarantine = yield* requireQuarantine(records, request)
+      yield* ensureDirectionAvailable(records, request, quarantine)
 
       const event = IntegrationQuarantineDirectionAppliedEvent.make({
         fingerprint: request.fingerprint,

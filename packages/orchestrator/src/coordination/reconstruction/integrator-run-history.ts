@@ -110,6 +110,38 @@ const previousRunIsConclusive = (
   indexes: IntegratorRunHistoryValidationIndexes
 ): boolean => previous === undefined || runRecordsAreConclusive(previous, record, indexes)
 
+const integratorRunAuthorizationIssue = (
+  event: IntegratorRunStarted,
+  records: ReadonlyArray<JournalRecord>,
+  record: JournalRecord
+): string | undefined =>
+  event.run.ordinal === 1
+    ? undefined
+    : event.run.ordinal === integratorRetryRunOrdinal
+      ? integratorRunTwoAuthorizationIssue(records, event.run, { beforePosition: record.position })
+      : `Integrator run ordinal ${event.run.ordinal} exceeds Retry bound`
+
+const invalidIntegratorRunStartedRecord = (
+  record: JournalRecord,
+  event: IntegratorRunStarted,
+  existing: PositionedIntegratorEvent<IntegratorRunStarted> | undefined,
+  session: boolean,
+  authorizationIssue: string | undefined,
+  previousConclusive: boolean
+): string | undefined => {
+  if (existing !== undefined) return `Integrator run repeats exact session ordinal ${event.run.ordinal}`
+  if (record.key !== integratorRunStartedRecordKey(event.run)) {
+    return `Integrator run start has a foreign key for session ordinal ${event.run.ordinal}`
+  }
+  if (!session) return `Integrator run has no exact earlier fixed session at ${event.run.session.startedAt}`
+  if (authorizationIssue !== undefined) return authorizationIssue
+  /* v8 ignore next -- @preserve ordinal one has no previous run, so previousConclusive is always true on this arm. */
+  if (event.run.ordinal === 1 && !previousConclusive) {
+    return `Integrator run ordinal ${event.run.ordinal} has no exact conclusive predecessor run`
+  }
+  return undefined
+}
+
 const invalidIntegratorRunStarted = (
   record: JournalRecord,
   event: IntegratorRunStarted,
@@ -121,25 +153,9 @@ const invalidIntegratorRunStarted = (
   const session = exactSessionForCorrelation(event.run.session, record, indexes)
   const previous = previousIntegratorRun(event.run)
   const previousConclusive = previousRunIsConclusive(previous, record, indexes)
-  const authorizationIssue =
-    event.run.ordinal === 1
-      ? undefined
-      : event.run.ordinal === integratorRetryRunOrdinal
-        ? integratorRunTwoAuthorizationIssue(records, event.run, { beforePosition: record.position })
-        : `Integrator run ordinal ${event.run.ordinal} exceeds Retry bound`
+  const authorizationIssue = integratorRunAuthorizationIssue(event, records, record)
   setMapValue(indexes.integratorRunStarted, key, { event, position: record.position })
-  return existing !== undefined
-    ? `Integrator run repeats exact session ordinal ${event.run.ordinal}`
-    : record.key !== integratorRunStartedRecordKey(event.run)
-      ? `Integrator run start has a foreign key for session ordinal ${event.run.ordinal}`
-      : !session
-        ? `Integrator run has no exact earlier fixed session at ${event.run.session.startedAt}`
-        : authorizationIssue !== undefined
-          ? authorizationIssue
-          : /* v8 ignore next -- @preserve ordinal one has no previous run, so previousConclusive is always true on this arm. */
-            event.run.ordinal === 1 && !previousConclusive
-            ? `Integrator run ordinal ${event.run.ordinal} has no exact conclusive predecessor run`
-            : undefined
+  return invalidIntegratorRunStartedRecord(record, event, existing, session, authorizationIssue, previousConclusive)
 }
 
 const exactIntegratorRunStart = (
@@ -191,6 +207,36 @@ const exactPreparedIntegratorRunResultFor = (
     : undefined
 }
 
+const exactEarlierIntegratorRunCandidateIntent = (
+  intent: PositionedIntegratorEvent<IntegratorRunCandidateGitReadIntended> | undefined,
+  record: JournalRecord,
+  event: IntegratorRunCandidateGitObserved
+): boolean =>
+  intent !== undefined &&
+  intent.position < record.position &&
+  intent.event.candidateText === event.candidateText &&
+  integratorRunCorrelationsEqual(intent.event.run, event.run)
+
+const invalidIntegratorRunCandidateGitObservationRecord = (
+  record: JournalRecord,
+  event: IntegratorRunCandidateGitObserved,
+  existing: PositionedIntegratorEvent<IntegratorRunCandidateGitObserved> | undefined,
+  exactEarlierIntent: boolean,
+  result: PositionedIntegratorEvent<IntegratorRunResultRecorded> | undefined,
+  matchingCandidateText: boolean
+): string | undefined => {
+  if (existing !== undefined) {
+    return `Integrator run candidate Git observation repeats candidate text ${event.candidateText}`
+  }
+  if (record.key !== integratorRunCandidateGitObservedRecordKey(event.run, event.candidateText)) {
+    return `Integrator run candidate Git observation has a foreign key`
+  }
+  if (!exactEarlierIntent || result === undefined || !matchingCandidateText) {
+    return `Integrator run candidate Git observation has no exact earlier intent, result, and candidate text`
+  }
+  return undefined
+}
+
 const invalidIntegratorRunCandidateGitReadIntent = (
   record: JournalRecord,
   event: IntegratorRunCandidateGitReadIntended,
@@ -218,20 +264,17 @@ const invalidIntegratorRunCandidateGitObservation = (
   const existing = indexes.integratorRunCandidateGitObservations.get(key)
   const intent = indexes.integratorRunCandidateGitReadIntents.get(key)
   const result = exactPreparedIntegratorRunResultFor(event.run, event.candidateText, record, indexes)
-  const exactEarlierIntent =
-    intent !== undefined &&
-    intent.position < record.position &&
-    intent.event.candidateText === event.candidateText &&
-    integratorRunCorrelationsEqual(intent.event.run, event.run)
+  const exactEarlierIntent = exactEarlierIntegratorRunCandidateIntent(intent, record, event)
   const matchingCandidateText = event.observation.candidateText === event.candidateText
   setMapValue(indexes.integratorRunCandidateGitObservations, key, { event, position: record.position })
-  return existing !== undefined
-    ? `Integrator run candidate Git observation repeats candidate text ${event.candidateText}`
-    : record.key !== integratorRunCandidateGitObservedRecordKey(event.run, event.candidateText)
-      ? `Integrator run candidate Git observation has a foreign key`
-      : !exactEarlierIntent || result === undefined || !matchingCandidateText
-        ? `Integrator run candidate Git observation has no exact earlier intent, result, and candidate text`
-        : undefined
+  return invalidIntegratorRunCandidateGitObservationRecord(
+    record,
+    event,
+    existing,
+    exactEarlierIntent,
+    result,
+    matchingCandidateText
+  )
 }
 
 /** Validates and indexes the run-bound events owned by the outer Integrator protocol. */

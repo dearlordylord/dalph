@@ -136,29 +136,33 @@ type FixedSessionRecord = JournalRecord & {
 const invalidEvidence = (detail: string): EvidenceValidation<never> => ({ _tag: "Invalid", detail })
 const validEvidence = <Value>(value: Value): EvidenceValidation<Value> => ({ _tag: "Valid", value })
 
-const fixedSessionRecordMatches = (
-  record: JournalRecord,
-  run: IntegratorRunCorrelation
-): record is FixedSessionRecord =>
+const fixedSessionEventMatches = (record: JournalRecord, run: IntegratorRunCorrelation): record is FixedSessionRecord =>
   record.runId === runIdFor(run) &&
   ((record.event._tag === "IntegratorSessionFixed" &&
     integratorCorrelationsEqual(record.event.correlation, run.session)) ||
     (record.event._tag === "IntegratorSuccessorSessionFixed" &&
-      integratorCorrelationsEqual(record.event.successor, run.session))) &&
-  record.position > run.session.targetLineageObservedAt
+      integratorCorrelationsEqual(record.event.successor, run.session)))
+
+const fixedSessionRecordMatches = (
+  record: JournalRecord,
+  run: IntegratorRunCorrelation
+): record is FixedSessionRecord =>
+  fixedSessionEventMatches(record, run) && record.position > run.session.targetLineageObservedAt
+
+const fixedSessionRecordKey = (record: FixedSessionRecord) =>
+  record.event._tag === "IntegratorSessionFixed"
+    ? integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(record.event.correlation))
+    : integratorSuccessorSessionFixedRecordKey(
+        record.event.predecessor,
+        record.event.quarantineAt,
+        record.event.directionAppliedAt
+      )
 
 const validateFixedSession = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation
 ): EvidenceValidation<FixedSessionRecord> => {
-  const matching = records.filter(
-    (record) =>
-      record.runId === runIdFor(run) &&
-      ((record.event._tag === "IntegratorSessionFixed" &&
-        integratorCorrelationsEqual(record.event.correlation, run.session)) ||
-        (record.event._tag === "IntegratorSuccessorSessionFixed" &&
-          integratorCorrelationsEqual(record.event.successor, run.session)))
-  )
+  const matching = records.filter((record) => fixedSessionEventMatches(record, run))
   if (matching.length !== 1) {
     return invalidEvidence("initial conclusive quarantine requires one exact fixed session predecessor")
   }
@@ -166,17 +170,8 @@ const validateFixedSession = (
   /* v8 ignore next -- @preserve a non-empty matching array always has index zero; this guard is defensive after exact-count validation. */
   if (record === undefined)
     return invalidEvidence("initial conclusive quarantine lacks the exact fixed session predecessor")
-  const key =
-    record.event._tag === "IntegratorSessionFixed"
-      ? integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(run.session))
-      : record.event._tag === "IntegratorSuccessorSessionFixed"
-        ? integratorSuccessorSessionFixedRecordKey(
-            record.event.predecessor,
-            record.event.quarantineAt,
-            record.event.directionAppliedAt
-          )
-        : /* v8 ignore next -- @preserve matching narrows the event to the two fixed-session tags handled above. */ undefined
-  if (key === undefined || record.key !== key) {
+  const key = fixedSessionRecordKey(record)
+  if (record.key !== key) {
     return invalidEvidence("fixed Integrator session evidence appears under a foreign key")
   }
   const exact = exactJournalRecordAtKey(records, key)

@@ -109,169 +109,257 @@ type FixedSessionValidation =
   | { readonly _tag: "Valid"; readonly session: JournalRecord }
   | { readonly _tag: "Invalid"; readonly detail: string }
 
-const fixedSessionForRun = (
+type DirectSessionRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
+}
+type SuccessorSessionRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSuccessorSessionFixed" }>
+}
+type TargetLineageRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TargetLineageObserved" }>
+}
+type QuarantineDirectionRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationQuarantineDirectionApplied" }>
+}
+
+const directSessionsFor = (
   history: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation
-): FixedSessionValidation => {
-  const direct = history.filter(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
-    } => record.event._tag === "IntegratorSessionFixed" && sameResponsibility(record.event.correlation, run.session)
+): ReadonlyArray<DirectSessionRecord> =>
+  history.filter(
+    (record): record is DirectSessionRecord =>
+      record.event._tag === "IntegratorSessionFixed" && sameResponsibility(record.event.correlation, run.session)
   )
-  const successors = history.filter(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSuccessorSessionFixed" }>
-    } =>
+
+const successorSessionsFor = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation
+): ReadonlyArray<SuccessorSessionRecord> =>
+  history.filter(
+    (record): record is SuccessorSessionRecord =>
       record.event._tag === "IntegratorSuccessorSessionFixed" &&
       integratorCorrelationsEqual(record.event.successor, run.session)
   )
-  if (successors.length > 1) {
-    return { _tag: "Invalid", detail: "provider run has duplicate FullRerun successor session evidence" }
-  }
-  const successor = successors[0]
-  if (successor === undefined) {
-    const key = fixedSessionKey(run.session)
-    if (
-      direct.length !== 1 ||
-      direct.some(
-        (record) =>
-          !integratorCorrelationsEqual(record.event.correlation, run.session) ||
-          record.runId !== runIdFor(run) ||
-          record.key !== key
-      )
-    ) {
-      return { _tag: "Invalid", detail: "fixed Integrator session evidence is foreign to the provider run" }
-    }
-    const lineage = history.find(
-      (
-        record
-      ): record is JournalRecord & {
-        readonly event: Extract<JournalRecord["event"], { readonly _tag: "TargetLineageObserved" }>
-      } => record.position === run.session.targetLineageObservedAt && record.event._tag === "TargetLineageObserved"
-    )
-    if (
-      lineage === undefined ||
-      !plannedTaskAttemptEquivalence(lineage.event.plannedAttempt, run.session.plannedAttempt) ||
-      lineage.event.observation.plannedBaseSha !== run.session.plannedAttempt.baseSha ||
-      !lineage.event.observation.plannedBaseIsAncestorOfTargetHead ||
-      lineage.event.observation.targetHeadSha !== run.session.expectedTargetHead
-    ) {
-      return { _tag: "Invalid", detail: "provider run lacks its exact target-lineage observation" }
-    }
-    const sessionLookup = exactJournalRecordAtKey(history, key)
-    if (sessionLookup._tag === "Duplicate") return { _tag: "Invalid", detail: sessionLookup.detail }
-    /* v8 ignore next -- @preserve the sole direct fixed-session record was already proven to carry this canonical key, so exact lookup cannot be Missing. */
-    if (sessionLookup._tag === "Missing") {
-      return { _tag: "Invalid", detail: "provider run lacks its exact fixed Integrator session" }
-    }
-    const session = sessionLookup.record
-    return session.runId === runIdFor(run) &&
-      session.event._tag === "IntegratorSessionFixed" &&
-      integratorCorrelationsEqual(session.event.correlation, run.session) &&
-      session.position > run.session.targetLineageObservedAt
-      ? { _tag: "Valid", session }
-      : { _tag: "Invalid", detail: "provider run lacks its exact fixed Integrator session" }
-  }
 
+const targetLineageAt = (
+  history: ReadonlyArray<JournalRecord>,
+  position: JournalRecord["position"]
+): TargetLineageRecord | undefined =>
+  history.find(
+    (record): record is TargetLineageRecord =>
+      record.position === position && record.event._tag === "TargetLineageObserved"
+  )
+
+const targetLineageMatchesSession = (
+  lineage: TargetLineageRecord | undefined,
+  session: IntegratorSessionCorrelation
+): lineage is TargetLineageRecord =>
+  lineage !== undefined &&
+  plannedTaskAttemptEquivalence(lineage.event.plannedAttempt, session.plannedAttempt) &&
+  lineage.event.observation.plannedBaseSha === session.plannedAttempt.baseSha &&
+  lineage.event.observation.plannedBaseIsAncestorOfTargetHead &&
+  lineage.event.observation.targetHeadSha === session.expectedTargetHead
+
+const directSessionHasForeignEvidence = (
+  direct: ReadonlyArray<DirectSessionRecord>,
+  run: IntegratorRunCorrelation,
+  key: JournalRecord["key"]
+): boolean =>
+  direct.some(
+    (record) =>
+      !integratorCorrelationsEqual(record.event.correlation, run.session) ||
+      record.runId !== runIdFor(run) ||
+      record.key !== key
+  )
+
+const directSessionRecordIsExact = (session: JournalRecord, run: IntegratorRunCorrelation): boolean =>
+  session.runId === runIdFor(run) &&
+  session.event._tag === "IntegratorSessionFixed" &&
+  integratorCorrelationsEqual(session.event.correlation, run.session) &&
+  session.position > run.session.targetLineageObservedAt
+
+const exactDirectSession = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  direct: ReadonlyArray<DirectSessionRecord>
+): FixedSessionValidation => {
+  const key = fixedSessionKey(run.session)
+  if (direct.length !== 1 || directSessionHasForeignEvidence(direct, run, key)) {
+    return { _tag: "Invalid", detail: "fixed Integrator session evidence is foreign to the provider run" }
+  }
+  if (!targetLineageMatchesSession(targetLineageAt(history, run.session.targetLineageObservedAt), run.session)) {
+    return { _tag: "Invalid", detail: "provider run lacks its exact target-lineage observation" }
+  }
+  const lookup = exactJournalRecordAtKey(history, key)
+  if (lookup._tag === "Duplicate") return { _tag: "Invalid", detail: lookup.detail }
+  /* v8 ignore next -- @preserve the sole direct fixed-session record was already proven to carry this canonical key, so exact lookup cannot be Missing. */
+  if (lookup._tag === "Missing") {
+    return { _tag: "Invalid", detail: "provider run lacks its exact fixed Integrator session" }
+  }
+  const session = lookup.record
+  return directSessionRecordIsExact(session, run)
+    ? { _tag: "Valid", session }
+    : { _tag: "Invalid", detail: "provider run lacks its exact fixed Integrator session" }
+}
+
+interface SuccessorPredecessorEvidence {
+  readonly predecessor: IntegratorSessionCorrelation
+  readonly record: DirectSessionRecord
+}
+
+type SuccessorPredecessorValidation =
+  | { readonly _tag: "Valid"; readonly value: SuccessorPredecessorEvidence }
+  | { readonly _tag: "Invalid"; readonly detail: string }
+
+const predecessorRecordIsExact = (
+  record: JournalRecord | undefined,
+  predecessorSessions: ReadonlyArray<DirectSessionRecord>,
+  predecessor: IntegratorSessionCorrelation,
+  run: IntegratorRunCorrelation,
+  key: JournalRecord["key"]
+): record is DirectSessionRecord =>
+  record?.event._tag === "IntegratorSessionFixed" &&
+  predecessorSessions.length === 1 &&
+  !predecessorSessions.some((candidate) => candidate.runId !== runIdFor(run) || candidate.key !== key) &&
+  record.runId === runIdFor(run) &&
+  integratorCorrelationsEqual(record.event.correlation, predecessor) &&
+  record.position > predecessor.targetLineageObservedAt
+
+const directSessionsMatchOnlyPredecessor = (
+  direct: ReadonlyArray<DirectSessionRecord>,
+  predecessorSessions: ReadonlyArray<DirectSessionRecord>,
+  predecessor: IntegratorSessionCorrelation
+): boolean =>
+  direct.length === predecessorSessions.length &&
+  !direct.some((candidate) => !integratorCorrelationsEqual(candidate.event.correlation, predecessor))
+
+const successorPredecessorEvidence = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  direct: ReadonlyArray<DirectSessionRecord>,
+  successor: SuccessorSessionRecord
+): SuccessorPredecessorValidation => {
   const predecessor = successor.event.predecessor
   const predecessorSessions = history.filter(
-    (record) =>
+    (record): record is DirectSessionRecord =>
       record.event._tag === "IntegratorSessionFixed" &&
       integratorCorrelationsEqual(record.event.correlation, predecessor)
   )
-  const predecessorKey = fixedSessionKey(predecessor)
-  const predecessorLookup = exactJournalRecordAtKey(history, predecessorKey)
-  if (
-    predecessorLookup._tag !== "Found" ||
-    predecessorSessions.length !== 1 ||
-    predecessorSessions.some((record) => record.runId !== runIdFor(run) || record.key !== predecessorKey) ||
-    predecessorLookup.record.runId !== runIdFor(run) ||
-    predecessorLookup.record.event._tag !== "IntegratorSessionFixed" ||
-    !integratorCorrelationsEqual(predecessorLookup.record.event.correlation, predecessor) ||
-    predecessorLookup.record.position <= predecessor.targetLineageObservedAt
-  ) {
+  const key = fixedSessionKey(predecessor)
+  const lookup = exactJournalRecordAtKey(history, key)
+  const record = lookup._tag === "Found" ? lookup.record : undefined
+  if (!predecessorRecordIsExact(record, predecessorSessions, predecessor, run, key)) {
     return { _tag: "Invalid", detail: "provider successor lacks the exact predecessor session" }
   }
-  if (
-    direct.length !== predecessorSessions.length ||
-    direct.some((record) => !integratorCorrelationsEqual(record.event.correlation, predecessor))
-  ) {
+  if (!directSessionsMatchOnlyPredecessor(direct, predecessorSessions, predecessor)) {
     return { _tag: "Invalid", detail: "provider successor has foreign fixed-session evidence" }
   }
-  const successorKey = integratorSuccessorSessionFixedRecordKey(
+  return { _tag: "Valid", value: { predecessor, record } }
+}
+
+const successorRecordIsExact = (
+  run: IntegratorRunCorrelation,
+  successor: SuccessorSessionRecord,
+  predecessor: IntegratorSessionCorrelation
+): boolean => {
+  const key = integratorSuccessorSessionFixedRecordKey(
     predecessor,
     successor.event.quarantineAt,
     successor.event.directionAppliedAt
   )
-  if (
-    successor.runId !== runIdFor(run) ||
-    successor.key !== successorKey ||
-    successor.position <= run.session.targetLineageObservedAt
-  ) {
-    return { _tag: "Invalid", detail: "provider successor session has a foreign key or chronology" }
-  }
+  return (
+    successor.runId === runIdFor(run) &&
+    successor.key === key &&
+    successor.position > run.session.targetLineageObservedAt
+  )
+}
+
+const successorPredecessorChronologyIsExact = (
+  history: ReadonlyArray<JournalRecord>,
+  successor: SuccessorSessionRecord,
+  evidence: SuccessorPredecessorEvidence
+): boolean => {
   const quarantine = history.find(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationQuarantined" }>
-    } => record.position === successor.event.quarantineAt && record.event._tag === "IntegrationQuarantined"
+    (record) => record.position === successor.event.quarantineAt && record.event._tag === "IntegrationQuarantined"
   )
   const direction = history.find(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationQuarantineDirectionApplied" }>
-    } =>
+    (record): record is QuarantineDirectionRecord =>
       record.position === successor.event.directionAppliedAt &&
       record.event._tag === "IntegrationQuarantineDirectionApplied"
   )
-  if (
-    quarantine === undefined ||
-    !integratorCorrelationsEqual(quarantine.event.correlation, predecessor) ||
-    direction === undefined ||
-    direction.event.fingerprint.direction !== "FullRerun" ||
-    direction.event.fingerprint.quarantineAt !== successor.event.quarantineAt ||
-    direction.event.fingerprint.sessionId !== predecessor.sessionId ||
-    !(predecessorLookup.record.position < quarantine.position && quarantine.position < direction.position)
-  ) {
-    return { _tag: "Invalid", detail: "provider successor lacks the exact Q/D predecessor chronology" }
-  }
-  const lineage = history.find(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "TargetLineageObserved" }>
-    } => record.position === run.session.targetLineageObservedAt && record.event._tag === "TargetLineageObserved"
+  if (quarantine?.event._tag !== "IntegrationQuarantined") return false
+  if (direction?.event._tag !== "IntegrationQuarantineDirectionApplied") return false
+  return (
+    successorDirectionMatches(direction, successor, evidence.predecessor) &&
+    integratorCorrelationsEqual(quarantine.event.correlation, evidence.predecessor) &&
+    evidence.record.position < quarantine.position &&
+    quarantine.position < direction.position
   )
-  if (
-    lineage === undefined ||
-    !plannedTaskAttemptEquivalence(lineage.event.plannedAttempt, run.session.plannedAttempt) ||
-    lineage.event.observation.plannedBaseSha !== run.session.plannedAttempt.baseSha ||
-    !lineage.event.observation.plannedBaseIsAncestorOfTargetHead ||
-    lineage.event.observation.targetHeadSha !== run.session.expectedTargetHead ||
-    lineage.position <= direction.position
-  ) {
-    return { _tag: "Invalid", detail: "provider successor lacks its exact fresh target-lineage observation" }
+}
+
+const successorDirectionMatches = (
+  direction: QuarantineDirectionRecord,
+  successor: SuccessorSessionRecord,
+  predecessor: IntegratorSessionCorrelation
+): boolean =>
+  direction.event.fingerprint.direction === "FullRerun" &&
+  direction.event.fingerprint.quarantineAt === successor.event.quarantineAt &&
+  direction.event.fingerprint.sessionId === predecessor.sessionId
+
+const successorLineageIssue = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  successor: SuccessorSessionRecord
+): string | undefined => {
+  const lineage = targetLineageAt(history, run.session.targetLineageObservedAt)
+  if (!targetLineageMatchesSession(lineage, run.session) || lineage.position <= successor.event.directionAppliedAt) {
+    return "provider successor lacks its exact fresh target-lineage observation"
   }
-  const lineageIntent = history.some(
+  const intentMatches = history.some(
     (record) =>
       record.event._tag === "GitReadIntentRecorded" &&
       record.event.operation._tag === "ReadTargetLineage" &&
       record.event.operation.operationId === lineage.event.operationId &&
-      record.position > direction.position &&
+      record.position > successor.event.directionAppliedAt &&
       record.position < lineage.position &&
       plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, run.session.plannedAttempt) &&
       record.event.operation.integrationTarget.repository === run.session.integrationTarget.repository &&
       record.event.operation.integrationTarget.ref === run.session.integrationTarget.ref
   )
-  return lineageIntent
-    ? { _tag: "Valid", session: successor }
-    : { _tag: "Invalid", detail: "provider successor Git intent does not follow FullRerun direction" }
+  return intentMatches ? undefined : "provider successor Git intent does not follow FullRerun direction"
+}
+
+const exactSuccessorSession = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  direct: ReadonlyArray<DirectSessionRecord>,
+  successor: SuccessorSessionRecord
+): FixedSessionValidation => {
+  const predecessor = successorPredecessorEvidence(history, run, direct, successor)
+  if (predecessor._tag === "Invalid") return predecessor
+  if (!successorRecordIsExact(run, successor, predecessor.value.predecessor)) {
+    return { _tag: "Invalid", detail: "provider successor session has a foreign key or chronology" }
+  }
+  if (!successorPredecessorChronologyIsExact(history, successor, predecessor.value)) {
+    return { _tag: "Invalid", detail: "provider successor lacks the exact Q/D predecessor chronology" }
+  }
+  const lineageIssue = successorLineageIssue(history, run, successor)
+  return lineageIssue === undefined ? { _tag: "Valid", session: successor } : { _tag: "Invalid", detail: lineageIssue }
+}
+
+const fixedSessionForRun = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation
+): FixedSessionValidation => {
+  const direct = directSessionsFor(history, run)
+  const successors = successorSessionsFor(history, run)
+  if (successors.length > 1) {
+    return { _tag: "Invalid", detail: "provider run has duplicate FullRerun successor session evidence" }
+  }
+  const successor = successors[0]
+  return successor === undefined
+    ? exactDirectSession(history, run, direct)
+    : exactSuccessorSession(history, run, direct, successor)
 }
 
 /** Returns the exact durable start for a run after its fixed session relation. */
@@ -296,60 +384,123 @@ export const providerRunStartFor = (
   return start !== undefined && start.position > fixedSession.session.position ? start : undefined
 }
 
+const retryAuthorizationIssue = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  runStart: JournalRecord
+): string | undefined => {
+  if (run.ordinal !== integratorRetryRunOrdinal) return undefined
+  const authorization = evaluateIntegratorRetryAuthorization(history, run, { beforePosition: runStart.position })
+  if (authorization._tag === "Rejected") return authorization.detail
+  return authorization.authorization.lineage.observation.event.observation.targetHeadSha ===
+    run.session.expectedTargetHead
+    ? undefined
+    : "Retry provider-run quarantine requires an unchanged fresh target head"
+}
+
+const hasRecordedRunResult = (history: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation): boolean =>
+  history.some(
+    (record) =>
+      record.event._tag === "IntegratorRunResultRecorded" &&
+      record.runId === runIdFor(run) &&
+      integratorRunCorrelationsEqual(record.event.run, run)
+  )
+
+const hasRecordedRunCandidateEvidence = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation
+): boolean =>
+  history.some(
+    (record) =>
+      (record.event._tag === "IntegratorRunCandidateGitReadIntended" ||
+        record.event._tag === "IntegratorRunCandidateGitObserved") &&
+      record.runId === runIdFor(run) &&
+      integratorRunCorrelationsEqual(record.event.run, run)
+  )
+
+const providerRunStartedAfterSession = (
+  history: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation
+): ProviderRunPredecessorValidation => {
+  const fixedSession = fixedSessionForRun(history, run)
+  if (fixedSession._tag === "Invalid") return invalidPredecessor(fixedSession.detail)
+  const runStart = providerRunStartFor(history, run)
+  return runStart === undefined || runStart.position <= fixedSession.session.position
+    ? invalidPredecessor("provider-run quarantine requires one exact run start after the fixed session")
+    : validPredecessor({ runStart, session: fixedSession.session })
+}
+
+const historyBefore = (
+  records: ReadonlyArray<JournalRecord>,
+  beforePosition: JournalRecord["position"] | undefined
+): ReadonlyArray<JournalRecord> =>
+  beforePosition === undefined ? records : records.filter((record) => record.position < beforePosition)
+
 const validateRunOnePredecessors = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation,
   beforePosition?: JournalRecord["position"]
 ): ProviderRunPredecessorValidation => {
-  if (run.ordinal !== initialRunOrdinal && run.ordinal !== integratorRetryRunOrdinal) {
+  if (![initialRunOrdinal, integratorRetryRunOrdinal].includes(run.ordinal)) {
     return invalidPredecessor("provider-run quarantine accepts only Integrator runs 1 and 2")
   }
-  const history = beforePosition === undefined ? records : records.filter((record) => record.position < beforePosition)
+  const history = historyBefore(records, beforePosition)
+  const predecessors = providerRunStartedAfterSession(history, run)
+  if (predecessors._tag === "Invalid") return predecessors
+  const { runStart, session } = predecessors.value
 
-  const fixedSession = fixedSessionForRun(history, run)
-  if (fixedSession._tag === "Invalid") return invalidPredecessor(fixedSession.detail)
-  const session = fixedSession.session
-
-  const runStart = providerRunStartFor(history, run)
-  if (runStart === undefined || runStart.position <= session.position) {
-    return invalidPredecessor("provider-run quarantine requires one exact run start after the fixed session")
-  }
-
-  if (run.ordinal === integratorRetryRunOrdinal) {
-    const authorization = evaluateIntegratorRetryAuthorization(history, run, { beforePosition: runStart.position })
-    if (authorization._tag === "Rejected") return invalidPredecessor(authorization.detail)
-    if (
-      authorization.authorization.lineage.observation.event.observation.targetHeadSha !== run.session.expectedTargetHead
-    ) {
-      return invalidPredecessor("Retry provider-run quarantine requires an unchanged fresh target head")
-    }
-  }
+  const authorizationIssue = retryAuthorizationIssue(history, run, runStart)
+  if (authorizationIssue !== undefined) return invalidPredecessor(authorizationIssue)
 
   // A provider absence is only valid before any result or candidate evidence
   // for the same run. A lost/ambiguous call is not converted into absence.
-  if (
-    history.some(
-      (record) =>
-        record.event._tag === "IntegratorRunResultRecorded" &&
-        record.runId === runIdFor(run) &&
-        integratorRunCorrelationsEqual(record.event.run, run)
-    )
-  ) {
+  if (hasRecordedRunResult(history, run)) {
     return invalidPredecessor("provider-run absence contradicts an already recorded Integrator result")
   }
-  if (
-    history.some(
-      (record) =>
-        (record.event._tag === "IntegratorRunCandidateGitReadIntended" ||
-          record.event._tag === "IntegratorRunCandidateGitObserved") &&
-        record.runId === runIdFor(run) &&
-        integratorRunCorrelationsEqual(record.event.run, run)
-    )
-  ) {
+  if (hasRecordedRunCandidateEvidence(history, run)) {
     return invalidPredecessor("provider-run absence contradicts run-bound candidate evidence")
   }
   return validPredecessor({ session, runStart })
 }
+
+const exactRunStartIssue = (
+  records: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation
+): string | undefined => {
+  const key = integratorRunStartedRecordKey(run)
+  const starts = records.filter(
+    (candidate) =>
+      candidate.event._tag === "IntegratorRunStarted" && integratorRunCorrelationsEqual(candidate.event.run, run)
+  )
+  return starts.length === 1 && !starts.some((candidate) => candidate.runId !== runIdFor(run) || candidate.key !== key)
+    ? undefined
+    : "provider run-start evidence is duplicate or wrongly keyed"
+}
+
+const exactRunAbsenceIssue = (
+  records: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  record: JournalRecord
+): string | undefined => {
+  const absences = records.filter(
+    (candidate) =>
+      candidate.event._tag === "IntegrationProviderRunActivityAbsent" &&
+      integratorRunCorrelationsEqual(candidate.event.run, run)
+  )
+  return absences.length === 1 && absences[0] === record
+    ? undefined
+    : "provider-activity absence is duplicate or contradictory"
+}
+
+const hasExactRunResultOrCandidate = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation): boolean =>
+  records.some(
+    (candidate) =>
+      (candidate.event._tag === "IntegratorRunResultRecorded" &&
+        integratorRunCorrelationsEqual(candidate.event.run, run)) ||
+      ((candidate.event._tag === "IntegratorRunCandidateGitReadIntended" ||
+        candidate.event._tag === "IntegratorRunCandidateGitObserved") &&
+        integratorRunCorrelationsEqual(candidate.event.run, run))
+  )
 
 /** Pure validation used by reconstruction and recovery to prove one exact provider absence. */
 export const validateProviderRunActivityAbsent = (
@@ -375,34 +526,11 @@ export const validateProviderRunActivityAbsent = (
   if (!absenceMatches(record, run, record.event.detail)) {
     return { _tag: "Invalid", detail: "provider-activity absence has a foreign key or Journal Run" }
   }
-  const runStartKey = integratorRunStartedRecordKey(run)
-  const exactRunStarts = records.filter(
-    (candidate) =>
-      candidate.event._tag === "IntegratorRunStarted" && integratorRunCorrelationsEqual(candidate.event.run, run)
-  )
-  if (
-    exactRunStarts.length !== 1 ||
-    exactRunStarts.some((candidate) => candidate.runId !== runIdFor(run) || candidate.key !== runStartKey)
-  ) {
-    return { _tag: "Invalid", detail: "provider run-start evidence is duplicate or wrongly keyed" }
-  }
-  const exactRunAbsences = records.filter(
-    (candidate) =>
-      candidate.event._tag === "IntegrationProviderRunActivityAbsent" &&
-      integratorRunCorrelationsEqual(candidate.event.run, run)
-  )
-  if (exactRunAbsences.length !== 1 || exactRunAbsences[0] !== record) {
-    return { _tag: "Invalid", detail: "provider-activity absence is duplicate or contradictory" }
-  }
-  const exactRunResultOrCandidate = records.some(
-    (candidate) =>
-      (candidate.event._tag === "IntegratorRunResultRecorded" &&
-        integratorRunCorrelationsEqual(candidate.event.run, run)) ||
-      ((candidate.event._tag === "IntegratorRunCandidateGitReadIntended" ||
-        candidate.event._tag === "IntegratorRunCandidateGitObserved") &&
-        integratorRunCorrelationsEqual(candidate.event.run, run))
-  )
-  if (exactRunResultOrCandidate) {
+  const runStartIssue = exactRunStartIssue(records, run)
+  if (runStartIssue !== undefined) return { _tag: "Invalid", detail: runStartIssue }
+  const absenceIssue = exactRunAbsenceIssue(records, run, record)
+  if (absenceIssue !== undefined) return { _tag: "Invalid", detail: absenceIssue }
+  if (hasExactRunResultOrCandidate(records, run)) {
     return { _tag: "Invalid", detail: "provider-activity absence contradicts exact run evidence" }
   }
   return { _tag: "Valid", record, run, runStart: predecessors.value.runStart }

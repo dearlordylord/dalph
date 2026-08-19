@@ -644,6 +644,46 @@ describe("Integrator reconstruction states", () => {
       )
     ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("foreign key") })
 
+    const wrongLineage = record(
+      15,
+      TargetLineageObservedEvent.make({
+        ...fixture.freshLineage,
+        observation: TargetLineageObservation.make({ ...fixture.freshLineage.observation, targetHeadSha: sha("d") })
+      })
+    )
+    expect(deriveCurrentIntegratorState([...base, wrongLineage, ...fixture.records], responsibility)).toMatchObject({
+      _tag: "Contradiction",
+      detail: expect.stringContaining("FullRerun successor does not preserve")
+    })
+
+    const wrongResponsibilitySuccessor = {
+      ...fixture.successorEvent,
+      successor: { ...fixture.successor, startedAt: JournalPosition.make(4) }
+    }
+    expect(
+      deriveCurrentIntegratorState(
+        [
+          ...base,
+          record(15, fixture.freshLineage),
+          ...fixture.records.slice(0, 2),
+          record(16, wrongResponsibilitySuccessor, successorRecord.key)
+        ],
+        responsibility
+      )
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("FullRerun successor does not preserve") })
+
+    expect(
+      deriveCurrentIntegratorState(
+        [
+          ...base,
+          record(15, fixture.freshLineage),
+          ...fixture.records.slice(0, 2),
+          { ...successorRecord, position: JournalPosition.make(15) }
+        ],
+        responsibility
+      )
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("FullRerun successor does not preserve") })
+
     const invalidDirection = fixture.records[1]
     expect(invalidDirection).toBeDefined()
     if (invalidDirection === undefined || invalidDirection.event._tag !== "IntegrationQuarantineDirectionApplied")

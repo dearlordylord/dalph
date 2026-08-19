@@ -302,21 +302,37 @@ const providerFailureEvidence = (
     : undefined
 }
 
-const providerAbsenceMatches = (
+const providerAbsenceIdentityMatches = (
   record: JournalRecord,
   run: IntegratorRunCorrelation,
-  start: RunStartedRecord,
   quarantine: QuarantineRecord
 ): record is ProviderAbsenceRecord =>
   quarantine.event.basis._tag === "ProviderRunFailure" &&
   isProviderAbsenceRecord(record) &&
   record.runId === runIdFor(run) &&
   record.key === integrationProviderRunActivityAbsentRecordKey(run) &&
-  integratorRunCorrelationsEqual(record.event.run, run) &&
+  integratorRunCorrelationsEqual(record.event.run, run)
+
+const providerAbsenceChronologyMatches = (
+  record: ProviderAbsenceRecord,
+  run: IntegratorRunCorrelation,
+  start: RunStartedRecord,
+  quarantine: QuarantineRecord
+): boolean =>
+  quarantine.event.basis._tag === "ProviderRunFailure" &&
   record.position > start.position &&
   record.position < quarantine.position &&
   record.event.detail === quarantine.event.basis.detail &&
   integratorCorrelationsEqual(record.event.correlation, run.session)
+
+const providerAbsenceMatches = (
+  record: JournalRecord,
+  run: IntegratorRunCorrelation,
+  start: RunStartedRecord,
+  quarantine: QuarantineRecord
+): record is ProviderAbsenceRecord =>
+  providerAbsenceIdentityMatches(record, run, quarantine) &&
+  providerAbsenceChronologyMatches(record, run, start, quarantine)
 
 const ordinalOneEvidence = (
   records: ReadonlyArray<JournalRecord>,

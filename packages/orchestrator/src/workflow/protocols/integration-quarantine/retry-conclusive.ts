@@ -78,21 +78,25 @@ const runResultMatches = (
   start: RunStartedRecord
 ): record is RunResultRecord => {
   const run = input.run
-  if (
-    record.event._tag !== "IntegratorRunResultRecorded" ||
-    record.runId !== runIdFor(run) ||
-    record.key !== integratorRunResultRecordedRecordKey(run) ||
-    !integratorRunCorrelationsEqual(record.event.run, run) ||
-    !integratorCorrelationsEqual(record.event.result.correlation, run.session) ||
-    record.position <= start.position
-  ) {
-    return false
-  }
-  if (input._tag === "NotPrepared") {
-    return record.event.result._tag === "NotPrepared" && record.event.result.detail === input.detail
-  }
-  return record.event.result._tag === "PreparedCandidate" && record.event.result.candidateText === input.candidateText
+  return runResultRecordMatches(record, run, start) && runResultOutcomeMatches(record, input)
 }
+
+const runResultRecordMatches = (
+  record: JournalRecord,
+  run: IntegratorRunCorrelation,
+  start: RunStartedRecord
+): record is RunResultRecord =>
+  record.event._tag === "IntegratorRunResultRecorded" &&
+  record.runId === runIdFor(run) &&
+  record.key === integratorRunResultRecordedRecordKey(run) &&
+  integratorRunCorrelationsEqual(record.event.run, run) &&
+  integratorCorrelationsEqual(record.event.result.correlation, run.session) &&
+  record.position > start.position
+
+const runResultOutcomeMatches = (record: RunResultRecord, input: RetryConclusiveIntegrationQuarantineInput): boolean =>
+  input._tag === "NotPrepared"
+    ? record.event.result._tag === "NotPrepared" && record.event.result.detail === input.detail
+    : record.event.result._tag === "PreparedCandidate" && record.event.result.candidateText === input.candidateText
 
 const sameRunCandidateEvent = (record: JournalRecord, run: IntegratorRunCorrelation): boolean =>
   (record.event._tag === "IntegratorRunCandidateGitReadIntended" ||
@@ -246,6 +250,49 @@ const validateNotPreparedEvidence = (
     : invalidEvidence("NotPrepared cannot have run-two Git candidate evidence")
 }
 
+interface ExactCandidateEvidence {
+  readonly observation: JournalRecord
+  readonly readIntent: JournalRecord
+}
+
+const exactCandidateEvidence = (
+  records: ReadonlyArray<JournalRecord>,
+  result: CandidateRejectedInput
+): EvidenceValidation<ExactCandidateEvidence> => {
+  const readIntentLookup = exactJournalRecordAtKey(
+    records,
+    integratorRunCandidateGitReadIntendedRecordKey(result.run, result.candidateText)
+  )
+  const observationLookup = exactJournalRecordAtKey(
+    records,
+    integratorRunCandidateGitObservedRecordKey(result.run, result.candidateText)
+  )
+  /* v8 ignore next -- @preserve retryPreflightIssue rejects duplicate candidate-read identities before this lookup. */
+  if (readIntentLookup._tag === "Duplicate") return invalidEvidence(readIntentLookup.detail)
+  /* v8 ignore next -- @preserve retryPreflightIssue rejects duplicate candidate-observation identities before this lookup. */
+  if (observationLookup._tag === "Duplicate") return invalidEvidence(observationLookup.detail)
+  if (readIntentLookup._tag === "Missing" || observationLookup._tag === "Missing") {
+    return invalidEvidence("Retry candidate rejection lacks the exact invalid Git observation chronology")
+  }
+  return validEvidence({ observation: observationLookup.record, readIntent: readIntentLookup.record })
+}
+
+const candidateChronologyIsExact = (
+  evidence: ExactCandidateEvidence,
+  result: CandidateRejectedInput,
+  resultRecord: RunResultRecord
+): boolean =>
+  readIntentMatches(evidence.readIntent, result.run, result.candidateText) &&
+  observationMatches(evidence.observation, result.run, result.candidateText) &&
+  evidence.observation.position > evidence.readIntent.position &&
+  evidence.readIntent.position > resultRecord.position &&
+  gitObservationEquivalence(evidence.observation.event.observation, result.observation) &&
+  !integratorCandidateHasExactParents(
+    result.observation,
+    result.run.session.expectedTargetHead,
+    result.run.session.acceptedResult.commit
+  )
+
 const validateCandidateRejectedEvidence = (
   records: ReadonlyArray<JournalRecord>,
   candidateEvents: ReadonlyArray<JournalRecord>,
@@ -265,36 +312,10 @@ const validateCandidateRejectedEvidence = (
   if (candidateEventsUseForeignKey(candidateEvents, result)) {
     return invalidEvidence("Retry run-two Git evidence appears under a foreign key")
   }
-  const readIntentLookup = exactJournalRecordAtKey(
-    records,
-    integratorRunCandidateGitReadIntendedRecordKey(result.run, result.candidateText)
-  )
-  const observationLookup = exactJournalRecordAtKey(
-    records,
-    integratorRunCandidateGitObservedRecordKey(result.run, result.candidateText)
-  )
-  /* v8 ignore next -- @preserve retryPreflightIssue rejects duplicate candidate-read identities before this lookup. */
-  if (readIntentLookup._tag === "Duplicate") return invalidEvidence(readIntentLookup.detail)
-  /* v8 ignore next -- @preserve retryPreflightIssue rejects duplicate candidate-observation identities before this lookup. */
-  if (observationLookup._tag === "Duplicate") return invalidEvidence(observationLookup.detail)
-  if (readIntentLookup._tag === "Missing" || observationLookup._tag === "Missing") {
-    return invalidEvidence("Retry candidate rejection lacks the exact invalid Git observation chronology")
-  }
-  const readIntent = readIntentLookup.record
-  const observation = observationLookup.record
-  const chronologyIsExact =
-    readIntentMatches(readIntent, result.run, result.candidateText) &&
-    observationMatches(observation, result.run, result.candidateText) &&
-    observation.position > readIntent.position &&
-    readIntent.position > resultRecord.position &&
-    gitObservationEquivalence(observation.event.observation, result.observation) &&
-    !integratorCandidateHasExactParents(
-      result.observation,
-      result.run.session.expectedTargetHead,
-      result.run.session.acceptedResult.commit
-    )
-  return chronologyIsExact
-    ? validEvidence(conclusiveBasisFor(result, resultRecord.position, observation.position))
+  const evidence = exactCandidateEvidence(records, result)
+  if (evidence._tag === "Invalid") return evidence
+  return candidateChronologyIsExact(evidence.value, result, resultRecord)
+    ? validEvidence(conclusiveBasisFor(result, resultRecord.position, evidence.value.observation.position))
     : invalidEvidence("Retry candidate rejection lacks the exact invalid Git observation chronology")
 }
 

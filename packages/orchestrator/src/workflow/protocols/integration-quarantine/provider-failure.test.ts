@@ -1176,6 +1176,14 @@ it.effect("rejects successor, Retry, and legacy provider histories before record
     expect(
       validateProviderRunActivityAbsent([...successorHistoryWithAbsence, foreignDirect], successorAbsence)._tag
     ).toBe("Invalid")
+    for (const missingEventTag of ["IntegrationQuarantined", "IntegrationQuarantineDirectionApplied"] as const) {
+      expect(
+        validateProviderRunActivityAbsent(
+          successorHistoryWithAbsence.filter((record) => record.event._tag !== missingEventTag),
+          successorAbsence
+        )._tag
+      ).toBe("Invalid")
+    }
     expect(
       validateProviderRunActivityAbsent(
         successorHistoryWithAbsence.map((record) =>

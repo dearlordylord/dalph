@@ -67,37 +67,72 @@ const invalidIntegrationStart = (
     : undefined
 }
 
+const invalidProviderAbsenceHistory = (
+  prefix: ReadonlyArray<JournalRecord>,
+  record: JournalRecord
+): string | undefined => {
+  const validation = validateProviderRunActivityAbsent(prefix, record)
+  return validation._tag === "Valid"
+    ? undefined
+    : `Integration provider-activity absence is not justified by exact earlier history: ${validation.detail}`
+}
+
+const invalidQuarantineHistory = (
+  prefix: ReadonlyArray<JournalRecord>,
+  record: JournalRecord & { readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationQuarantined" }> }
+): string | undefined => {
+  const state = deriveIntegrationQuarantineState(prefix, record.event.correlation.sessionId)
+  return state._tag === "Quarantined" && state.quarantineAt === record.position
+    ? undefined
+    : `Integration quarantine is not justified by exact earlier history: ${state._tag}`
+}
+
+const invalidQuarantineDirectionHistory = (
+  prefix: ReadonlyArray<JournalRecord>,
+  record: JournalRecord & {
+    readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationQuarantineDirectionApplied" }>
+  }
+): string | undefined => {
+  const state = deriveIntegrationQuarantineState(prefix, record.event.fingerprint.sessionId)
+  return state._tag === "DirectionApplied" &&
+    state.applicationAt === record.position &&
+    state.quarantineAt === record.event.fingerprint.quarantineAt
+    ? undefined
+    : `Integration quarantine direction is not the exact first direction for its subject: ${state._tag}`
+}
+
+const isQuarantineRecord = (
+  record: JournalRecord
+): record is JournalRecord & {
+  readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationQuarantined" }>
+} => record.event._tag === "IntegrationQuarantined"
+
+const isQuarantineDirectionRecord = (
+  record: JournalRecord
+): record is JournalRecord & {
+  readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationQuarantineDirectionApplied" }>
+} => record.event._tag === "IntegrationQuarantineDirectionApplied"
+
 const invalidIntegrationQuarantineHistory = (
   record: JournalRecord,
   records: ReadonlyArray<JournalRecord>
 ): string | undefined => {
-  const event = record.event
   if (
-    event._tag !== "IntegrationProviderRunActivityAbsent" &&
-    event._tag !== "IntegrationQuarantined" &&
-    event._tag !== "IntegrationQuarantineDirectionApplied"
+    record.event._tag !== "IntegrationProviderRunActivityAbsent" &&
+    !isQuarantineRecord(record) &&
+    !isQuarantineDirectionRecord(record)
   ) {
     return undefined
   }
   const prefix = records.filter(({ position }) => position <= record.position)
-  if (event._tag === "IntegrationProviderRunActivityAbsent") {
-    const validation = validateProviderRunActivityAbsent(prefix, record)
-    return validation._tag === "Valid"
-      ? undefined
-      : `Integration provider-activity absence is not justified by exact earlier history: ${validation.detail}`
+  if (record.event._tag === "IntegrationProviderRunActivityAbsent") {
+    return invalidProviderAbsenceHistory(prefix, record)
   }
-  const sessionId = event._tag === "IntegrationQuarantined" ? event.correlation.sessionId : event.fingerprint.sessionId
-  const state = deriveIntegrationQuarantineState(prefix, sessionId)
-  if (event._tag === "IntegrationQuarantined") {
-    return state._tag === "Quarantined" && state.quarantineAt === record.position
-      ? undefined
-      : `Integration quarantine is not justified by exact earlier history: ${state._tag}`
+  if (isQuarantineRecord(record)) return invalidQuarantineHistory(prefix, record)
+  if (isQuarantineDirectionRecord(record)) {
+    return invalidQuarantineDirectionHistory(prefix, record)
   }
-  return state._tag === "DirectionApplied" &&
-    state.applicationAt === record.position &&
-    state.quarantineAt === event.fingerprint.quarantineAt
-    ? undefined
-    : `Integration quarantine direction is not the exact first direction for its subject: ${state._tag}`
+  return undefined
 }
 
 type TargetPromotionEvent = Extract<

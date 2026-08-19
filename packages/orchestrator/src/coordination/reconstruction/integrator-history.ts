@@ -155,6 +155,28 @@ const successorResponsibilityMatches = (
   predecessor.queuedAt === successor.queuedAt &&
   predecessor.startedAt === successor.startedAt
 
+type SuccessorTargetLineageReadIntent = {
+  readonly operation: Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" }>
+  readonly position: JournalPosition
+}
+
+const successorTargetLineageIntentChronologyMatches = (
+  intent: SuccessorTargetLineageReadIntent,
+  event: IntegratorSuccessorSessionFixed
+): boolean => intent.position > event.directionAppliedAt && intent.position < event.successor.targetLineageObservedAt
+
+const successorTargetLineageFactsMatch = (
+  intent: SuccessorTargetLineageReadIntent,
+  event: IntegratorSuccessorSessionFixed,
+  observed: Extract<WorkflowJournalEvent, { readonly _tag: "TargetLineageObserved" }>
+): boolean =>
+  sameIntegrationTarget(intent.operation.integrationTarget, event.successor.integrationTarget) &&
+  plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.successor.plannedAttempt) &&
+  plannedTaskAttemptEquivalence(observed.plannedAttempt, event.successor.plannedAttempt) &&
+  observed.observation.plannedBaseSha === event.successor.plannedAttempt.baseSha &&
+  observed.observation.targetHeadSha === event.successor.expectedTargetHead &&
+  observed.observation.plannedBaseIsAncestorOfTargetHead
+
 const successorTargetLineageMatches = (
   event: IntegratorSuccessorSessionFixed,
   indexes: IntegratorHistoryIndexes
@@ -165,14 +187,168 @@ const successorTargetLineageMatches = (
   const intent = indexes.targetLineageReadIntents.get(observed.operationId)
   return (
     intent !== undefined &&
-    intent.position > event.directionAppliedAt &&
-    intent.position < event.successor.targetLineageObservedAt &&
-    sameIntegrationTarget(intent.operation.integrationTarget, event.successor.integrationTarget) &&
-    plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.successor.plannedAttempt) &&
-    plannedTaskAttemptEquivalence(observed.plannedAttempt, event.successor.plannedAttempt) &&
-    observed.observation.plannedBaseSha === event.successor.plannedAttempt.baseSha &&
-    observed.observation.targetHeadSha === event.successor.expectedTargetHead &&
-    observed.observation.plannedBaseIsAncestorOfTargetHead
+    successorTargetLineageIntentChronologyMatches(intent, event) &&
+    successorTargetLineageFactsMatch(intent, event, observed)
+  )
+}
+
+type ValidSuccessorPredecessor = { readonly position: JournalPosition }
+
+const validSuccessorPredecessorFor = (
+  predecessorPosition: JournalPosition | undefined,
+  predecessor: IntegratorSessionFixed | IntegratorSuccessorSessionFixed | undefined,
+  event: IntegratorSuccessorSessionFixed
+): ValidSuccessorPredecessor | undefined => {
+  if (
+    predecessorPosition === undefined ||
+    predecessor === undefined ||
+    predecessor._tag !== "IntegratorSessionFixed" ||
+    predecessorPosition >= event.quarantineAt ||
+    !integratorCorrelationsEqual(predecessor.correlation, event.predecessor)
+  ) {
+    return undefined
+  }
+  return { position: predecessorPosition }
+}
+
+const deterministicSuccessorFor = (
+  event: IntegratorSuccessorSessionFixed,
+  successorLineage: Extract<WorkflowJournalEvent, { readonly _tag: "TargetLineageObserved" }> | undefined
+): IntegratorSessionCorrelation | undefined =>
+  successorLineage === undefined
+    ? undefined
+    : integratorSuccessorCorrelationFor({
+        directionAppliedAt: event.directionAppliedAt,
+        predecessor: event.predecessor,
+        quarantineAt: event.quarantineAt,
+        targetLineage: successorLineage.observation,
+        targetLineageObservedAt: event.successor.targetLineageObservedAt
+      })
+
+const successorQuarantineIsValid = (
+  quarantine: JournalRecord | undefined,
+  record: JournalRecord,
+  event: IntegratorSuccessorSessionFixed
+): boolean =>
+  quarantine?.event._tag === "IntegrationQuarantined" &&
+  quarantine.runId === record.runId &&
+  integratorCorrelationsEqual(quarantine.event.correlation, event.predecessor)
+
+const successorDirectionIsValid = (
+  direction: JournalRecord | undefined,
+  record: JournalRecord,
+  event: IntegratorSuccessorSessionFixed
+): boolean =>
+  direction?.event._tag === "IntegrationQuarantineDirectionApplied" &&
+  direction.runId === record.runId &&
+  direction.event.fingerprint.direction === "FullRerun" &&
+  direction.event.fingerprint.quarantineAt === event.quarantineAt &&
+  direction.event.fingerprint.sessionId === event.predecessor.sessionId
+
+type SuccessorIdentityValidation =
+  | { readonly _tag: "Invalid"; readonly detail: string }
+  | { readonly _tag: "Valid"; readonly predecessor: ValidSuccessorPredecessor }
+
+const invalidSuccessorIdentity = (
+  record: JournalRecord,
+  expectedKey: JournalRecord["key"],
+  existingSuccessorPosition: JournalPosition | undefined,
+  existingSessionIdentity: JournalPosition | undefined,
+  predecessor: ValidSuccessorPredecessor | undefined
+): SuccessorIdentityValidation => {
+  if (record.key !== expectedKey)
+    return { _tag: "Invalid", detail: `FullRerun successor requires record key ${expectedKey}` }
+  if (existingSuccessorPosition !== undefined) {
+    return { _tag: "Invalid", detail: `Integrator predecessor already has a successor at ${existingSuccessorPosition}` }
+  }
+  if (existingSessionIdentity !== undefined) {
+    return {
+      _tag: "Invalid",
+      detail: `Integrator successor reuses a session or resource at ${existingSessionIdentity}`
+    }
+  }
+  return predecessor === undefined
+    ? { _tag: "Invalid", detail: "Integrator successor has no exact earlier predecessor session" }
+    : { _tag: "Valid", predecessor }
+}
+
+const invalidSuccessorCorrelation = (
+  event: IntegratorSuccessorSessionFixed,
+  deterministicSuccessor: IntegratorSessionCorrelation | undefined
+): string | undefined => {
+  if (deterministicSuccessor === undefined || !integratorCorrelationsEqual(deterministicSuccessor, event.successor)) {
+    return "Integrator successor identity is not the deterministic result of its Q, D, and fresh lineage"
+  }
+  /* v8 ignore next -- @preserve deterministic successor construction copies every responsibility field from its predecessor. */
+  if (!successorResponsibilityMatches(event.predecessor, event.successor)) {
+    return "Integrator successor changes the accepted result, target, attempt, queue position, or start position"
+  }
+  /* v8 ignore next -- @preserve deterministic successor identities derive distinct session and resource locators from the predecessor. */
+  if (
+    event.predecessor.sessionId === event.successor.sessionId ||
+    event.predecessor.candidateResource === event.successor.candidateResource
+  ) {
+    return "Integrator successor must use distinct session and resource identities"
+  }
+  return undefined
+}
+
+const invalidSuccessorChronology = (
+  record: JournalRecord,
+  event: IntegratorSuccessorSessionFixed,
+  indexes: IntegratorHistoryIndexes,
+  predecessor: ValidSuccessorPredecessor,
+  validQuarantine: boolean,
+  validDirection: boolean
+): string | undefined => {
+  if (!validQuarantine || event.quarantineAt <= predecessor.position) {
+    return "Integrator successor has no exact predecessor quarantine after S1"
+  }
+  if (!validDirection || event.directionAppliedAt <= event.quarantineAt) {
+    return "Integrator successor has no exact FullRerun direction after Q"
+  }
+  /* v8 ignore next -- @preserve IntegratorSuccessorSessionFixedEvent's schema requires Q < D < fresh L before this validator. */
+  if (event.successor.targetLineageObservedAt <= event.directionAppliedAt) {
+    return "Integrator successor fresh lineage must be observed after D"
+  }
+  if (!successorTargetLineageMatches(event, indexes)) {
+    return "Integrator successor has no exact fresh target-lineage observation"
+  }
+  if (record.position <= event.successor.targetLineageObservedAt) {
+    return "Integrator successor must be fixed after its fresh target-lineage observation"
+  }
+  return undefined
+}
+
+const invalidSuccessorRecord = (
+  record: JournalRecord,
+  event: IntegratorSuccessorSessionFixed,
+  indexes: IntegratorHistoryIndexes,
+  expectedKey: JournalRecord["key"],
+  existingSuccessorPosition: JournalPosition | undefined,
+  existingSessionIdentity: JournalPosition | undefined,
+  predecessor: ValidSuccessorPredecessor | undefined,
+  deterministicSuccessor: IntegratorSessionCorrelation | undefined,
+  validQuarantine: boolean,
+  validDirection: boolean
+): string | undefined => {
+  const identityValidation = invalidSuccessorIdentity(
+    record,
+    expectedKey,
+    existingSuccessorPosition,
+    existingSessionIdentity,
+    predecessor
+  )
+  if (identityValidation._tag === "Invalid") return identityValidation.detail
+  const correlationIssue = invalidSuccessorCorrelation(event, deterministicSuccessor)
+  if (correlationIssue !== undefined) return correlationIssue
+  return invalidSuccessorChronology(
+    record,
+    event,
+    indexes,
+    identityValidation.predecessor,
+    validQuarantine,
+    validDirection
   )
 }
 
@@ -197,63 +373,22 @@ const invalidIntegratorSuccessorSession = (
     event.directionAppliedAt
   )
   const successorLineage = indexes.targetLineageObservations.get(event.successor.targetLineageObservedAt)
-  const deterministicSuccessor =
-    successorLineage === undefined
-      ? undefined
-      : integratorSuccessorCorrelationFor({
-          directionAppliedAt: event.directionAppliedAt,
-          predecessor: event.predecessor,
-          quarantineAt: event.quarantineAt,
-          targetLineage: successorLineage.observation,
-          targetLineageObservedAt: event.successor.targetLineageObservedAt
-        })
-  const validPredecessor =
-    predecessorPosition !== undefined &&
-    predecessor !== undefined &&
-    predecessor._tag === "IntegratorSessionFixed" &&
-    predecessorPosition < event.quarantineAt &&
-    integratorCorrelationsEqual(predecessor.correlation, event.predecessor)
-  const validQuarantine =
-    quarantine?.event._tag === "IntegrationQuarantined" &&
-    quarantine.runId === record.runId &&
-    integratorCorrelationsEqual(quarantine.event.correlation, event.predecessor)
-  const validDirection =
-    direction?.event._tag === "IntegrationQuarantineDirectionApplied" &&
-    direction.runId === record.runId &&
-    direction.event.fingerprint.direction === "FullRerun" &&
-    direction.event.fingerprint.quarantineAt === event.quarantineAt &&
-    direction.event.fingerprint.sessionId === event.predecessor.sessionId
-  const issue =
-    record.key !== expectedKey
-      ? `FullRerun successor requires record key ${expectedKey}`
-      : existingSuccessorPosition !== undefined
-        ? `Integrator predecessor already has a successor at ${existingSuccessorPosition}`
-        : existingSessionIdentity !== undefined
-          ? `Integrator successor reuses a session or resource at ${existingSessionIdentity}`
-          : !validPredecessor
-            ? "Integrator successor has no exact earlier predecessor session"
-            : deterministicSuccessor === undefined ||
-                !integratorCorrelationsEqual(deterministicSuccessor, event.successor)
-              ? "Integrator successor identity is not the deterministic result of its Q, D, and fresh lineage"
-              : /* v8 ignore next -- @preserve deterministic successor construction copies every responsibility field from its predecessor. */
-                !successorResponsibilityMatches(event.predecessor, event.successor)
-                ? "Integrator successor changes the accepted result, target, attempt, queue position, or start position"
-                : /* v8 ignore next -- @preserve deterministic successor identities derive distinct session and resource locators from the predecessor. */
-                  event.predecessor.sessionId === event.successor.sessionId ||
-                    event.predecessor.candidateResource === event.successor.candidateResource
-                  ? "Integrator successor must use distinct session and resource identities"
-                  : !validQuarantine || event.quarantineAt <= predecessorPosition
-                    ? "Integrator successor has no exact predecessor quarantine after S1"
-                    : !validDirection || event.directionAppliedAt <= event.quarantineAt
-                      ? "Integrator successor has no exact FullRerun direction after Q"
-                      : /* v8 ignore next -- @preserve IntegratorSuccessorSessionFixedEvent's schema requires Q < D < fresh L before this validator. */
-                        event.successor.targetLineageObservedAt <= event.directionAppliedAt
-                        ? "Integrator successor fresh lineage must be observed after D"
-                        : !successorTargetLineageMatches(event, indexes)
-                          ? "Integrator successor has no exact fresh target-lineage observation"
-                          : record.position <= event.successor.targetLineageObservedAt
-                            ? "Integrator successor must be fixed after its fresh target-lineage observation"
-                            : undefined
+  const deterministicSuccessor = deterministicSuccessorFor(event, successorLineage)
+  const validPredecessor = validSuccessorPredecessorFor(predecessorPosition, predecessor, event)
+  const validQuarantine = successorQuarantineIsValid(quarantine, record, event)
+  const validDirection = successorDirectionIsValid(direction, record, event)
+  const issue = invalidSuccessorRecord(
+    record,
+    event,
+    indexes,
+    expectedKey,
+    existingSuccessorPosition,
+    existingSessionIdentity,
+    validPredecessor,
+    deterministicSuccessor,
+    validQuarantine,
+    validDirection
+  )
 
   setMapValue(indexes.integratorSessionFixed, record.position, event)
   setMapValue(indexes.integratorSuccessorSessionFixed, record.position, event)

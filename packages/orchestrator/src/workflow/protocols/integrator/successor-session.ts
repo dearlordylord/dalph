@@ -50,6 +50,8 @@ const sameTarget = (left: IntegrationTarget, right: IntegrationTarget): boolean 
 const exactRecordAt = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): JournalRecord | undefined =>
   records.find((record) => record.position === position)
 
+type TargetLineageObservedEvent = Extract<JournalRecord["event"], { readonly _tag: "TargetLineageObserved" }>
+
 type SuccessorValidation = { readonly _tag: "Valid" } | { readonly _tag: "Invalid"; readonly detail: string }
 
 const validSuccessor = (): SuccessorValidation => ({ _tag: "Valid" })
@@ -64,27 +66,52 @@ const targetLineageMatches = (
   if (observationRecord?.event._tag !== "TargetLineageObserved") return false
   const observation = observationRecord.event
   if (!targetLineageEquivalence(observation.observation, input.targetLineage)) return false
-  const intent = records.find((record) => {
+  const intent = targetLineageReadIntentFor(records, input, observation.operationId, observationRecord.position)
+  return targetLineageFactsMatch(intent, observation, correlation)
+}
+
+const targetLineageReadIntentFor = (
+  records: ReadonlyArray<JournalRecord>,
+  input: IntegratorSuccessorPreparationInput,
+  operationId: TargetLineageObservedEvent["operationId"],
+  observationPosition: JournalPosition
+): JournalRecord | undefined =>
+  records.find((record) => {
     const event = record.event
     return (
       event._tag === "GitReadIntentRecorded" &&
       event.operation._tag === "ReadTargetLineage" &&
-      event.operation.operationId === observation.operationId &&
+      event.operation.operationId === operationId &&
       record.position > input.directionAppliedAt &&
-      record.position < observationRecord.position
+      record.position < observationPosition
     )
   })
-  return (
-    intent?.event._tag === "GitReadIntentRecorded" &&
-    intent.event.operation._tag === "ReadTargetLineage" &&
-    sameTarget(intent.event.operation.integrationTarget, correlation.integrationTarget) &&
-    plannedTaskAttemptEquivalence(intent.event.operation.plannedAttempt, correlation.plannedAttempt) &&
-    plannedTaskAttemptEquivalence(observation.plannedAttempt, correlation.plannedAttempt) &&
-    observation.observation.plannedBaseSha === correlation.plannedAttempt.baseSha &&
-    observation.observation.targetHeadSha === correlation.expectedTargetHead &&
-    observation.observation.plannedBaseIsAncestorOfTargetHead
-  )
-}
+
+type ReadTargetLineageOperation = Extract<
+  Extract<JournalRecord["event"], { readonly _tag: "GitReadIntentRecorded" }>["operation"],
+  { readonly _tag: "ReadTargetLineage" }
+>
+
+const targetLineageIntentFactsMatch = (
+  operation: ReadTargetLineageOperation,
+  observation: TargetLineageObservedEvent,
+  correlation: IntegratorSessionCorrelation
+): boolean =>
+  sameTarget(operation.integrationTarget, correlation.integrationTarget) &&
+  plannedTaskAttemptEquivalence(operation.plannedAttempt, correlation.plannedAttempt) &&
+  plannedTaskAttemptEquivalence(observation.plannedAttempt, correlation.plannedAttempt) &&
+  observation.observation.plannedBaseSha === correlation.plannedAttempt.baseSha &&
+  observation.observation.targetHeadSha === correlation.expectedTargetHead &&
+  observation.observation.plannedBaseIsAncestorOfTargetHead
+
+const targetLineageFactsMatch = (
+  intent: JournalRecord | undefined,
+  observation: TargetLineageObservedEvent,
+  correlation: IntegratorSessionCorrelation
+): boolean =>
+  intent?.event._tag === "GitReadIntentRecorded" &&
+  intent.event.operation._tag === "ReadTargetLineage" &&
+  targetLineageIntentFactsMatch(intent.event.operation, observation, correlation)
 
 const predecessorFixedAt = (
   records: ReadonlyArray<JournalRecord>,
@@ -135,41 +162,63 @@ const directionMatches = (
   record.key ===
     integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
 
-const validateFreshSuccessorPreconditions = (
+const freshSuccessorQuarantineStateMatches = (
+  state: ReturnType<typeof deriveIntegrationQuarantineState>,
+  input: IntegratorSuccessorPreparationInput
+): boolean =>
+  state._tag === "DirectionApplied" &&
+  state.quarantineAt === input.quarantineAt &&
+  state.applicationAt === input.directionAppliedAt &&
+  state.application.fingerprint.direction === "FullRerun"
+
+type FreshSuccessorEvidence =
+  | { readonly _tag: "Valid"; readonly fixed: JournalRecord }
+  | { readonly _tag: "Invalid"; readonly detail: string }
+
+const invalidFreshSuccessor = (detail: string): FreshSuccessorEvidence => ({ _tag: "Invalid", detail })
+
+const validateFreshSuccessorEvidence = (
   records: ReadonlyArray<JournalRecord>,
-  input: IntegratorSuccessorPreparationInput,
-  successor: IntegratorSessionCorrelation
-): SuccessorValidation => {
+  input: IntegratorSuccessorPreparationInput
+): FreshSuccessorEvidence => {
   const predecessor = input.predecessor
   const fixed = predecessorFixedAt(records, predecessor)
   const started = exactRecordAt(records, predecessor.startedAt)
   const quarantine = exactRecordAt(records, input.quarantineAt)
   const direction = exactRecordAt(records, input.directionAppliedAt)
   const quarantineState = deriveIntegrationQuarantineState(records, predecessor.sessionId)
-  if (fixed === undefined) return invalidSuccessor("FullRerun successor lacks the exact predecessor session")
+  if (fixed === undefined) return invalidFreshSuccessor("FullRerun successor lacks the exact predecessor session")
   if (fixed.position <= predecessor.targetLineageObservedAt) {
-    return invalidSuccessor("FullRerun successor predecessor session does not follow its target-lineage observation")
+    return invalidFreshSuccessor(
+      "FullRerun successor predecessor session does not follow its target-lineage observation"
+    )
   }
   if (!integrationStartedMatches(started, predecessor)) {
-    return invalidSuccessor("FullRerun successor lacks the exact earlier IntegrationStarted responsibility")
+    return invalidFreshSuccessor("FullRerun successor lacks the exact earlier IntegrationStarted responsibility")
   }
   if (!quarantineMatches(quarantine, predecessor, input.quarantineAt)) {
-    return invalidSuccessor("FullRerun successor lacks the exact predecessor quarantine")
+    return invalidFreshSuccessor("FullRerun successor lacks the exact predecessor quarantine")
   }
   if (!directionMatches(direction, predecessor, input.quarantineAt, input.directionAppliedAt)) {
-    return invalidSuccessor("FullRerun successor lacks the exact applied FullRerun direction")
+    return invalidFreshSuccessor("FullRerun successor lacks the exact applied FullRerun direction")
   }
-  if (
-    quarantineState._tag !== "DirectionApplied" ||
-    quarantineState.quarantineAt !== input.quarantineAt ||
-    quarantineState.applicationAt !== input.directionAppliedAt ||
-    quarantineState.application.fingerprint.direction !== "FullRerun"
-  ) {
-    return invalidSuccessor(
+  if (!freshSuccessorQuarantineStateMatches(quarantineState, input)) {
+    return invalidFreshSuccessor(
       "FullRerun successor requires one valid reconstructed Q and exact winning FullRerun direction"
     )
   }
-  if (!(fixed.position < input.quarantineAt && input.quarantineAt < input.directionAppliedAt)) {
+  return { _tag: "Valid", fixed }
+}
+
+const validateFreshSuccessorPreconditions = (
+  records: ReadonlyArray<JournalRecord>,
+  input: IntegratorSuccessorPreparationInput,
+  successor: IntegratorSessionCorrelation
+): SuccessorValidation => {
+  const predecessor = input.predecessor
+  const evidence = validateFreshSuccessorEvidence(records, input)
+  if (evidence._tag === "Invalid") return evidence
+  if (!(evidence.fixed.position < input.quarantineAt && input.quarantineAt < input.directionAppliedAt)) {
     return invalidSuccessor("FullRerun successor requires predecessor session < Q < D")
   }
   if (!(input.directionAppliedAt < input.targetLineageObservedAt)) {
@@ -197,6 +246,58 @@ const existingSuccessorFor = (
       record.event.predecessor.sessionId === predecessor.sessionId
   )
 
+const validateExistingSuccessor = (
+  existing: IntegratorSuccessorSessionFixedRecord,
+  input: IntegratorSuccessorPreparationInput,
+  successor: IntegratorSessionCorrelation,
+  expectedKey: JournalRecord["key"]
+):
+  | { readonly _tag: "Existing"; readonly record: IntegratorSuccessorSessionFixedRecord }
+  | { readonly _tag: "Invalid"; readonly detail: string } => {
+  if (
+    !integratorCorrelationsEqual(existing.event.predecessor, input.predecessor) ||
+    existing.event.quarantineAt !== input.quarantineAt ||
+    existing.event.directionAppliedAt !== input.directionAppliedAt
+  ) {
+    return { _tag: "Invalid", detail: "FullRerun predecessor already has a different successor subject" }
+  }
+  /* v8 ignore next -- @preserve fresh-successor precondition validation rejects a related successor under a foreign key before uniqueness reconstruction. */
+  if (existing.key !== expectedKey) return { _tag: "Invalid", detail: "FullRerun successor exists under a foreign key" }
+  /* v8 ignore next -- @preserve a related successor at the expected key is returned by the earlier exact-key lookup. */
+  return successorEventEquivalence(existing.event, {
+    _tag: "IntegratorSuccessorSessionFixed",
+    direction: "FullRerun",
+    directionAppliedAt: input.directionAppliedAt,
+    predecessor: input.predecessor,
+    quarantineAt: input.quarantineAt,
+    successor,
+    successorGeneration: firstFullRerunSuccessorGeneration,
+    version: workflowJournalEventVersion
+  })
+    ? { _tag: "Existing", record: existing }
+    : { _tag: "Invalid", detail: "FullRerun successor key contains contradictory successor identity" }
+}
+
+const successorIdentityCollision = (
+  records: ReadonlyArray<JournalRecord>,
+  successor: IntegratorSessionCorrelation
+): boolean =>
+  records.some((record) => {
+    if (record.event._tag === "IntegratorSessionFixed") {
+      return (
+        record.event.correlation.sessionId === successor.sessionId ||
+        record.event.correlation.candidateResource === successor.candidateResource
+      )
+    }
+    if (record.event._tag === "IntegratorSuccessorSessionFixed") {
+      return (
+        record.event.successor.sessionId === successor.sessionId ||
+        record.event.successor.candidateResource === successor.candidateResource
+      )
+    }
+    return false
+  })
+
 const validateSuccessorUniqueness = (
   records: ReadonlyArray<JournalRecord>,
   input: IntegratorSuccessorPreparationInput,
@@ -211,41 +312,8 @@ const validateSuccessorUniqueness = (
     return { _tag: "Invalid", detail: "Journal history contains multiple FullRerun successors for one predecessor" }
   }
   const existing = related[0]
-  if (existing !== undefined) {
-    if (
-      !integratorCorrelationsEqual(existing.event.predecessor, input.predecessor) ||
-      existing.event.quarantineAt !== input.quarantineAt ||
-      existing.event.directionAppliedAt !== input.directionAppliedAt
-    ) {
-      return { _tag: "Invalid", detail: "FullRerun predecessor already has a different successor subject" }
-    }
-    /* v8 ignore next -- @preserve fresh-successor precondition validation rejects a related successor under a foreign key before uniqueness reconstruction. */
-    if (existing.key !== expectedKey)
-      return { _tag: "Invalid", detail: "FullRerun successor exists under a foreign key" }
-    /* v8 ignore next -- @preserve a related successor at the expected key is returned by the earlier exact-key lookup. */
-    return successorEventEquivalence(existing.event, {
-      _tag: "IntegratorSuccessorSessionFixed",
-      direction: "FullRerun",
-      directionAppliedAt: input.directionAppliedAt,
-      predecessor: input.predecessor,
-      quarantineAt: input.quarantineAt,
-      successor,
-      successorGeneration: firstFullRerunSuccessorGeneration,
-      version: workflowJournalEventVersion
-    })
-      ? { _tag: "Existing", record: existing }
-      : { _tag: "Invalid", detail: "FullRerun successor key contains contradictory successor identity" }
-  }
-
-  const identityCollision = records.some(
-    (record) =>
-      (record.event._tag === "IntegratorSessionFixed" &&
-        (record.event.correlation.sessionId === successor.sessionId ||
-          record.event.correlation.candidateResource === successor.candidateResource)) ||
-      (record.event._tag === "IntegratorSuccessorSessionFixed" &&
-        (record.event.successor.sessionId === successor.sessionId ||
-          record.event.successor.candidateResource === successor.candidateResource))
-  )
+  if (existing !== undefined) return validateExistingSuccessor(existing, input, successor, expectedKey)
+  const identityCollision = successorIdentityCollision(records, successor)
   return identityCollision
     ? { _tag: "Invalid", detail: "FullRerun successor reuses an existing session or resource identity" }
     : { _tag: "Available" }
@@ -274,20 +342,13 @@ const successorRecordMatches = (
   record.event._tag === "IntegratorSuccessorSessionFixed" &&
   successorEventEquivalence(record.event, event)
 
-/** Pure, fail-closed lookup used before reconstruction or delivery selects S2. */
-const activeIntegratorSuccessorFor = (
+const validateActiveIntegratorSuccessorRecord = (
   records: ReadonlyArray<JournalRecord>,
+  fixed: IntegratorSuccessorSessionFixedRecord,
   predecessor: IntegratorSessionCorrelation
 ):
-  | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
-  const related = existingSuccessorFor(records, predecessor)
-  if (related.length > 1) {
-    return { _tag: "Invalid", detail: "Journal history contains multiple successors for one Integrator session" }
-  }
-  const fixed = related[0]
-  if (fixed === undefined) return { _tag: "Absent" }
   if (!integratorCorrelationsEqual(fixed.event.predecessor, predecessor)) {
     return { _tag: "Invalid", detail: "Integrator successor predecessor is foreign to the responsibility" }
   }
@@ -316,6 +377,23 @@ const activeIntegratorSuccessorFor = (
   return successorRecordMatches(fixed, expectedKey, successorEventFor(input, expectedSuccessor))
     ? { _tag: "Valid", successor: expectedSuccessor }
     : { _tag: "Invalid", detail: "Integrator successor record has a foreign key or non-deterministic identity" }
+}
+
+/** Pure, fail-closed lookup used before reconstruction or delivery selects S2. */
+const activeIntegratorSuccessorFor = (
+  records: ReadonlyArray<JournalRecord>,
+  predecessor: IntegratorSessionCorrelation
+):
+  | { readonly _tag: "Absent" }
+  | { readonly _tag: "Invalid"; readonly detail: string }
+  | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
+  const related = existingSuccessorFor(records, predecessor)
+  if (related.length > 1) {
+    return { _tag: "Invalid", detail: "Journal history contains multiple successors for one Integrator session" }
+  }
+  const fixed = related[0]
+  if (fixed === undefined) return { _tag: "Absent" }
+  return validateActiveIntegratorSuccessorRecord(records, fixed, predecessor)
 }
 
 /**

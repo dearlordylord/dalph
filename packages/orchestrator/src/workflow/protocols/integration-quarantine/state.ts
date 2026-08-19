@@ -128,6 +128,28 @@ const isIntegratorCandidateObservationRecord = (
 const isDirectionRecord = (record: JournalRecord | undefined): record is DirectionRecord =>
   record?.event._tag === "IntegrationQuarantineDirectionApplied"
 
+const hasMatchingRunStart = (records: ReadonlyArray<JournalRecord>, record: IntegratorResultRecord): boolean => {
+  const run = record.event.run
+  return records.some(
+    (candidate) =>
+      candidate.position < record.position &&
+      candidate.event._tag === "IntegratorRunStarted" &&
+      (run.ordinal !== integratorRetryRunOrdinal || candidate.key === integratorRunStartedRecordKey(run)) &&
+      integratorRunCorrelationsEqual(candidate.event.run, run)
+  )
+}
+
+const resultBelongsToQuarantinedRun = (record: IntegratorResultRecord, quarantine: QuarantineRecord): boolean => {
+  const run = record.event.run
+  const supportedOrdinal = run.ordinal === 1 || run.ordinal === integratorRetryRunOrdinal
+  return (
+    supportedOrdinal &&
+    record.key === integratorRunResultRecordedRecordKey(run) &&
+    integratorCorrelationsEqual(run.session, quarantine.event.correlation) &&
+    integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation)
+  )
+}
+
 const resultRecordFor = (
   records: ReadonlyArray<JournalRecord>,
   position: JournalPosition,
@@ -135,22 +157,9 @@ const resultRecordFor = (
 ): IntegratorResultRecord | undefined => {
   const record = recordAt(records, position)
   if (!isIntegratorResultRecord(record)) return undefined
-  const run = record.event.run
-  const matchingRunStart = records.some(
-    (candidate) =>
-      candidate.position < record.position &&
-      candidate.event._tag === "IntegratorRunStarted" &&
-      (run.ordinal !== integratorRetryRunOrdinal || candidate.key === integratorRunStartedRecordKey(run)) &&
-      integratorRunCorrelationsEqual(candidate.event.run, run)
-  )
-  const exactRun =
-    (run.ordinal === 1 || run.ordinal === integratorRetryRunOrdinal) &&
-    record.key === integratorRunResultRecordedRecordKey(run) &&
-    integratorCorrelationsEqual(run.session, quarantine.event.correlation)
   return record.position < quarantine.position &&
-    matchingRunStart &&
-    exactRun &&
-    integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation)
+    hasMatchingRunStart(records, record) &&
+    resultBelongsToQuarantinedRun(record, quarantine)
     ? record
     : undefined
 }
@@ -197,6 +206,37 @@ const candidateObservationMatches = (
   record.event.candidateText === cause.candidateText &&
   gitObservationEqual(record.event.observation, cause.observation)
 
+const retryResultIsAuthorized = (records: ReadonlyArray<JournalRecord>, resultRecord: IntegratorResultRecord) => {
+  if (resultRecord.event.run.ordinal !== integratorRetryRunOrdinal) return true
+  const runStart = providerRunStartFor(records, resultRecord.event.run)
+  if (runStart === undefined || runStart.position >= resultRecord.position) return false
+  const authorization = evaluateIntegratorRetryAuthorization(records, resultRecord.event.run, {
+    beforePosition: runStart.position
+  })
+  return (
+    authorization._tag === "Authorized" &&
+    authorization.authorization.lineage.observation.event.observation.targetHeadSha ===
+      resultRecord.event.run.session.expectedTargetHead
+  )
+}
+
+const invalidCandidateEvidenceMatchesRecords = (
+  records: ReadonlyArray<JournalRecord>,
+  quarantine: QuarantineRecord,
+  resultRecord: IntegratorResultRecord,
+  cause: Extract<IntegrationQuarantineBasis, { readonly _tag: "ConclusiveResult" }>["cause"] & {
+    readonly _tag: "InvalidCandidate"
+  },
+  observationAt: JournalPosition | undefined
+): boolean =>
+  observationAt !== undefined &&
+  candidateResultMatches(resultRecord, cause) &&
+  candidateObservationMatches(
+    candidateObservationRecordFor(records, observationAt, quarantine, resultRecord),
+    resultRecord,
+    cause
+  )
+
 const conclusiveEvidenceMatchesRecords = (
   records: ReadonlyArray<JournalRecord>,
   quarantine: QuarantineRecord
@@ -206,30 +246,14 @@ const conclusiveEvidenceMatchesRecords = (
   const { cause, evidence } = quarantine.event.basis
   const resultRecord = resultRecordFor(records, evidence.resultRecordedAt, quarantine)
   if (resultRecord === undefined) return false
-  if (resultRecord.event.run.ordinal === integratorRetryRunOrdinal) {
-    const runStart = providerRunStartFor(records, resultRecord.event.run)
-    if (runStart === undefined || runStart.position >= resultRecord.position) return false
-    const authorization = evaluateIntegratorRetryAuthorization(records, resultRecord.event.run, {
-      beforePosition: runStart.position
-    })
-    if (
-      authorization._tag === "Rejected" ||
-      authorization.authorization.lineage.observation.event.observation.targetHeadSha !==
-        resultRecord.event.run.session.expectedTargetHead
-    ) {
-      return false
-    }
-  }
+  if (!retryResultIsAuthorized(records, resultRecord)) return false
   if (cause._tag === "NotPrepared") return notPreparedResultMatches(resultRecord, cause)
-  const observationAt = evidence.candidateObservationAt
-  return (
-    observationAt !== undefined &&
-    candidateResultMatches(resultRecord, cause) &&
-    candidateObservationMatches(
-      candidateObservationRecordFor(records, observationAt, quarantine, resultRecord),
-      resultRecord,
-      cause
-    )
+  return invalidCandidateEvidenceMatchesRecords(
+    records,
+    quarantine,
+    resultRecord,
+    cause,
+    evidence.candidateObservationAt
   )
 }
 
@@ -309,19 +333,24 @@ function quarantineEvidenceMatchesRecords(
 ): boolean {
   const { basis } = quarantine.event
   if (basis._tag === "ConclusiveResult") return conclusiveEvidenceMatchesRecords(records, quarantine)
-  if (basis._tag === "ProviderRunFailure") {
-    const absence = recordAt(records, basis.ownedActivityProvenAbsentAt)
-    const validation = absence === undefined ? undefined : validateProviderRunActivityAbsent(records, absence)
-    const runStart = validation?._tag === "Valid" ? validation.runStart : undefined
-    return (
-      validation?._tag === "Valid" &&
-      runStart !== undefined &&
-      basis.ownedActivityProvenAbsentAt > runStart.position &&
-      basis.ownedActivityProvenAbsentAt < quarantine.position &&
-      providerActivityAbsenceMatches(records, absence, quarantine.event.correlation, basis.detail)
-    )
-  }
+  if (basis._tag === "ProviderRunFailure") return providerFailureEvidenceMatchesRecords(records, quarantine, basis)
   return retryTargetHeadEvidenceMatchesRecords(records, quarantine)
+}
+
+const providerFailureEvidenceMatchesRecords = (
+  records: ReadonlyArray<JournalRecord>,
+  quarantine: QuarantineRecord,
+  basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ProviderRunFailure" }>
+): boolean => {
+  const absence = recordAt(records, basis.ownedActivityProvenAbsentAt)
+  if (absence === undefined) return false
+  const validation = validateProviderRunActivityAbsent(records, absence)
+  if (validation._tag !== "Valid") return false
+  return (
+    basis.ownedActivityProvenAbsentAt > validation.runStart.position &&
+    basis.ownedActivityProvenAbsentAt < quarantine.position &&
+    providerActivityAbsenceMatches(records, absence, quarantine.event.correlation, basis.detail)
+  )
 }
 
 const contradiction = (detail: string): IntegrationQuarantineState =>

@@ -163,6 +163,47 @@ export const IntegratorSessionFixedEvent = Schema.TaggedStruct("IntegratorSessio
 export const firstFullRerunSuccessorGeneration = 2
 export const IntegratorSuccessorGeneration = Schema.Literal(firstFullRerunSuccessorGeneration)
 
+const successorResponsibilityMatches = (
+  predecessor: IntegratorSessionCorrelation,
+  successor: IntegratorSessionCorrelation
+): boolean =>
+  plannedTaskAttemptEquivalence(predecessor.plannedAttempt, successor.plannedAttempt) &&
+  acceptedResultEquivalence(predecessor.acceptedResult, successor.acceptedResult) &&
+  predecessor.integrationTarget.repository === successor.integrationTarget.repository &&
+  predecessor.integrationTarget.ref === successor.integrationTarget.ref &&
+  predecessor.queuedAt === successor.queuedAt &&
+  predecessor.startedAt === successor.startedAt
+
+const successorIdentitiesAreDistinct = (
+  predecessor: IntegratorSessionCorrelation,
+  successor: IntegratorSessionCorrelation
+): boolean =>
+  predecessor.sessionId !== successor.sessionId && predecessor.candidateResource !== successor.candidateResource
+
+const successorChronologyIsValid = (event: {
+  readonly predecessor: IntegratorSessionCorrelation
+  readonly quarantineAt: JournalPosition
+  readonly directionAppliedAt: JournalPosition
+  readonly successor: IntegratorSessionCorrelation
+}): boolean =>
+  event.predecessor.targetLineageObservedAt < event.quarantineAt &&
+  event.quarantineAt < event.directionAppliedAt &&
+  event.directionAppliedAt < event.successor.targetLineageObservedAt
+
+const successorSessionFixedEventIssue = (event: {
+  readonly predecessor: IntegratorSessionCorrelation
+  readonly quarantineAt: JournalPosition
+  readonly directionAppliedAt: JournalPosition
+  readonly successor: IntegratorSessionCorrelation
+}): string | undefined => {
+  const sameResponsibility = successorResponsibilityMatches(event.predecessor, event.successor)
+  return successorIdentitiesAreDistinct(event.predecessor, event.successor) &&
+    sameResponsibility &&
+    successorChronologyIsValid(event)
+    ? undefined
+    : "FullRerun successor must preserve responsibility, use distinct identities, and follow Q < D < fresh L"
+}
+
 /**
  * Durable relation preserving a quarantined Integrator session while fixing
  * its one fresh-head successor. The predecessor remains cleanup evidence; the
@@ -176,25 +217,7 @@ export const IntegratorSuccessorSessionFixedEvent = Schema.TaggedStruct("Integra
   successor: IntegratorSessionCorrelation,
   successorGeneration: IntegratorSuccessorGeneration,
   version: Schema.Literal(workflowJournalEventVersion)
-}).check(
-  Schema.makeFilter((event) => {
-    const sameResponsibility =
-      plannedTaskAttemptEquivalence(event.predecessor.plannedAttempt, event.successor.plannedAttempt) &&
-      acceptedResultEquivalence(event.predecessor.acceptedResult, event.successor.acceptedResult) &&
-      event.predecessor.integrationTarget.repository === event.successor.integrationTarget.repository &&
-      event.predecessor.integrationTarget.ref === event.successor.integrationTarget.ref &&
-      event.predecessor.queuedAt === event.successor.queuedAt &&
-      event.predecessor.startedAt === event.successor.startedAt
-    return event.predecessor.sessionId !== event.successor.sessionId &&
-      event.predecessor.candidateResource !== event.successor.candidateResource &&
-      sameResponsibility &&
-      event.predecessor.targetLineageObservedAt < event.quarantineAt &&
-      event.quarantineAt < event.directionAppliedAt &&
-      event.directionAppliedAt < event.successor.targetLineageObservedAt
-      ? undefined
-      : "FullRerun successor must preserve responsibility, use distinct identities, and follow Q < D < fresh L"
-  })
-)
+}).check(Schema.makeFilter(successorSessionFixedEventIssue))
 export type IntegratorSuccessorSessionFixedEvent = typeof IntegratorSuccessorSessionFixedEvent.Type
 
 /** Durable intent written before each opaque call for one exact run ordinal. */

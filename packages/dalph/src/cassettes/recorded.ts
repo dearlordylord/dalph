@@ -76,6 +76,7 @@ import {
 } from "./recorded-semantic-state.js"
 import {
   eventForGitObservationEntry,
+  isRecordedGitObservationCassetteEntry,
   isRecordedGitObservationEntry,
   lyricForGitObservationEntry,
   recordGitObservationEntry,
@@ -480,6 +481,88 @@ type TaskBoundaryEvent = Extract<
   }
 >
 
+const taskBoundaryEventTags = {
+  IntegrationResponsibilityBegan: true,
+  IntegrationStarted: true,
+  PlannedAttemptReplaced: true,
+  TaskAttemptPlanned: true,
+  TaskClaimAcquired: true,
+  TaskClaimAcquisitionIntended: true,
+  TaskClaimAcquisitionRejected: true,
+  TaskClaimReleaseIntended: true,
+  TaskClaimReleased: true,
+  TaskWorktreeReady: true,
+  TaskWorktreeReconciliationIntended: true
+} satisfies Record<TaskBoundaryEvent["_tag"], true>
+
+const isTaskBoundaryEvent = (event: WorkflowJournalEvent): event is TaskBoundaryEvent =>
+  Object.hasOwn(taskBoundaryEventTags, event._tag)
+
+type GitObservationEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "GitReadIntentRecorded" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
+>
+
+const gitObservationEventTags = {
+  GitReadIntentRecorded: true,
+  PlannedAttemptWorktreeObserved: true,
+  TargetLineageObserved: true
+} satisfies Record<GitObservationEvent["_tag"], true>
+
+const isGitObservationEvent = (event: WorkflowJournalEvent): event is GitObservationEvent =>
+  Object.hasOwn(gitObservationEventTags, event._tag)
+
+type TrackerEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "TaskTrackerReadIntentRecorded" | "TaskTrackerFactsObserved" }
+>
+
+const trackerEventTags = { TaskTrackerFactsObserved: true, TaskTrackerReadIntentRecorded: true } satisfies Record<
+  TrackerEvent["_tag"],
+  true
+>
+
+const isTrackerEvent = (event: WorkflowJournalEvent): event is TrackerEvent =>
+  Object.hasOwn(trackerEventTags, event._tag)
+
+type ExecutorEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "PlannedAttemptExecutorCommandIntended"
+      | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorCommandResponseContradicted"
+      | "PlannedAttemptExecutorStateObserved"
+      | "PlannedAttemptExecutorWorkReported"
+      | "PlannedAttemptExecutorWorkResponsibilityBegan"
+  }
+>
+
+const executorEventTags = {
+  PlannedAttemptExecutorCommandIntended: true,
+  PlannedAttemptExecutorCommandProjectionObserved: true,
+  PlannedAttemptExecutorCommandResponseContradicted: true,
+  PlannedAttemptExecutorStateObserved: true,
+  PlannedAttemptExecutorWorkReported: true,
+  PlannedAttemptExecutorWorkResponsibilityBegan: true
+} satisfies Record<ExecutorEvent["_tag"], true>
+
+const isExecutorEvent = (event: WorkflowJournalEvent): event is ExecutorEvent =>
+  Object.hasOwn(executorEventTags, event._tag)
+
+type ContinuationAuthorizationEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "PlannedAttemptContinuationAuthorized" }
+>
+
+const isContinuationAuthorizationEvent = (event: WorkflowJournalEvent): event is ContinuationAuthorizationEvent =>
+  event._tag === "PlannedAttemptContinuationAuthorized"
+
+const isAttemptRestartAuthorityReadFailedEvent = (
+  event: WorkflowJournalEvent
+): event is Extract<WorkflowJournalEvent, { readonly _tag: "AttemptRestartAuthorityReadFailed" }> =>
+  event._tag === "AttemptRestartAuthorityReadFailed"
+
 const recordTaskBoundaryEntry = (event: TaskBoundaryEvent): RecordedCassetteEntry => {
   if (event._tag === "PlannedAttemptReplaced") {
     return {
@@ -707,52 +790,33 @@ const recordIntegrationQuarantineEntry = (event: IntegrationQuarantineEvent): Re
     })
   })
 
-const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
-  if (isOuterIntegratorEvent(event)) return recordOuterIntegratorEntry(event)
-  if (isIntegrationQuarantineEvent(event)) return recordIntegrationQuarantineEntry(event)
-  if (isJournalRunEntry(event)) return recordedRunEntryFor(event)
-  if (isOperatorDirectionEvent(event)) return recordedOperatorDirectionEntryFor(event)
-  if (isAttemptStopEvent(event)) return recordedAttemptStopEntryFor(event)
-  if (event._tag === "AttemptRestartAuthorityReadFailed") {
-    return {
-      _tag: event._tag,
-      failure: event.failure,
-      occurrenceClassification: event.occurrenceClassification,
-      operationId: event.operationId,
-      requestId: event.requestId,
-      subject: event.subject
-    }
-  }
-  if (isIntegrationPreparationEvent(event)) return recordIntegrationPreparationEntry(event)
-  if (
-    event._tag === "GitReadIntentRecorded" ||
-    event._tag === "PlannedAttemptWorktreeObserved" ||
-    event._tag === "TargetLineageObserved"
-  ) {
-    return recordGitObservationEntry(event)
-  }
-  if (event._tag === "TaskTrackerReadIntentRecorded" || event._tag === "TaskTrackerFactsObserved") {
-    return recordTrackerEntry(event)
-  }
-  if (
-    event._tag === "PlannedAttemptExecutorCommandIntended" ||
-    event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
-    event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
-    event._tag === "PlannedAttemptExecutorStateObserved" ||
-    event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
-    event._tag === "PlannedAttemptExecutorWorkReported"
-  ) {
-    return recordExecutorEntry(event)
-  }
-  if (event._tag === "PlannedAttemptContinuationAuthorized") {
-    return {
-      _tag: "PlannedAttemptContinuationAuthorized",
-      plannedAttempt: event.plannedAttempt,
-      witness: event.witness
-    }
-  }
-  return recordTaskBoundaryEntry(event)
-}
+const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
+  Match.value(event).pipe(
+    Match.when(isOuterIntegratorEvent, recordOuterIntegratorEntry),
+    Match.when(isIntegrationQuarantineEvent, recordIntegrationQuarantineEntry),
+    Match.when(isJournalRunEntry, recordedRunEntryFor),
+    Match.when(isOperatorDirectionEvent, recordedOperatorDirectionEntryFor),
+    Match.when(isAttemptStopEvent, recordedAttemptStopEntryFor),
+    Match.when(isAttemptRestartAuthorityReadFailedEvent, (value) => ({
+      _tag: value._tag,
+      failure: value.failure,
+      occurrenceClassification: value.occurrenceClassification,
+      operationId: value.operationId,
+      requestId: value.requestId,
+      subject: value.subject
+    })),
+    Match.when(isIntegrationPreparationEvent, recordIntegrationPreparationEntry),
+    Match.when(isGitObservationEvent, recordGitObservationEntry),
+    Match.when(isTrackerEvent, recordTrackerEntry),
+    Match.when(isExecutorEvent, recordExecutorEntry),
+    Match.when(isContinuationAuthorizationEvent, (value) => ({
+      _tag: value._tag,
+      plannedAttempt: value.plannedAttempt,
+      witness: value.witness
+    })),
+    Match.when(isTaskBoundaryEvent, recordTaskBoundaryEntry),
+    Match.exhaustive
+  )
 
 export class EmptyJournalCannotBeRecorded extends Schema.TaggedError<EmptyJournalCannotBeRecorded>()(
   "EmptyJournalCannotBeRecorded",
@@ -1223,26 +1287,32 @@ const eventForContinuationAuthorizationEntry = (entry: RecordedContinuationAutho
     witness: entry.witness
   })
 
+const isRecordedAttemptRestartAuthorityReadFailedEntry = (
+  entry: RecordedCassetteEntry
+): entry is Extract<RecordedCassetteEntry, { readonly _tag: "AttemptRestartAuthorityReadFailed" }> =>
+  entry._tag === "AttemptRestartAuthorityReadFailed"
+
 const eventForOtherRecordedEntry = (
   entry: Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>,
   entries: ReadonlyArray<RecordedCassetteEntry>,
   index: number,
   runId: RecordedCassetteType["runId"]
-): WorkflowJournalEvent => {
-  if (isRecordedRunEntry(entry)) return eventForRunEntry(entry)
-  if (isRecordedOperatorDirectionEntry(entry)) return eventForRecordedOperatorDirectionEntry(entry, runId)
-  if (isRecordedAttemptStopEntry(entry)) return eventForRecordedAttemptStopEntry(entry)
-  if (entry._tag === "AttemptRestartAuthorityReadFailed") {
-    return AttemptRestartAuthorityReadFailedEvent.make({ ...entry, version: workflowJournalEventVersion })
-  }
-  if (isRecordedOuterIntegratorEntry(entry)) return eventForOuterIntegratorEntry(entry)
-  if (isRecordedIntegrationQuarantineEntry(entry)) return eventForIntegrationQuarantineEntry(entry)
-  if (isRecordedIntegrationPreparationEntry(entry)) return eventForIntegrationPreparationEntry(entry)
-  if (isRecordedGitObservationEntry(entry)) return eventForGitObservationEntry(entry)
-  if (isRecordedExecutorEntry(entry)) return eventForExecutorEntry(entry)
-  if (isRecordedTrackerEntry(entry)) return eventForTrackerEntry(entry)
-  return eventForTaskBoundaryEntry(entry, entries, index)
-}
+): WorkflowJournalEvent =>
+  Match.value(entry).pipe(
+    Match.when(isRecordedRunEntry, eventForRunEntry),
+    Match.when(isRecordedOperatorDirectionEntry, (value) => eventForRecordedOperatorDirectionEntry(value, runId)),
+    Match.when(isRecordedAttemptStopEntry, eventForRecordedAttemptStopEntry),
+    Match.when(isRecordedAttemptRestartAuthorityReadFailedEntry, (value) =>
+      AttemptRestartAuthorityReadFailedEvent.make({ ...value, version: workflowJournalEventVersion })
+    ),
+    Match.when(isRecordedOuterIntegratorEntry, eventForOuterIntegratorEntry),
+    Match.when(isRecordedIntegrationQuarantineEntry, eventForIntegrationQuarantineEntry),
+    Match.when(isRecordedIntegrationPreparationEntry, eventForIntegrationPreparationEntry),
+    Match.when(isRecordedGitObservationCassetteEntry, eventForGitObservationEntry),
+    Match.when(isRecordedExecutorEntry, eventForExecutorEntry),
+    Match.when(isRecordedTrackerEntry, eventForTrackerEntry),
+    Match.orElse((value) => eventForTaskBoundaryEntry(value, entries, index))
+  )
 
 const eventForRecordedEntry = (
   entry: RecordedCassetteEntry,
