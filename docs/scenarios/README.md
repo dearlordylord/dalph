@@ -37,6 +37,7 @@ separately and are not current implementation authority.
 | `issue-103-github-dry-run-cli.md` | 103 |
 | `issue-203-application-exit-model-mapping.md` | 203 |
 | `issue-204-application-exit-runtime-mapping.md` | 204 |
+| `issue-224-outer-integrator-application-exit.md` | 224 |
 
 **Describes implemented behavior with an intentionally open owning issue** —
 the implementation evidence and post-implementation choices audit are recorded

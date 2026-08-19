@@ -238,8 +238,8 @@ The accepted chronology is in
 [issue-169-graceful-application-exit.md](scenarios/issue-169-graceful-application-exit.md),
 the exact model/test mapping is in
 [issue-203-application-exit-model-mapping.md](scenarios/issue-203-application-exit-model-mapping.md),
-the integration/evidence boundary mapping is in
-[issue-207-integration-evidence-exit.md](scenarios/issue-207-integration-evidence-exit.md),
+the corrected outer-Integrator boundary mapping is in
+[issue-224-outer-integrator-application-exit.md](scenarios/issue-224-outer-integrator-application-exit.md),
 and the durable-boundary trade-off is recorded in
 [ADR 0013](adr/0013-bound-graceful-application-exit.md).
 The five-second local drain boundary and its separation from executor and

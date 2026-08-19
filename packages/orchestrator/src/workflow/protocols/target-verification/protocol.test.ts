@@ -52,17 +52,9 @@ import { validateIntegrationHistoryRecord } from "../../../coordination/reconstr
 import { makeTargetPromotionHistoryIndexes } from "../../../coordination/reconstruction/target-promotion-history.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import { makeIntegrationTargetResourceController } from "../../../coordination/admission/integration-target-resource.js"
-import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { makeApplicationExitLifecycle } from "../../../coordination/application-exit/lifecycle.js"
 import { RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
 import { deliveryProposalsOf } from "../../../coordination/delivery/delivery-proposal-derivation.js"
 import { executeIntegrationAction } from "../../../coordination/delivery/integration-delivery-action-adapter.js"
-import { makeDeliveryRuntimeAdmissionController } from "../../../coordination/delivery/delivery-runtime-admission.js"
-import {
-  makeDeliveryRuntimeLiveOwner,
-  makeObservedDeliveryActionLease
-} from "../../../coordination/delivery/delivery-runtime-observation.js"
-import { plannedAttemptProtocolControllerLayer } from "../planned-attempt-executor-work/protocol-controller.js"
 import { TargetVerificationRuntime } from "./runtime.js"
 import type {
   DeliveryActionProposal,
@@ -278,82 +270,6 @@ it.effect("keeps another target usable while exact M verifies and releases only 
             const snapshot = yield* resources.snapshot
             expect(snapshot.heldResponsibilityPositions.has(responsibility.queuedAt)).toBe(false)
             expect(snapshot.heldResponsibilityPositions.has(other.queuedAt)).toBe(true)
-          })
-        )
-    )
-  })
-)
-
-it.effect("replays the authored verification Exit cassette through production admission without a successor", () =>
-  Effect.gen(function* () {
-    const authored = [
-      "VerificationBoundaryEntered",
-      "ExitCutoffClosed",
-      "TargetVerificationEvidenceSealed",
-      "OwnerReleasedWithoutSuccessor"
-    ] as const
-    const recorded = yield* Ref.make<ReadonlyArray<(typeof authored)[number]>>([])
-    const record = (entry: (typeof authored)[number]) => Ref.update(recorded, (entries) => [...entries, entry])
-    const verificationEntered = yield* Deferred.make<void>()
-    const verificationMayReturn = yield* Deferred.make<void>()
-    return yield* harness(
-      {
-        runOrResume: (request) =>
-          Effect.gen(function* () {
-            yield* record("VerificationBoundaryEntered")
-            yield* Deferred.succeed(verificationEntered, undefined)
-            yield* Deferred.await(verificationMayReturn)
-            return TargetVerificationTerminal.cases.Passed.make({
-              artifacts: [artifact("exit-verification.log", "passed before the drain limit")],
-              correlation: request
-            })
-          })
-      },
-      (records) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const resources = yield* makeIntegrationTargetResourceController()
-            yield* resources.acquire(responsibility)
-            yield* resources.publishAcceptedOwnership(responsibility)
-            const lifecycle = yield* makeApplicationExitLifecycle()
-            const admission = yield* makeDeliveryRuntimeAdmissionController(
-              { capacity: defaultTaskWorkCapacity, held: [] },
-              resources,
-              lifecycle.admission
-            ).pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
-            const { action, transition } = verificationActionFor(responsibility)
-            const admitted = yield* admission.tryReserve(action.proposal)
-            if (admitted._tag !== "Admitted") return yield* Effect.die("verification proposal was not admitted")
-            expect(admitted.reservation.forwardOwner.kind).toBe("AtomicBoundary")
-            const owner = yield* makeDeliveryRuntimeLiveOwner(admitted.reservation)
-            const lease = makeObservedDeliveryActionLease(admission, resources, owner, Effect.void)
-            const successors = yield* Ref.make(0)
-            const boundary = yield* TargetVerificationBoundary
-            const evidenceStore = yield* EvidenceStore
-            const running = yield* executeIntegrationAction(action, transition, lease, trackerTarget).pipe(
-              Effect.provideService(
-                TargetVerificationRuntime,
-                TargetVerificationRuntime.of({ boundary, evidenceStore, plan })
-              ),
-              Effect.andThen(Ref.update(successors, (count) => count + 1)),
-              Effect.ensuring(owner.settle.pipe(Effect.andThen(admission.complete(admitted.reservation)))),
-              Effect.forkScoped
-            )
-
-            yield* Deferred.await(verificationEntered)
-            yield* lifecycle.requestExit
-            yield* record("ExitCutoffClosed")
-            yield* Deferred.succeed(verificationMayReturn, undefined)
-
-            expect((yield* Fiber.await(running))._tag).toBe("Failure")
-            expect(
-              (yield* Ref.get(records)).some(({ event }) => event._tag === "TargetVerificationEvidenceSealed")
-            ).toBe(true)
-            yield* record("TargetVerificationEvidenceSealed")
-            expect(yield* Ref.get(successors)).toBe(0)
-            yield* lifecycle.awaitForwardOwnersReleased
-            yield* record("OwnerReleasedWithoutSuccessor")
-            expect(yield* Ref.get(recorded)).toEqual(authored)
           })
         )
     )

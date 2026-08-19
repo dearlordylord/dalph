@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { acceptedResultFixture, evidenceReferenceFixture } from "../../../../test/support/evidence.js"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
@@ -43,19 +43,6 @@ import {
 import { InitialControlPolicy, RunPolicyRevision } from "../../../control/policy.js"
 import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { makeApplicationExitLifecycle } from "../../../coordination/application-exit/lifecycle.js"
-import { RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
-import { deliveryProposalsOf } from "../../../coordination/delivery/delivery-proposal-derivation.js"
-import { executeIntegrationAction } from "../../../coordination/delivery/integration-delivery-action-adapter.js"
-import { makeDeliveryRuntimeAdmissionController } from "../../../coordination/delivery/delivery-runtime-admission.js"
-import {
-  makeDeliveryRuntimeLiveOwner,
-  makeObservedDeliveryActionLease
-} from "../../../coordination/delivery/delivery-runtime-observation.js"
-import type {
-  DeliveryActionProposal,
-  IdentityFreeDeliveryProposal
-} from "../../../coordination/delivery/delivery-action-proposal.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import {
   TaskAttemptPlannedEvent,
@@ -75,7 +62,6 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
-import { plannedAttemptProtocolControllerLayer } from "../planned-attempt-executor-work/protocol-controller.js"
 import {
   CandidateContinuationLimit,
   IntegrationCandidateAgentReportedEvent,
@@ -170,31 +156,6 @@ const placeholderCorrelation = {
   integrationSessionId: IntegrationSessionId.make("placeholder-session"),
   integrationTarget: target,
   runId
-}
-
-const isIdentityFreeProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>
-  proposal.actionIdentity._tag === "NoWorkflowOperationIdentity"
-
-const candidateAction = () => {
-  const transition = RunnableFrontierTransition.ContinueStartedIntegrationCandidate({
-    acceptedCandidateProgressAt: null,
-    continuationLimit,
-    correctionLimit: CandidateCorrectionLimit.make(2),
-    lineage,
-    responsibility: started
-  })
-  const contributions = deliveryProposalsOf({
-    acceptedOperationIds: new Set(),
-    fresh: [],
-    integrationResponsibilities: [started],
-    runId,
-    transitions: [transition]
-  })
-  const proposal = contributions.deliverySettlement[0] ?? contributions.ticketDelivery[0]
-  if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
-    throw new Error("candidate continuation must derive one identity-free proposal")
-  }
-  return { action: { _tag: "IdentityFreeAction" as const, proposal }, transition }
 }
 
 const seedStartedResponsibility = Effect.gen(function* () {
@@ -724,86 +685,6 @@ it("does not let an unrelated task in the same run perturb the successor ordinal
   expect(integrationCandidateSuccessorOrdinalFor([record(unrelated, 1)], started)).toBe(1)
   expect(integrationCandidateSuccessorOrdinalFor([record(unrelated, 1), record(own, 2)], started)).toBe(2)
 })
-
-it.effect("replays the authored candidate Exit cassette through production admission without a successor", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      yield* seedStartedResponsibility
-      const authored = [
-        "CandidateBoundaryEntered",
-        "ExitCutoffClosed",
-        "IntegrationCandidateConstructed",
-        "OwnerReleasedWithoutSuccessor"
-      ] as const
-      const recorded = yield* Ref.make<ReadonlyArray<(typeof authored)[number]>>([])
-      const record = (entry: (typeof authored)[number]) => Ref.update(recorded, (entries) => [...entries, entry])
-      const candidateEntered = yield* Deferred.make<void>()
-      const candidateMayReturn = yield* Deferred.make<void>()
-      const resources = yield* makeIntegrationTargetResourceController()
-      yield* resources.acquire(started)
-      yield* resources.publishAcceptedOwnership(started)
-      const lifecycle = yield* makeApplicationExitLifecycle()
-      const admission = yield* makeDeliveryRuntimeAdmissionController(
-        { capacity: defaultTaskWorkCapacity, held: [] },
-        resources,
-        lifecycle.admission
-      ).pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
-      const { action, transition } = candidateAction()
-      const admitted = yield* admission.tryReserve(action.proposal)
-      if (admitted._tag !== "Admitted") return yield* Effect.die("candidate proposal was not admitted")
-      expect(admitted.reservation.forwardOwner.kind).toBe("AtomicBoundary")
-      const owner = yield* makeDeliveryRuntimeLiveOwner(admitted.reservation)
-      const lease = makeObservedDeliveryActionLease(admission, resources, owner, Effect.void)
-      const successors = yield* Ref.make(0)
-      const agent = IntegrationCandidateAgent.of({
-        startOrContinue: (request) =>
-          record("CandidateBoundaryEntered").pipe(
-            Effect.andThen(Deferred.succeed(candidateEntered, undefined)),
-            Effect.andThen(Deferred.await(candidateMayReturn)),
-            Effect.as(
-              IntegrationCandidateAgentReport.cases.Submitted.make({
-                candidateCommit: candidate,
-                correlation: request.correlation,
-                reviewManifest: evidenceReferenceFixture
-              })
-            )
-          )
-      })
-      const git = IntegrationCandidateGit.of({
-        readSubmittedCommit: () =>
-          Effect.succeed(
-            IntegrationCandidateGitObservation.cases.Commit.make({ directParents: [head, acceptedCommit] })
-          )
-      })
-      const running = yield* executeIntegrationAction(
-        action,
-        transition,
-        lease,
-        FixtureTarget.make("candidate-exit-target")
-      ).pipe(
-        Effect.provideService(IntegrationCandidateAgent, agent),
-        Effect.provideService(IntegrationCandidateGit, git),
-        Effect.andThen(Ref.update(successors, (count) => count + 1)),
-        Effect.ensuring(owner.settle.pipe(Effect.andThen(admission.complete(admitted.reservation)))),
-        Effect.forkScoped
-      )
-
-      yield* Deferred.await(candidateEntered)
-      yield* lifecycle.requestExit
-      yield* record("ExitCutoffClosed")
-      yield* Deferred.succeed(candidateMayReturn, undefined)
-
-      expect((yield* Fiber.await(running))._tag).toBe("Failure")
-      const records = yield* (yield* JournalStore).read(runId)
-      expect(records.some(({ event }) => event._tag === "IntegrationCandidateConstructed")).toBe(true)
-      yield* record("IntegrationCandidateConstructed")
-      expect(yield* Ref.get(successors)).toBe(0)
-      yield* lifecycle.awaitForwardOwnersReleased
-      yield* record("OwnerReleasedWithoutSuccessor")
-      expect(yield* Ref.get(recorded)).toEqual(authored)
-    })
-  ).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
-)
 
 it.effect("does not verify or promote the constructed candidate", () =>
   Effect.gen(function* () {
