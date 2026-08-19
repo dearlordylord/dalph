@@ -140,6 +140,24 @@ importers:
         specifier: 2.2.9
         version: 2.2.9
 
+  prototypes/durable-computation:
+    dependencies:
+      '@dalph/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@dalph/orchestrator':
+        specifier: workspace:*
+        version: link:../../packages/orchestrator
+      '@effect/platform-node':
+        specifier: 4.0.0-beta.106
+        version: 4.0.0-beta.106(effect@4.0.0-beta.106)(ioredis@5.11.1)
+      '@effect/sql-sqlite-node':
+        specifier: 4.0.0-beta.106
+        version: 4.0.0-beta.106(effect@4.0.0-beta.106)
+      effect:
+        specifier: 4.0.0-beta.106
+        version: 4.0.0-beta.106
+
   prototypes/reducer-lab:
     dependencies:
       '@effect/platform-browser':

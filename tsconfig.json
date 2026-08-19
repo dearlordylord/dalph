@@ -56,6 +56,7 @@
   "include": [
     "src/**/*.ts",
     "packages/**/*.ts",
+    "prototypes/durable-computation/**/*.ts",
     "scripts/**/*.ts",
     "test/**/*.ts",
     "vitest.config.ts"

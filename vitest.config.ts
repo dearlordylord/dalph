@@ -11,7 +11,13 @@ const performanceTestPattern = "packages/**/*.performance.test.ts"
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 20_000
 const ordinaryWorkerCount = 4
-const ordinaryTestIncludes = ["src/**/*.test.ts", "packages/**/*.test.ts", "scripts/**/*.test.ts", "test/**/*.test.ts"]
+const ordinaryTestIncludes = [
+  "src/**/*.test.ts",
+  "packages/**/*.test.ts",
+  "prototypes/durable-computation/**/*.test.ts",
+  "scripts/**/*.test.ts",
+  "test/**/*.test.ts"
+]
 
 export default defineConfig(({ mode }) => ({
   resolve: {
