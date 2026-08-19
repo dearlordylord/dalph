@@ -71,6 +71,7 @@ today.
 | `issue-223-migrate-promotion-and-finality.md` | 223 |
 | `issue-68-recover-or-quarantine-integration-session.md` | 68 |
 | `issue-138-reconcile-blockers-around-promotion.md` | 138 |
+| `issue-225-remove-legacy-split-integration.md` | 225 |
 | `issue-63-observe-pause-progress.md` | 63 |
 | `issue-65-cancel-or-continue-attempt.md` | 65 |
 | `issue-66-clean-restart-changed-attempt.md` | 66 |
