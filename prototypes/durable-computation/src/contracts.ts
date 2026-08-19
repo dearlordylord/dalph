@@ -28,6 +28,7 @@ export type ExactClaim = typeof ExactClaim.Type
 export const OutsideWorld = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   applicationExitAdmission: Schema.Literals(["Open", "Closed"]),
+  clockEpochMilliseconds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   executorObservation: Schema.Literals(["Absent", "Running", "SafelySuspended", "Terminal"]),
   plannedBaseSha: Schema.NonEmptyString,
   task: Schema.Struct({
@@ -65,6 +66,7 @@ export const ChildMessage = Schema.TaggedUnion({
   ChildProtocolFailure: { detail: Schema.NonEmptyString },
   ChildReady: {
     adapter: AdapterName,
+    attemptIds: Schema.Array(Schema.NonEmptyString),
     executionId: Schema.NonEmptyString,
     plannedBaseSha: Schema.NonEmptyString,
     runId: Schema.NonEmptyString
@@ -85,6 +87,7 @@ export interface ScenarioRequest {
 }
 
 export interface ScenarioResult {
+  readonly attemptIds: ReadonlyArray<string>
   readonly canonicalTrace: ReadonlyArray<CanonicalTraceEvent>
   readonly executionIds: ReadonlyArray<string>
   readonly failureDetail?: string
@@ -127,5 +130,6 @@ export const fixture = {
     token: "claim-token-232-0001"
   }),
   plannedBaseSha: "d4128e475ddfdda6970ac7951ce7696d7736685a",
+  clockEpochMilliseconds: 1_786_665_600_000,
   runId: "run-232-ambiguity-0001"
 } as const

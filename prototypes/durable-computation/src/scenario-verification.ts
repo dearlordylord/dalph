@@ -7,6 +7,7 @@ export type ScenarioVerification =
 const rejected = (reason: string): ScenarioVerification => ({ _tag: "ScenarioRejected", reason })
 
 export const verifyAmbiguousClaimScenario = (result: ScenarioResult): ScenarioVerification => {
+  if (result.attemptIds.length !== 0) return rejected("a task attempt was established before planning")
   if (result.executionIds.length !== 1) {
     return rejected("a rival Run execution was established")
   }

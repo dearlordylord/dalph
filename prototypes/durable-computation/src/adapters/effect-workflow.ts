@@ -24,7 +24,7 @@ interface EffectWorkflowInput {
   readonly faultPoint: FaultPoint
   readonly processInstance: string
   readonly workspace: string
-  readonly onExecutionStored: (executionId: string) => Promise<void>
+  readonly onExecutionStored: (executionId: string, attemptIds: ReadonlyArray<string>) => Promise<void>
   readonly onFault: (faultPoint: FaultPoint) => Promise<never>
 }
 
@@ -152,7 +152,7 @@ export const runEffectWorkflow = async (input: EffectWorkflowInput): Promise<Eff
   const handler = DalphRunV1.toLayer((_payload, executionId) =>
     Effect.gen(function* () {
       yield* executionRegistration
-      yield* Effect.promise(() => input.onExecutionStored(executionId))
+      yield* Effect.promise(() => input.onExecutionStored(executionId, []))
       if (input.faultPoint === "AfterExecutionStored" && input.processInstance === "process-1") {
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
       }

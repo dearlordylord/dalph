@@ -45,7 +45,7 @@ The parent invokes one child executable with:
 
 ```text
 child --adapter <journal-baseline|effect-workflow-v1|effect-workflow-v2>
-      --scenario <scenario-name>
+      --fault-point <fault-point>
       --workspace <absolute-temporary-directory>
       --run-id run-232-ambiguity-0001
 ```

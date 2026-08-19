@@ -1,11 +1,15 @@
 # Durable-computation comparative evidence
 
-**Evaluation date:** 2026-08-19  
-**Exact Dalph Base SHA:** `d4128e475ddfdda6970ac7951ce7696d7736685a`  
-**Prototype branch:** `prototype/issue-232-durable-computation`  
+**Evaluation date:** 2026-08-19
+
+**Exact Dalph Base SHA:** `d4128e475ddfdda6970ac7951ce7696d7736685a`
+
+**Prototype branch:** `prototype/issue-232-durable-computation`
+
 **Candidate:** `effect@4.0.0-beta.106` (`fb75264`), SQL message storage
 through `@effect/sql-sqlite-node@4.0.0-beta.106`, `SingleRunner` with
-process-local runner storage  
+process-local runner storage
+
 **Observed host:** Node `24.18.0`, pnpm `10.29.3`, Linux arm64
 
 ## Outcome
@@ -64,7 +68,16 @@ The controlled Git and executor ledgers remain empty. Those boundaries do not
 apply to this chronology because every tested decision stops immediately after
 the current tracker decision; no worktree mutation or executor start is
 authorized. The fixtures still carry the planned Base SHA and absent executor
-observation so an adapter cannot invent them.
+observation so an adapter cannot invent them. The fixed controlled-clock fact
+is `1786665600000`; no runtime clock call applies because the chronology has no
+deadline, schedule, sleep, or time-derived decision. Parent-side monotonic time
+is used only to measure the experiment and is not an adapter input.
+
+The reserved fixture Attempt is not established in either arm: both adapters
+report an empty established-attempt set at each durable registration, and the
+shared identity test asserts that it stays empty across restart. This is the
+concrete expected result because planning and executor admission occur after
+the tracker decision where this tracer bullet stops.
 
 ## Canonical trace
 
@@ -96,9 +109,10 @@ scenario verifier rejects:
 - removal of the post-loss exact-claim read;
 - insertion of a second unsafe claim request;
 - insertion of a rival Run identity; and
+- insertion of a task attempt before planning; and
 - removal of durable claim intent before the applied request.
 
-The incompatible-code test is the fifth negative control. Version B declares
+The incompatible-code test is the sixth negative control. Version B declares
 the same Run handler with its claim Activity renamed to
 `ReconcileExactTaskClaimV2`; explicit version routing rejects the unfinished
 `v1` execution before the v2 handler or any provider call can reinterpret its
@@ -111,7 +125,7 @@ stored `ReconcileExactTaskClaimV1` request.
 | SQLite `journal_records` and `effect_sql_migrations` | Journal baseline | Current Dalph Journal stores Run beginning, claim intent, and exact observed outcome. | Dalph workflow-journal history. |
 | SQLite `cluster_messages`, `cluster_replies`, and `cluster_migrations` | Workflow-only | Effect stores the Run request, registration-checkpoint and claim Activity request/results, replies, delivery markers, and schema migrations. Runner assignment is deliberately process-local. | Runtime replay infrastructure, not task/Git/executor authority. |
 | `effect-workflow-code-version` (`v1`) | Workflow-only | Routes unfinished execution to compatible code and fails closed on `v2`. | Runtime evolution metadata; not domain or provider state. |
-| `outside-world.json` | Shared harness | Controlled GitHub/Git/executor/Exit facts. | Controlled outside-system authority for the experiment. |
+| `outside-world.json` | Shared harness | Controlled GitHub/Git/executor/clock/Exit facts. | Controlled outside-system authority for the experiment. |
 | `provider-calls.ndjson` | Shared harness | Fsynced chronological requests/results. | Evaluation/provider history; adapters never reconstruct continuation from it. |
 | canonical trace returned to the parent | Both | Comparable projection built after execution from actual arm/provider evidence. | Evaluation output, not a durable-computation driver. |
 
@@ -174,7 +188,8 @@ The candidate polls entity messages and replies every 20 ms in this experiment.
 The table separates first-process time to the named cut from restart-to-visible
 progress; cleanup is removal of the closed temporary store. RSS is sampled
 from `/proc` while process 1 is blocked at the cut. These are single
-observations after correctness, not performance claims.
+Linux-host observations after correctness, not performance claims; RSS
+assertions are omitted on hosts without `/proc`.
 
 | Case | P1 to cut | Restart to progress | P1 RSS | Cleanup |
 | --- | ---: | ---: | ---: | ---: |

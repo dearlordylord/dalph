@@ -31,6 +31,7 @@ export const initializeOutsideWorld = async (workspace: string): Promise<void> =
     `${JSON.stringify(
       OutsideWorld.make({
         applicationExitAdmission: "Open",
+        clockEpochMilliseconds: fixture.clockEpochMilliseconds,
         executorObservation: "Absent",
         plannedBaseSha: fixture.plannedBaseSha,
         schemaVersion: 1,
@@ -90,10 +91,19 @@ const appendProviderCall = async (
 
 export const readClaim = async (context: CallContext): Promise<ExactClaim | null> => {
   const world = await readOutsideWorld(context.workspace)
+  const observed =
+    world.task.claim === null
+      ? "Absent"
+      : world.task.claim.operationId === fixture.claim.operationId &&
+          world.task.claim.owner === fixture.claim.owner &&
+          world.task.claim.taskId === fixture.claim.taskId &&
+          world.task.claim.token === fixture.claim.token
+        ? "Exact"
+        : "Foreign"
   await appendProviderCall(
     context,
     "GitHub.ReadClaim",
-    world.task.claim === null ? "Absent" : "Exact",
+    observed,
     world.trackerRevision,
     true
   )

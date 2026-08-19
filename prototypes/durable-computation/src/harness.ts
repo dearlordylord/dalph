@@ -71,8 +71,8 @@ const childExit = (running: RunningChild): Promise<number | null> =>
   })
 
 const residentKiB = async (pid: number | undefined): Promise<number> => {
-  if (pid === undefined) return 0
-  const status = await readFile(`/proc/${pid}/status`, "utf8")
+  if (pid === undefined || process.platform !== "linux") return 0
+  const status = await readFile(`/proc/${pid}/status`, "utf8").catch(() => "")
   const match = /^VmRSS:\s+(\d+)\s+kB$/mu.exec(status)
   return match === null ? 0 : Number(match[1])
 }
@@ -84,6 +84,7 @@ const waitForFault = async (running: RunningChild, expected: FaultPoint, executi
         throw new Error("adapter registered an execution with the wrong immutable identity")
       }
       executionIds.add(message.executionId)
+      if (message.attemptIds.length > 0) throw new Error("adapter established a task attempt before planning")
     }
     if (message._tag === "ChildProtocolFailure") throw new Error(message.detail)
     if (message._tag === "FaultReached") {
@@ -104,6 +105,7 @@ const waitForCompletion = async (
         throw new Error("adapter registered an execution with the wrong immutable identity")
       }
       executionIds.add(message.executionId)
+      if (message.attemptIds.length > 0) throw new Error("adapter established a task attempt before planning")
     }
     if (message._tag === "ChildProtocolFailure") throw new Error(message.detail)
     if (message._tag === "ExecutionFailedClosed") return { decision: "FailClosed", failureDetail: message.detail }
@@ -165,6 +167,7 @@ export const runCrashRestartScenario = async (request: ScenarioRequest): Promise
 
     const providerCalls = await loadProviderCalls(workspace)
     return {
+      attemptIds: [],
       canonicalTrace: projectCanonicalTrace(workspace, request.adapter, providerCalls, completion.decision),
       executionIds: [...executionIds],
       ...(completion.failureDetail === undefined ? {} : { failureDetail: completion.failureDetail }),

@@ -24,10 +24,11 @@ const main = async (): Promise<void> => {
   const workspace = argumentValue("--workspace")
   if (runId !== fixture.runId) throw new Error(`unexpected Run ID ${runId}`)
 
-  const onExecutionStored = async (executionId: string): Promise<void> => {
+  const onExecutionStored = async (executionId: string, attemptIds: ReadonlyArray<string>): Promise<void> => {
     emit(
       ChildMessage.cases.ChildReady.make({
         adapter,
+        attemptIds,
         executionId,
         plannedBaseSha: fixture.plannedBaseSha,
         runId

@@ -110,6 +110,7 @@ describe("durable-computation child-process harness", () => {
       ["run-232-ambiguity-0001"],
       [workflowExecutionId]
     ])
+    expect(results.map(({ attemptIds }) => attemptIds)).toEqual([[], []])
   })
 
   it.each(["AfterExecutionStored", "AfterClaimIntentBeforeRequest"] as const)(
@@ -123,7 +124,9 @@ describe("durable-computation child-process harness", () => {
       expect(baseline.recoveredDecision).toBe("ContinueSameRun")
       expect(candidate.recoveredDecision).toBe("ContinueSameRun")
       expect(candidate.canonicalTrace).toEqual(baseline.canonicalTrace)
-      expect(baseline.operationalMetrics.firstProcessResidentKiB).toBeGreaterThan(0)
+      if (process.platform === "linux") {
+        expect(baseline.operationalMetrics.firstProcessResidentKiB).toBeGreaterThan(0)
+      }
       expect(candidate.operationalMetrics.restartToProgressMilliseconds).toBeGreaterThan(0)
     }
   )
@@ -219,6 +222,7 @@ describe("durable-computation child-process harness", () => {
     }
     const repeatedMutation = { ...accepted, providerCalls: [...accepted.providerCalls, create] }
     const rivalExecution = { ...accepted, executionIds: [...accepted.executionIds, "run-232-rival"] }
+    const rivalAttempt = { ...accepted, attemptIds: ["attempt-232-rival"] }
     const withoutIntent = {
       ...accepted,
       canonicalTrace: accepted.canonicalTrace.filter(({ _tag }) => _tag !== "TaskClaimAcquisitionIntended")
@@ -227,6 +231,7 @@ describe("durable-computation child-process harness", () => {
     expect(verifyAmbiguousClaimScenario(withoutReconciliation)._tag).toBe("ScenarioRejected")
     expect(verifyAmbiguousClaimScenario(repeatedMutation)._tag).toBe("ScenarioRejected")
     expect(verifyAmbiguousClaimScenario(rivalExecution)._tag).toBe("ScenarioRejected")
+    expect(verifyAmbiguousClaimScenario(rivalAttempt)._tag).toBe("ScenarioRejected")
     expect(verifyAmbiguousClaimScenario(withoutIntent)._tag).toBe("ScenarioRejected")
   })
 })

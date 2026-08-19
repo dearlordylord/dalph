@@ -33,7 +33,7 @@ interface JournalBaselineInput {
   readonly faultPoint: FaultPoint
   readonly processInstance: string
   readonly workspace: string
-  readonly onExecutionStored: (executionId: string) => Promise<void>
+  readonly onExecutionStored: (executionId: string, attemptIds: ReadonlyArray<string>) => Promise<void>
   readonly onFault: (faultPoint: FaultPoint) => Promise<never>
 }
 
@@ -81,7 +81,7 @@ export const runJournalBaseline = async (input: JournalBaselineInput): Promise<R
       if (records.length === 0) {
         yield* journal.beginRun(runId, target, { taskExecutionCapacity: defaultTaskWorkCapacity })
       }
-      yield* Effect.promise(() => input.onExecutionStored(runId))
+      yield* Effect.promise(() => input.onExecutionStored(runId, []))
       if (input.faultPoint === "AfterExecutionStored" && input.processInstance === "process-1") {
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
       }
