@@ -43,24 +43,46 @@ export const projectCanonicalTrace = (
   providerCalls: ReadonlyArray<ProviderCall>,
   decision: RecoveredDecision
 ): ReadonlyArray<CanonicalTraceEvent> => {
-  const trace: Array<CanonicalTraceEvent> = [{ _tag: "RunExecutionEstablished", runId: fixture.runId }]
+  const trace: Array<CanonicalTraceEvent> = [
+    { _tag: "RunExecutionEstablished", plannedBaseSha: fixture.plannedBaseSha, runId: fixture.runId }
+  ]
   let intentProjected = false
   const hasDurableIntent = adapterHasDurableIntent(workspace, adapter)
+  const projectIntent = (): void => {
+    if (intentProjected) return
+    trace.push({
+      _tag: "TaskClaimAcquisitionIntended",
+      owner: fixture.claim.owner,
+      taskId: fixture.claim.taskId,
+      token: fixture.claim.token
+    })
+    intentProjected = true
+  }
   for (const call of providerCalls) {
     if (call.request === "GitHub.ReadClaim" && call.trackerRevision !== null) {
       trace.push({ _tag: "TaskClaimObserved", result: call.result, trackerRevision: call.trackerRevision })
     }
     if (call.request === "GitHub.CreateClaim" && call.trackerRevision !== null) {
       if (!hasDurableIntent) throw new Error(`${adapter} crossed GitHub without durable claim intent`)
-      if (!intentProjected) {
-        trace.push({ _tag: "TaskClaimAcquisitionIntended", taskId: fixture.claim.taskId })
-        intentProjected = true
-      }
+      projectIntent()
       trace.push({ _tag: "TaskClaimRequestApplied", trackerRevision: call.trackerRevision })
     }
     if (call.request === "GitHub.ReadCurrentTaskFacts" && call.trackerRevision !== null) {
       trace.push({ _tag: "CurrentTaskFactsObserved", result: call.result, trackerRevision: call.trackerRevision })
     }
+    if (call.request === "ApplicationExit.CutoffObserved") {
+      if (hasDurableIntent) projectIntent()
+      trace.push({ _tag: "ApplicationExitCutoffApplied" })
+    }
+  }
+  if (decision === "FailClosed") {
+    if (hasDurableIntent) projectIntent()
+    trace.push({
+      _tag: "ExecutionCodeRejected",
+      changedStep: "ReconcileExactTaskClaimV2",
+      found: "v1",
+      requested: "v2"
+    })
   }
   trace.push({ _tag: "RunDecisionRecovered", decision })
   return trace

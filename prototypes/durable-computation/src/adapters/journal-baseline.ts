@@ -33,6 +33,7 @@ interface JournalBaselineInput {
   readonly faultPoint: FaultPoint
   readonly processInstance: string
   readonly workspace: string
+  readonly onExecutionStored: (executionId: string) => Promise<void>
   readonly onFault: (faultPoint: FaultPoint) => Promise<never>
 }
 
@@ -80,9 +81,14 @@ export const runJournalBaseline = async (input: JournalBaselineInput): Promise<R
       if (records.length === 0) {
         yield* journal.beginRun(runId, target, { taskExecutionCapacity: defaultTaskWorkCapacity })
       }
+      yield* Effect.promise(() => input.onExecutionStored(runId))
+      if (input.faultPoint === "AfterExecutionStored" && input.processInstance === "process-1") {
+        return yield* Effect.promise(() => input.onFault(input.faultPoint))
+      }
       const history = yield* journal.read(runId)
       const intent = history.find(({ event }) => event._tag === "TaskClaimAcquisitionIntended")
       const outcome = history.find(({ event }) => event._tag === "TaskClaimAcquired")
+      let claimAcquired = outcome !== undefined
       const recordAcquired = journal.append(
         runId,
         outcomeRecordKey(operationId),
@@ -94,7 +100,7 @@ export const runJournalBaseline = async (input: JournalBaselineInput): Promise<R
 
       if (intent === undefined) {
         const observed = yield* Effect.promise(() => readClaim(context))
-        if (observed !== null) return yield* Effect.die("fixture starts with a foreign or unexpected claim")
+        if (observed !== null && !exactClaimMatches(observed)) return "Wait" as const
         yield* journal.append(
           runId,
           intentRecordKey(operationId),
@@ -110,23 +116,25 @@ export const runJournalBaseline = async (input: JournalBaselineInput): Promise<R
           yield* Effect.promise(() => closeApplicationExitAdmission(context))
           return yield* Effect.promise(() => input.onFault(input.faultPoint))
         }
-        const replyDelivered = input.faultPoint === "AfterClaimReplyDurableBeforeNextRead"
+        const replyDelivered = input.faultPoint !== "AfterClaimAppliedBeforeReplyRecorded"
         yield* Effect.promise(() => createClaim(context, fixture.claim, replyDelivered))
         if (input.faultPoint === "AfterClaimAppliedBeforeReplyRecorded") {
           return yield* Effect.promise(() => input.onFault(input.faultPoint))
         }
-        if (replyDelivered) {
+        if (input.faultPoint === "AfterClaimReplyDurableBeforeNextRead") {
           yield* recordAcquired
           return yield* Effect.promise(() => input.onFault(input.faultPoint))
         }
+        yield* recordAcquired
+        claimAcquired = true
       }
 
-      if (outcome === undefined) {
+      if (!claimAcquired) {
         const observed = yield* Effect.promise(() => readClaim(context))
         if (observed === null) {
           yield* Effect.promise(() => createClaim(context, fixture.claim, true))
         } else if (!exactClaimMatches(observed)) {
-          return yield* Effect.die("claim reconciliation found a foreign claim")
+          return "Wait" as const
         }
         yield* recordAcquired
       }

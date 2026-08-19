@@ -24,7 +24,16 @@ const main = async (): Promise<void> => {
   const workspace = argumentValue("--workspace")
   if (runId !== fixture.runId) throw new Error(`unexpected Run ID ${runId}`)
 
-  emit(ChildMessage.cases.ChildReady.make({ adapter, runId }))
+  const onExecutionStored = async (executionId: string): Promise<void> => {
+    emit(
+      ChildMessage.cases.ChildReady.make({
+        adapter,
+        executionId,
+        plannedBaseSha: fixture.plannedBaseSha,
+        runId
+      })
+    )
+  }
   const onFault = async (reached: FaultPoint): Promise<never> => {
     emit(ChildMessage.cases.FaultReached.make({ faultPoint: reached, runId }))
     return waitForever()
@@ -33,6 +42,7 @@ const main = async (): Promise<void> => {
   const recoveredDecision = await runAdapter({
     adapter,
     faultPoint,
+    onExecutionStored,
     onFault,
     processInstance,
     workspace

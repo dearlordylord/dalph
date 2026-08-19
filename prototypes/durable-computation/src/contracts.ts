@@ -63,7 +63,12 @@ export type ProviderCall = typeof ProviderCall.Type
 
 export const ChildMessage = Schema.TaggedUnion({
   ChildProtocolFailure: { detail: Schema.NonEmptyString },
-  ChildReady: { adapter: AdapterName, runId: Schema.NonEmptyString },
+  ChildReady: {
+    adapter: AdapterName,
+    executionId: Schema.NonEmptyString,
+    plannedBaseSha: Schema.NonEmptyString,
+    runId: Schema.NonEmptyString
+  },
   ExecutionCompleted: {
     adapter: AdapterName,
     recoveredDecision: RecoveredDecision,
@@ -82,16 +87,35 @@ export interface ScenarioRequest {
 export interface ScenarioResult {
   readonly canonicalTrace: ReadonlyArray<CanonicalTraceEvent>
   readonly executionIds: ReadonlyArray<string>
+  readonly failureDetail?: string
+  readonly operationalMetrics: {
+    readonly cleanupMilliseconds: number
+    readonly firstProcessResidentKiB: number
+    readonly firstProcessToFaultMilliseconds: number
+    readonly restartToProgressMilliseconds: number
+  }
   readonly providerCalls: ReadonlyArray<ProviderCall>
   readonly recoveredDecision: RecoveredDecision
 }
 
 export type CanonicalTraceEvent =
-  | { readonly _tag: "RunExecutionEstablished"; readonly runId: string }
-  | { readonly _tag: "TaskClaimAcquisitionIntended"; readonly taskId: string }
+  | { readonly _tag: "RunExecutionEstablished"; readonly plannedBaseSha: string; readonly runId: string }
+  | {
+      readonly _tag: "TaskClaimAcquisitionIntended"
+      readonly owner: string
+      readonly taskId: string
+      readonly token: string
+    }
   | { readonly _tag: "TaskClaimObserved"; readonly result: string; readonly trackerRevision: number }
   | { readonly _tag: "TaskClaimRequestApplied"; readonly trackerRevision: number }
   | { readonly _tag: "CurrentTaskFactsObserved"; readonly result: string; readonly trackerRevision: number }
+  | { readonly _tag: "ApplicationExitCutoffApplied" }
+  | {
+      readonly _tag: "ExecutionCodeRejected"
+      readonly changedStep: "ReconcileExactTaskClaimV2"
+      readonly found: "v1"
+      readonly requested: "v2"
+    }
   | { readonly _tag: "RunDecisionRecovered"; readonly decision: RecoveredDecision }
 
 export const fixture = {

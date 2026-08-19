@@ -3,6 +3,8 @@ import { runCrashRestartScenario } from "../src/harness.ts"
 import { verifyAmbiguousClaimScenario } from "../src/scenario-verification.ts"
 
 describe("durable-computation child-process harness", () => {
+  const workflowExecutionId = "54c2759073567a3291c523227a11826d"
+
   it("checks GitHub after losing the mutation response and does not repeat the request", async () => {
     const result = await runCrashRestartScenario({
       adapter: "journal-baseline",
@@ -70,7 +72,7 @@ describe("durable-computation child-process harness", () => {
       faultPoint: "AfterClaimAppliedBeforeReplyRecorded"
     })
 
-    expect(result.executionIds).toEqual(["run-232-ambiguity-0001"])
+    expect(result.executionIds).toEqual([workflowExecutionId])
     expect(result.providerCalls.map(({ request }) => request)).toEqual([
       "GitHub.ReadClaim",
       "GitHub.CreateClaim",
@@ -106,9 +108,25 @@ describe("durable-computation child-process harness", () => {
 
     expect(results.map(({ executionIds }) => executionIds)).toEqual([
       ["run-232-ambiguity-0001"],
-      ["run-232-ambiguity-0001"]
+      [workflowExecutionId]
     ])
   })
+
+  it.each(["AfterExecutionStored", "AfterClaimIntentBeforeRequest"] as const)(
+    "runs the frozen %s crash cut against both adapters",
+    async (faultPoint) => {
+      const [baseline, candidate] = await Promise.all([
+        runCrashRestartScenario({ adapter: "journal-baseline", faultPoint }),
+        runCrashRestartScenario({ adapter: "effect-workflow-v1", faultPoint })
+      ])
+
+      expect(baseline.recoveredDecision).toBe("ContinueSameRun")
+      expect(candidate.recoveredDecision).toBe("ContinueSameRun")
+      expect(candidate.canonicalTrace).toEqual(baseline.canonicalTrace)
+      expect(baseline.operationalMetrics.firstProcessResidentKiB).toBeGreaterThan(0)
+      expect(candidate.operationalMetrics.restartToProgressMilliseconds).toBeGreaterThan(0)
+    }
+  )
 
   it("projects equivalent canonical semantics across baseline and candidate", async () => {
     const [baseline, candidate] = await Promise.all([
@@ -125,6 +143,19 @@ describe("durable-computation child-process harness", () => {
     expect(candidate.canonicalTrace).toEqual(baseline.canonicalTrace)
   })
 
+  it.each([
+    "AfterClaimReplyDurableBeforeNextRead",
+    "AfterCleanCheckpoint",
+    "AfterExitCutoff"
+  ] as const)("projects equivalent canonical semantics at %s", async (faultPoint) => {
+    const [baseline, candidate] = await Promise.all([
+      runCrashRestartScenario({ adapter: "journal-baseline", faultPoint }),
+      runCrashRestartScenario({ adapter: "effect-workflow-v1", faultPoint })
+    ])
+
+    expect(candidate.canonicalTrace).toEqual(baseline.canonicalTrace)
+  })
+
   it("fails closed when unfinished execution code changes incompatibly", async () => {
     const result = await runCrashRestartScenario({
       adapter: "effect-workflow-v1",
@@ -132,8 +163,16 @@ describe("durable-computation child-process harness", () => {
     })
 
     expect(result.providerCalls).toEqual([])
-    expect(result.executionIds).toEqual(["run-232-ambiguity-0001"])
+    expect(result.executionIds).toEqual([workflowExecutionId])
     expect(result.recoveredDecision).toBe("FailClosed")
+    expect(result.failureDetail).toContain("ReconcileExactTaskClaimV2")
+    expect(result.canonicalTrace.some(({ _tag }) => _tag === "TaskClaimAcquisitionIntended")).toBe(true)
+    expect(result.canonicalTrace.at(-2)).toEqual({
+      _tag: "ExecutionCodeRejected",
+      changedStep: "ReconcileExactTaskClaimV2",
+      found: "v1",
+      requested: "v2"
+    })
   })
 
   it("reads fresh GitHub facts when Workflow replays after ordinary downtime", async () => {

@@ -24,6 +24,7 @@ interface EffectWorkflowInput {
   readonly faultPoint: FaultPoint
   readonly processInstance: string
   readonly workspace: string
+  readonly onExecutionStored: (executionId: string) => Promise<void>
   readonly onFault: (faultPoint: FaultPoint) => Promise<never>
 }
 
@@ -35,6 +36,8 @@ export interface IncompatibleWorkflowCode {
 }
 
 export type EffectWorkflowResult = RecoveredDecision | IncompatibleWorkflowCode
+
+const changedClaimStep = "ReconcileExactTaskClaimV2" as const
 
 const DalphRunV1 = Workflow.make("DalphRunV1", {
   error: Schema.Never,
@@ -87,7 +90,7 @@ const establishCodeVersion = async (
       ? undefined
       : {
           _tag: "IncompatibleWorkflowCode",
-          changedStep: "ReconcileExactTaskClaimV2",
+          changedStep: changedClaimStep,
           found: version === "v2" ? "v2" : "v1",
           requested
         }
@@ -104,22 +107,38 @@ const establishCodeVersion = async (
 }
 
 export const runEffectWorkflow = async (input: EffectWorkflowInput): Promise<EffectWorkflowResult> => {
-  const incompatible = await establishCodeVersion(input.workspace, codeVersionFor(input.adapter))
+  const codeVersion = codeVersionFor(input.adapter)
+  const incompatible = await establishCodeVersion(input.workspace, codeVersion)
   if (incompatible !== undefined) return incompatible
   const context = {
     adapter: input.adapter,
     processInstance: input.processInstance,
     workspace: input.workspace
   }
+  const executionRegistration = Activity.make({
+    error: Schema.Never,
+    execute: Effect.succeed(fixture.runId),
+    name: "RegisterExactDalphRunV1",
+    success: Schema.NonEmptyString
+  })
   const claimActivity = Activity.make({
     error: Schema.Never,
     execute: Effect.gen(function* () {
+      if (input.faultPoint === "WithIncompatibleExecutionCode" && input.processInstance === "process-1") {
+        return yield* Effect.promise(() => input.onFault(input.faultPoint))
+      }
       const observed = yield* Effect.promise(() => readClaim(context))
       if (observed !== null) {
-        if (!exactClaimMatches(observed)) return yield* Effect.die("claim reconciliation found a foreign claim")
-        return observed
+        return exactClaimMatches(observed) ? observed : null
       }
-      const replyDelivered = input.faultPoint === "AfterClaimReplyDurableBeforeNextRead"
+      if (input.faultPoint === "AfterClaimIntentBeforeRequest" && input.processInstance === "process-1") {
+        return yield* Effect.promise(() => input.onFault(input.faultPoint))
+      }
+      if (input.faultPoint === "AfterExitCutoff" && input.processInstance === "process-1") {
+        yield* Effect.promise(() => closeApplicationExitAdmission(context))
+        return yield* Effect.promise(() => input.onFault(input.faultPoint))
+      }
+      const replyDelivered = input.faultPoint !== "AfterClaimAppliedBeforeReplyRecorded"
       yield* Effect.promise(() => createClaim(context, fixture.claim, replyDelivered))
       if (input.faultPoint === "AfterClaimAppliedBeforeReplyRecorded") {
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
@@ -127,20 +146,19 @@ export const runEffectWorkflow = async (input: EffectWorkflowInput): Promise<Eff
       return fixture.claim
     }),
     interruptRetryPolicy: Schedule.recurs(0),
-    name: "ReconcileExactTaskClaimV1",
-    success: ExactClaim
+    name: codeVersion === "v1" ? "ReconcileExactTaskClaimV1" : changedClaimStep,
+    success: Schema.NullOr(ExactClaim)
   })
-  const handler = DalphRunV1.toLayer(() =>
+  const handler = DalphRunV1.toLayer((_payload, executionId) =>
     Effect.gen(function* () {
-      if (input.faultPoint === "WithIncompatibleExecutionCode") {
+      yield* executionRegistration
+      yield* Effect.promise(() => input.onExecutionStored(executionId))
+      if (input.faultPoint === "AfterExecutionStored" && input.processInstance === "process-1") {
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
       }
-      yield* claimActivity
+      const claim = yield* claimActivity
+      if (claim === null) return "Wait" as const
       if (input.faultPoint === "AfterClaimReplyDurableBeforeNextRead" && input.processInstance === "process-1") {
-        return yield* Effect.promise(() => input.onFault(input.faultPoint))
-      }
-      if (input.faultPoint === "AfterExitCutoff" && input.processInstance === "process-1") {
-        yield* Effect.promise(() => closeApplicationExitAdmission(context))
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
       }
       const current = yield* Effect.promise(() => readCurrentTaskFacts(context))

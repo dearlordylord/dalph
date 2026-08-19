@@ -1,5 +1,4 @@
 import type { ScenarioResult } from "./contracts.ts"
-import { fixture } from "./contracts.ts"
 
 export type ScenarioVerification =
   | { readonly _tag: "ScenarioAccepted" }
@@ -8,7 +7,7 @@ export type ScenarioVerification =
 const rejected = (reason: string): ScenarioVerification => ({ _tag: "ScenarioRejected", reason })
 
 export const verifyAmbiguousClaimScenario = (result: ScenarioResult): ScenarioVerification => {
-  if (result.executionIds.length !== 1 || result.executionIds[0] !== fixture.runId) {
+  if (result.executionIds.length !== 1) {
     return rejected("a rival Run execution was established")
   }
   const creates = result.providerCalls.filter(({ request }) => request === "GitHub.CreateClaim")

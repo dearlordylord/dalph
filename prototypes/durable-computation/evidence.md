@@ -46,14 +46,18 @@ the adapter.
 
 | Fault point / arm | P1 ledger | Downtime change | P2 ledger | Result |
 | --- | --- | --- | --- | --- |
+| Execution stored / Journal | no provider call | none | `ReadClaim(absent), CreateClaim✓, ReadCurrentTaskFacts(r2)` | Same stored Run begins once; continue |
+| Execution stored / Workflow | no provider call | none | `ReadClaim(absent), CreateClaim✓, ReadCurrentTaskFacts(r2)` | Same derived Workflow execution resumes; continue |
+| Claim intent before request / Journal | `ReadClaim(absent)` | none | `ReadClaim(absent), CreateClaim✓, ReadCurrentTaskFacts(r2)` | Durable intent survives; one first create |
+| Claim intent before request / Workflow | `ReadClaim(absent)` | none | `ReadClaim(absent), CreateClaim✓, ReadCurrentTaskFacts(r2)` | Durable Activity request survives; one first create |
 | Lost claim reply / Journal | `ReadClaim(absent), CreateClaim!` | none | `ReadClaim(exact), ReadCurrentTaskFacts(r2)` | Continue same Run |
 | Lost claim reply / Workflow | `ReadClaim(absent), CreateClaim!` | none | `ReadClaim(exact), ReadCurrentTaskFacts(r2)` | Continue same Run |
 | Recorded claim reply / Journal | `ReadClaim(absent), CreateClaim✓` | none | `ReadCurrentTaskFacts(r2)` | Reuse result; continue |
 | Recorded claim reply / Workflow | `ReadClaim(absent), CreateClaim✓` | none | `ReadCurrentTaskFacts(r2)` | Reuse Activity result; continue |
-| Clean checkpoint / Journal | `ReadClaim(absent), CreateClaim!, ReadClaim(exact), ReadCurrentTaskFacts(r2/member)` | target membership removed; revision becomes 3 | `ReadCurrentTaskFacts(r3/outside-target)` | Wait from current facts |
-| Clean checkpoint / Workflow | `ReadClaim(absent), CreateClaim!, ReadCurrentTaskFacts(r2/member)` | target membership removed; revision becomes 3 | `ReadCurrentTaskFacts(r3/outside-target)` | Wait from current facts |
+| Clean checkpoint / Journal | `ReadClaim(absent), CreateClaim✓, ReadCurrentTaskFacts(r2/member)` | target membership removed; revision becomes 3 | `ReadCurrentTaskFacts(r3/outside-target)` | Wait from current facts |
+| Clean checkpoint / Workflow | `ReadClaim(absent), CreateClaim✓, ReadCurrentTaskFacts(r2/member)` | target membership removed; revision becomes 3 | `ReadCurrentTaskFacts(r3/outside-target)` | Wait from current facts |
 | Exit cutoff / Journal | `ReadClaim(absent), ApplicationExit.CutoffObserved` | explicit new application start | `ReadClaim(absent), CreateClaim✓, ReadCurrentTaskFacts(r2)` | No P1 successor; P2 continues |
-| Exit cutoff / Workflow | `ReadClaim(absent), CreateClaim!, ApplicationExit.CutoffObserved` | explicit new application start | `ReadCurrentTaskFacts(r2)` | No P1 successor; P2 continues |
+| Exit cutoff / Workflow | `ReadClaim(absent), ApplicationExit.CutoffObserved` | explicit new application start | `ReadClaim(absent), CreateClaim✓, ReadCurrentTaskFacts(r2)` | No P1 successor; P2 continues |
 | Incompatible code / Workflow | no provider call | `v1` store opened as `v2` | no provider call | Typed fail-closed result |
 
 The controlled Git and executor ledgers remain empty. Those boundaries do not
@@ -67,9 +71,10 @@ observation so an adapter cannot invent them.
 For the organizing lost-reply scenario, both arms project:
 
 ```text
-RunExecutionEstablished(run-232-ambiguity-0001)
+RunExecutionEstablished(run-232-ambiguity-0001, Base d4128e4...)
 TaskClaimObserved(Absent, revision 1)
-TaskClaimAcquisitionIntended(github:dearlordylord/dalph#232-fixture-task)
+TaskClaimAcquisitionIntended(github:dearlordylord/dalph#232-fixture-task,
+  dalph-evaluation-owner, claim-token-232-0001)
 TaskClaimRequestApplied(revision 2)
 TaskClaimObserved(Exact, revision 2)
 CurrentTaskFactsObserved(Open:Member, revision 2)
@@ -93,17 +98,18 @@ scenario verifier rejects:
 - insertion of a rival Run identity; and
 - removal of durable claim intent before the applied request.
 
-The incompatible-code test is the fifth negative control. Version B renames
-the durable claim step to `ReconcileExactTaskClaimV2`; explicit version routing
-rejects the unfinished `v1` execution before any provider call instead of
-silently treating the new name as a new request.
+The incompatible-code test is the fifth negative control. Version B declares
+the same Run handler with its claim Activity renamed to
+`ReconcileExactTaskClaimV2`; explicit version routing rejects the unfinished
+`v1` execution before the v2 handler or any provider call can reinterpret its
+stored `ReconcileExactTaskClaimV1` request.
 
 ## Durable evidence inventory
 
 | Durable item | Arm | Owner and purpose | Authority classification |
 | --- | --- | --- | --- |
 | SQLite `journal_records` and `effect_sql_migrations` | Journal baseline | Current Dalph Journal stores Run beginning, claim intent, and exact observed outcome. | Dalph workflow-journal history. |
-| SQLite `cluster_messages`, `cluster_replies`, and `cluster_migrations` | Workflow-only | Effect stores the Run request, Activity request/result, replies, delivery markers, and schema migrations. Runner assignment is deliberately process-local. | Runtime replay infrastructure, not task/Git/executor authority. |
+| SQLite `cluster_messages`, `cluster_replies`, and `cluster_migrations` | Workflow-only | Effect stores the Run request, registration-checkpoint and claim Activity request/results, replies, delivery markers, and schema migrations. Runner assignment is deliberately process-local. | Runtime replay infrastructure, not task/Git/executor authority. |
 | `effect-workflow-code-version` (`v1`) | Workflow-only | Routes unfinished execution to compatible code and fails closed on `v2`. | Runtime evolution metadata; not domain or provider state. |
 | `outside-world.json` | Shared harness | Controlled GitHub/Git/executor/Exit facts. | Controlled outside-system authority for the experiment. |
 | `provider-calls.ndjson` | Shared harness | Fsynced chronological requests/results. | Evaluation/provider history; adapters never reconstruct continuation from it. |
@@ -114,8 +120,8 @@ No reduced Dalph semantic log was necessary for these accepted scenarios.
 
 ## Required candidate code and remaining protocols
 
-The Workflow-only adapter is 157 authored lines after formatting, compared with
-144 for the experiment-specific Journal adapter. Those are spike sizes, not a
+The Workflow-only adapter is 175 authored lines after formatting, compared with
+152 for the experiment-specific Journal adapter. Those are spike sizes, not a
 production migration estimate.
 
 Effect owns:
@@ -128,6 +134,9 @@ Effect owns:
 Dalph-shaped code still owns:
 
 - mapping the exact Run ID one way into Workflow identity;
+- a harness-only `RegisterExactDalphRunV1` Activity checkpoint so the parent can
+  kill immediately after durable registration through the public Workflow
+  seam; this is runtime test control, not retained domain evidence;
 - the `read exact claim; create only if absent` reconciliation protocol inside
   the claim Activity;
 - disabling Activity interruption retries (`Schedule.recurs(0)`) for the unsafe
@@ -161,20 +170,39 @@ retention, migration, and malformed-row protocol before adoption. The
 process-local runner option is appropriate only to the accepted single-process
 experiment and proves nothing about multi-runner fencing.
 
-Observed end-to-end child kill/restart durations on the host above:
+The candidate polls entity messages and replies every 20 ms in this experiment.
+The table separates first-process time to the named cut from restart-to-visible
+progress; cleanup is removal of the closed temporary store. RSS is sampled
+from `/proc` while process 1 is blocked at the cut. These are single
+observations after correctness, not performance claims.
 
-| Case | Wall time |
-| --- | ---: |
-| Journal lost-reply baseline | 966 ms |
-| Workflow lost reply | 1,016 ms |
-| Workflow recorded reply | 1,015 ms |
-| Workflow ordinary downtime/current reread | 1,014 ms |
-| Workflow Exit cutoff and later start | 1,031 ms |
-| Workflow incompatible-code failure | 921 ms |
+| Case | P1 to cut | Restart to progress | P1 RSS | Cleanup |
+| --- | ---: | ---: | ---: | ---: |
+| Journal execution-stored cold start | 628 ms | 523 ms | 174 MiB | 1.2 ms |
+| Workflow execution-stored cold start | 654 ms | 671 ms | 188 MiB | 0.6 ms |
+| Journal lost reply | 634 ms | 675 ms | 175 MiB | 1.2 ms |
+| Workflow lost reply | 759 ms | 764 ms | 188 MiB | 0.8 ms |
+| Workflow recorded reply | 729 ms | 799 ms | 192 MiB | 0.4 ms |
+| Workflow ordinary downtime/current reread | 823 ms | 843 ms | 192 MiB | 0.5 ms |
+| Workflow Exit cutoff and later start | 675 ms | 712 ms | 192 MiB | 0.5 ms |
+| Workflow incompatible-code failure | 709 ms | 688 ms | 187 MiB | 0.7 ms |
 
-These are single observations after correctness, not performance claims. The
-harness enforces a 2.5-second recovery bound so a marked-read execution cannot
-silently hang a passing test.
+Every successful recovery opened the original SQLite files without copying or
+rebuilding them. Backup-and-restore of a copied database was not exercised;
+the adoption gap remains a WAL-aware backup/restore drill. The harness enforces
+a 2.5-second recovery bound so a marked-read execution cannot silently hang a
+passing test.
+
+## Authority refresh as reconstructed input
+
+A useful industry analogy is to treat the tracker refresh after restart as
+pulling the input queue before durable computation continues. That is exactly
+what the non-memoized current-facts read demonstrates: the runtime replays its
+history, then Dalph reconstructs decision input from the authoritative tracker
+snapshot. This is sufficient when the decision depends on current state. It is
+not equivalent to an event queue when the identity or order of intervening
+transitions is independently meaningful; those transitions still need durable
+domain evidence or a provider event stream.
 
 ## Pinned Effect issue dispositions
 
