@@ -11,6 +11,7 @@ The evaluation order is fixed:
 3. Journal baseline adapter
 4. SQL-backed Effect Workflow-only adapter
 5. [Comparative evidence](evidence.md)
+6. [Domain-coloured code-shape evaluation](code-shape-evaluation.md)
 
 The current Journal and the candidate receive the same exact identities,
 controlled outside-world facts, fault script, provider-call ledger, and

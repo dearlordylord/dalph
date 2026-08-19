@@ -18,6 +18,11 @@ import {
   readClaim,
   readCurrentTaskFacts
 } from "../controlled-world.ts"
+import {
+  CurrentTaskFactsRefresh,
+  ExactTaskClaimReconciliation,
+  recoverCurrentRunDecision
+} from "../domain-colored-computation.ts"
 
 interface EffectWorkflowInput {
   readonly adapter: AdapterName
@@ -110,6 +115,7 @@ export const runEffectWorkflow = async (input: EffectWorkflowInput): Promise<Eff
   const codeVersion = codeVersionFor(input.adapter)
   const incompatible = await establishCodeVersion(input.workspace, codeVersion)
   if (incompatible !== undefined) return incompatible
+  const claimStep = codeVersion === "v1" ? "ReconcileExactTaskClaimV1" : changedClaimStep
   const context = {
     adapter: input.adapter,
     processInstance: input.processInstance,
@@ -146,26 +152,42 @@ export const runEffectWorkflow = async (input: EffectWorkflowInput): Promise<Eff
       return fixture.claim
     }),
     interruptRetryPolicy: Schedule.recurs(0),
-    name: codeVersion === "v1" ? "ReconcileExactTaskClaimV1" : changedClaimStep,
+    name: `${claimStep}/${fixture.claim.operationId}`,
     success: Schema.NullOr(ExactClaim)
   })
+  const currentTaskFacts = Effect.promise(() => readCurrentTaskFacts(context)).pipe(
+    Effect.tap((current) =>
+      input.faultPoint === "AfterCleanCheckpoint" && current.trackerRevision === 2
+        ? Effect.promise(() => input.onFault(input.faultPoint))
+        : Effect.void
+    ),
+    Effect.map(({ task }) => ({ lifecycle: task.lifecycle, targetMember: task.targetMember }))
+  )
   const handler = DalphRunV1.toLayer((_payload, executionId) =>
     Effect.gen(function* () {
+      const workflowContext = yield* Effect.context<
+        WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+      >()
+      const exactClaim = claimActivity.pipe(
+        Effect.tap(() =>
+          input.faultPoint === "AfterClaimReplyDurableBeforeNextRead" && input.processInstance === "process-1"
+            ? Effect.promise(() => input.onFault(input.faultPoint))
+            : Effect.void
+        ),
+        Effect.provide(workflowContext)
+      )
       yield* executionRegistration
       yield* Effect.promise(() => input.onExecutionStored(executionId, []))
       if (input.faultPoint === "AfterExecutionStored" && input.processInstance === "process-1") {
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
       }
-      const claim = yield* claimActivity
-      if (claim === null) return "Wait" as const
-      if (input.faultPoint === "AfterClaimReplyDurableBeforeNextRead" && input.processInstance === "process-1") {
-        return yield* Effect.promise(() => input.onFault(input.faultPoint))
-      }
-      const current = yield* Effect.promise(() => readCurrentTaskFacts(context))
-      if (input.faultPoint === "AfterCleanCheckpoint" && current.trackerRevision === 2) {
-        return yield* Effect.promise(() => input.onFault(input.faultPoint))
-      }
-      return current.task.lifecycle === "Open" && current.task.targetMember ? "ContinueSameRun" : "Wait"
+      return yield* recoverCurrentRunDecision.pipe(
+        Effect.provideService(
+          ExactTaskClaimReconciliation,
+          ExactTaskClaimReconciliation.of({ exactClaim })
+        ),
+        Effect.provideService(CurrentTaskFactsRefresh, CurrentTaskFactsRefresh.of({ currentTaskFacts }))
+      )
     })
   )
   const runtime = workflowRuntimeLayer(join(input.workspace, "effect-workflow.sqlite"), handler)

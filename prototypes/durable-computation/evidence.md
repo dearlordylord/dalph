@@ -228,15 +228,49 @@ domain evidence or a provider event stream.
 | Effect #6179, SQLite contention between long/short clients | Not exercised by design: one child process and one embedded client exist at a time. Adoption or a multi-client control surface must reproduce it separately. |
 | Effect #6508, concurrent entity execution after SQL runner refresh | Not applicable to the authorized single-process arm, which uses process-local runner storage. It supplies no multi-runner ownership evidence. |
 
-## Recommendation for owner decision
+## Interim result for owner evaluation
 
-**Continue with Workflow-only as the viable candidate; do not add a reduced
-semantic log for the tested chronology.** The candidate preserves all accepted
-results and keeps fresh GitHub authority explicit with modest embedded
-infrastructure. Before adoption, the owner should require a follow-up scope
-covering the untested Journal event families, operator diagnostics/retention,
-upgrade migration beyond fail-closed routing, live resource ownership, and the
-relevant multi-client/multi-runner risks.
+**Workflow-only remains viable; no reduced semantic log was necessary for the
+tested chronology.** This is evidence for continued evaluation, not an adoption
+recommendation. No further real-provider, worktree, or executor evaluation is
+implied: the owner has chosen to evaluate the form of the computation and its
+fit with Dalph's domain-coloured code before making the decision.
+
+### Domain-coloured code-shape extension
+
+The owner extended step 4 before making the decision: evaluate whether Workflow
+can sit below Dalph's protected, domain-coloured compositions, while retaining
+the explicit option that Workflow could replace `delivery` with its own
+readable model if preservation creates worse duplication.
+
+The executable extension extracted the recovered decision into
+`domain-colored-computation.ts`. Its seven statements say: reconcile the exact
+task claim, stop if it cannot be reconciled, read current task facts, and
+continue or wait. The module imports no Workflow, Activity, SQL, Journal,
+cluster, storage, or harness fault vocabulary. The same SQL-backed
+child-process suite remains green with the Workflow adapter supplying the two
+domain ports.
+
+The extension also found one concrete integration constraint. Within one
+Workflow execution, yielding the same named Activity twice reuses its first
+stored result. A focused executable probe observes one underlying call and the
+same result twice. A production adapter therefore cannot name every proposal
+`ExecuteAction`; each materialized domain action needs one stable durable name.
+The claim Activity now includes its exact `OperationId`.
+
+The current code-shape verdict is **preserve `delivery` with named architectural
+adjustments**. The tested claim fits below domain ports. The remaining
+adjustments are stable per-action identity, schema-decoded result publication
+back into current domain inputs, fresh owning-boundary reads, process-local
+resource ownership, and explicit version routing. No tested behavior requires
+Workflow to replace `delivery`.
+
+The replacement verdict remains open rather than forbidden. Its concrete cost
+is that a Workflow-native composition must re-express the current signal,
+description, planning, bounded concurrency, live ownership, Exit, quiescence,
+and stabilization meanings. A short handler that hides those obligations is
+not equivalent evidence. See `code-shape-evaluation.md` for both shapes, the
+four verdicts, and the scenario-to-test mapping.
 
 Do not integrate this prototype or delete Journal code from this issue. Step 4
 remains the project owner's continue/revise/adopt/retain decision.
