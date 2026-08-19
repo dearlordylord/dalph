@@ -3,15 +3,7 @@ import { open, readFile, rename } from "node:fs/promises"
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { Effect, Layer, Schedule, Schema } from "effect"
-import {
-  ClusterWorkflowEngine,
-  EntityAddress,
-  EntityId,
-  EntityType,
-  MessageStorage,
-  Sharding,
-  SingleRunner
-} from "effect/unstable/cluster"
+import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { Activity, Workflow, WorkflowEngine } from "effect/unstable/workflow"
 import {
   type AdapterName,
@@ -37,6 +29,7 @@ interface EffectWorkflowInput {
 
 export interface IncompatibleWorkflowCode {
   readonly _tag: "IncompatibleWorkflowCode"
+  readonly changedStep: "ReconcileExactTaskClaimV2"
   readonly found: "v1" | "v2"
   readonly requested: "v1" | "v2"
 }
@@ -92,7 +85,12 @@ const establishCodeVersion = async (
     const version = found.trim()
     return version === requested
       ? undefined
-      : { _tag: "IncompatibleWorkflowCode", found: version === "v2" ? "v2" : "v1", requested }
+      : {
+          _tag: "IncompatibleWorkflowCode",
+          changedStep: "ReconcileExactTaskClaimV2",
+          found: version === "v2" ? "v2" : "v1",
+          requested
+        }
   }
   const temporaryPath = `${path}.${process.pid}.tmp`
   const file = await open(temporaryPath, "w")
@@ -138,10 +136,10 @@ export const runEffectWorkflow = async (input: EffectWorkflowInput): Promise<Eff
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
       }
       yield* claimActivity
-      if (input.faultPoint === "AfterClaimReplyDurableBeforeNextRead") {
+      if (input.faultPoint === "AfterClaimReplyDurableBeforeNextRead" && input.processInstance === "process-1") {
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
       }
-      if (input.faultPoint === "AfterExitCutoff") {
+      if (input.faultPoint === "AfterExitCutoff" && input.processInstance === "process-1") {
         yield* Effect.promise(() => closeApplicationExitAdmission(context))
         return yield* Effect.promise(() => input.onFault(input.faultPoint))
       }
@@ -154,22 +152,6 @@ export const runEffectWorkflow = async (input: EffectWorkflowInput): Promise<Eff
   )
   const runtime = workflowRuntimeLayer(join(input.workspace, "effect-workflow.sqlite"), handler)
   return Effect.runPromise(
-    Effect.gen(function* () {
-      const payload = { codeVersion: "v1", runId: fixture.runId } as const
-      if (input.processInstance !== "process-1") {
-        const executionId = yield* DalphRunV1.executionId(payload)
-        const sharding = yield* Sharding.Sharding
-        const storage = yield* MessageStorage.MessageStorage
-        const entityId = EntityId.EntityId.make(executionId)
-        const address = EntityAddress.EntityAddress.make({
-          entityId,
-          entityType: EntityType.make(`Workflow/${DalphRunV1._tag}`),
-          shardId: sharding.getShardId(entityId, "default")
-        })
-        yield* storage.resetAddress(address)
-        yield* sharding.pollStorage
-      }
-      return yield* DalphRunV1.execute(payload)
-    }).pipe(Effect.provide(runtime), Effect.scoped)
+    DalphRunV1.execute({ codeVersion: "v1", runId: fixture.runId }).pipe(Effect.provide(runtime), Effect.scoped)
   )
 }

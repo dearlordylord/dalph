@@ -41,7 +41,7 @@ const main = async (): Promise<void> => {
     emit(
       ChildMessage.cases.ExecutionFailedClosed.make({
         adapter,
-        detail: `unfinished ${recoveredDecision.found} execution cannot run as ${recoveredDecision.requested}`,
+        detail: `unfinished ${recoveredDecision.found} execution cannot reinterpret ${recoveredDecision.changedStep} as ${recoveredDecision.requested}`,
         runId
       })
     )

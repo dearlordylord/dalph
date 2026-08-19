@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { CandidateRecoveryTimedOut, runCrashRestartScenario } from "../src/harness.ts"
+import { runCrashRestartScenario } from "../src/harness.ts"
 import { verifyAmbiguousClaimScenario } from "../src/scenario-verification.ts"
 
 describe("durable-computation child-process harness", () => {
@@ -82,13 +82,19 @@ describe("durable-computation child-process harness", () => {
     expect(verifyAmbiguousClaimScenario(result)).toEqual({ _tag: "ScenarioAccepted" })
   })
 
-  it("records that Workflow cannot reuse a durable Activity result within the recovery bound", async () => {
-    await expect(
-      runCrashRestartScenario({
-        adapter: "effect-workflow-v1",
-        faultPoint: "AfterClaimReplyDurableBeforeNextRead"
-      })
-    ).rejects.toBeInstanceOf(CandidateRecoveryTimedOut)
+  it("reuses the durable Workflow Activity result when GitHub's reply was recorded", async () => {
+    const result = await runCrashRestartScenario({
+      adapter: "effect-workflow-v1",
+      faultPoint: "AfterClaimReplyDurableBeforeNextRead"
+    })
+
+    expect(result.providerCalls.map(({ request }) => request)).toEqual([
+      "GitHub.ReadClaim",
+      "GitHub.CreateClaim",
+      "GitHub.ReadCurrentTaskFacts"
+    ])
+    expect(result.providerCalls[1]?.replyDelivered).toBe(true)
+    expect(result.recoveredDecision).toBe("ContinueSameRun")
   })
 
   it("replays one exact Run without establishing a duplicate execution", async () => {
@@ -142,10 +148,18 @@ describe("durable-computation child-process harness", () => {
     expect(result.recoveredDecision).toBe("Wait")
   })
 
-  it("records that Workflow cannot resume after the application Exit cutoff within the recovery bound", async () => {
-    await expect(
-      runCrashRestartScenario({ adapter: "effect-workflow-v1", faultPoint: "AfterExitCutoff" })
-    ).rejects.toBeInstanceOf(CandidateRecoveryTimedOut)
+  it("lets Workflow resume only after a later explicit start following the application Exit cutoff", async () => {
+    const result = await runCrashRestartScenario({
+      adapter: "effect-workflow-v1",
+      faultPoint: "AfterExitCutoff"
+    })
+    const cutoff = result.providerCalls.findIndex(({ request }) => request === "ApplicationExit.CutoffObserved")
+
+    expect(cutoff).toBeGreaterThanOrEqual(0)
+    expect(result.providerCalls.slice(cutoff + 1).filter(({ processInstance }) => processInstance === "process-1")).toEqual(
+      []
+    )
+    expect(result.recoveredDecision).toBe("ContinueSameRun")
   })
 
   it("rejects all ambiguity negative controls", async () => {
