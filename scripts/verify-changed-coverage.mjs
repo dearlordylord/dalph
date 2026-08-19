@@ -6,7 +6,8 @@ import { coverageBracketForPath, coveragePolicy } from "./coverage-policy.mjs"
 
 const changedCoverageThreshold = coveragePolicy.changedProductionLinesThreshold
 
-const defaultGit = (args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+const defaultGit = (args) =>
+  execFileSync("git", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] })
 
 const normalizePath = (path) => path.replaceAll("\\", "/")
 

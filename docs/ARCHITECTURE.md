@@ -428,7 +428,6 @@ depart from the community knowledge base.
 | [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md) | exclusive coordinator ownership, Run establishment and activation, pause, frontier/admission separation, capacity, waits, and stabilization |
 | [Tracker Graph and Claims](architecture/tracker-graph-and-claims.md) | tracker closure, observation evidence, GitHub consistency limits, named reads, mutations, and claims |
 | [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, outer Integrator, Git qualification, and exact-head promotion |
-| [Outer Integrator Boundary Migration](architecture/integrator-boundary-migration.md) | rejected split-stage runtime/model surface, retained behavior, and replacement scenario-to-test map |
 | [Control-plane latency and responsiveness](architecture/control-plane-latency-and-responsiveness.md) | tracker freshness, local derivation, admission, executor observation, local ownership contradiction, application drain, and recovery timing policy |
 | [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
 | [scenarios/](scenarios/) | chronological behavior and acceptance-test mappings |

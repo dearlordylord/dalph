@@ -19,8 +19,8 @@ part of this prototype. They did not contribute to the accepted core direction
 and their controls implied functionality the demo did not provide.
 
 The fixture is executable decision evidence derived from the provisional trace
-shape in `operator-and-resource-control-surface.md`. It is not the accepted
-implementation specification or a runtime authority. It contains tracker revisions,
+shape accepted in [issue #12](https://github.com/dearlordylord/dalph/issues/12).
+It is not the accepted implementation specification or a runtime authority. It contains tracker revisions,
 workflow occurrences, typed causal parents, decision reasons, evidence
 references, and adapter capabilities. The trace contract and UI support actor
 output and explicit observation gaps, but this accepted prototype deliberately

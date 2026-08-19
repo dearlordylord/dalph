@@ -48,8 +48,7 @@ the axis on which the tools differ.
 - **L2 — delivery protocol.** The lifecycle from graph observation through claim,
   planned attempt, executor work, accepted result, integration, promotion, and
   settlement, under capacity, pause, and process loss. Source of truth:
-  `research/delivery-composition-implementation-preparation.md` and
-  `docs/OPERATIONAL-SCENARIOS.md`.
+  `docs/OPERATIONAL-SCENARIOS.md` and the current architecture pages.
 
 ## L1 — pure projection
 

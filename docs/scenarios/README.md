@@ -86,12 +86,9 @@ until replacement operational scenarios exist.
 
 | File | Issue | Status |
 |---|---:|---|
-| `issue-57-build-two-parent-integration-candidate.md` | 57 | Implemented and closed completed; boundary superseded by #222 |
-| `issue-59-run-target-verification.md` | 59 | Implemented and closed completed; workflow fully superseded |
 | `issue-60-promote-or-reconcile.md` | 60 | Promotion retained; #59 evidence premise obsolete |
 | `issue-61-complete-task-and-release-dependants.md` | 61 | Tracker behavior retained; evidence premise requires reconciliation |
 | `issue-76-production-evidence-store.md` | 76 | Storage retained; #59 chain element obsolete |
-| `issue-78-qualify-repository-verification-locking.md` | 78 | Implemented and closed completed; workflow fully superseded |
 | `issue-141-integration-finality.md` | 141 | Settlement retained; evidence premise requires reconciliation |
 | `issue-167-controlled-provider-capstone.md` | 167 | Maintained chronology corrected by #225; original issue remains historical |
 | `issue-207-integration-evidence-exit.md` | 207 | Exit rules retained; boundary families require reconciliation |
