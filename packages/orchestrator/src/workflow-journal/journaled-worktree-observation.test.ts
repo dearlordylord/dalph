@@ -33,7 +33,7 @@ import {
   makeTaskWorktreeObservationOperation
 } from "../workflow/registry/operation.js"
 import { AttemptWorktreeLost } from "../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
-import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
@@ -84,7 +84,7 @@ const interruptedGitAuthoredCassette = [
 ] as const
 
 const journaledTestLayer = (base: Layer.Layer<WorkflowInterpreter>) =>
-  journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
+  journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provide(memoryJournalTestLayer))
 
 const replayingLostWorktreeLayer = journaledTestLayer(
   Layer.effect(
@@ -204,7 +204,7 @@ it.effect("records exact worktree loss and replays it without another Git read",
         .map(({ event }) => event._tag)
         .filter((tag) => tag === "GitReadIntentRecorded" || tag === "PlannedAttemptWorktreeObserved")
     ).toEqual(["GitReadIntentRecorded", "PlannedAttemptWorktreeObserved"])
-  }).pipe(Effect.provide(replayingLostWorktreeLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(replayingLostWorktreeLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reopens an intent-only Git read with the same operation identity", () =>
@@ -237,7 +237,7 @@ it.effect("reopens an intent-only Git read with the same operation identity", ()
             : []
       )
     ).toEqual([operation.operationId, operation.operationId])
-  }).pipe(Effect.provide(retryingLostWorktreeLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(retryingLostWorktreeLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records the authored Git interruption and ordinary replay cassette", () =>
@@ -327,7 +327,7 @@ it.effect("records the authored Git interruption and ordinary replay cassette", 
       ).toEqual(["GitReadIntentRecorded", "PlannedAttemptWorktreeObserved"])
       expect(yield* Ref.get(chronology)).toEqual(interruptedGitAuthoredCassette)
     }).pipe(Effect.provide(journaled))
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("retains the ready worktree while retrying a failed target-lineage read with the same identity", () =>
@@ -374,5 +374,5 @@ it.effect("retains the ready worktree while retrying a failed target-lineage rea
         .filter(({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage")
         .map(({ event }) => (event._tag === "GitReadIntentRecorded" ? event.operation.operationId : undefined))
     ).toEqual([lineageOperation.operationId])
-  }).pipe(Effect.provide(retryingTargetLineageLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(retryingTargetLineageLayer), Effect.provide(memoryJournalTestLayer))
 )

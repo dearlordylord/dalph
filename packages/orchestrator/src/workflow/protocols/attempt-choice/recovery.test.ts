@@ -27,7 +27,7 @@ import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -339,7 +339,7 @@ it.effect("never claims the executor incorporated changed instructions", () =>
       plannedAttempt
     })
     expect(plannedAttempt.taskRevision).toBe(plannedRevision)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("waits for a readable claim after Continue reports unreadable claim facts", () =>
@@ -401,7 +401,7 @@ it.effect("waits for a readable claim after Continue reports unreadable claim fa
       ]),
       transitions: []
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("requires a new choice when instructions change again before continuation", () =>
@@ -453,5 +453,5 @@ it.effect("requires a new choice when instructions change again before continuat
       })
     )
     expect(constrained.transitions).toEqual([])
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )

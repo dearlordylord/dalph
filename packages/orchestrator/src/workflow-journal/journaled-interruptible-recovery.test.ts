@@ -18,7 +18,6 @@ import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { PlannedWorktreeReady } from "../authorities/git/worktree.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
-import { deriveRunRecoveryFrontier } from "../coordination/frontier/recovery-frontier.js"
 import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { OperationId } from "../workflow/identity.js"
@@ -41,7 +40,7 @@ import {
   makeTaskWorktreeReconciliationOperation
 } from "../workflow/registry/operation.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "./record-key.js"
-import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { InRunJournal, JournalStore } from "./store.js"
 
@@ -149,7 +148,7 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
       yield* Scope.close(restartedScope, Exit.void)
       expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toContain("TaskClaimAcquired")
     })
-  ).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  ).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rebuilds the Git application from its recovery projection and records the available response", () =>
@@ -233,12 +232,6 @@ it.effect("rebuilds the Git application from its recovery projection and records
       yield* Scope.close(firstScope, Exit.void)
 
       yield* journal.readRunForRecovery(runId, target)
-      expect(deriveRunRecoveryFrontier(yield* journal.read(runId)).entries).toContainEqual(
-        expect.objectContaining({
-          _tag: "TaskWorktreeReconciliationUnresolved",
-          operation: expect.objectContaining({ operationId: operation.operationId })
-        })
-      )
 
       const restartedScope = yield* Scope.make()
       const restartedLifecycle = yield* makeApplicationExitLifecycle()
@@ -269,5 +262,5 @@ it.effect("rebuilds the Git application from its recovery projection and records
       yield* Scope.close(restartedScope, Exit.void)
       expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toContain("TaskWorktreeReady")
     })
-  ).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  ).pipe(Effect.provide(memoryJournalTestLayer))
 )

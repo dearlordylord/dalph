@@ -51,7 +51,7 @@ import {
   makeFocusedTaskClaimFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
-import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -96,7 +96,7 @@ const claim = ActiveTaskClaim.make({
   token: ClaimToken.make("recovered-settlement-token")
 })
 const acceptedResult = acceptedResultFixture(acceptedCommit)
-const settlementTestLayer = Layer.merge(acceptedResultEvidenceLayer, legacyMemoryJournalStoreLayer)
+const settlementTestLayer = Layer.merge(acceptedResultEvidenceLayer, memoryJournalTestLayer)
 
 const seedTerminalAccepted = Effect.gen(function* () {
   const journal = yield* JournalStore

@@ -39,7 +39,7 @@ import {
   JournalStoreContradiction,
   type JournalRecord
 } from "../../../workflow-journal/store.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
 import { appendInitialConclusiveIntegrationQuarantine } from "./initial-conclusive.js"
@@ -217,7 +217,7 @@ it.effect("quarantines one conclusively unsuccessful Integrator session and pres
         evidence: { resultRecordedAt: history.resultRecord.position }
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records CandidateRejected Q with exact result and invalid Git observation positions", () =>
@@ -237,7 +237,7 @@ it.effect("records CandidateRejected Q with exact result and invalid Git observa
         }
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("fails closed for foreign evidence and an ambiguous append", () =>
@@ -283,7 +283,7 @@ it.effect("fails closed for foreign evidence and an ambiguous append", () =>
     )
     expect(reconciled.event._tag).toBe("IntegrationQuarantined")
     expect(reconciled.key).toEqual(integrationQuarantinedRecordKey(history.session.sessionId, reconciled.event.basis))
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("fails closed when the exact fixed-session key is duplicated", () =>
@@ -307,7 +307,7 @@ it.effect("fails closed when the exact fixed-session key is duplicated", () =>
       Effect.flip
     )
     expect(contradiction._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects legacy, foreign-key, and malformed modern run evidence", () =>
@@ -424,7 +424,7 @@ it.effect("rejects legacy, foreign-key, and malformed modern run evidence", () =
       records.map((record) => (record === runStart ? { ...record, position: fixedSession.position } : record))
     )
     expect(startBeforeFixed._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("fails closed when an exact candidate evidence key is duplicated", () =>
@@ -463,7 +463,7 @@ it.effect("fails closed when an exact candidate evidence key is duplicated", () 
       Effect.flip
     )
     expect(duplicateObservation._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a NotPrepared result with candidate evidence and candidate result/key contradictions", () =>
@@ -521,7 +521,7 @@ it.effect("rejects a NotPrepared result with candidate evidence and candidate re
       Effect.flip
     )
     expect(wrongResultKind._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects CandidateRejected results with foreign candidate names or keys", () =>
@@ -635,7 +635,7 @@ it.effect("rejects CandidateRejected results with foreign candidate names or key
       Effect.flip
     )
     expect(nonChronological._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("accepts a modern run whose fixed predecessor is a FullRerun successor session", () =>
@@ -714,7 +714,7 @@ it.effect("accepts a modern run whose fixed predecessor is a FullRerun successor
     )
     expect(quarantine.event._tag).toBe("IntegrationQuarantined")
     expect(quarantine.event.correlation.sessionId).toBe(successor.sessionId)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects foreign Q keys/events and ambiguous append winners", () =>
@@ -815,7 +815,7 @@ it.effect("rejects foreign Q keys/events and ambiguous append winners", () =>
       Effect.flip
     )
     expect(returnedFailure._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("fails closed when the exact quarantine key is duplicated", () =>
@@ -839,5 +839,5 @@ it.effect("fails closed when the exact quarantine key is duplicated", () =>
       Effect.flip
     )
     expect(contradiction._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )

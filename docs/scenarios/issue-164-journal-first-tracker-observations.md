@@ -37,7 +37,7 @@ replays that observation; a retry of the completed operation reuses it.
 
 If a family is incomplete, names different subjects or freshness, omits an
 explicitly requested task, or the reconstructed graph is contradictory, Dalph
-exposes no schedulable graph or recovery-frontier work. A person can see
+exposes no schedulable graph or recoverable responsibility. A person can see
 progress only from the valid case. Dalph must not persist provider pages or
 select work from the invalid case.
 
@@ -100,7 +100,7 @@ observation without calling the provider again`, `records exact normalized
 title and body only through the focused attempt read`, and `a crash before
 append authorizes no work; restart after append reconstructs facts and only a
 later observed completion releases B` in `task-tracker-facts.test.ts`.
-`classifies every generated pre-attempt fact-to-next-intent crash prefix` in
-`run-recovery-frontier.property.test.ts` proves that restart requires the
-focused read, waits for its outcome if unresolved, and permits planning only
-after the focused title/body observation is durable.
+`replays exact task-fact choices and recovery through production journal and
+authority seams` in `task-fact-reconciliation.mbt.test.ts` proves that restart
+requires the focused read, waits for its outcome if unresolved, and permits
+planning only after the focused title/body observation is durable.

@@ -145,7 +145,7 @@ performs no runtime call.
 
 Acceptance test:
 
-- `keeps quiescence probes out of action planning and compatibility runtime code`
+- `keeps quiescence probes out of action planning and former scheduler runtime code`
 
 Invariant mapping: D29 keeps the Run-level decision out of persisted derived
 state, and D34 keeps it distinct from ordinary delivery actions.

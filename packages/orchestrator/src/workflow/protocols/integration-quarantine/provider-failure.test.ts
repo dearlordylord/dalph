@@ -38,7 +38,7 @@ import {
   type JournalRecord
 } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegrationProviderRunActivityAbsentEvent,
@@ -336,7 +336,7 @@ it.effect("records provider-owned absence before one idempotent provider-failure
     expect(records.filter(({ event }) => event._tag === "IntegrationProviderRunActivityAbsent")).toHaveLength(1)
     expect(records.filter(({ event }) => event._tag === "IntegrationQuarantined")).toHaveLength(1)
     expect(deriveIntegrationQuarantineState(records, history.session.sessionId)._tag).toBe("Quarantined")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records a run-two provider absence only after authorized Retry Q1/D/L/start evidence", () =>
@@ -355,7 +355,7 @@ it.effect("records a run-two provider absence only after authorized Retry Q1/D/L
     expect(records.filter(({ event }) => event._tag === "IntegrationProviderRunActivityAbsent")).toHaveLength(2)
     expect(records.filter(({ event }) => event._tag === "IntegrationQuarantined")).toHaveLength(2)
     expect(deriveIntegrationQuarantineState(records, history.session.sessionId)._tag).toBe("Quarantined")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("recovers run-two Q without repeating the provider call after absence was already appended", () =>
@@ -380,7 +380,7 @@ it.effect("recovers run-two Q without repeating the provider call after absence 
     expect(secondRecovery).toEqual(firstRecovery)
     expect(records.filter(({ event }) => event._tag === "IntegrationProviderRunActivityAbsent")).toHaveLength(2)
     expect(records.filter(({ event }) => event._tag === "IntegrationQuarantined")).toHaveLength(2)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("quarantines provider absence for the FullRerun successor session S2", () =>
@@ -396,7 +396,7 @@ it.effect("quarantines provider absence for the FullRerun successor session S2",
     expect(result.absence.key).toBe(integrationProviderRunActivityAbsentRecordKey(history.successorRun))
     expect(result.quarantine.event.correlation).toEqual(history.successorSession)
     expect(deriveIntegrationQuarantineState(records, history.successorSession.sessionId)._tag).toBe("Quarantined")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("recovers Q after absence was durably recorded before the process disappeared", () =>
@@ -419,7 +419,7 @@ it.effect("recovers Q after absence was durably recorded before the process disa
     expect(recovered.absence.position).toBe(absence.position)
     expect(recovered.quarantine.position).toBeGreaterThan(absence.position)
     expect(records.filter(({ event }) => event._tag === "IntegrationProviderRunActivityAbsent")).toHaveLength(1)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("ignores an unrelated responsibility's run-one evidence", () =>
@@ -455,7 +455,7 @@ it.effect("ignores an unrelated responsibility's run-one evidence", () =>
 
     const result = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run })
     expect(result.quarantine.event.correlation.sessionId).toBe(history.session.sessionId)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a provider outcome bound to a foreign session", () =>
@@ -476,7 +476,7 @@ it.effect("rejects a provider outcome bound to a foreign session", () =>
     expect(result._tag).toBe("IntegratorJournalContradiction")
     expect(records.some(({ event }) => event._tag === "IntegrationProviderRunActivityAbsent")).toBe(false)
     expect(records.some(({ event }) => event._tag === "IntegrationQuarantined")).toBe(false)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects missing, duplicate, foreign, and reordered run-one evidence", () =>
@@ -620,7 +620,7 @@ it.effect("rejects missing, duplicate, foreign, and reordered run-one evidence",
         history.session.sessionId
       )._tag
     ).toBe("Contradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects provider absence when its run predecessors or exact Journal facts are incomplete", () =>
@@ -701,7 +701,7 @@ it.effect("rejects provider absence when its run predecessors or exact Journal f
     }
     expect(validateProviderRunActivityAbsent([...records, runResult], absence)._tag).toBe("Invalid")
     expect(providerRunStartFor(records, history.run)?.position).toBeGreaterThan(history.session.targetLineageObservedAt)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("covers exact fixed-session, run-start, and provider-evidence boundary contradictions", () =>
@@ -811,7 +811,7 @@ it.effect("covers exact fixed-session, run-start, and provider-evidence boundary
     expect(
       validateProviderRunActivityAbsent([...records, candidateAbsence, resultAfterAbsence], candidateAbsence)._tag
     ).toBe("Invalid")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects Retry provider absence when Q1 direction evidence is missing", () =>
@@ -825,7 +825,7 @@ it.effect("rejects Retry provider absence when Q1 direction evidence is missing"
         absence
       )._tag
     ).toBe("Invalid")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconciles a Retry absence against the post-append Journal reread", () =>
@@ -863,7 +863,7 @@ it.effect("reconciles a Retry absence against the post-append Journal reread", (
     )
     expect(recovered.quarantine.event._tag).toBe("IntegrationQuarantined")
     expect(reads).toBeGreaterThanOrEqual(3)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconciles provider absence and quarantine across duplicate, ambiguous, and foreign Journal outcomes", () =>
@@ -1146,7 +1146,7 @@ it.effect("reconciles provider absence and quarantine across duplicate, ambiguou
       Effect.flip
     )
     expect(foreignQuarantineAppend._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects successor, Retry, and legacy provider histories before recording absence", () =>
@@ -1277,7 +1277,7 @@ it.effect("rejects successor, Retry, and legacy provider histories before record
     expect(
       validateProviderRunActivityAbsent([...successorHistoryWithAbsence, resultRecord], successorAbsence)._tag
     ).toBe("Invalid")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects Retry provider history when the fresh target head changed", () =>
@@ -1294,5 +1294,5 @@ it.effect("rejects Retry provider history when the fresh target head changed", (
         : record
     )
     expect(validateProviderRunActivityAbsent(changedFreshLineage, absence)._tag).toBe("Invalid")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )

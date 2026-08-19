@@ -19,9 +19,9 @@ import {
   JournalStorageUnavailable,
   JournalStore,
   JournalStoreContradiction,
-  legacyMemoryJournalStoreLayer,
+  memoryJournalTestLayer,
   OperationId,
-  legacySqliteJournalStoreLayer,
+  sqliteJournalTestLayer,
   productionJournalStoreLayer,
   TaskWorkCapacity,
   taskTrackerReadIntent,
@@ -268,10 +268,10 @@ const durableJournalStoreContract = (
   describe(`${name} durable JournalStore contract`, registerLifecycleAndFailureCases)
 }
 
-journalAppendContract("memory", () => legacyMemoryJournalStoreLayer)
+journalAppendContract("memory", () => memoryJournalTestLayer)
 durableJournalStoreContract(
   "sqlite",
-  () => legacySqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(":memory:") }),
+  () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }),
   () => {
     it.effect("migrates the production SQLite journal and enables WAL mode", () =>
       Effect.scoped(
@@ -279,7 +279,7 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             yield* Effect.gen(function* () {
               yield* JournalStore
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
             const sql = yield* SqliteClient.make({ disableWAL: true, filename, readonly: true })
             const journalMode = yield* sql`PRAGMA journal_mode`
@@ -301,18 +301,18 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             yield* Effect.gen(function* () {
               yield* JournalStore
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
             yield* Effect.gen(function* () {
               yield* JournalStore
               const secondWriterFailure = yield* Effect.flip(
                 Effect.gen(function* () {
                   yield* JournalStore
-                }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+                }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
               )
 
               expect(secondWriterFailure).toBeInstanceOf(JournalStorageLocked)
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
           })
         )
       )
@@ -325,9 +325,7 @@ durableJournalStoreContract(
             const failure = yield* Effect.flip(
               Effect.gen(function* () {
                 yield* JournalStore
-              }).pipe(
-                Effect.provide(legacySqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(directory) }))
-              )
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(directory) })))
             )
 
             expect(failure).toMatchObject({ _tag: "JournalStorageUnavailable", operation: "JournalStore.open" })
@@ -396,7 +394,7 @@ durableJournalStoreContract(
             const failure = yield* Effect.flip(
               Effect.gen(function* () {
                 yield* JournalStore
-              }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
 
             expect(failure).toMatchObject({ _tag: "JournalSchemaIncompatible", found: 3, supported: 1 })
@@ -417,7 +415,7 @@ durableJournalStoreContract(
                 JournalRecordKey.make("operation:malformed:intent"),
                 intent("malformed", "task-malformed")
               )
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             yield* withSqliteClient(filename, (sql) =>
               Effect.asVoid(sql`UPDATE journal_records SET payload_json = '{'`)
             )
@@ -426,7 +424,7 @@ durableJournalStoreContract(
               Effect.gen(function* () {
                 const journal = yield* JournalStore
                 return yield* journal.read(runId)
-              }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
             expect(failure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
           })
@@ -464,7 +462,7 @@ durableJournalStoreContract(
                 JournalRecordKey.make("operation:fourth:intent"),
                 intent("fourth", "task-fourth")
               )
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             yield* withSqliteClient(filename, (sql) =>
               Effect.gen(function* () {
                 yield* sql`UPDATE journal_records SET payload_json = '{' WHERE run_id = ${firstRun}`
@@ -476,7 +474,7 @@ durableJournalStoreContract(
 
             const scan = yield* Effect.gen(function* () {
               return yield* (yield* JournalStore).scan()
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             expect(scan.issues).toHaveLength(4)
             expect(new Set(scan.issues.map(({ runId }) => runId))).toEqual(
               new Set([firstRun, secondRun, thirdRun, null])
@@ -497,7 +495,7 @@ durableJournalStoreContract(
             const failure = yield* Effect.flip(
               Effect.gen(function* () {
                 yield* JournalStore
-              }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
 
             expect(failure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.open" })
@@ -512,7 +510,7 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             yield* Effect.gen(function* () {
               yield* JournalStore
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             yield* withSqliteClient(filename, (sql) =>
               Effect.asVoid(
                 sql`CREATE TRIGGER reject_journal_insert AFTER INSERT ON journal_records BEGIN SELECT RAISE(ABORT, 'opaque append failure'); END`
@@ -527,7 +525,7 @@ durableJournalStoreContract(
                   JournalRecordKey.make("operation:opaque:append"),
                   intent("opaque-append-failure", "task-opaque-append-failure")
                 )
-              }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
 
             expect(failure).toMatchObject({ _tag: "JournalStorageUnavailable", operation: "JournalStore.append" })
@@ -542,7 +540,7 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             yield* Effect.gen(function* () {
               yield* JournalStore
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             yield* withSqliteClient(filename, (sql) => Effect.asVoid(sql`DROP TABLE journal_records`))
 
             yield* Effect.gen(function* () {
@@ -558,7 +556,7 @@ durableJournalStoreContract(
 
               expect(appendError).toMatchObject({ _tag: "JournalStorageUnavailable", operation: "JournalStore.append" })
               expect(readError).toMatchObject({ _tag: "JournalStorageUnavailable", operation: "JournalStore.read" })
-            }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
           })
         )
       )

@@ -69,9 +69,8 @@ cut, then `PlannedAttemptWorktreeObserved` after reopening.
 
 The tracker and Git rebuild tests close the first application scope, cross the
 raw journal's ordinary `readRunForRecovery` boundary, assert the exact pending
-delivery or recovery-frontier projection, and construct a fresh lifecycle and
-journaled interpreter over the same durable journal before recording the
-available outside response.
+responsibility, and construct a fresh lifecycle and journaled interpreter over
+the same durable journal before recording the available outside response.
 
 ## Cutoff reaches an acknowledged intent before its outside call starts
 

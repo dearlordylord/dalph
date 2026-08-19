@@ -21,7 +21,7 @@ import { expect } from "vitest"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
@@ -193,7 +193,7 @@ it.effect("records both task fingerprints when Alice continues the exact attempt
       requestId: input.requestId,
       subject: { observedTaskRevision: observedRevision, plannedAttempt }
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("coalesces exact Stop redelivery and rejects request identity reuse", () =>
@@ -208,7 +208,7 @@ it.effect("coalesces exact Stop redelivery and rejects request identity reuse", 
     expect(yield* control.read(input.requestId)).toEqual(first)
     const contradiction = yield* control.apply(request("ContinueExistingAttempt", "stable-D2")).pipe(Effect.flip)
     expect(contradiction).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects every later fingerprint choice after Stop wins the exact attempt", () =>
@@ -248,7 +248,7 @@ it.effect("rejects every later fingerprint choice after Stop wins the exact atte
         .pipe(Effect.flip)
       expect(rejection).toBeInstanceOf(AttemptChoiceAlreadyApplied)
     }
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("coalesces exact Continue redelivery and rejects request identity reuse", () =>
@@ -260,7 +260,7 @@ it.effect("coalesces exact Continue redelivery and rejects request identity reus
 
     const contradiction = yield* control.apply(request("StopTaskImplementation", "stable-D1")).pipe(Effect.flip)
     expect(contradiction).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("journals Restart as the third exact choice and coalesces its redelivery", () =>
@@ -279,7 +279,7 @@ it.effect("journals Restart as the third exact choice and coalesces its redelive
     expect(
       yield* control.apply(request("ContinueExistingAttempt", "stable-restart-D1")).pipe(Effect.flip)
     ).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects an attempt-choice request identity bound to another Run", () =>
@@ -299,7 +299,7 @@ it.effect("rejects an attempt-choice request identity bound to another Run", () 
       boundRunId: runId,
       subjectRunId: foreignRunId
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("requires the Run and exact planned attempt before exposing Alice's choice", () =>
@@ -320,7 +320,7 @@ it.effect("requires the Run and exact planned attempt before exposing Alice's ch
     const unavailable = yield* control.apply(request("ContinueExistingAttempt", "before-plan")).pipe(Effect.flip)
     expect(unavailable).toBeInstanceOf(AttemptChoiceNotAvailable)
     expect(unavailable).toMatchObject({ reason: "AttemptNotPlanned" })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reports an unknown attempt-choice request identity without inventing a result", () =>
@@ -330,7 +330,7 @@ it.effect("reports an unknown attempt-choice request identity without inventing 
 
     expect(missing).toBeInstanceOf(AttemptChoiceResultNotFound)
     expect(missing).toMatchObject({ requestId })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("does not expose a choice from a safe report older than a later executor request", () =>
@@ -355,7 +355,7 @@ it.effect("does not expose a choice from a safe report older than a later execut
       .apply(request("StopTaskImplementation", "stale-safe-stop"))
       .pipe(Effect.flip)
     expect(unavailable).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "ExecutorNotSafelySuspended" })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("requires Alice's choice to name the latest observed task fingerprint", () =>
@@ -371,7 +371,7 @@ it.effect("requires Alice's choice to name the latest observed task fingerprint"
 
     expect(stale).toBeInstanceOf(AttemptChoiceNotAvailable)
     expect(stale).toMatchObject({ reason: "ObservedFingerprintNotCurrent" })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("lets the first journaled valid choice win a concurrent Continue and Stop race", () =>
@@ -406,7 +406,7 @@ it.effect("lets the first journaled valid choice win a concurrent Continue and S
     expect(
       (yield* (yield* JournalStore).read(runId)).filter(({ event }) => event._tag === "AttemptChoiceApplied")
     ).toHaveLength(1)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects Continue and Stop after the exact integration cutoff", () =>
@@ -447,7 +447,7 @@ it.effect("rejects Continue and Stop after the exact integration cutoff", () =>
         expect.objectContaining({ detail: expect.stringContaining("follows the exact integration-start cutoff") })
       ])
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("returns exact pre-cutoff redelivery after integration has begun", () =>
@@ -461,5 +461,5 @@ it.effect("returns exact pre-cutoff redelivery after integration has begun", () 
     expect(
       (yield* (yield* JournalStore).read(runId)).filter(({ event }) => event._tag === "AttemptChoiceApplied")
     ).toHaveLength(1)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )

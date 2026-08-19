@@ -42,7 +42,7 @@ import {
   taskTrackerReadIntent,
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
-import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { makeRunRecoveryProjection, RunRecoveryProjection } from "../run/recovery-activation.js"
 import {
   recoverTaskClaimOperation,
@@ -78,6 +78,7 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { requestPlannedAttemptExecutorSuspension } from "../../workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { InitialControlPolicy } from "../../control/policy.js"
+import type { DeliveryActionExecutionLease } from "../delivery/delivery-action-executor.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskClaimFactsObserved,
@@ -89,6 +90,14 @@ import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { AuthoritativeTaskClaimReleased } from "../../workflow/protocols/task-claim-release/protocol.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+
+const controlledRecoveryLease: Pick<DeliveryActionExecutionLease, "forwardBoundary" | "recordIntent"> = {
+  forwardBoundary: {
+    _tag: "InterruptibleBoundary",
+    execution: { run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult) }
+  },
+  recordIntent: () => Effect.void
+}
 
 const unused = () => Effect.die("empty history must not invoke an interpreter")
 
@@ -128,14 +137,16 @@ it.effect("replays only the exact recorded claim-release intent", () => {
           Effect.as(AuthoritativeTaskClaimReleased.make({ release: operation.release }))
         )
     })
-    yield* recoverTaskClaimReleaseOperation(runId, release.release.operationId).pipe(
+    yield* recoverTaskClaimReleaseOperation(runId, release.release.operationId, controlledRecoveryLease).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter)
     )
-    yield* recoverTaskClaimReleaseOperation(runId, OperationId.make("missing-release-intent")).pipe(
-      Effect.provideService(WorkflowInterpreter, interpreter)
-    )
+    yield* recoverTaskClaimReleaseOperation(
+      runId,
+      OperationId.make("missing-release-intent"),
+      controlledRecoveryLease
+    ).pipe(Effect.provideService(WorkflowInterpreter, interpreter))
     expect(yield* Ref.get(released)).toEqual([release.release.operationId])
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 })
 
 it.effect("settles a recovered generic claim through run recovery activation", () =>
@@ -189,13 +200,13 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       if (transition._tag !== "CheckTaskClaim" && transition._tag !== "ReconcileTaskClaim") {
         return yield* Effect.die(`expected a claim recovery transition, received ${transition._tag}`)
       }
-      yield* recoverTaskClaimOperation(runId, transition.operationId)
+      yield* recoverTaskClaimOperation(runId, transition.operationId, controlledRecoveryLease)
     }).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provide(controlledFakePlannedAttemptExecutorLayer)
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("keeps recovered executor work stopped when no tracker target can authorize a fresh read", () =>
@@ -239,7 +250,7 @@ it.effect("keeps recovered executor work stopped when no tracker target can auth
       transitions: []
     })
   }).pipe(
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -308,7 +319,7 @@ it.effect("keeps an unclaimed executor responsibility inert when no acquired cla
     const recovery = yield* makeRunRecoveryProjection(runId)
     expect((yield* recovery.readDeliveryProjection).frontier).toMatchObject({ transitions: [] })
   }).pipe(
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   )
@@ -365,7 +376,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
       transitions: []
     })
   }).pipe(
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -445,7 +456,7 @@ it.effect("fresh-run journal facts expose membership constraints without recover
         Layer.provide(controlledFakePlannedAttemptExecutorLayer)
       )
     ),
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
@@ -680,7 +691,7 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
         operation: expect.objectContaining({ _tag: "ReadTaskClaim", taskId })
       })
     )
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer), Effect.provide(plannedAttemptProtocolControllerLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer), Effect.provide(plannedAttemptProtocolControllerLayer))
 )
 
 it.effect("a task leaving complete membership safely suspends its executor work before the local constraint", () =>
@@ -1000,7 +1011,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       { _tag: "ReconcileTaskClaimRelease", operationId: externalRelease.release.operationId, taskId }
     ])
   }).pipe(
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -1096,13 +1107,13 @@ it.effect("replays the exact durable claim and worktree intents", () => {
       recordTaskAttemptPlan: unused,
       releaseTaskClaim: unused
     })
-    yield* recoverTaskClaimOperation(runId, claim.acquisition.operationId).pipe(
+    yield* recoverTaskClaimOperation(runId, claim.acquisition.operationId, controlledRecoveryLease).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter)
     )
-    yield* recoverTaskClaimOperation(runId, claim.acquisition.operationId).pipe(
+    yield* recoverTaskClaimOperation(runId, claim.acquisition.operationId, controlledRecoveryLease).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter)
     )
-    yield* recoverTaskWorktreeOperation(runId, worktree.operationId).pipe(
+    yield* recoverTaskWorktreeOperation(runId, worktree.operationId, controlledRecoveryLease).pipe(
       Effect.provideService(WorkflowInterpreter, interpreter)
     )
     expect(yield* Ref.get(calls)).toEqual([
@@ -1110,7 +1121,7 @@ it.effect("replays the exact durable claim and worktree intents", () => {
       "claim:recovered-claim",
       "worktree:recovered-worktree"
     ])
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 })
 
 it.effect("fails closed when initial or reread workflow-journal history is invalid", () =>

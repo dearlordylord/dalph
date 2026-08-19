@@ -266,7 +266,7 @@ export interface AuthoredDeliveryFrame {
       }
   readonly capacity: TaskWorkCapacity
   /** Whether this exact runtime publication permits a finality read or must remain passive. */
-  readonly quiescence: DeliveryRelationInputBundle["legacy"]["runtimeFacts"]["quiescence"]
+  readonly quiescence: DeliveryRelationInputBundle["actionInputs"]["runtimeFacts"]["quiescence"]
   readonly heldPositions: ReadonlyArray<{
     readonly taskId: TaskId
     readonly runId: RunId
@@ -985,7 +985,7 @@ const authoredDeliveryFrameOf = (
   return {
     activationOrdinal: captured.activationOrdinal,
     storyPosition: captured.storyPosition,
-    acceptedAt: captured.bundle.legacy.runtimeFacts.acceptedAt,
+    acceptedAt: captured.bundle.actionInputs.runtimeFacts.acceptedAt,
     graph:
       consequences.graph._tag === "GraphNotEstablished"
         ? { _tag: "NotEstablished" }
@@ -1006,9 +1006,9 @@ const authoredDeliveryFrameOf = (
                 prerequisiteIds: task.prerequisiteIds
               }))
           },
-    capacity: captured.bundle.legacy.runtimeFacts.taskWork.capacity,
-    quiescence: captured.bundle.legacy.runtimeFacts.quiescence,
-    heldPositions: captured.bundle.legacy.runtimeFacts.taskWork.held.map(({ correlation, taskId }) => ({
+    capacity: captured.bundle.actionInputs.runtimeFacts.taskWork.capacity,
+    quiescence: captured.bundle.actionInputs.runtimeFacts.quiescence,
+    heldPositions: captured.bundle.actionInputs.runtimeFacts.taskWork.held.map(({ correlation, taskId }) => ({
       taskId,
       runId: correlation.runId,
       attemptId: correlation.attemptId

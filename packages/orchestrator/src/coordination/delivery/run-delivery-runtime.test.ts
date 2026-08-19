@@ -206,7 +206,7 @@ const baseEvaluation = Effect.gen(function* () {
       makeDeliveryRelationsLayer({
         ...deterministicDeliveryRuntimeSupport(policy),
         coherent: currentSignalOf({
-          legacy: {
+          actionInputs: {
             proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
             reflectionProposals: [],
             runtimeFacts: {
@@ -1071,7 +1071,7 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
       ticketDelivery: [b]
     })
     const coherent = yield* SubscriptionRef.make<DeliveryRelationInputBundle>({
-      legacy: {
+      actionInputs: {
         proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
         reflectionProposals: [],
         runtimeFacts: {
@@ -1136,9 +1136,9 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
           Effect.andThen(
             SubscriptionRef.update(coherent, (current) => ({
               ...current,
-              legacy: {
-                ...current.legacy,
-                runtimeFacts: { ...current.legacy.runtimeFacts, acceptedAt: JournalPosition.make(2) }
+              actionInputs: {
+                ...current.actionInputs,
+                runtimeFacts: { ...current.actionInputs.runtimeFacts, acceptedAt: JournalPosition.make(2) }
               }
             }))
           ),

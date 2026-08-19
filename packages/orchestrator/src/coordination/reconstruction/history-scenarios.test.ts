@@ -63,7 +63,6 @@ import { PlannedAttemptContinuationAuthorizedEvent } from "../../workflow/protoc
 import { CompletionClaimReplacedEvent } from "../../workflow/protocols/integration-finality/events.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import { reduceWorkflowJournalHistory } from "./history.js"
-import { deriveRunRecoveryFrontier } from "../frontier/recovery-frontier.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -306,7 +305,6 @@ it("accepts every chronological workflow-journal-history boundary prefix", () =>
   const final = reduceWorkflowJournalHistory(runId, records)
   expect(final._tag).toBe("ValidWorkflowJournalHistory")
   if (final._tag !== "ValidWorkflowJournalHistory") return
-  expect(final.recoveryFrontier.entries).toContainEqual({ _tag: "Terminal", plannedAttempt })
   expect(final.runState.appliedThrough).toBe(records.length)
   expect(final.runState.graphKnowledge.taskTrackerFacts).toHaveLength(2)
   const running = reconstructRunState(runId, records.slice(0, 12))
@@ -1257,11 +1255,6 @@ it("retains each canonical tracker-facts observation in journal order", () => {
     ])
   )
   expect(orphanOutcome._tag).toBe("ValidReconstructedRun")
-  expect(
-    deriveRunRecoveryFrontier(
-      orphanOutcome._tag === "ValidReconstructedRun" ? orphanOutcome.state.workflowHistory.records : []
-    ).entries
-  ).toEqual([])
 })
 
 it("projects the causal operation graph in canonical code-unit order", () => {

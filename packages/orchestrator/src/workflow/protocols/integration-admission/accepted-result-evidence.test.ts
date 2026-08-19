@@ -24,7 +24,7 @@ import { expect } from "vitest"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
@@ -130,7 +130,7 @@ it.effect("admits a durable accepted result only after its exact manifest qualif
     expect(queued.acceptedResult).toEqual(result)
     expect(records.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
   }).pipe(
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provide(memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)))
   )
 )
@@ -150,7 +150,7 @@ it.effect("waits when acceptance evidence is unavailable without consuming integ
       )
     ).toBe(false)
   }).pipe(
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provide(
       Layer.succeed(
         EvidenceStore,
@@ -188,5 +188,5 @@ it.effect("exposes malformed or mismatched acceptance bytes as a task-local conf
     expect(failure).toBeInstanceOf(AcceptedResultEvidenceConflict)
     expect(failure.attemptId).toBe(attempt.attemptId)
     expect(failure.runId).toBe(runId)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )

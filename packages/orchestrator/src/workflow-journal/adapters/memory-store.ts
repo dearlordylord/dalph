@@ -7,7 +7,7 @@ import {
   JournalStore,
   JournalStoreContradiction,
   journalStoreCapabilities,
-  legacyUnpublishedInRunJournalLayer,
+  unpublishedInRunJournalTestLayer,
   type WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated,
   type WorkflowRunIdentityAlreadyUsed,
@@ -134,7 +134,5 @@ const memoryRawJournalStoreLayer = Layer.effect(
 
 export const memoryJournalStoreLayer = journalStoreCapabilities(memoryRawJournalStoreLayer)
 
-/** Explicit test-only composition whose appends are not published through Journal. */
-export const legacyMemoryJournalStoreLayer = legacyUnpublishedInRunJournalLayer.pipe(
-  Layer.provideMerge(memoryJournalStoreLayer)
-)
+/** Complete test-only composition whose appends are not published through Journal. */
+export const memoryJournalTestLayer = unpublishedInRunJournalTestLayer.pipe(Layer.provideMerge(memoryJournalStoreLayer))

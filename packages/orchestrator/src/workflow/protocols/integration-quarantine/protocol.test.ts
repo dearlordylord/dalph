@@ -69,7 +69,7 @@ import {
   makeIntegrationQuarantineDirectionControl,
   integrationQuarantineDirectionControlLayer
 } from "./control.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 
 const runId = integrationFinalityFixture.runId
 const target = FixtureTarget.make("integration-quarantine-target")
@@ -295,7 +295,7 @@ it.effect("reconstructs one conclusively unsuccessful Integrator quarantine from
         ["CompletionTaskClaimReleased", "IntegrationCompleted", "IntegratorSessionFixed"].includes(current._tag)
       )
     ).toBe(false)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("accepts conclusive evidence bound to the exact initial Integrator run", () =>
@@ -335,7 +335,7 @@ it.effect("accepts conclusive evidence bound to the exact initial Integrator run
     yield* journal.append(runId, integrationQuarantinedRecordKey(correlation.sessionId, quarantine.basis), quarantine)
 
     expect(deriveIntegrationQuarantineState(yield* journal.read(runId), correlation.sessionId)._tag).toBe("Quarantined")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconstructs exact invalid-candidate quarantine evidence and rejects mismatched evidence", () =>
@@ -465,7 +465,7 @@ it.effect("reconstructs exact invalid-candidate quarantine evidence and rejects 
         )
       )
     ).toThrow()
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records provider-run failure only after owned activity is proved absent", () =>
@@ -479,7 +479,7 @@ it.effect("records provider-run failure only after owned activity is proved abse
     const state = deriveIntegrationQuarantineState(yield* journal.read(runId), event.correlation.sessionId)
     expect(state._tag).toBe("Quarantined")
     expect(event.basis).toMatchObject({ _tag: "ProviderRunFailure", ownedActivityProvenAbsentAt: 5 })
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("authorizes Retry from exact provider-failure and run-bound conclusive evidence", () =>
@@ -554,7 +554,7 @@ it.effect("authorizes Retry from exact provider-failure and run-bound conclusive
       requestFor(fingerprintFor(quarantine, quarantineRecord.position, "Retry"), "run-bound-retry-request")
     )
     expect(runBoundApplied._tag).toBe("DirectionApplied")
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects arbitrary Journal history as proof that a provider run has no owned activity", () =>
@@ -572,7 +572,7 @@ it.effect("rejects arbitrary Journal history as proof that a provider run has no
       record.position === absence.position ? { ...record, event: records[0]?.event ?? record.event } : record
     )
     expect(deriveIntegrationQuarantineState(arbitrary, event.correlation.sessionId)._tag).toBe("Contradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("distinguishes an unopened Run, a missing quarantine, and a session-mismatched quarantine", () =>
@@ -610,7 +610,7 @@ it.effect("distinguishes an unopened Run, a missing quarantine, and a session-mi
     const sessionMismatchControl = yield* makeIntegrationQuarantineDirectionControl(sessionMismatchJournal)
     const mismatch = yield* sessionMismatchControl.apply(request).pipe(Effect.flip)
     expect(mismatch).toMatchObject({ _tag: "IntegrationQuarantineDirectionNotAvailable", reason: "SessionMismatch" })
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects incomplete conclusive run-one evidence and reports an absent direction result", () =>
@@ -632,7 +632,7 @@ it.effect("rejects incomplete conclusive run-one evidence and reports an absent 
       .read({ requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "never-applied", runId }) })
       .pipe(Effect.flip)
     expect(notFound).toBeInstanceOf(IntegrationQuarantineDirectionResultNotFound)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconciles every ambiguous direction append outcome against the Journal winner", () =>
@@ -767,7 +767,7 @@ it.effect("reconciles every ambiguous direction append outcome against the Journ
       .apply(requestFor(fingerprint, "append-foreign-result"))
       .pipe(Effect.flip)
     expect(foreignAppend).toBeInstanceOf(IntegrationQuarantineDirectionRequestIdentityContradiction)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect(
@@ -813,7 +813,7 @@ it.effect(
       expect(state._tag).toBe("DirectionApplied")
       if (state._tag !== "DirectionApplied") return
       expect(state.quarantine.basis).toEqual(successor.basis)
-    }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects changed-head quarantine when its direction evidence is missing, FullRerun, or foreign", () =>
@@ -907,7 +907,7 @@ it.effect("rejects changed-head quarantine when its direction evidence is missin
         prior.correlation.sessionId
       )._tag
     ).toBe("Contradiction")
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("fails closed for canonical quarantine and direction records with foreign or pre-quarantine keys", () =>
@@ -1010,7 +1010,7 @@ it.effect("fails closed for canonical quarantine and direction records with fore
     expect(deriveIntegrationQuarantineState(preQuarantineDirection, prior.correlation.sessionId)._tag).toBe(
       "Contradiction"
     )
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("detects duplicate directions on an earlier quarantine even after a later quarantine occurrence", () =>
@@ -1061,7 +1061,7 @@ it.effect("detects duplicate directions on an earlier quarantine even after a la
     expect(deriveIntegrationQuarantineState(yield* journal.read(runId), prior.correlation.sessionId)._tag).toBe(
       "Contradiction"
     )
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("deduplicates repeated Retry requests by session quarantine and direction", () =>
@@ -1077,7 +1077,7 @@ it.effect("deduplicates repeated Retry requests by session quarantine and direct
       records.filter(({ event: current }) => current._tag === "IntegrationQuarantineDirectionApplied")
     ).toHaveLength(1)
     expect(first.application.event.requestId).toEqual(request.requestId)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("uses the Journal as the first-choice authority across two fresh control layers", () =>
@@ -1117,7 +1117,7 @@ it.effect("uses the Journal as the first-choice authority across two fresh contr
         ({ event: current }) => current._tag === "IntegrationQuarantineDirectionApplied"
       )
     ).toHaveLength(1)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("replays a recorded Retry direction through the control after restart", () =>
@@ -1132,7 +1132,7 @@ it.effect("replays a recorded Retry direction through the control after restart"
     }).pipe(Effect.provide(Layer.fresh(integrationQuarantineDirectionControlLayer)))
 
     expect(replayed).toEqual(first)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a conflicting direction after the first choice", () =>
@@ -1150,7 +1150,7 @@ it.effect("rejects a conflicting direction after the first choice", () =>
         ({ event: current }) => current._tag === "IntegrationQuarantineDirectionApplied"
       )
     ).toHaveLength(1)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects conflicting request identity and starts nothing", () =>
@@ -1169,7 +1169,7 @@ it.effect("rejects conflicting request identity and starts nothing", () =>
         ({ event: current }) => current._tag === "IntegrationQuarantineDirectionApplied"
       )
     ).toHaveLength(1)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a direction request bound to a different Run than the quarantined responsibility", () =>
@@ -1192,7 +1192,7 @@ it.effect("rejects a direction request bound to a different Run than the quarant
     const rejection = yield* control.apply(request).pipe(Effect.flip)
 
     expect(rejection).toBeInstanceOf(IntegrationQuarantineDirectionRequestRunMismatch)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("decodes unknown direction requests strictly and does not accept malformed story inputs", () =>

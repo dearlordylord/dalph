@@ -48,7 +48,7 @@ import {
 import { causalPredecessorOperationIds } from "../../causal-history.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
 import {
@@ -772,7 +772,7 @@ it.effect("rejects a replacement when the planner returns a non-distinct success
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -884,7 +884,7 @@ it.effect("atomically supersedes exact P1 with clean P2 from fresh F2 K1 W1 and 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -954,7 +954,7 @@ it.effect("exposes the same exact attempt choice for a replacement-recorded succ
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1010,7 +1010,7 @@ it.effect("removes every new attempt-choice capability from superseded P1", () =
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1031,7 +1031,7 @@ it.effect("keeps P2's atomic plan in the durable causal operation graph", () =>
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1045,7 +1045,7 @@ it.effect("allocates P2 in A's next task-local slot regardless of independent C"
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1110,7 +1110,7 @@ it.effect("keeps P1 worktree authority independent from a later task C worktree 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1145,7 +1145,7 @@ it.effect("keeps P1 restart eligibility independent from a later task C graph re
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1190,7 +1190,7 @@ it.effect("lets a new F3 Continue replace the stale F2 Restart recovery disposit
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1233,7 +1233,7 @@ it.effect("rejects replacement authority whose boundary intent predates the appl
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1388,7 +1388,7 @@ it.effect("rejects every missing or superseding replacement authority fact", () 
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1443,7 +1443,7 @@ it.effect("rejects replacement when a later task read supersedes the named F2 au
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1607,7 +1607,7 @@ for (const fixture of nonAuthorizingCases) {
       ),
       Effect.provide(attemptChoiceControlLayer),
       Effect.provide(plannedAttemptProtocolControllerLayer),
-      Effect.provide(legacyMemoryJournalStoreLayer)
+      Effect.provide(memoryJournalTestLayer)
     )
   )
 }
@@ -1636,7 +1636,7 @@ it.effect("uses read-only safe evidence after three consecutive Running suspensi
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1654,7 +1654,7 @@ it.effect("records a later identified read after a durable Restart authority fai
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1669,7 +1669,7 @@ it.effect("keeps D1 permanently stale after F3 even when a later read returns F2
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1712,7 +1712,7 @@ it.effect("rejects a Restart authority failure whose read intent predates the ap
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1738,6 +1738,6 @@ it.effect("recovers an ambiguously acknowledged replacement append as exact P2 w
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )

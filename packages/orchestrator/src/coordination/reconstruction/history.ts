@@ -16,7 +16,6 @@ import {
   WorkflowJournalHistorySemanticIssue,
   type ValidWorkflowJournalHistory
 } from "./history-result.js"
-import { deriveRunRecoveryFrontier } from "../frontier/recovery-frontier.js"
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { advanceReconstructedRunState, reconstructValidatedRunState } from "./reduce.js"
 import type { ReconstructedRunState } from "./state.js"
@@ -2302,7 +2301,6 @@ const finishValidation = (
     _tag: "ValidWorkflowJournalHistory",
     runState: reconstructRunState(),
     records,
-    recoveryFrontier: deriveRunRecoveryFrontier(records),
     runId
   }
   acceptedFoldIndexes.set(valid, indexes)

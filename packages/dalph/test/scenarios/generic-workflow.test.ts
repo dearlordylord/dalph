@@ -23,7 +23,7 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorktreeReconciliationOperation,
-  legacyMemoryJournalStoreLayer,
+  memoryJournalTestLayer,
   OperationId,
   PlannedWorktreeReady,
   requireAcknowledgedPlan,
@@ -91,7 +91,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(legacyMemoryJournalStoreLayer))
+  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(memoryJournalTestLayer))
 
   return Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter

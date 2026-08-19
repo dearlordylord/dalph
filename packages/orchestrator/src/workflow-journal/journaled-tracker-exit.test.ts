@@ -11,7 +11,7 @@ import { InitialControlPolicy } from "../control/policy.js"
 import { OperationId } from "../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation } from "../workflow/registry/operation.js"
-import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
 
@@ -123,5 +123,5 @@ it.effect("records the authored tracker interruption and ordinary replay cassett
           .filter((tag) => tag === "TaskTrackerReadIntentRecorded" || tag === "TaskTrackerFactsObserved")
       ).toEqual(["TaskTrackerReadIntentRecorded", "TaskTrackerFactsObserved"])
     }).pipe(Effect.provide(journaled))
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )

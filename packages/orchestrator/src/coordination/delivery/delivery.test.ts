@@ -101,7 +101,7 @@ const makeDeliveryRelationsLayer = (
   const coherent = mapCurrentSignal(
     zipCurrentSignals(zipCurrentSignals(input.graph, input.exactEvidence), input.policy),
     ([[graph, exactEvidence], currentPolicy]): DeliveryRelationInputBundle => ({
-      legacy: {
+      actionInputs: {
         proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
         reflectionProposals: [],
         runtimeFacts: {
@@ -506,21 +506,21 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
 it.effect("derives one stable proposal from a persistent delivery consequence without performing it", () =>
   Effect.gen(function* () {
     const task: Task = {
-      id: TaskId.make("legacy-action-task"),
+      id: TaskId.make("current-action-task"),
       lifecycle: TaskLifecycle.cases.Open.make({}),
       parentTaskId: null,
       prerequisiteIds: []
     }
-    const predecessorOperationId = OperationId.make("legacy-action-predecessor")
+    const predecessorOperationId = OperationId.make("current-action-predecessor")
     const step = FreshWorkflowStep.AcquireTaskClaim({ predecessorOperationId, task })
     const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
       taskId: task.id,
-      taskRevision: TaskRevision.make("legacy-action-revision")
+      taskRevision: TaskRevision.make("current-action-revision")
     })
     const lowerProposal = deliveryProposalsOf({
       acceptedOperationIds: new Set(),
       fresh: [{ step, transition }],
-      runId: RunId.make("legacy-action-run"),
+      runId: RunId.make("current-action-run"),
       transitions: [transition]
     }).ticketDelivery[0]
     if (lowerProposal === undefined) return yield* Effect.die("fixture must derive a lower proposal")
@@ -910,7 +910,7 @@ it.effect("recomputes the same flat relation when exact responsibility evidence 
   })
 )
 
-it("keeps quiescence probes out of action planning and compatibility runtime code", () => {
+it("keeps quiescence probes out of action planning and former scheduler runtime code", () => {
   const deliverySource = readFileSync(fileURLToPath(new URL("./delivery.ts", import.meta.url)), "utf8")
   const planningSource = readFileSync(fileURLToPath(new URL("./delivery-action-planning.ts", import.meta.url)), "utf8")
   const runtimeAdapterSource = readFileSync(

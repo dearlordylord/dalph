@@ -14,9 +14,8 @@ import {
 } from "../../workflow-journal/store.js"
 import { taskTrackerReadIntent } from "../registry/event.js"
 import { completionTaskIntentRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
-import { legacyMemoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
-import { deriveRunRecoveryFrontier } from "../../coordination/frontier/recovery-frontier.js"
 import { reduceWorkflowJournalHistory } from "../../coordination/reconstruction/history.js"
 import type { TaskTrackerFactsReadUnavailable } from "./observation.js"
 import {
@@ -290,22 +289,6 @@ it("a potentially mixed-time complete read is schedulable only when every fact f
     }
   })
   expect(reconstructedTaskGraphFor({ taskTrackerFacts: [cyclic.observation] }, operation.target)).toEqual(Option.none())
-  expect(
-    deriveRunRecoveryFrontier([
-      {
-        event: taskTrackerReadIntent(operation),
-        key: intentRecordKey(operation.operationId),
-        position: JournalPosition.make(1),
-        runId: RunId.make("cyclic-frontier")
-      },
-      {
-        event: cyclic,
-        key: outcomeRecordKey(operation.operationId),
-        position: JournalPosition.make(2),
-        runId: RunId.make("cyclic-frontier")
-      }
-    ]).entries
-  ).toEqual([])
 })
 
 it("rejects canonical facts whose target contradicts the initiating logical read", () => {
@@ -696,9 +679,7 @@ it("appends one canonical observation for each logical provider read", async () 
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-    Layer.provide(legacyMemoryJournalStoreLayer)
-  )
+  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(memoryJournalTestLayer))
 
   const events = await Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
@@ -711,7 +692,7 @@ it("appends one canonical observation for each logical provider read", async () 
     yield* interpreter.readTrackerGraph(third)
     yield* interpreter.readTrackerGraph(first)
     return (yield* journal.read(runId)).map(({ event }) => event)
-  }).pipe(Effect.provide(Layer.merge(journaled, legacyMemoryJournalStoreLayer)), Effect.runPromise)
+  }).pipe(Effect.provide(Layer.merge(journaled, memoryJournalTestLayer)), Effect.runPromise)
 
   expect(events.map(({ _tag }) => _tag)).toEqual([
     "TaskTrackerReadIntentRecorded",
@@ -743,7 +724,7 @@ it("restarts from a durable unreadable graph read without calling the tracker ag
   const provider = Layer.mock(WorkflowInterpreter, {
     readTrackerGraph: () => Effect.die("replay must not call the tracker")
   })
-  const store = legacyMemoryJournalStoreLayer
+  const store = memoryJournalTestLayer
   const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(store))
 
   const failure = await Effect.gen(function* () {
@@ -926,7 +907,7 @@ it("an invalid post-success graph read keeps the focused success and B blocked w
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const store = legacyMemoryJournalStoreLayer
+  const store = memoryJournalTestLayer
   const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(store))
 
   const result = await Effect.gen(function* () {
@@ -1030,7 +1011,7 @@ it("fails replay with a typed error when recorded facts cannot reconstruct the p
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const store = legacyMemoryJournalStoreLayer
+  const store = memoryJournalTestLayer
   const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(store))
   const failures = await Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
@@ -1077,9 +1058,7 @@ it("replays a focused read from its canonical journal observation without callin
       })
     })
   )
-  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-    Layer.provide(legacyMemoryJournalStoreLayer)
-  )
+  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(memoryJournalTestLayer))
 
   const result = await Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
@@ -1092,7 +1071,7 @@ it("replays a focused read from its canonical journal observation without callin
     const first = yield* interpreter.readTaskWorkSpecification(operation)
     const replayed = yield* interpreter.readTaskWorkSpecification(operation)
     return { events: (yield* journal.read(runId)).map(({ event }) => event), first, replayed }
-  }).pipe(Effect.provide(Layer.merge(journaled, legacyMemoryJournalStoreLayer)), Effect.runPromise)
+  }).pipe(Effect.provide(Layer.merge(journaled, memoryJournalTestLayer)), Effect.runPromise)
 
   expect(result.first).toEqual(specification)
   expect(result.replayed).toEqual(specification)

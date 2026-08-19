@@ -8,13 +8,12 @@ import { ActiveTaskClaim, TaskClaimConflict } from "../authorities/task-tracker/
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
-import { deriveRunRecoveryFrontier } from "../coordination/frontier/recovery-frontier.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
 import { OperationId } from "../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { makeTaskClaimAcquisitionOperation } from "../workflow/registry/operation.js"
-import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
 
@@ -63,7 +62,6 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
       reason: "ForeignClaim"
     })
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-    expect(deriveRunRecoveryFrontier(records).entries).toEqual([])
     const recovery = yield* makeRunRecoveryProjection(runId)
     expect((yield* recovery.readDeliveryProjection).frontier.transitions).not.toContainEqual(
       expect.objectContaining({ _tag: "ReconcileTaskClaim", operationId: operation.acquisition.operationId })
@@ -101,10 +99,10 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
             releaseTaskClaim: unused
           })
         )
-      ).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
+      ).pipe(Layer.provide(memoryJournalTestLayer))
     ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )

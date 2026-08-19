@@ -45,7 +45,7 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   taskTrackerReadIntent
 } from "../../registry/event.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { plannedAttemptProtocolControllerLayer } from "./protocol-controller.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
 import {
@@ -237,7 +237,7 @@ it.effect("supplies the exact planned task specification to the injected executo
       )
     )
     expect(yield* Ref.get(received)).toMatchObject({ plannedAttempt, specification: currentSpecification })
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconstructs the original specification when later and duplicate evidence coexist", () =>
@@ -263,7 +263,7 @@ it.effect("reconstructs the original specification when later and duplicate evid
       )
     )
     expect(yield* Ref.get(received)).toEqual({ plannedAttempt, specification: currentSpecification })
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("passes the fresh selection value without rereading journal evidence", () =>
@@ -281,7 +281,7 @@ it.effect("passes the fresh selection value without rereading journal evidence",
       )
     )
     expect(yield* Ref.get(received)).toEqual({ plannedAttempt, specification: currentSpecification })
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a fresh selected specification mismatch before executor contact", () =>
@@ -305,7 +305,7 @@ it.effect("rejects a fresh selected specification mismatch before executor conta
     )
     expect(failure._tag).toBe("PlannedAttemptExecutorTaskWorkSpecificationMismatch")
     expect(yield* Ref.get(calls)).toBe(0)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("does not journal a mismatched command and retries with one exact intent", () =>
@@ -349,7 +349,7 @@ it.effect("does not journal a mismatched command and retries with one exact inte
       "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorWorkReported"
     ])
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reports task-scoped missing specification without unrelated witness text", () =>
@@ -377,7 +377,7 @@ it.effect("reports task-scoped missing specification without unrelated witness t
       "TaskTrackerFactsObserved",
       "PlannedAttemptExecutorWorkResponsibilityBegan"
     ])
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("drives one planned attempt through the generic executor boundary", () =>
@@ -533,7 +533,7 @@ it.effect("journals a contradictory executor response and reconciles its exact c
       "PlannedAttemptExecutorCommandResponseContradicted",
       "PlannedAttemptExecutorCommandProjectionObserved"
     ])
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("continues an exact planned attempt through the executor protocol", () =>
@@ -556,7 +556,7 @@ it.effect("continues an exact planned attempt through the executor protocol", ()
     )
   }).pipe(
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provide(
       makeControlledFakePlannedAttemptExecutorLayer([
         ControlledFakeExecutorStep.cases.StartOrContinue.make({
@@ -640,7 +640,7 @@ it.effect("projects one unmatched command without duplicating it and sends the n
         ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
       )
     ).toHaveLength(2)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("does not manufacture executor-work responsibility from a read-only observation", () =>
@@ -660,7 +660,7 @@ it.effect("does not manufacture executor-work responsibility from a read-only ob
     expect(missing._tag).toBe("PlannedAttemptExecutorResponsibilityMissing")
     expect(yield* Ref.get(projectionCalls)).toBe(0)
     expect(yield* (yield* JournalStore).read(plannedAttempt.runId)).toEqual([])
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("requires exact command reconciliation before a generic executor-state observation", () =>
@@ -708,7 +708,7 @@ it.effect("requires exact command reconciliation before a generic executor-state
         ({ event }) => event._tag === "PlannedAttemptExecutorStateObserved"
       )
     ).toHaveLength(0)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records unavailable and contradictory projections while reconciling one ambiguous command", () =>
@@ -768,7 +768,7 @@ it.effect("records unavailable and contradictory projections while reconciling o
       expected: correlation,
       observed: foreignCorrelation
     })
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records unavailable and contradictory read-only executor state", () =>
@@ -829,7 +829,7 @@ it.effect("records unavailable and contradictory read-only executor state", () =
       Effect.flip
     )
     expect(divergentResponsibility).toMatchObject({ _tag: "PlannedAttemptExecutorResponsibilityContradiction" })
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records temporary and unreadable outcomes without issuing an unmatched command", () =>
@@ -913,7 +913,7 @@ it.effect("records temporary and unreadable outcomes without issuing an unmatche
         ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
       )
     ).toHaveLength(1)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records temporary and unreadable current-state outcomes while retaining responsibility", () =>
@@ -990,7 +990,7 @@ it.effect("records temporary and unreadable current-state outcomes while retaini
           event.plannedAttempt.attemptId === stateObservationAttempt.attemptId
       )
     ).toBe(true)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it("rejects malformed executor command and projection chronology through the public history reducer", () => {
@@ -1165,7 +1165,7 @@ it.effect("rejects a divergent immutable plan before recording another executor 
         ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
       )
     ).toHaveLength(1)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("stops an always-Running executor at the durable continuation limit", () =>
@@ -1203,7 +1203,7 @@ it.effect("stops an always-Running executor at the durable continuation limit", 
         ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"
       )
     ).toHaveLength(3)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("counts lost start responses reconciled as Running against the durable continuation limit", () =>
@@ -1240,7 +1240,7 @@ it.effect("counts lost start responses reconciled as Running against the durable
       records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
     ).toHaveLength(3)
     expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(0)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("never issues a fourth durable suspension command without quiescence", () =>
@@ -1272,7 +1272,7 @@ it.effect("never issues a fourth durable suspension command without quiescence",
         ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
       )
     ).toHaveLength(3)
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it("generic executor correlation contains exactly RunId and AttemptId", () => {
@@ -1350,7 +1350,7 @@ it.effect("recreates the fake executor and continues the same attempt after shar
             : []
       )
     ).toEqual([plannedAttempt.attemptId, plannedAttempt.attemptId, plannedAttempt.attemptId])
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reports safe suspension for the same planned attempt", () =>
@@ -1375,7 +1375,7 @@ it.effect("reports safe suspension for the same planned attempt", () =>
       ])
     ),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1429,7 +1429,7 @@ it.effect("frees the exact task-work position after a terminal report", () =>
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1505,7 +1505,7 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1591,7 +1591,7 @@ it.effect("resumes the same planned attempt after unpause", () =>
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1683,6 +1683,6 @@ it.effect("one recovered transition continues reconstructed work through the con
     Effect.provide(currentFactsInterpreterLayer),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )

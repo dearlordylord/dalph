@@ -18,7 +18,7 @@ import {
 } from "@dalph/contracts"
 import { Effect, Ref } from "effect"
 import { expect } from "vitest"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../coordination/run/required-planned-attempt-positions.js"
@@ -273,7 +273,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
           "PlannedAttemptExecutorCommandIntended",
           "PlannedAttemptExecutorWorkReported"
         ])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
     )
 
     it.effect("records a foreign StartOrContinue response without advancing the exact attempt", () =>
@@ -290,7 +290,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
           "PlannedAttemptExecutorCommandIntended",
           "PlannedAttemptExecutorCommandResponseContradicted"
         ])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
     )
 
     it.effect("uses only Suspend until Running becomes exact safe evidence", () =>
@@ -321,7 +321,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
           "PlannedAttemptExecutorCommandIntended",
           "PlannedAttemptExecutorWorkReported"
         ])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
     )
 
     it.effect("accepts Terminal from Suspend without issuing StartOrContinue", () =>
@@ -336,7 +336,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
         }
         expect(yield* harness.calls).toEqual([{ _tag: "Suspend", correlation }])
         expect(yield* requiredTaskWorkPositions).toEqual([])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
     )
 
     it.effect("records a foreign Suspend response without proving safety", () =>
@@ -356,7 +356,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
         expect(yield* requiredTaskWorkPositions).toEqual([
           { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
         ])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
     )
 
     it.effect("retains the exact task-work position when Suspend returns no report", () =>
@@ -375,7 +375,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
         expect(yield* requiredTaskWorkPositions).toEqual([
           { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
         ])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
     )
 
     it.effect("projects exact current state and preserves responsibility when no report exists", () =>
@@ -403,7 +403,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
           )
         ).toEqual(running())
         expect(yield* exact.calls).toEqual([{ _tag: "Project", correlation }])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
     )
 
     it.effect("rejects a foreign current-state projection", () =>
@@ -416,7 +416,7 @@ export const definePlannedAttemptExecutorConformanceSuite = (implementation: Con
         )
         expect(failure).toMatchObject({ _tag: "PlannedAttemptExecutorCorrelationMismatch", expected: correlation })
         expect(yield* harness.calls).toEqual([{ _tag: "Project", correlation }])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
     )
   })
 
@@ -460,7 +460,7 @@ it.effect("reconstructs the task-work position when newer untrusted state invali
         expect(yield* requiredTaskWorkPositions).toEqual([
           { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
         ])
-      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(legacyMemoryJournalStoreLayer)),
+      }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer)),
     { discard: true }
   )
 )

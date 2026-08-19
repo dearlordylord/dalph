@@ -41,7 +41,7 @@ import {
   type JournalRecord,
   type JournalStoreService
 } from "../../../workflow-journal/store.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -330,7 +330,7 @@ it.effect("records a fresh quarantine after the authorized Retry run ends conclu
     expect(
       records.filter(({ event }) => event._tag === "IntegratorRunStarted" && Number(event.run.ordinal) > 2)
     ).toHaveLength(0)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records Q2 CandidateRejected only with the exact run-two Git evidence", () =>
@@ -391,7 +391,7 @@ it.effect("records Q2 CandidateRejected only with the exact run-two Git evidence
         : record
     )
     expect(deriveIntegrationQuarantineState(resultAfterRunStart, history.session.sessionId)._tag).toBe("Contradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconstructs Q2 only when Retry chronology is authorized and tolerates unrelated run records", () =>
@@ -482,7 +482,7 @@ it.effect("reconstructs Q2 only when Retry chronology is authorized and tolerate
       { ...originalFreshObservation, position: JournalPosition.make(runStart.position + 2) }
     ]
     expect(deriveIntegrationQuarantineState(lineageAfterRunStart, history.session.sessionId)._tag).toBe("Contradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("requires Q1, the winning Retry direction, fresh lineage, and exact run-two chronology", () =>
@@ -516,7 +516,7 @@ it.effect("requires Q1, the winning Retry direction, fresh lineage, and exact ru
     )
     expect(ordinalFailure._tag).toBe("IntegratorJournalContradiction")
     expect(records.some(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2)).toBe(true)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a Retry run-two candidate with missing, foreign, or valid Git evidence", () =>
@@ -567,7 +567,7 @@ it.effect("rejects a Retry run-two candidate with missing, foreign, or valid Git
       Effect.flip
     )
     expect(validFailure._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", () =>
@@ -681,7 +681,7 @@ it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", ()
       )
     )
     expect(contradictoryResult._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects candidate evidence with foreign names, keys, or duplicate exact records", () =>
@@ -737,7 +737,7 @@ it.effect("rejects candidate evidence with foreign names, keys, or duplicate exa
       Effect.flip
     )
     expect(foreignCandidateFailure._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects PreparedCandidate input and a changed fresh Retry target head", () =>
@@ -776,7 +776,7 @@ it.effect("rejects PreparedCandidate input and a changed fresh Retry target head
       Effect.flip
     )
     expect(changedFreshHead._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects NotPrepared when run-two candidate evidence was also recorded", () =>
@@ -796,7 +796,7 @@ it.effect("rejects NotPrepared when run-two candidate evidence was also recorded
       Effect.flip
     )
     expect(failure._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("fails closed when an ambiguous or successful Q2 append returns a foreign Journal winner", () =>
@@ -835,7 +835,7 @@ it.effect("fails closed when an ambiguous or successful Q2 append returns a fore
       Effect.flip
     )
     expect(returnedForeign._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconciles an ambiguous Q2 append to the Journal winner", () =>
@@ -856,7 +856,7 @@ it.effect("reconciles an ambiguous Q2 append to the Journal winner", () =>
       provideJournal(ambiguousJournal)
     )
     expect(reconciled.key).toEqual(integrationQuarantinedRecordKey(history.session.sessionId, reconciled.event.basis))
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("strictly rejects excess input fields before any Q2 append", () =>
@@ -868,5 +868,5 @@ it.effect("strictly rejects excess input fields before any Q2 append", () =>
       Effect.flip
     )
     expect(failure).toBeInstanceOf(Schema.SchemaError)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )

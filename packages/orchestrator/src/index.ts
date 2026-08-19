@@ -212,7 +212,7 @@ export {
   InRunJournal,
   InRunJournalRunMismatch,
   journalStoreCapabilities,
-  legacyUnpublishedInRunJournalLayer,
+  unpublishedInRunJournalTestLayer,
   JournalStore,
   JournalStoreContradiction,
   type JournalStoreError,
@@ -250,7 +250,7 @@ export {
 } from "./workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 export * from "./workflow/protocols/git-reconciliation/decision.js"
 export { responsibilityDispositionForTargetLineage } from "./workflow/protocols/git-reconciliation/frontier-adapter.js"
-export { legacyMemoryJournalStoreLayer, memoryJournalStoreLayer } from "./workflow-journal/adapters/memory-store.js"
+export { memoryJournalTestLayer, memoryJournalStoreLayer } from "./workflow-journal/adapters/memory-store.js"
 export { journaledWorkflowInterpreterLayer } from "./workflow-journal/journaled-interpreter.js"
 export {
   coordinatorOwnedGitWorktreeLayer,
@@ -260,9 +260,9 @@ export {
 } from "./authorities/coordinator-ownership/live-task-work-start.js"
 export * from "./coordination/reconstruction/history.js"
 export * from "./coordination/reconstruction/history-result.js"
-export * from "./coordination/frontier/recovery-frontier.js"
 export { deriveIntegrationFrontier } from "./coordination/frontier/integration-frontier.js"
 export {
+  deriveJournalResponsibilityFacts,
   RunRecoveryProjection,
   RunRecoveryProjectionRunMismatch,
   type RunRecoveryProjectionError,
@@ -338,7 +338,7 @@ export { reconstructRunState } from "./coordination/reconstruction/reduce.js"
 export { latestReconstructedTaskGraph } from "./coordination/reconstruction/graph-knowledge.js"
 export {
   journalDatabaseLocatorConfig,
-  legacySqliteJournalStoreLayer,
+  sqliteJournalTestLayer,
   productionJournalStoreLayer,
   sqliteJournalStoreLayer
 } from "./workflow-journal/adapters/sqlite-store.js"
@@ -610,7 +610,6 @@ export {
   type DeliveryConsequences,
   type BoundedTicketRank,
   type DeliveryGraphPublication,
-  type DeliveryLegacyInputs,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
   type CurrentSignal,

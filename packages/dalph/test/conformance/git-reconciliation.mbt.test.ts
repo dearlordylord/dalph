@@ -40,7 +40,7 @@ import {
 } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { InRunJournal, JournalStore } from "../../../orchestrator/src/workflow-journal/store.js"
-import { legacyMemoryJournalStoreLayer } from "../../../orchestrator/src/workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../orchestrator/src/workflow-journal/adapters/memory-store.js"
 import { JournalPosition } from "../../../orchestrator/src/workflow-journal/identity.js"
 import {
   intentRecordKey,
@@ -137,7 +137,7 @@ const independentTask = {
  * production append/reconstruct/frontier seams as the coordinator.
  */
 const makeProductionReconciliationTrace = () => {
-  const context = Effect.runSync(Effect.scoped(Layer.build(legacyMemoryJournalStoreLayer)))
+  const context = Effect.runSync(Effect.scoped(Layer.build(memoryJournalTestLayer)))
   const journalStore = Context.get(context, JournalStore)
   const journal = Context.get(context, InRunJournal)
   const runId = RunId.make("git-reconciliation-production-run")

@@ -22,7 +22,7 @@ import {
   type JournalRecord,
   JournalStore,
   journalStoreCapabilities,
-  legacyUnpublishedInRunJournalLayer,
+  unpublishedInRunJournalTestLayer,
   JournalPosition,
   makePlannedAttemptProtocolController,
   makeApplicationExitLifecycle,
@@ -201,7 +201,7 @@ const executorConformanceDriver = defineDriver(
       scan: () => Effect.die("executor model never scans all Runs"),
       terminateRun: () => Effect.die("executor model never terminates its Run")
     })
-    const journalLayer = legacyUnpublishedInRunJournalLayer.pipe(
+    const journalLayer = unpublishedInRunJournalTestLayer.pipe(
       Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
     )
     const executor = PlannedAttemptExecutor.of({

@@ -10,7 +10,7 @@ type BoundaryExecutionLease = Pick<DeliveryActionExecutionLease, "forwardBoundar
 export const recoverTaskClaimOperation = Effect.fn("WorkflowRecovery.recoverTaskClaimOperation")(function* (
   runId: RunId,
   operationId: OperationId,
-  lease?: BoundaryExecutionLease
+  lease: BoundaryExecutionLease
 ) {
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
@@ -21,8 +21,8 @@ export const recoverTaskClaimOperation = Effect.fn("WorkflowRecovery.recoverTask
   if (intent?._tag === "TaskClaimAcquisitionIntended") {
     yield* interpreter.acquireTaskClaim(
       intent.operation,
-      lease?.recordIntent(operationId),
-      lease === undefined ? undefined : interruptibleBoundaryOf(lease)
+      lease.recordIntent(operationId),
+      interruptibleBoundaryOf(lease)
     )
   }
 })
@@ -30,7 +30,7 @@ export const recoverTaskClaimOperation = Effect.fn("WorkflowRecovery.recoverTask
 export const recoverTaskWorktreeOperation = Effect.fn("WorkflowRecovery.recoverTaskWorktreeOperation")(function* (
   runId: RunId,
   operationId: OperationId,
-  lease?: BoundaryExecutionLease
+  lease: BoundaryExecutionLease
 ) {
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
@@ -40,14 +40,14 @@ export const recoverTaskWorktreeOperation = Effect.fn("WorkflowRecovery.recoverT
   if (intent?._tag === "TaskWorktreeReconciliationIntended") {
     yield* interpreter.reconcileTaskWorktree(
       intent.operation,
-      lease?.recordIntent(operationId),
-      lease === undefined ? undefined : interruptibleBoundaryOf(lease)
+      lease.recordIntent(operationId),
+      interruptibleBoundaryOf(lease)
     )
   }
 })
 
 export const recoverTaskClaimReleaseOperation = Effect.fn("WorkflowRecovery.recoverTaskClaimReleaseOperation")(
-  function* (runId: RunId, operationId: OperationId, lease?: BoundaryExecutionLease) {
+  function* (runId: RunId, operationId: OperationId, lease: BoundaryExecutionLease) {
     const journal = yield* InRunJournal
     const interpreter = yield* WorkflowInterpreter
     const intent = (yield* journal.read(runId)).find(
@@ -56,8 +56,8 @@ export const recoverTaskClaimReleaseOperation = Effect.fn("WorkflowRecovery.reco
     if (intent?._tag === "TaskClaimReleaseIntended") {
       yield* interpreter.releaseTaskClaim(
         intent.operation,
-        lease?.recordIntent(operationId),
-        lease === undefined ? undefined : interruptibleBoundaryOf(lease)
+        lease.recordIntent(operationId),
+        interruptibleBoundaryOf(lease)
       )
     }
   }

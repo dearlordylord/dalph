@@ -526,17 +526,17 @@ export interface DeliveryGraphPublication {
   readonly policy: RunControlPolicy
 }
 
-/** Legacy action planning and runtime facts kept outside the descriptive chain. */
-export interface DeliveryLegacyInputs {
+/** Current action-planning and runtime inputs kept outside the descriptive chain. */
+interface DeliveryActionInputs {
   readonly proposalContributions: DeliveryProposalContributions
   readonly reflectionProposals: ReadonlyArray<DeliveryActionProposal>
   readonly runtimeFacts: DeliveryRuntimeFacts
   readonly trackerGraphProposals: ReadonlyArray<TrackerGraphActionProposal>
 }
 
-/** One current-first bundle containing the descriptive publication and compatibility inputs. */
+/** One current-first bundle containing the descriptive publication and action inputs. */
 export interface DeliveryRelationInputBundle {
-  readonly legacy: DeliveryLegacyInputs
+  readonly actionInputs: DeliveryActionInputs
   readonly publication: DeliveryGraphPublication
 }
 
@@ -569,7 +569,7 @@ const standingIsUnsettled = (standing: TicketDeliveryStanding): boolean => {
   return true
 }
 
-/** Derives finality from the relation's own lifecycle facts, never from the legacy runnable frontier. */
+/** Derives finality from the relation's own lifecycle facts, never from a second runnable-frontier projection. */
 export const deliveryFinalityOf = (
   current: DeliveryRuntimeSnapshot,
   proposedActions: DeliveryProposalFrontier,

@@ -111,7 +111,7 @@ const unpausedRuntimeEvaluation = Effect.gen(function* () {
       makeDeliveryRelationsLayer({
         ...deterministicDeliveryRuntimeSupport(runtimePolicy),
         coherent: currentSignalOf({
-          legacy: {
+          actionInputs: {
             proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
             reflectionProposals: [],
             runtimeFacts: {

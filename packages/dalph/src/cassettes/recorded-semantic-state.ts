@@ -1,37 +1,42 @@
 import { Match } from "effect"
-import type { reduceWorkflowJournalHistory } from "@dalph/orchestrator"
+import { deriveJournalResponsibilityFacts, type reduceWorkflowJournalHistory } from "@dalph/orchestrator"
 
 export const semanticJson = (value: unknown): string => JSON.stringify(value)
 
-const semanticResponsibility = (
-  history: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
+type ValidWorkflowJournalHistory = Extract<
+  ReturnType<typeof reduceWorkflowJournalHistory>,
+  { readonly _tag: "ValidWorkflowJournalHistory" }
+>
+
+const semanticResponsibilityEntry = (
+  entry: ValidWorkflowJournalHistory["runState"]["responsibility"]["entries"][number]
 ) =>
+  Match.value(entry).pipe(
+    Match.tagsExhaustive({
+      PlannedAttemptExecutorWorkResponsibility: (value) => ({ _tag: value._tag, plannedAttempt: value.plannedAttempt }),
+      TaskClaimResponsibility: (value) => ({ _tag: value._tag, acquisition: value.acquisition, taskId: value.taskId }),
+      TaskClaimReleaseResponsibility: (value) => ({
+        _tag: value._tag,
+        operation: value.operation,
+        taskId: value.taskId
+      }),
+      TaskWorktreeResponsibility: (value) => ({ _tag: value._tag, operation: value.operation, taskId: value.taskId })
+    })
+  )
+
+const semanticResponsibility = (history: ValidWorkflowJournalHistory) =>
   history.runState.responsibility.entries
-    .map(
-      Match.type<(typeof history.runState.responsibility.entries)[number]>().pipe(
-        Match.tagsExhaustive({
-          PlannedAttemptExecutorWorkResponsibility: (entry) => ({
-            _tag: entry._tag,
-            plannedAttempt: entry.plannedAttempt
-          }),
-          TaskClaimResponsibility: (entry) => ({
-            _tag: entry._tag,
-            acquisition: entry.acquisition,
-            taskId: entry.taskId
-          }),
-          TaskClaimReleaseResponsibility: (entry) => ({
-            _tag: entry._tag,
-            operation: entry.operation,
-            taskId: entry.taskId
-          }),
-          TaskWorktreeResponsibility: (entry) => ({
-            _tag: entry._tag,
-            operation: entry.operation,
-            taskId: entry.taskId
-          })
-        })
-      )
-    )
+    .map(semanticResponsibilityEntry)
+    .toSorted((left, right) => semanticJson(left).localeCompare(semanticJson(right)))
+
+/** The current pure selection projection is one disposition per reconstructed responsibility. */
+export const semanticResponsibilityFacts = (history: ValidWorkflowJournalHistory): unknown =>
+  deriveJournalResponsibilityFacts(history.runState)
+    .map(({ _tag, disposition, responsibility }) => ({
+      _tag,
+      disposition,
+      responsibility: semanticResponsibilityEntry(responsibility)
+    }))
     .toSorted((left, right) => semanticJson(left).localeCompare(semanticJson(right)))
 
 export const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>

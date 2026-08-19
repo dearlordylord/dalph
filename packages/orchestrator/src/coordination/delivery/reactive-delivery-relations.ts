@@ -164,7 +164,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const runIsPaused = journal.reconstructed.pause.run._tag === "RunPaused"
     const trackerGraphProposals = trackerGraphProposalsOf(journal, recovered.length, runIsPaused, runId, target)
     return {
-      legacy: {
+      actionInputs: {
         proposalContributions,
         reflectionProposals: [],
         runtimeFacts: {
@@ -241,7 +241,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         onSuccess: (bundle) =>
           SubscriptionRef.set(state, { _tag: "ReactiveDeliveryOpen", bundle }).pipe(
             Effect.andThen(publicationObserver.observe(bundle)),
-            Effect.andThen(completePublicationWaiters(bundle.legacy.runtimeFacts.acceptedAt))
+            Effect.andThen(completePublicationWaiters(bundle.actionInputs.runtimeFacts.acceptedAt))
           )
       })
     )
@@ -257,8 +257,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const current = yield* SubscriptionRef.get(state)
     if (
       current._tag === "ReactiveDeliveryOpen" &&
-      current.bundle.legacy.runtimeFacts.acceptedAt !== null &&
-      current.bundle.legacy.runtimeFacts.acceptedAt >= journalPosition
+      current.bundle.actionInputs.runtimeFacts.acceptedAt !== null &&
+      current.bundle.actionInputs.runtimeFacts.acceptedAt >= journalPosition
     )
       return
     return yield* refresh
@@ -294,7 +294,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           if (current._tag === "ReactiveDeliveryFailed") {
             return yield* new DeliveryRelationReconciliationError({ cause: current.cause })
           }
-          const acceptedAt = current.bundle.legacy.runtimeFacts.acceptedAt
+          const acceptedAt = current.bundle.actionInputs.runtimeFacts.acceptedAt
           if (acceptedAt !== null && acceptedAt >= targetPosition) return false
           yield* Ref.update(publicationWaiters, (waiters) => [...waiters, { completed, targetPosition }])
           return true

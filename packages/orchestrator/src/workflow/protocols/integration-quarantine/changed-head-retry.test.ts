@@ -24,7 +24,7 @@ import {
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord, JournalStoreService } from "../../../workflow-journal/store.js"
 import { InRunJournal, JournalStore, JournalStoreContradiction } from "../../../workflow-journal/store.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
@@ -241,7 +241,7 @@ it.effect("starts no retry when the session target head has changed", () =>
       _tag: "Rejected",
       detail: "Retry authorization was terminated by a changed-head quarantine"
     })
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects an idempotent replay whose complete lineage facts do not match L", () =>
@@ -266,7 +266,7 @@ it.effect("rejects an idempotent replay whose complete lineage facts do not matc
         ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
       )
     ).toEqual([first])
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("routes changed-head Retry through delivery once, releases ownership, and never calls Integrator", () =>
@@ -349,7 +349,7 @@ it.effect("routes changed-head Retry through delivery once, releases ownership, 
       )
     ).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
     expect(yield* Ref.get(releases)).toBe(2)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects unchanged, foreign, FullRerun, and duplicate Retry evidence without appending", () =>
@@ -394,7 +394,7 @@ it.effect("rejects unchanged, foreign, FullRerun, and duplicate Retry evidence w
         )
       ).toHaveLength(0)
     }
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a foreign target-lineage position and strict malformed input", () =>
@@ -408,7 +408,7 @@ it.effect("rejects a foreign target-lineage position and strict malformed input"
       Effect.flip
     )
     expect(malformedFailure).toBeInstanceOf(Schema.SchemaError)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects missing run-start evidence", () =>
@@ -422,7 +422,7 @@ it.effect("rejects missing run-start evidence", () =>
         ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
       )
     ).toHaveLength(0)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconciles ambiguous Q2 appends and rejects every foreign winner", () =>
@@ -513,5 +513,5 @@ it.effect("reconciles ambiguous Q2 appends and rejects every foreign winner", ()
       Effect.flip
     )
     expect(returnedForeign).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )

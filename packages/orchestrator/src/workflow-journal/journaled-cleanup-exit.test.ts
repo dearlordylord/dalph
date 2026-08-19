@@ -24,7 +24,7 @@ import {
   makeTaskClaimReleaseOperation,
   TaskClaimReleaseAuthority
 } from "../workflow/registry/operation.js"
-import { legacyMemoryJournalStoreLayer } from "./adapters/memory-store.js"
+import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { InRunJournal, JournalStore } from "./store.js"
@@ -222,7 +222,7 @@ it.effect("preserves and reopens interrupted exact claim cleanup in authored and
           .filter((tag) => tag === "TaskClaimReleaseIntended" || tag === "TaskClaimReleased")
       ).toEqual(["TaskClaimReleaseIntended", "TaskClaimReleased"])
     })
-  ).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  ).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("sends no task-claim cleanup call through a pre-cutoff owner after the Exit cutoff", () =>

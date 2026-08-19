@@ -60,7 +60,11 @@ const supportSpecification = makeTaskWorkSpecification({
 
 it("loads the current public surface without compatibility exports", () => {
   expect(Contracts.PlannedAttemptExecutor).toBeDefined()
-  expect(PublicApi.RunRecoveryFrontier).toBeDefined()
+  expect(PublicApi.deriveJournalResponsibilityFacts).toBeDefined()
+  expect("RunRecoveryFrontier" in PublicApi).toBe(false)
+  expect("legacyUnpublishedInRunJournalLayer" in PublicApi).toBe(false)
+  expect("legacyMemoryJournalStoreLayer" in PublicApi).toBe(false)
+  expect("legacySqliteJournalStoreLayer" in PublicApi).toBe(false)
   expect(dryRunWorkflowInterpreterLayer).toBeDefined()
   expect(new JournalBoundaryDecodeIssue({ detail: "bad row", rowOrdinal: 1, runId: null })._tag).toBe(
     "JournalBoundaryDecodeIssue"

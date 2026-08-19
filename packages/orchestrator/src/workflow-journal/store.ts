@@ -229,12 +229,11 @@ export const journalStoreCapabilities = <E, R>(
   ).pipe(Layer.provide(storage))
 
 /**
- * Temporary adapter for test and scheduler compositions that do not install the
- * Journal service. Production bootstrap must receive raw storage and install
- * its own published Journal capability.
- * #184 deletes the remaining scheduler consumers.
+ * Test-support adapter for focused protocol compositions that intentionally do
+ * not install the published Journal service. Production bootstrap receives raw
+ * storage and installs its own published Journal capability.
  */
-export const legacyUnpublishedInRunJournalLayer = Layer.effect(
+export const unpublishedInRunJournalTestLayer = Layer.effect(
   InRunJournal,
   JournalStore.pipe(Effect.map((journal) => InRunJournal.of({ append: journal.append, read: journal.read })))
 )

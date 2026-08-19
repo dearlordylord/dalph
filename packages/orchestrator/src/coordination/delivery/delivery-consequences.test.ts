@@ -120,7 +120,7 @@ const coherentBundle = (
   currentPolicy: RunControlPolicy,
   exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
 ): DeliveryRelationInputBundle => ({
-  legacy: {
+  actionInputs: {
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
     reflectionProposals: [],
     runtimeFacts: {

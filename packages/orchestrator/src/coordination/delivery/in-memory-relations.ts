@@ -40,11 +40,11 @@ export interface DeliveryRelationsLayerInput {
   readonly publicationConsistency: {
     readonly withStablePublication: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   }
-  /** Legacy action-plan contributions are consumed only by the outer runtime adapter. */
+  /** Action-plan contributions are consumed only by the outer runtime adapter. */
   readonly proposalContributions?: CurrentSignal<DeliveryProposalContributions, DeliveryRelationSourceError>
   readonly reflectionProposals?: CurrentSignal<ReadonlyArray<DeliveryActionProposal>, DeliveryRelationSourceError>
   readonly trackerGraphProposals?: CurrentSignal<ReadonlyArray<TrackerGraphActionProposal>, DeliveryRelationSourceError>
-  /** One current-first input bundle carrying the descriptive publication and compatibility inputs together. */
+  /** One current-first input bundle carrying the descriptive publication and action inputs together. */
   readonly coherent: CurrentSignal<DeliveryRelationInputBundle, DeliveryRelationSourceError>
 }
 
@@ -113,7 +113,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
   const proposalContributions =
     input.proposalContributions === undefined
       ? mapCurrentSignal(input.coherent, (bundle) =>
-          releaseEligibleContributions(bundle, bundle.legacy.proposalContributions)
+          releaseEligibleContributions(bundle, bundle.actionInputs.proposalContributions)
         )
       : (() => {
           const changes = Stream.merge(
@@ -169,9 +169,9 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
       )
     : mapCurrentSignal(input.coherent, (bundle) =>
         planningInputOf(
-          bundle.legacy.trackerGraphProposals,
-          releaseEligibleContributions(bundle, bundle.legacy.proposalContributions),
-          bundle.legacy.reflectionProposals
+          bundle.actionInputs.trackerGraphProposals,
+          releaseEligibleContributions(bundle, bundle.actionInputs.proposalContributions),
+          bundle.actionInputs.reflectionProposals
         )
       )
   const actionPlanTrackerGraphProposals = mapCurrentSignal(planningInputs, ({ trackerGraph }) => trackerGraph)
@@ -249,7 +249,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         readonly delivery: CurrentSignal<DeliveryConsequences, E>
         readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
-        const facts = mapCurrentSignal(input.coherent, ({ legacy }) => legacy.runtimeFacts)
+        const facts = mapCurrentSignal(input.coherent, ({ actionInputs }) => actionInputs.runtimeFacts)
         const current = mapCurrentSignal(delivery, (delivery) => ({
           _tag: "DeliveryRuntimeSnapshot" as const,
           reflection: delivery.trackerConsequences,

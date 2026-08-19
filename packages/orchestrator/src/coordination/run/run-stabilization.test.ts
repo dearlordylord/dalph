@@ -86,7 +86,7 @@ const baseEvaluation = Effect.gen(function* () {
       makeDeliveryRelationsLayer({
         ...deterministicDeliveryRuntimeSupport(policy),
         coherent: currentSignalOf({
-          legacy: {
+          actionInputs: {
             proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
             reflectionProposals: [],
             runtimeFacts: {

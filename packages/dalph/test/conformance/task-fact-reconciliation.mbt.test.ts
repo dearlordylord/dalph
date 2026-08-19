@@ -42,7 +42,7 @@ import {
   InitialControlPolicy,
   JournalPosition,
   JournalStore,
-  legacyMemoryJournalStoreLayer,
+  memoryJournalTestLayer,
   makePlannedAttemptProtocolController,
   OperationId,
   OperationIdAllocator,
@@ -88,7 +88,7 @@ import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordina
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
 import {
   journalStoreCapabilities,
-  legacyUnpublishedInRunJournalLayer,
+  unpublishedInRunJournalTestLayer,
   type JournalRecord
 } from "../../../orchestrator/src/workflow-journal/store.js"
 import {
@@ -571,7 +571,7 @@ const taskFactReconciliationDriver = defineDriver(
       scan: () => Effect.succeed({ issues: [], runs: [{ records, runId }] }),
       terminateRun: () => Effect.die("model driver never terminates its Run")
     })
-    const journalLayer = legacyUnpublishedInRunJournalLayer.pipe(
+    const journalLayer = unpublishedInRunJournalTestLayer.pipe(
       Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
     )
     const acceptanceEvidenceLayer = Layer.succeed(
@@ -2687,7 +2687,7 @@ it.effect("requires command reconciliation before a generic executor-state proje
     expect(failure._tag).toBe("PlannedAttemptExecutorCommandReconciliationRequired")
     expect(projectionCalls).toBe(0)
     expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorStateObserved")).toBe(false)
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer), Effect.provide(plannedAttemptProtocolControllerLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer), Effect.provide(plannedAttemptProtocolControllerLayer))
 )
 
 it("rejects a work report whose exact command intent is absent", () => {

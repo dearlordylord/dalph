@@ -300,7 +300,7 @@ interface BundleInput {
 
 const bundle = ({ acceptedAt, evidence, graph, paused, proposals = [], taskWork }: BundleInput) =>
   ({
-    legacy: {
+    actionInputs: {
       proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: proposals },
       reflectionProposals: [],
       runtimeFacts: {
@@ -735,12 +735,12 @@ it.effect("updates Alice's public task Pause view as accepted executor and Git f
       })
       yield* relation.publish({
         ...initial,
-        legacy: {
-          ...initial.legacy,
+        actionInputs: {
+          ...initial.actionInputs,
           runtimeFacts: {
-            ...initial.legacy.runtimeFacts,
+            ...initial.actionInputs.runtimeFacts,
             pauseCoverage: {
-              ...initial.legacy.runtimeFacts.pauseCoverage,
+              ...initial.actionInputs.runtimeFacts.pauseCoverage,
               applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "TaskPauses", taskIds: [TaskId.make("A")] } }
             }
           }

@@ -3443,17 +3443,17 @@ it.effect("retains every conflicting production proposal owner in the delivery f
       }
     })
     if (captured === undefined) return expect.fail("expected a delivery publication")
-    const trackerProposal = captured.bundle.legacy.trackerGraphProposals[0]
+    const trackerProposal = captured.bundle.actionInputs.trackerGraphProposals[0]
     if (trackerProposal === undefined) return expect.fail("expected the initial tracker graph proposal")
 
     const frame = yield* evaluateAuthoredDeliveryPublication({
       ...captured,
       bundle: {
         ...captured.bundle,
-        legacy: {
-          ...captured.bundle.legacy,
+        actionInputs: {
+          ...captured.bundle.actionInputs,
           proposalContributions: {
-            ...captured.bundle.legacy.proposalContributions,
+            ...captured.bundle.actionInputs.proposalContributions,
             ticketDelivery: [{ ...trackerProposal, owner: "TicketDelivery" }]
           }
         }
@@ -3487,10 +3487,10 @@ it.effect("projects every isolated action-planning issue through its typed maint
       ...captured,
       bundle: {
         ...captured.bundle,
-        legacy: {
-          ...captured.bundle.legacy,
+        actionInputs: {
+          ...captured.bundle.actionInputs,
           proposalContributions: {
-            ...captured.bundle.legacy.proposalContributions,
+            ...captured.bundle.actionInputs.proposalContributions,
             issues: [
               {
                 _tag: "AcceptedOperationEvidenceMissing",

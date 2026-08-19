@@ -68,7 +68,12 @@ import {
   recordedCassetteVersion
 } from "./recorded-domain.js"
 import { renameRecordedCassette } from "./recorded-renaming.js"
-import { appliedOccurrencePosition, semanticJson, semanticState } from "./recorded-semantic-state.js"
+import {
+  appliedOccurrencePosition,
+  semanticJson,
+  semanticResponsibilityFacts,
+  semanticState
+} from "./recorded-semantic-state.js"
 import {
   eventForGitObservationEntry,
   isRecordedGitObservationEntry,
@@ -1287,7 +1292,7 @@ const checkpointComparison = (
   pureSelectionEquivalent:
     expected._tag === "ValidWorkflowJournalHistory" &&
     actual._tag === "ValidWorkflowJournalHistory" &&
-    semanticJson(expected.recoveryFrontier) === semanticJson(actual.recoveryFrontier),
+    semanticJson(semanticResponsibilityFacts(expected)) === semanticJson(semanticResponsibilityFacts(actual)),
   operationalStateEquivalent: semanticJson(semanticState(expected)) === semanticJson(semanticState(actual)),
   workflowHistoryEquivalent:
     semanticJson(semanticWorkflowHistory(expected)) === semanticJson(semanticWorkflowHistory(actual))

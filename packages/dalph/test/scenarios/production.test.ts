@@ -63,7 +63,7 @@ import {
   PlannedAttemptExecutorProjectionUnreadable,
   projectTrackerSnapshot,
   runWorkflow,
-  legacySqliteJournalStoreLayer,
+  sqliteJournalTestLayer,
   RunFinalityDecision,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -259,7 +259,7 @@ const makePublicRunFixture = (
           version: workflowJournalEventVersion
         })
       )
-    }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+    }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
     const projections = yield* Ref.make(projectionPlan(correlation))
     const commandCallsRef = yield* Ref.make<ReadonlyArray<"StartOrContinue" | "Suspend">>([])
@@ -352,7 +352,7 @@ const makePublicRunFixture = (
       )
     const readRecords = Effect.gen(function* () {
       return yield* (yield* JournalStore).read(runId)
-    }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+    }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
     return {
       activate,
       attempt,
@@ -779,7 +779,7 @@ it.effect(absentHistoryApplicationScenario, () =>
       )
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       const beginningAt = records.findIndex(({ event }) => event._tag === "WorkflowRunBegan")
       const firstTrackerReadAt = records.findIndex(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
 
@@ -837,7 +837,7 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
           intentRecordKey(acquisition.operationId),
           TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
         )
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
       const current = projectTrackerSnapshot({ revision: "production-lost-claim-current", tasks: [] })
       if (current._tag === "Invalid") return yield* Effect.die("current graph must be valid")
@@ -903,7 +903,7 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
       expect(yield* Ref.get(claimReads)).toBeGreaterThan(0)
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       expect(records.filter(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toHaveLength(1)
       expect(records.find(({ event }) => event._tag === "TaskClaimAcquired")?.event).toMatchObject({
         _tag: "TaskClaimAcquired",
@@ -1019,7 +1019,7 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
           intentRecordKey(worktree.operationId),
           TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
         )
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
       const trackerLayer = Layer.succeed(
         TrackerMutation,
@@ -1078,7 +1078,7 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
       expect(worktreesAfter).toBe(worktreesBefore)
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       expect(records.filter(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")).toHaveLength(1)
       expect(records.find(({ event }) => event._tag === "TaskWorktreeReady")?.event).toMatchObject({
         _tag: "TaskWorktreeReady",
@@ -1181,7 +1181,7 @@ it.effect("records an Operator capacity change through the production compositio
       )
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
       expect(records.find(({ event }) => event._tag === "WorkflowRunBegan")?.event).toMatchObject({
         initialControlPolicy: { taskExecutionCapacity: 2 }
@@ -1278,7 +1278,7 @@ it.effect("terminates once only after G2 proves the target complete and responsi
       expect(yield* Ref.get(trackerReads)).toBe(readsAfterFirstRun)
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       expect(records[0]?.event._tag).toBe("WorkflowRunBegan")
       expect(records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
@@ -1369,7 +1369,7 @@ it.effect(
         ).pipe(provideRunEnvironment)
         const records = yield* Effect.gen(function* () {
           return yield* (yield* JournalStore).read(runId)
-        }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
         expect(firstActivation).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
         expect(laterActivation).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
@@ -1535,7 +1535,7 @@ it.effect("publishes each accepted executor report before continuing and stops a
             version: workflowJournalEventVersion
           })
         )
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       const trackerLayer = Layer.succeed(
         TrackerMutation,
         TrackerMutation.of({
@@ -1598,7 +1598,7 @@ it.effect("publishes each accepted executor report before continuing and stops a
       expect(failure._tag).toBe("GitTargetLineageReadFailure")
       const failedRecords = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       const targetReadIntents = failedRecords.filter(
         ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
       )
@@ -1609,7 +1609,7 @@ it.effect("publishes each accepted executor report before continuing and stops a
       yield* activateExactRun
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       const originalTargetReadOperationId =
         targetReadIntents[0]?.event._tag === "GitReadIntentRecorded"
           ? targetReadIntents[0].event.operation.operationId
@@ -1678,7 +1678,7 @@ it.effect("blocks Run establishment before activation when preserved history has
             taskIds: []
           })
         )
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
       const requestedRunId = RunId.make("current-production-run")
       const application = productionWorkflowInterpreterLayer(
@@ -1751,7 +1751,7 @@ it.effect(
               version: workflowJournalEventVersion
             })
           )
-        }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
         const requestedRunId = RunId.make("requested-production-run")
         const application = productionWorkflowInterpreterLayer(
@@ -1809,7 +1809,7 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
           FixtureTarget.make("began-only-target"),
           InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
         )
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
       const requestedRunId = RunId.make("new-run-after-began-only")
       const application = productionWorkflowInterpreterLayer(
@@ -1888,7 +1888,7 @@ it.effect("establishes a Run when another Run's responsibility is completed", ()
             version: workflowJournalEventVersion
           })
         )
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
       const requestedTarget = FixtureTarget.make("requested-after-completed-run-target")
       const requestedRunId = yield* freshWorkflowRunId(requestedTarget)

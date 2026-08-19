@@ -133,7 +133,7 @@ export const journaledIntegrationEvidenceOf = (
   return evidence
 }
 
-/** Derives exact delivery evidence from journal facts, never from the legacy runnable frontier. */
+/** Derives exact delivery evidence from journal facts, never from a second runnable-frontier projection. */
 export const ticketDeliveryEvidenceOf = (
   frame: CurrentDeliveryFrame,
   responsibilityFacts: ReadonlyArray<ResponsibilityFreshFacts>

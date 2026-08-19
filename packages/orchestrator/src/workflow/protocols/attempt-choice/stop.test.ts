@@ -33,7 +33,7 @@ import {
 } from "../../../coordination/delivery/delivery-proposal.js"
 import { executeAcceptedWorkflowAction } from "../../../coordination/delivery/recovered-delivery-action-adapter.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
@@ -290,7 +290,7 @@ it.effect("proves the exact executor stopped before abandoning implementation re
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -363,7 +363,7 @@ it.effect("serializes a public Continue against exact Stop abandonment without p
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -399,7 +399,7 @@ it.effect("rejects Stop advancement and observation without Alice's exact applie
   }).pipe(
     Effect.provideService(PlannedAttemptExecutor, unusedPlannedAttemptExecutor),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -413,7 +413,7 @@ it.effect("requires the exact claim that authorized the attempt before abandonin
     Effect.provideService(PlannedAttemptExecutor, unusedPlannedAttemptExecutor),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -438,7 +438,7 @@ it.effect("keeps an abandoned attempt waiting when no tracker target can authori
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -529,7 +529,7 @@ it.effect("rejects attempt choices that are not exposed by the exact Run plan sa
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -561,7 +561,7 @@ it.effect("coalesces concurrent abandonment and treats later Stop observation as
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -706,7 +706,7 @@ it.effect("rejects stopped-attempt events without their exact choice quiescence 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -754,7 +754,7 @@ it.effect("keeps Stop pending when a read-only executor projection still reports
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -804,7 +804,7 @@ it.effect("shows a contradictory executor projection as an explicit Stop wait", 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -846,7 +846,7 @@ it.effect("rejects executor work that reopens an abandoned attempt", () =>
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -897,7 +897,7 @@ it.effect("rechecks the executor after restart before repeating Stop", () =>
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -981,7 +981,7 @@ it.effect("issues three suspension commands, never a fourth, then abandons after
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1094,7 +1094,7 @@ it.effect("reconciles a lost third suspension response before the bounded read-o
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1179,7 +1179,7 @@ it.effect("derives a no-release result only from the exact journaled focused cla
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1271,7 +1271,7 @@ it.effect("rejects a stale no-release observation after a newer exact claim read
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1536,7 +1536,7 @@ it.effect("requires one exact stopped-claim release operation after its current 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1628,7 +1628,7 @@ it.effect("makes released and no-release stopped-claim dispositions mutually exc
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1699,7 +1699,7 @@ it.effect("releases only the freshly confirmed exact claim after Stop", () =>
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1807,7 +1807,7 @@ it.effect("retries the same stopped-claim release after reconstruction confirms 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 
@@ -1925,6 +1925,6 @@ it.effect("stops implementation without mutating an absent or foreign claim", ()
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer)
+    Effect.provide(memoryJournalTestLayer)
   )
 )

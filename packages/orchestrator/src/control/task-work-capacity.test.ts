@@ -20,7 +20,7 @@ import { makeDeliveryRuntimeAdmissionController } from "../coordination/delivery
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
 import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
-import { legacyMemoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../workflow-journal/adapters/memory-store.js"
 import { InRunJournal, JournalStore } from "../workflow-journal/store.js"
 import { JournalPosition } from "../workflow-journal/identity.js"
 import { OperationId } from "../workflow/identity.js"
@@ -61,7 +61,7 @@ it.effect("rejects an invalid journal prefix instead of deriving a capacity", ()
         { ...began, position: JournalPosition.make(2) }
       ]).pipe(Effect.flip)
     ).toMatchObject({ _tag: "InvalidWorkflowJournalHistory" })
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect(
@@ -100,7 +100,7 @@ it.effect(
           runId
         }
       ])
-    }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a stale capacity revision without appending another applied change", () =>
@@ -129,7 +129,7 @@ it.effect("rejects a stale capacity revision without appending another applied c
       "WorkflowRunBegan",
       "TaskWorkCapacityChanged"
     ])
-  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reports that capacity has no durable value before the Run begins", () =>
@@ -138,7 +138,7 @@ it.effect("reports that capacity has no durable value before the Run begins", ()
     const failure = yield* control.read(RunId.make("unbegun-capacity-run")).pipe(Effect.flip)
 
     expect(failure).toMatchObject({ _tag: "WorkflowRunNotBegan", runId: "unbegun-capacity-run" })
-  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rereads the winning policy when another writer commits the requested revision first", () =>
@@ -179,7 +179,7 @@ it.effect("rereads the winning policy when another writer commits the requested 
       expectedRevision: 1,
       runId
     })
-  }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("restart reconstructs the latest applied capacity and both unfinished task positions", () =>
@@ -277,7 +277,7 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
     expect([...(yield* controller.snapshot).positions.keys()]).toEqual([TaskId.make("A"), TaskId.make("B")])
   }).pipe(
     Effect.provide(taskWorkCapacityControlLayer),
-    Effect.provide(legacyMemoryJournalStoreLayer),
+    Effect.provide(memoryJournalTestLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer)
   )
 )

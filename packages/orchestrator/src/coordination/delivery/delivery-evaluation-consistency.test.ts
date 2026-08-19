@@ -30,7 +30,7 @@ const target = FixtureTarget.make("coherent-runtime-evaluation-target")
 const proposal = trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
 
 const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): DeliveryRelationInputBundle => ({
-  legacy: {
+  actionInputs: {
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
     reflectionProposals: [],
     runtimeFacts: {

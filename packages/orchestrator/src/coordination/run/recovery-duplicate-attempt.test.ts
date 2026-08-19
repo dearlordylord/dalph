@@ -25,7 +25,7 @@ import { TaskAttemptPlannedEvent } from "../../workflow/registry/event.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import { legacySqliteJournalStoreLayer } from "../../workflow-journal/adapters/sqlite-store.js"
+import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { causalClaimForAttempt } from "./recovery-authority.js"
 import { makeRunRecoveryProjection } from "./recovery-activation.js"
 
@@ -149,7 +149,7 @@ it.effect(
           }
         }
         return yield* journal.read(runId)
-      }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(":memory:") })))
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") })))
       expect(roundTrippedRecords).toEqual(invalidRecords)
 
       const failure = yield* makeRunRecoveryProjection(runId).pipe(

@@ -3,7 +3,6 @@ import { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { type PlannedTaskAttempt } from "@dalph/contracts"
 import type { JournalRecord } from "../../workflow-journal/store.js"
-import type { RunRecoveryFrontier } from "../frontier/recovery-frontier.js"
 import type { ReconstructedRunState } from "./state.js"
 
 const WorkflowJournalHistoryIssueFields = { detail: Schema.String, position: JournalPosition, runId: RunId }
@@ -54,7 +53,6 @@ export interface ValidWorkflowJournalHistory {
   readonly _tag: "ValidWorkflowJournalHistory"
   readonly runState: ReconstructedRunState
   readonly records: ReadonlyArray<JournalRecord>
-  readonly recoveryFrontier: RunRecoveryFrontier
   readonly runId: RunId
 }
 

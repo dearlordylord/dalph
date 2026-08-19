@@ -7,8 +7,8 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
-import { legacyMemoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { legacySqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
 import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
 import { controlDirectionAppliedRecordKey } from "../../../workflow-journal/record-key.js"
@@ -47,7 +47,7 @@ const makeJournalReadBarrier = Effect.gen(function* () {
           })
       })
     })
-  ).pipe(Layer.provide(legacyMemoryJournalStoreLayer))
+  ).pipe(Layer.provide(memoryJournalTestLayer))
   return { activeReads, armed, firstReadEntered, layer, peakReads, releaseReads }
 })
 
@@ -85,7 +85,7 @@ describe("ControlDirectionApplication", () => {
           tasks: { _tag: "TaskPauses", taskIds: [taskId] }
         })
       }
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("leaves no durable direction when Alice's process dies before apply", () =>
@@ -102,7 +102,7 @@ describe("ControlDirectionApplication", () => {
       if (reopened._tag === "ValidWorkflowJournalHistory") {
         expect(reopened.runState.pause).toEqual({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } })
       }
-    }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("applies run and task directions in order without claiming downstream effects", () =>
@@ -130,7 +130,7 @@ describe("ControlDirectionApplication", () => {
       if (reopened._tag === "ValidWorkflowJournalHistory") {
         expect(reopened.runState.pause).toEqual({ run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } })
       }
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("unpauses A without clearing an independent Pause on C", () =>
@@ -152,7 +152,7 @@ describe("ControlDirectionApplication", () => {
           tasks: { _tag: "TaskPauses", taskIds: [independentTaskId] }
         })
       }
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("serializes concurrent applications before either can allocate a run-local ordinal", () =>
@@ -180,7 +180,7 @@ describe("ControlDirectionApplication", () => {
         expect(applied.map(({ event }) => event._tag === "ControlDirectionApplied" && event.ordinal)).toEqual([1, 2])
       }).pipe(
         Effect.provide(controlDirectionApplicationLayer.pipe(Layer.provideMerge(barrier.layer))),
-        Effect.provide(legacyMemoryJournalStoreLayer)
+        Effect.provide(memoryJournalTestLayer)
       )
     })
   )
@@ -209,7 +209,7 @@ describe("ControlDirectionApplication", () => {
           expect.objectContaining({ detail: "control direction expected ordinal 1, found 2" })
         )
       }
-    }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("rejects malformed input and a Run that has not begun without appending", () =>
@@ -227,7 +227,7 @@ describe("ControlDirectionApplication", () => {
       const missingRun = yield* Effect.flip(control.apply({ direction: "Pause", subject: { _tag: "Run", runId } }))
       expect(missingRun).toMatchObject({ _tag: "WorkflowRunNotBegan", runId })
       expect(yield* journal.read(runId)).toEqual([])
-    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(legacyMemoryJournalStoreLayer))
+    }).pipe(Effect.provide(controlDirectionApplicationLayer), Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("reopens an applied direction from persisted SQLite after the response is lost", () =>
@@ -242,13 +242,13 @@ describe("ControlDirectionApplication", () => {
             // The caller does not retain the returned record, modeling a lost response.
           }).pipe(
             Effect.provide(controlDirectionApplicationLayer),
-            Effect.provide(legacySqliteJournalStoreLayer({ filename }))
+            Effect.provide(sqliteJournalTestLayer({ filename }))
           )
 
           const records = yield* Effect.gen(function* () {
             const journal = yield* JournalStore
             return yield* journal.read(runId)
-          }).pipe(Effect.provide(legacySqliteJournalStoreLayer({ filename })))
+          }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
           const reopened = reduceWorkflowJournalHistory(runId, records)
           expect(reopened._tag).toBe("ValidWorkflowJournalHistory")
           if (reopened._tag === "ValidWorkflowJournalHistory") {
