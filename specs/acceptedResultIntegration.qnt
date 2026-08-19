@@ -17,7 +17,7 @@ module acceptedResultIntegration {
     | IntegratorInFlight
     | IntegratorResponseLost
     | IntegratorNotPrepared
-    | IntegratorResultRecorded
+    | IntegratorRunResultRecorded
     | Quarantined
     | RetrySelected
     | RetryInFlight
@@ -122,7 +122,7 @@ module acceptedResultIntegration {
     integratorInvocationCount: int,
     integratorResumeCount: int,
     integratorOutcome: IntegratorOutcome,
-    integratorResultRecorded: bool,
+    integratorRunResultRecorded: bool,
     // A prepared outcome is not enough: this records the explicit report
     // boundary that supplied the candidate to Dalph.
     candidateReported: bool,
@@ -248,7 +248,7 @@ module acceptedResultIntegration {
       IntegratorSessionFixed,
       IntegratorInFlight,
       IntegratorResponseLost,
-      IntegratorResultRecorded,
+      IntegratorRunResultRecorded,
       RetryInFlight,
       SuccessorSessionFixed,
       SuccessorInFlight,
@@ -265,7 +265,7 @@ module acceptedResultIntegration {
       IntegratorSessionFixed,
       IntegratorInFlight,
       IntegratorResponseLost,
-      IntegratorResultRecorded,
+      IntegratorRunResultRecorded,
       CandidateGitReadIntent,
       CandidateGitReadPending,
     ).contains(phase)
@@ -288,7 +288,7 @@ module acceptedResultIntegration {
 
   pure def candidateResultPhase(phase: Phase): bool =
     Set(
-      IntegratorResultRecorded,
+      IntegratorRunResultRecorded,
       CandidateGitReadIntent,
       CandidateGitReadPending,
       CandidateReady,
@@ -362,7 +362,7 @@ module acceptedResultIntegration {
       IntegratorSessionFixed,
       IntegratorInFlight,
       IntegratorResponseLost,
-      IntegratorResultRecorded,
+      IntegratorRunResultRecorded,
       CandidateGitReadIntent,
       CandidateGitReadPending,
       CandidateReady,
@@ -419,8 +419,8 @@ module acceptedResultIntegration {
     RESULT_IDS.exists(id => state.results.get(id).integratorResumeCount > 0)
   val integratorNotPreparedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorNotPrepared)
-  val integratorResultRecordedReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorResultRecorded)
+  val integratorRunResultRecordedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == IntegratorRunResultRecorded)
   val quarantineReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == Quarantined)
   val retrySelectedReached: bool =
@@ -553,7 +553,7 @@ module acceptedResultIntegration {
           IntegratorSessionFixed,
           IntegratorInFlight,
           IntegratorResponseLost,
-          IntegratorResultRecorded,
+          IntegratorRunResultRecorded,
           IntegratorNotPrepared,
           CandidateRejected,
           RetryInFlight,
@@ -618,7 +618,7 @@ module acceptedResultIntegration {
       val result = state.results.get(id)
       result.integratorOutcome != NoIntegratorOutcome implies and {
         result.sessionFixed,
-        result.integratorResultRecorded,
+        result.integratorRunResultRecorded,
         result.integrationSession == id,
       }
     })
@@ -651,7 +651,7 @@ module acceptedResultIntegration {
   val integratorCallResultIsPersistent: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      result.integratorResultRecorded implies and {
+      result.integratorRunResultRecorded implies and {
         result.integratorInvocationCount > 0,
         result.integratorOutcome != NoIntegratorOutcome,
         Set(
@@ -687,7 +687,7 @@ module acceptedResultIntegration {
       val result = state.results.get(id)
       and {
         result.integratorReturnedEvidenceRefs == Set(),
-        not(result.integratorResultRecorded) or and {
+        not(result.integratorRunResultRecorded) or and {
           result.acceptedEvidencePreserved,
           result.acceptedResultEvidence != 0,
         },
@@ -699,7 +699,7 @@ module acceptedResultIntegration {
       val result = state.results.get(id)
       result.phase != IntegratorNotPrepared or and {
         result.integratorOutcome == NotPrepared,
-        result.integratorResultRecorded,
+        result.integratorRunResultRecorded,
         result.submittedCandidate == 0,
         not(result.candidateGitReadIntentRecorded),
         result.candidateGitObservation == NoCandidateGitObservation,
@@ -715,7 +715,7 @@ module acceptedResultIntegration {
       not(candidateResultPhase(result.phase) or candidateQualificationPhase(result.phase))
         or and {
           result.integratorOutcome == PreparedCandidate,
-          result.integratorResultRecorded,
+          result.integratorRunResultRecorded,
           result.candidateReported,
           result.submittedCandidate != 0,
         }
@@ -740,7 +740,7 @@ module acceptedResultIntegration {
         result.candidateGitObservation == CandidateExactParents,
         result.observedFirstParent == result.expectedTargetHead,
         result.observedSecondParent == result.acceptedResultCommit,
-        result.integratorResultRecorded,
+        result.integratorRunResultRecorded,
         result.candidateReported,
         result.candidateQualificationProven,
       }
@@ -767,7 +767,7 @@ module acceptedResultIntegration {
         result.quarantineOccurrenceCount > 0,
         result.quarantinePosition > 0,
         result.quarantineCause != NoQuarantineCause,
-        result.integratorResultRecorded,
+        result.integratorRunResultRecorded,
         result.acceptedEvidencePreserved,
         result.integrationResponsibilityRecorded,
         result.integrationResponsibilityCount == 1,
@@ -1009,7 +1009,7 @@ module acceptedResultIntegration {
       not(result.promotionAuthorized) or and {
         result.candidateQualificationProven,
         result.integratorOutcome == PreparedCandidate,
-        result.integratorResultRecorded,
+        result.integratorRunResultRecorded,
         result.candidateReported,
         result.submittedCandidate != 0,
         result.acceptedEvidencePreserved,
@@ -1103,7 +1103,7 @@ module acceptedResultIntegration {
         result.observedSecondParent == result.acceptedResultCommit,
         result.candidateQualificationProven,
         result.integratorOutcome == PreparedCandidate,
-        result.integratorResultRecorded,
+        result.integratorRunResultRecorded,
         result.candidateReported,
       }
     })
@@ -1116,7 +1116,7 @@ module acceptedResultIntegration {
         result.promotionExpectedHeadVerified,
         result.phase != PromotionInFlight or result.promotionTargetFactsCurrent,
         result.submittedCandidate != 0,
-        result.integratorResultRecorded,
+        result.integratorRunResultRecorded,
         result.candidateReported,
         result.observedFirstParent == result.expectedTargetHead,
         result.observedSecondParent == result.acceptedResultCommit,
@@ -1132,7 +1132,7 @@ module acceptedResultIntegration {
         result.promotionResultRecorded,
         result.promotionCandidateAncestryProven,
         result.candidateQualificationProven,
-        result.integratorResultRecorded,
+        result.integratorRunResultRecorded,
         result.candidateReported,
         Set(PromotionCandidateCurrent, PromotionCandidateAncestor).contains(result.promotionGitObservation),
         result.promotionObservedTargetHead == result.submittedCandidate
@@ -1247,7 +1247,7 @@ module acceptedResultIntegration {
         integratorInvocationCount: 0,
         integratorResumeCount: 0,
         integratorOutcome: NoIntegratorOutcome,
-        integratorResultRecorded: false,
+        integratorRunResultRecorded: false,
         candidateReported: false,
         integratorResponseAmbiguous: false,
         submittedCandidate: 0,
@@ -1540,7 +1540,7 @@ module acceptedResultIntegration {
           // releases that permit only after preservation is established.
           targetHeld: true,
           integratorOutcome: NotPrepared,
-          integratorResultRecorded: true,
+          integratorRunResultRecorded: true,
           candidateReported: false,
           integratorResponseAmbiguous: false,
           // Run two replaces run one's rejected candidate as the session's
@@ -1581,9 +1581,9 @@ module acceptedResultIntegration {
         ...state,
         results: state.results.put(id, {
           ...result,
-          phase: IntegratorResultRecorded,
+          phase: IntegratorRunResultRecorded,
           integratorOutcome: PreparedCandidate,
-          integratorResultRecorded: true,
+          integratorRunResultRecorded: true,
           candidateReported: true,
           integratorResponseAmbiguous: false,
           submittedCandidate: candidate,
@@ -1604,10 +1604,10 @@ module acceptedResultIntegration {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
-      result.phase == IntegratorResultRecorded,
+      result.phase == IntegratorRunResultRecorded,
       result.targetHeld,
       result.integratorOutcome == PreparedCandidate,
-      result.integratorResultRecorded,
+      result.integratorRunResultRecorded,
       result.submittedCandidate != 0,
       not(result.candidateGitReadIntentRecorded),
       not(state.targetReacquisitionRequired),
@@ -1727,7 +1727,7 @@ module acceptedResultIntegration {
       Set(IntegratorNotPrepared, CandidateRejected).contains(result.phase),
       result.targetHeld,
       result.sessionFixed,
-      result.integratorResultRecorded,
+      result.integratorRunResultRecorded,
       result.quarantineOccurrenceCount <= 1,
       result.integrationResponsibilityRecorded,
       result.integrationResponsibilityCount == 1,

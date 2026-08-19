@@ -2795,7 +2795,7 @@ const outerIntegratorCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc
 const outerIntegratorSessionSuffix =
   `$authored-run:attempt:A:0:23:27:${outerIntegratorExpectedHead}:${outerIntegratorAcceptedCommit}` +
   ":/dalph/cassettes/integration.git:refs/heads/master"
-const outerIntegratorCorrelationA = {
+const outerIntegratorSessionCorrelationA = {
   acceptedResult: {
     commit: outerIntegratorAcceptedCommit,
     evidenceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
@@ -2822,7 +2822,7 @@ const outerIntegratorCorrelationA = {
 
 const outerIntegratorRequestForA = {
   _tag: "IntegratorRequestReceived" as const,
-  correlation: outerIntegratorCorrelationA
+  correlation: outerIntegratorSessionCorrelationA
 }
 const outerIntegratorPreparedForA = (candidateText = outerIntegratorCandidateText) => [
   outerIntegratorRequestForA,

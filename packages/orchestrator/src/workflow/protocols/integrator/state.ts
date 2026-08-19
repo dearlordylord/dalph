@@ -2,9 +2,6 @@ import { Schema } from "effect"
 import { PlannedTaskAttempt } from "@dalph/contracts"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import {
-  integratorCandidateGitObservedRecordKey,
-  integratorCandidateGitReadIntendedRecordKey,
-  integratorResultRecordedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey
@@ -12,16 +9,13 @@ import {
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../registry/event.js"
 import {
-  integratorCandidateHasExactParents,
   IntegratorResponsibilityFacts,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
-  IntegratorRunState,
-  IntegratorState,
   integratorRetryRunOrdinal
 } from "./events.js"
-import type { IntegratorCandidateText, IntegratorCorrelation, IntegratorResult } from "./events.js"
+import type { IntegratorSessionCorrelation, IntegratorRunState } from "./events.js"
 import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
 
 const responsibilityFactsEquivalence = Schema.toEquivalence(IntegratorResponsibilityFacts)
@@ -38,7 +32,7 @@ export const integratorResponsibilityFactsFor = (
 })
 
 export const integratorResponsibilityFactsFromCorrelation = (
-  correlation: IntegratorCorrelation
+  correlation: IntegratorSessionCorrelation
 ): IntegratorResponsibilityFacts => ({
   acceptedResult: correlation.acceptedResult,
   integrationTarget: correlation.integrationTarget,
@@ -49,7 +43,10 @@ export const integratorResponsibilityFactsFromCorrelation = (
 
 export const integratorResponsibilityFactsEqual = responsibilityFactsEquivalence
 
-export const integratorCorrelationsEqual = (left: IntegratorCorrelation, right: IntegratorCorrelation): boolean =>
+export const integratorCorrelationsEqual = (
+  left: IntegratorSessionCorrelation,
+  right: IntegratorSessionCorrelation
+): boolean =>
   left.candidateResource === right.candidateResource &&
   left.expectedTargetHead === right.expectedTargetHead &&
   left.sessionId === right.sessionId &&
@@ -59,231 +56,88 @@ export const integratorCorrelationsEqual = (left: IntegratorCorrelation, right: 
     integratorResponsibilityFactsFromCorrelation(right)
   )
 
-const integratorEventCorrelation = (event: WorkflowJournalEvent): IntegratorCorrelation | undefined => {
-  if (event._tag === "IntegratorSessionFixed") return event.correlation
-  if (event._tag === "IntegratorResultRecorded") return event.result.correlation
-  if (event._tag === "IntegratorCandidateGitReadIntended") return event.correlation
-  if (event._tag === "IntegratorCandidateGitObserved") return event.correlation
-  return undefined
-}
-
 export const integratorFindEventAtKey = (
   records: ReadonlyArray<JournalRecord>,
   key: JournalRecord["key"]
 ): JournalRecord | undefined => records.find((record) => record.key === key)
 
-const contradictionState = (detail: string): IntegratorState => IntegratorState.cases.Contradiction.make({ detail })
-
-const eventMatchesResponsibility = (event: WorkflowJournalEvent, facts: IntegratorResponsibilityFacts): boolean => {
-  const correlation = integratorEventCorrelation(event)
-  return (
-    correlation !== undefined &&
-    integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(correlation), facts)
-  )
-}
-
-const lineageMatchesCorrelation = (record: JournalRecord | undefined, correlation: IntegratorCorrelation): boolean =>
-  record?.event._tag === "TargetLineageObserved" &&
-  record.event.observation.targetHeadSha === correlation.expectedTargetHead &&
-  record.event.observation.plannedBaseSha === correlation.plannedAttempt.baseSha &&
-  record.event.observation.plannedBaseIsAncestorOfTargetHead &&
-  plannedAttemptEquivalence(record.event.plannedAttempt, correlation.plannedAttempt)
-
-const gitFactsBindCandidate = (
-  records: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText
-): boolean =>
-  records.every(({ event }) => {
-    if (event._tag !== "IntegratorCandidateGitReadIntended" && event._tag !== "IntegratorCandidateGitObserved") {
-      return true
-    }
-    return integratorCorrelationsEqual(event.correlation, correlation) && event.candidateText === candidateText
-  })
-
-const intentMatchesCandidate = (
-  record: JournalRecord | undefined,
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText
-): boolean =>
-  record === undefined ||
-  (record.event._tag === "IntegratorCandidateGitReadIntended" &&
-    record.event.candidateText === candidateText &&
-    integratorCorrelationsEqual(record.event.correlation, correlation))
-
-const observationMatchesCandidate = (
-  record: JournalRecord,
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText
-): record is JournalRecord & {
-  readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorCandidateGitObserved" }>
-} =>
-  record.event._tag === "IntegratorCandidateGitObserved" &&
-  record.event.candidateText === candidateText &&
-  integratorCorrelationsEqual(record.event.correlation, correlation) &&
-  record.event.observation.candidateText === candidateText
-
-const stateForPreparedCandidate = (
-  records: ReadonlyArray<JournalRecord>,
-  related: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation,
-  result: Extract<IntegratorResult, { readonly _tag: "PreparedCandidate" }>
-): IntegratorState => {
-  const { candidateText } = result
-  if (!gitFactsBindCandidate(related, correlation, candidateText)) {
-    return contradictionState("Git facts do not bind the recorded candidate")
-  }
-  const intent = integratorFindEventAtKey(
-    records,
-    integratorCandidateGitReadIntendedRecordKey(correlation, candidateText)
-  )
-  if (!intentMatchesCandidate(intent, correlation, candidateText)) {
-    return contradictionState("the Git-read intent has a foreign correlation or candidate")
-  }
-  const observed = integratorFindEventAtKey(
-    records,
-    integratorCandidateGitObservedRecordKey(correlation, candidateText)
-  )
-  if (observed === undefined) return IntegratorState.cases.PreparedAwaitingGit.make({ candidateText, correlation })
-  if (intent === undefined) return contradictionState("Git observation exists without a read intent")
-  if (!observationMatchesCandidate(observed, correlation, candidateText)) {
-    return contradictionState("Git observation does not bind the reported candidate")
-  }
-  const observation = observed.event.observation
-  if (
-    !integratorCandidateHasExactParents(observation, correlation.expectedTargetHead, correlation.acceptedResult.commit)
-  ) {
-    return IntegratorState.cases.CandidateRejected.make({ candidateText, correlation, observation })
-  }
-  return IntegratorState.cases.GitQualifiedPrepared.make({
-    candidateCommit: observation.commit,
-    candidateText,
-    correlation,
-    observation: { directParents: [observation.directParents[0], observation.directParents[1]] },
-    qualifiedAt: observed.position
-  })
-}
-
-const stateAfterSession = (
-  records: ReadonlyArray<JournalRecord>,
-  related: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation
-): IntegratorState => {
-  const resultRecord = integratorFindEventAtKey(records, integratorResultRecordedRecordKey(correlation))
-  if (resultRecord === undefined) {
-    const hasResultOrGit = related.some(({ event }) => event._tag !== "IntegratorSessionFixed")
-    return hasResultOrGit
-      ? contradictionState("an outer result exists at a foreign result key")
-      : IntegratorState.cases.SessionUnfinished.make({ correlation })
-  }
-  if (resultRecord.event._tag !== "IntegratorResultRecorded") {
-    return contradictionState("the result key contains a non-result event")
-  }
-  const { result } = resultRecord.event
-  if (!integratorCorrelationsEqual(result.correlation, correlation)) {
-    return contradictionState("the recorded outer result has a foreign correlation")
-  }
-  const foreignResult = related.some(
-    ({ event }) =>
-      event._tag === "IntegratorResultRecorded" && !integratorCorrelationsEqual(event.result.correlation, correlation)
-  )
-  if (foreignResult) return contradictionState("multiple outer results exist for one responsibility")
-  if (result._tag === "PreparedCandidate") return stateForPreparedCandidate(records, related, correlation, result)
-  const hasGitFacts = related.some(
-    ({ event }) =>
-      event._tag === "IntegratorCandidateGitReadIntended" || event._tag === "IntegratorCandidateGitObserved"
-  )
-  return hasGitFacts
-    ? contradictionState("NotPrepared cannot have a candidate Git observation")
-    : IntegratorState.cases.NotPrepared.make({ correlation, detail: result.detail })
-}
-
-/**
- * Reconstructs only states proved by this module's local records. Foreign or
- * incomplete relationships become Contradiction rather than a guessed state.
- */
-export const deriveIntegratorState = (
-  records: ReadonlyArray<JournalRecord>,
-  responsibility: StartedIntegrationResponsibility
-): IntegratorState => {
-  const facts = integratorResponsibilityFactsFor(responsibility)
-  const session = integratorFindEventAtKey(records, integratorSessionFixedRecordKey(facts))
-  const related = records.filter(({ event }) => eventMatchesResponsibility(event, facts))
-  if (session === undefined) {
-    return related.length === 0
-      ? IntegratorState.cases.Absent.make({ responsibility: facts })
-      : contradictionState("a result or Git record exists without a fixed session")
-  }
-  if (session.event._tag !== "IntegratorSessionFixed") {
-    return contradictionState("the session key contains a non-session event")
-  }
-  const correlation = session.event.correlation
-  if (!integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(correlation), facts)) {
-    return contradictionState("the fixed session does not bind the requested responsibility")
-  }
-  const lineageRecord = records.find(({ position }) => position === correlation.targetLineageObservedAt)
-  if (!lineageMatchesCorrelation(lineageRecord, correlation)) {
-    return contradictionState("the fixed session does not follow its durable target-lineage observation")
-  }
-
-  const foreignRelatedSession = related.some(
-    ({ event }) =>
-      event._tag === "IntegratorSessionFixed" && !integratorCorrelationsEqual(event.correlation, correlation)
-  )
-  if (foreignRelatedSession) return contradictionState("multiple target heads were recorded for one responsibility")
-  return stateAfterSession(records, related, correlation)
-}
-
-/** Reconstructs run-bound state while keeping the public state module surface stable. */
+/** Reconstructs run-bound state without upcasting any session-only history. */
 export const deriveIntegratorRunState = (
   records: ReadonlyArray<JournalRecord>,
   responsibility: StartedIntegrationResponsibility,
   run: IntegratorRunCorrelation
 ): IntegratorRunState =>
   deriveIntegratorRunStateFromHistory(records, responsibility, run, {
-    deriveLegacyState: deriveIntegratorState,
     findEventAtKey: integratorFindEventAtKey,
     responsibilityFactsFromCorrelation: integratorResponsibilityFactsFromCorrelation,
     responsibilityFactsEqual: integratorResponsibilityFactsEqual,
     correlationsEqual: integratorCorrelationsEqual
   })
 
-/**
- * The latest exact run state for one fixed Integrator session. Before a
- * session exists, reconstruction retains the responsibility-bound Absent or
- * Contradiction state because no run identity can yet be constructed.
- */
-export type CurrentIntegratorState =
-  | Extract<IntegratorState, { readonly _tag: "Absent" | "Contradiction" }>
-  | IntegratorRunState
+type IntegratorCurrentAbsent = { readonly _tag: "Absent"; readonly responsibility: IntegratorResponsibilityFacts }
+
+type IntegratorCurrentContradiction = { readonly _tag: "Contradiction"; readonly detail: string }
+
+/** The latest exact run state, or the responsibility-bound absence/contradiction before a session exists. */
+export type CurrentIntegratorState = IntegratorCurrentAbsent | IntegratorCurrentContradiction | IntegratorRunState
+
+const contradictionState = (detail: string): IntegratorCurrentContradiction => ({ _tag: "Contradiction", detail })
+
+const runEventMatchesResponsibility = (event: WorkflowJournalEvent, facts: IntegratorResponsibilityFacts): boolean => {
+  if (event._tag === "IntegratorRunStarted") {
+    return integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(event.run.session), facts)
+  }
+  if (event._tag === "IntegratorRunResultRecorded") {
+    return integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(event.run.session), facts)
+  }
+  if (event._tag === "IntegratorRunCandidateGitReadIntended") {
+    return integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(event.run.session), facts)
+  }
+  if (event._tag === "IntegratorRunCandidateGitObserved") {
+    return integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(event.run.session), facts)
+  }
+  return false
+}
+
+const lineageMatchesCorrelation = (
+  record: JournalRecord | undefined,
+  correlation: IntegratorSessionCorrelation
+): boolean =>
+  record?.event._tag === "TargetLineageObserved" &&
+  record.event.observation.targetHeadSha === correlation.expectedTargetHead &&
+  record.event.observation.plannedBaseSha === correlation.plannedAttempt.baseSha &&
+  record.event.observation.plannedBaseIsAncestorOfTargetHead &&
+  plannedAttemptEquivalence(record.event.plannedAttempt, correlation.plannedAttempt)
 
 const latestStartedRunFor = (
   records: ReadonlyArray<JournalRecord>,
-  session: IntegratorCorrelation
+  session: IntegratorSessionCorrelation
 ):
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly run: IntegratorRunCorrelation } => {
   const related = records.filter(
-    ({ event }) => event._tag === "IntegratorRunStarted" && integratorCorrelationsEqual(event.run.session, session)
+    (
+      record
+    ): record is JournalRecord & {
+      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunStarted" }>
+    } => record.event._tag === "IntegratorRunStarted" && integratorCorrelationsEqual(record.event.run.session, session)
   )
   if (
     related.some(
       (record) =>
-        record.event._tag !== "IntegratorRunStarted" ||
         record.event.run.ordinal > integratorRetryRunOrdinal ||
         record.key !== integratorRunStartedRecordKey(record.event.run)
     )
   ) {
     return { _tag: "Invalid", detail: "Integrator run start has a foreign key or exceeds the Retry bound" }
   }
-  const ordinals = related.flatMap(({ event }) => (event._tag === "IntegratorRunStarted" ? [event.run.ordinal] : []))
+  const ordinals = related.map(({ event }) => event.run.ordinal)
   if (new Set(ordinals).size !== ordinals.length) {
     return { _tag: "Invalid", detail: "Integrator run start repeats one exact session ordinal" }
   }
   const latest = related.reduce<IntegratorRunCorrelation | undefined>((current, { event }) => {
-    /* v8 ignore next -- @preserve related contains only IntegratorRunStarted events by the exact filter above. */
-    if (event._tag !== "IntegratorRunStarted") return current
+    /* v8 ignore next -- @preserve validated Journal order records a lower ordinal before its authorized successor. */
     return current === undefined || event.run.ordinal > current.ordinal ? event.run : current
   }, undefined)
   return latest === undefined ? { _tag: "Absent" } : { _tag: "Valid", run: latest }
@@ -291,11 +145,11 @@ const latestStartedRunFor = (
 
 const activeSuccessorFor = (
   records: ReadonlyArray<JournalRecord>,
-  predecessor: IntegratorCorrelation
+  predecessor: IntegratorSessionCorrelation
 ):
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
-  | { readonly _tag: "Valid"; readonly successor: IntegratorCorrelation } => {
+  | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
   const related = records.filter(
     ({ event }) =>
       event._tag === "IntegratorSuccessorSessionFixed" && event.predecessor.sessionId === predecessor.sessionId
@@ -346,36 +200,52 @@ const activeSuccessorFor = (
   return { _tag: "Valid", successor: event.successor }
 }
 
-/** Reconstructs the latest exact Integrator run, including the initial legacy-history migration. */
+const fixedSessionFor = (
+  records: ReadonlyArray<JournalRecord>,
+  facts: IntegratorResponsibilityFacts
+): JournalRecord | undefined => integratorFindEventAtKey(records, integratorSessionFixedRecordKey(facts))
+
+/** Reconstructs the latest explicit run; old session-only event tags remain unknown and cannot be upcast. */
 export const deriveCurrentIntegratorState = (
   records: ReadonlyArray<JournalRecord>,
   responsibility: StartedIntegrationResponsibility
 ): CurrentIntegratorState => {
-  const sessionState = deriveIntegratorState(records, responsibility)
-  if (sessionState._tag === "Absent" || sessionState._tag === "Contradiction") return sessionState
-  const predecessor = sessionState.correlation
-  const activeSuccessor = activeSuccessorFor(records, predecessor)
-  if (activeSuccessor._tag === "Invalid") {
-    return IntegratorRunState.cases.Contradiction.make({ detail: activeSuccessor.detail })
+  const facts = integratorResponsibilityFactsFor(responsibility)
+  const sessionRecord = fixedSessionFor(records, facts)
+  if (sessionRecord === undefined) {
+    return records.some(({ event }) => runEventMatchesResponsibility(event, facts))
+      ? contradictionState("an Integrator run record exists without a fixed session")
+      : { _tag: "Absent", responsibility: facts }
   }
+  if (sessionRecord.event._tag !== "IntegratorSessionFixed") {
+    return contradictionState("the session key contains a non-session event")
+  }
+  const predecessor = sessionRecord.event.correlation
+  if (!integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(predecessor), facts)) {
+    return contradictionState("the fixed session does not bind the requested responsibility")
+  }
+  const lineageRecord = records.find(({ position }) => position === predecessor.targetLineageObservedAt)
+  if (!lineageMatchesCorrelation(lineageRecord, predecessor)) {
+    return contradictionState("the fixed session does not follow its durable target-lineage observation")
+  }
+  const foreignSession = records.some(
+    ({ event }) =>
+      event._tag === "IntegratorSessionFixed" &&
+      integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(event.correlation), facts) &&
+      !integratorCorrelationsEqual(event.correlation, predecessor)
+  )
+  if (foreignSession) return contradictionState("multiple target heads were recorded for one responsibility")
+  const activeSuccessor = activeSuccessorFor(records, predecessor)
+  if (activeSuccessor._tag === "Invalid") return contradictionState(activeSuccessor.detail)
   const session = activeSuccessor._tag === "Valid" ? activeSuccessor.successor : predecessor
   const startedRun = latestStartedRunFor(records, session)
-  if (startedRun._tag === "Invalid") {
-    return IntegratorRunState.cases.Contradiction.make({ detail: startedRun.detail })
-  }
+  if (startedRun._tag === "Invalid") return contradictionState(startedRun.detail)
   if (
     activeSuccessor._tag === "Valid" &&
     startedRun._tag === "Valid" &&
     startedRun.run.ordinal !== IntegratorRunOrdinal.make(1)
   ) {
-    return IntegratorRunState.cases.Contradiction.make({
-      detail: "FullRerun successor permits only its initial Integrator run"
-    })
-  }
-  if (startedRun._tag === "Absent" && sessionState._tag !== "SessionUnfinished") {
-    return IntegratorRunState.cases.Contradiction.make({
-      detail: "session-only terminal Integrator history cannot authorize run-bound promotion"
-    })
+    return contradictionState("FullRerun successor permits only its initial Integrator run")
   }
   const run =
     startedRun._tag === "Valid"

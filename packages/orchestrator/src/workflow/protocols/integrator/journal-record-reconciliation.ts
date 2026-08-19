@@ -2,18 +2,15 @@ import { Effect, Option, Schema } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
 import {
-  integratorCandidateGitObservedRecordKey,
-  integratorCandidateGitReadIntendedRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
-  integratorRunStartedRecordKey,
-  integratorResultRecordedRecordKey
+  integratorRunStartedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   type IntegratorCandidateText,
-  type IntegratorCorrelation,
+  type IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorResult,
   IntegratorRunCandidateGitReadIntendedEvent,
@@ -24,7 +21,8 @@ import { IntegratorJournalContradiction } from "./errors.js"
 import { appendIntegratorRunStartedIfNeeded } from "./session.js"
 import { integratorCorrelationsEqual, integratorFindEventAtKey } from "./state.js"
 
-export const runIdForCorrelation = (correlation: IntegratorCorrelation): RunId => correlation.plannedAttempt.runId
+export const runIdForCorrelation = (correlation: IntegratorSessionCorrelation): RunId =>
+  correlation.plannedAttempt.runId
 const integratorResultEquivalence = Schema.toEquivalence(IntegratorResult)
 const integratorGitObservationEquivalence = Schema.toEquivalence(IntegratorGitObservation)
 
@@ -180,119 +178,6 @@ const readRunGitReadIntent = (
   return Effect.succeed(true)
 }
 
-const readRecordedResult = (
-  records: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation
-): Effect.Effect<Option.Option<IntegratorResult>, IntegratorJournalContradiction> => {
-  const existing = integratorFindEventAtKey(records, integratorResultRecordedRecordKey(correlation))
-  if (existing === undefined) return Effect.succeed(Option.none())
-  if (existing.event._tag !== "IntegratorResultRecorded") {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "result key contains a foreign event",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  if (!integratorCorrelationsEqual(existing.event.result.correlation, correlation)) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "recorded result belongs to a foreign correlation",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  return Effect.succeed(Option.some(existing.event.result))
-}
-
-const readRecordedGitObservation = (
-  records: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText
-): Effect.Effect<Option.Option<IntegratorGitObservation>, IntegratorJournalContradiction> => {
-  const key = integratorCandidateGitObservedRecordKey(correlation, candidateText)
-  const existing = integratorFindEventAtKey(records, key)
-  if (existing === undefined) return Effect.succeed(Option.none())
-  if (existing.event._tag !== "IntegratorCandidateGitObserved") {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "Git observation key contains a foreign event",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  if (
-    !integratorCorrelationsEqual(existing.event.correlation, correlation) ||
-    existing.event.candidateText !== candidateText
-  ) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "recorded Git observation belongs to a foreign candidate",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  if (existing.event.observation.candidateText !== candidateText) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "Git observation text differs from the reported candidate",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  return Effect.succeed(Option.some(existing.event.observation))
-}
-
-const readGitReadIntent = (
-  records: ReadonlyArray<JournalRecord>,
-  correlation: IntegratorCorrelation,
-  candidateText: IntegratorCandidateText
-): Effect.Effect<boolean, IntegratorJournalContradiction> => {
-  const existing = integratorFindEventAtKey(
-    records,
-    integratorCandidateGitReadIntendedRecordKey(correlation, candidateText)
-  )
-  if (existing === undefined) return Effect.succeed(false)
-  if (
-    existing.event._tag !== "IntegratorCandidateGitReadIntended" ||
-    existing.event.candidateText !== candidateText ||
-    !integratorCorrelationsEqual(existing.event.correlation, correlation)
-  ) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "Git-read key contains a foreign event",
-        runId: runIdForCorrelation(correlation)
-      })
-    )
-  }
-  return Effect.succeed(true)
-}
-
-export const readLegacyInitialResultForRun = Effect.fn("IntegratorProtocol.readLegacyInitialResultForRun")(function* (
-  records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation
-) {
-  if (run.ordinal !== 1) return Option.none<IntegratorResult>()
-  return yield* readRecordedResult(records, run.session)
-})
-
-export const validateLegacyInitialResult = (
-  records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation,
-  result: IntegratorResult
-): Effect.Effect<IntegratorResult, IntegratorJournalContradiction> => {
-  const existingRunStart = integratorFindEventAtKey(records, integratorRunStartedRecordKey(run))
-  if (existingRunStart !== undefined) {
-    return Effect.fail(
-      new IntegratorJournalContradiction({
-        detail: "legacy initial result and run-bound run start cannot describe one call",
-        runId: runIdForCorrelation(run.session)
-      })
-    )
-  }
-  return Effect.succeed(result)
-}
-
 const previousRunFor = (run: IntegratorRunCorrelation): IntegratorRunCorrelation | undefined =>
   run.ordinal === 1
     ? undefined
@@ -324,13 +209,7 @@ const previousRunIsDurablyConclusive = (
 ): boolean => {
   const previous = previousRunFor(run)
   if (previous === undefined) return true
-  if (previousRunHasDurableResult(records, previous)) return true
-  // Existing session-only initial results are the sole historical migration case.
-  return (
-    previous.ordinal === 1 &&
-    integratorFindEventAtKey(records, integratorResultRecordedRecordKey(run.session))?.event._tag ===
-      "IntegratorResultRecorded"
-  )
+  return previousRunHasDurableResult(records, previous)
 }
 
 export const reconcileRunResult = Effect.fn("IntegratorProtocol.reconcileRunResult")(function* (
@@ -353,45 +232,20 @@ export const reconcileRunResult = Effect.fn("IntegratorProtocol.reconcileRunResu
   return yield* readRecordedRunResult(recordsAfterRunStart, run)
 })
 
-const readLegacyObservationForRun = Effect.fn("IntegratorProtocol.readLegacyObservationForRun")(function* (
-  records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation,
-  candidateText: IntegratorCandidateText,
-  runObservation: Option.Option<IntegratorGitObservation>
-) {
-  if (run.ordinal !== 1) return Option.none<IntegratorGitObservation>()
-  if (Option.isSome(runObservation)) return Option.none<IntegratorGitObservation>()
-  return yield* readRecordedGitObservation(records, run.session, candidateText)
-})
-
-const readLegacyReadIntentForRun = Effect.fn("IntegratorProtocol.readLegacyReadIntentForRun")(function* (
-  records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation,
-  candidateText: IntegratorCandidateText,
-  runObservation: Option.Option<IntegratorGitObservation>
-) {
-  if (run.ordinal !== 1) return false
-  if (Option.isSome(runObservation)) return false
-  return yield* readGitReadIntent(records, run.session, candidateText)
-})
-
 export const readRunCandidateObservation = Effect.fn("IntegratorProtocol.readRunCandidateObservation")(function* (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation,
   candidateText: IntegratorCandidateText
 ) {
   const runObservation = yield* readRecordedRunGitObservation(records, run, candidateText)
-  const legacyObservation = yield* readLegacyObservationForRun(records, run, candidateText, runObservation)
-  const recordedObservation = Option.isSome(runObservation) ? runObservation : legacyObservation
   const runReadIntent = yield* readRunGitReadIntent(records, run, candidateText)
-  const legacyReadIntent = yield* readLegacyReadIntentForRun(records, run, candidateText, runObservation)
-  if (Option.isSome(recordedObservation)) {
-    if (!runReadIntent && !legacyReadIntent) {
+  if (Option.isSome(runObservation)) {
+    if (!runReadIntent) {
       return yield* new IntegratorJournalContradiction({
         detail: "Git observation exists without its durable read intent",
         runId: runIdForCorrelation(run.session)
       })
     }
   }
-  return recordedObservation
+  return runObservation
 })

@@ -46,7 +46,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorResult,
@@ -105,7 +105,7 @@ type History = {
   readonly resultRecord: JournalRecord
   readonly candidateObservationRecord?: JournalRecord
   readonly run: IntegratorRunCorrelation
-  readonly session: IntegratorCorrelation
+  readonly session: IntegratorSessionCorrelation
 }
 
 const appendRecord = Effect.fn("RetryConclusiveTest.appendRecord")(function* (
@@ -160,7 +160,7 @@ const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
     makeTargetLineage(initialLineageOperationId, fixedHead)
   )
 
-  const session = IntegratorCorrelation.make({
+  const session = IntegratorSessionCorrelation.make({
     acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:retry-conclusive"),
     expectedTargetHead: fixedHead,
@@ -407,7 +407,7 @@ it.effect("reconstructs Q2 only when Retry chronology is authorized and tolerate
       taskRevision: TaskRevision.make("retry-conclusive-unrelated-revision"),
       worktree: WorktreeLocator.make("/worktrees/retry-conclusive-unrelated")
     })
-    const unrelatedSession = IntegratorCorrelation.make({
+    const unrelatedSession = IntegratorSessionCorrelation.make({
       ...history.session,
       candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:retry-conclusive-unrelated"),
       plannedAttempt: unrelatedAttempt,
@@ -630,7 +630,7 @@ it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", ()
               event: IntegratorRunResultRecordedEvent.make({
                 ...record.event,
                 result: IntegratorResult.cases.NotPrepared.make({
-                  correlation: IntegratorCorrelation.make({
+                  correlation: IntegratorSessionCorrelation.make({
                     ...history.session,
                     sessionId: IntegratorSessionId.make("retry-conclusive-foreign-result-session")
                   }),

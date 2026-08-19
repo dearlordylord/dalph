@@ -46,7 +46,7 @@ import {
   InRunJournal,
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
@@ -123,7 +123,7 @@ const makePreparedFinality = Effect.fn("IntegrationFinalityProtocolCassette.make
       taskRevision: TaskRevision.make("integration-finality-protocol-revision"),
       worktree: WorktreeLocator.make("/worktrees/integration-finality-protocol")
     })
-    const integratorCorrelation = IntegratorCorrelation.make({
+    const integratorCorrelation = IntegratorSessionCorrelation.make({
       acceptedResult,
       candidateResource: IntegratorCandidateResourceLocator.make("/candidate/integration-finality-protocol"),
       expectedTargetHead,

@@ -44,7 +44,7 @@ import {
   IntegratorSessionId,
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorResult,
   IntegratorRunCorrelation,
@@ -157,22 +157,15 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     plannedAttempt: PlannedTaskAttempt
   },
   /** Outer Integrator facts retain the exact correlation, including causal Journal positions. */
-  IntegratorSessionFixed: { correlation: IntegratorCorrelation },
+  IntegratorSessionFixed: { correlation: IntegratorSessionCorrelation },
   /** FullRerun preserves the quarantined predecessor while fixing one fresh-head successor. */
   IntegratorSuccessorSessionFixed: {
     direction: Schema.Literal("FullRerun"),
     directionAppliedAt: JournalPosition,
-    predecessor: IntegratorCorrelation,
+    predecessor: IntegratorSessionCorrelation,
     quarantineAt: JournalPosition,
-    successor: IntegratorCorrelation,
+    successor: IntegratorSessionCorrelation,
     successorGeneration: IntegratorSuccessorGeneration
-  },
-  IntegratorResultRecorded: { result: IntegratorResult },
-  IntegratorCandidateGitReadIntended: { candidateText: IntegratorCandidateText, correlation: IntegratorCorrelation },
-  IntegratorCandidateGitObserved: {
-    candidateText: IntegratorCandidateText,
-    correlation: IntegratorCorrelation,
-    observation: IntegratorGitObservation
   },
   /** Run-scoped Integrator facts retain the exact run ordinal and owning session. */
   IntegratorRunStarted: { run: IntegratorRunCorrelation },
@@ -185,14 +178,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   },
   /** Quarantine facts retain the exact outer session, disposition evidence, and operator occurrence semantics. */
   IntegrationProviderRunActivityAbsent: {
-    correlation: IntegratorCorrelation,
+    correlation: IntegratorSessionCorrelation,
     detail: IntegrationQuarantineFailureDetail,
     run: IntegratorRunCorrelation,
     ...nonActionOccurrence
   },
   IntegrationQuarantined: {
     basis: IntegrationQuarantineBasis,
-    correlation: IntegratorCorrelation,
+    correlation: IntegratorSessionCorrelation,
     ...nonActionOccurrence
   },
   IntegrationQuarantineDirectionApplied: {

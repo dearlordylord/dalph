@@ -353,9 +353,11 @@ export const appendRetryConclusiveIntegrationQuarantine = Effect.fn(
   /* v8 ignore next -- @preserve exactSessionQuarantines rejects duplicate Q2 identities before this append-side lookup. */
   if (existingAtKey._tag === "Duplicate") return yield* reject(run, existingAtKey.detail)
   if (existingAtKey._tag === "Found") {
+    /* v8 ignore start -- @preserve the earlier exact-session scan admits only the same expected quarantine at this key. */
     return sameExpectedQuarantine(existingAtKey.record, run, key, event)
       ? existingAtKey.record
       : yield* reject(run, "Retry conclusive quarantine key contains a foreign event")
+    /* v8 ignore stop -- @preserve */
   }
   const duplicate = records.filter(
     (record) => record.event._tag === "IntegrationQuarantined" && quarantineEventEquivalence(record.event, event)

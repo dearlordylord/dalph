@@ -17,7 +17,7 @@ import {
   ControlDirection,
   InitialControlPolicy,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   PlannedBranchReady,
@@ -710,7 +710,7 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   /** Git applies the planned-worktree create, but Dalph loses the response before the ordinary reread. */
   GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
   /** The fake outer Integrator receives this exact session/responsibility correlation. */
-  IntegratorRequestReceived: { correlation: IntegratorCorrelation },
+  IntegratorRequestReceived: { correlation: IntegratorSessionCorrelation },
   /** The fake outer Integrator returns only its public prepared/not-prepared result. */
   IntegratorResultReturned: { result: AuthoredOuterIntegratorResult },
   /** Git returns object-kind and ordered-parent facts for the explicitly reported candidate text. */

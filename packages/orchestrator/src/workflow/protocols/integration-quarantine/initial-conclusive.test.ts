@@ -46,8 +46,7 @@ import { appendInitialConclusiveIntegrationQuarantine } from "./initial-conclusi
 import {
   IntegratorCandidateText,
   IntegratorCandidateResourceLocator,
-  IntegratorCorrelation,
-  IntegratorCandidateGitReadIntendedEvent,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorResult,
@@ -56,7 +55,6 @@ import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunProtocolResult,
-  IntegratorResultRecordedEvent,
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
@@ -129,7 +127,7 @@ const appendExactHistory = Effect.fn("InitialConclusiveTest.appendExactHistory")
       version: workflowJournalEventVersion
     })
   )
-  const session = IntegratorCorrelation.make({
+  const session = IntegratorSessionCorrelation.make({
     acceptedResult: responsibility.acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:initial-conclusive"),
     expectedTargetHead: targetHead,
@@ -340,18 +338,6 @@ it.effect("rejects legacy, foreign-key, and malformed modern run evidence", () =
         Effect.flip
       )
 
-    const legacyResult: JournalRecord = {
-      event: IntegratorResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation: history.session, detail: notPreparedDetail }),
-        version: workflowJournalEventVersion
-      }),
-      key: JournalRecordKey.make("initial-conclusive:legacy-result"),
-      position: JournalPosition.make(current.length + 1),
-      runId
-    }
-    const legacyFailure = yield* rejectWith((records) => [...records, legacyResult])
-    expect(legacyFailure._tag).toBe("IntegratorJournalContradiction")
-
     const foreignFixedKey = yield* rejectWith((records) =>
       records.map((record) =>
         record === fixedSession
@@ -366,7 +352,7 @@ it.effect("rejects legacy, foreign-key, and malformed modern run evidence", () =
       {
         ...fixedSession,
         event: IntegratorSessionFixedEvent.make({
-          correlation: IntegratorCorrelation.make({
+          correlation: IntegratorSessionCorrelation.make({
             ...history.session,
             sessionId: IntegratorSessionId.make("initial-conclusive-foreign-fixed-session")
           }),
@@ -420,19 +406,6 @@ it.effect("rejects legacy, foreign-key, and malformed modern run evidence", () =
       Effect.flip
     )
     expect(ordinalFailure._tag).toBe("IntegratorJournalContradiction")
-
-    const legacyCandidate: JournalRecord = {
-      event: IntegratorCandidateGitReadIntendedEvent.make({
-        candidateText,
-        correlation: history.session,
-        version: workflowJournalEventVersion
-      }),
-      key: JournalRecordKey.make("initial-conclusive:legacy-candidate"),
-      position: JournalPosition.make(current.length + 1),
-      runId
-    }
-    const legacyCandidateFailure = yield* rejectWith((records) => [...records, legacyCandidate])
-    expect(legacyCandidateFailure._tag).toBe("IntegratorJournalContradiction")
 
     const missingStart = yield* rejectWith((records) => records.filter((record) => record !== runStart))
     expect(missingStart._tag).toBe("IntegratorJournalContradiction")
@@ -675,13 +648,13 @@ it.effect("accepts a modern run whose fixed predecessor is a FullRerun successor
     if (fixed === undefined || start === undefined || result === undefined) {
       return yield* Effect.die("fixture lacks direct modern evidence")
     }
-    const predecessor = IntegratorCorrelation.make({
+    const predecessor = IntegratorSessionCorrelation.make({
       ...history.session,
       candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:initial-predecessor"),
       sessionId: IntegratorSessionId.make("initial-conclusive-predecessor"),
       targetLineageObservedAt: JournalPosition.make(1)
     })
-    const successor = IntegratorCorrelation.make({
+    const successor = IntegratorSessionCorrelation.make({
       ...history.session,
       targetLineageObservedAt: JournalPosition.make(5)
     })

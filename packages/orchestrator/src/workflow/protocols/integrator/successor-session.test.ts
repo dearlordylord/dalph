@@ -1,6 +1,6 @@
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
-import { Effect, Option, Ref } from "effect"
+import { Effect, Option, Ref, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -63,7 +63,8 @@ import {
   IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
   IntegratorSessionId,
-  IntegratorSuccessorSessionFixedEvent
+  IntegratorSuccessorSessionFixedEvent,
+  firstFullRerunSuccessorGeneration
 } from "./events.js"
 import { appendIntegratorSuccessorSessionIfNeeded, readActiveIntegratorSession } from "./successor-session.js"
 import {
@@ -113,6 +114,20 @@ const predecessorInput = IntegratorPreparationInput.make({
   targetLineageObservedAt: JournalPosition.make(5)
 })
 const predecessor = integratorCorrelationFor(predecessorInput)
+
+it("rejects a FullRerun successor that reuses predecessor identities", () => {
+  const decoded = Schema.decodeUnknownExit(IntegratorSuccessorSessionFixedEvent)({
+    _tag: "IntegratorSuccessorSessionFixed",
+    direction: "FullRerun",
+    directionAppliedAt: 12,
+    predecessor,
+    quarantineAt: 10,
+    successor: { ...predecessor, expectedTargetHead: freshHead, targetLineageObservedAt: 15 },
+    successorGeneration: firstFullRerunSuccessorGeneration,
+    version: workflowJournalEventVersion
+  })
+  expect(decoded._tag).toBe("Failure")
+})
 
 const journalRecord = (
   position: number,

@@ -15,11 +15,6 @@ import {
   type WorkflowJournalEvent
 } from "@dalph/orchestrator"
 import {
-  IntegratorCandidateGitObservedEvent,
-  IntegratorCandidateGitReadIntendedEvent,
-  IntegratorResultRecordedEvent
-} from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
-import {
   givesOneExactSessionToTheIntegratorAndQualifiesItsReportedCandidate,
   AuthoredIntegratorGitResult,
   AuthoredIntegratorStoryItem,
@@ -158,34 +153,26 @@ describe("maintained outer Integrator cassettes", () => {
     )
   )
 
-  it.effect("projects legacy Integrator records and omits unrelated journal events", () =>
+  it.effect("projects exact run-bound Integrator records and omits unrelated journal events", () =>
     Effect.gen(function* () {
       const result = yield* run(givesOneExactSessionToTheIntegratorAndQualifiesItsReportedCandidate)
-      const resultRecord = result.records.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
-      const observedRecord = result.records.find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
-      if (
-        resultRecord?.event._tag !== "IntegratorRunResultRecorded" ||
-        observedRecord?.event._tag !== "IntegratorRunCandidateGitObserved"
-      ) {
-        return yield* Effect.die("the exact Integrator fixture lacks run-bound result and Git observation")
+      const exactRecords = result.records.filter(
+        ({ event }) =>
+          event._tag === "IntegratorRunStarted" ||
+          event._tag === "IntegratorRunResultRecorded" ||
+          event._tag === "IntegratorRunCandidateGitReadIntended" ||
+          event._tag === "IntegratorRunCandidateGitObserved"
+      )
+      expect(exactRecords.map(({ event }) => event._tag)).toEqual([
+        "IntegratorRunStarted",
+        "IntegratorRunResultRecorded",
+        "IntegratorRunCandidateGitReadIntended",
+        "IntegratorRunCandidateGitObserved"
+      ])
+      const runStarted = exactRecords[0]
+      if (runStarted?.event._tag !== "IntegratorRunStarted") {
+        return yield* Effect.die("the exact Integrator fixture lacks its run start")
       }
-
-      const correlation = resultRecord.event.result.correlation
-      const legacyResult = IntegratorResultRecordedEvent.make({
-        result: resultRecord.event.result,
-        version: workflowJournalEventVersion
-      })
-      const legacyRead = IntegratorCandidateGitReadIntendedEvent.make({
-        candidateText: observedRecord.event.candidateText,
-        correlation,
-        version: workflowJournalEventVersion
-      })
-      const legacyObservation = IntegratorCandidateGitObservedEvent.make({
-        candidateText: observedRecord.event.candidateText,
-        correlation,
-        observation: observedRecord.event.observation,
-        version: workflowJournalEventVersion
-      })
       const unrelated = TaskClaimAcquiredEvent.make({
         claim: ActiveTaskClaim.make({
           operationId: OperationId.make("integrator-cassette-unrelated-operation"),
@@ -203,24 +190,28 @@ describe("maintained outer Integrator cassettes", () => {
           runId: result.cassette.startingFacts.responsibility.plannedAttempt.runId
         })
 
-      const projected = recordedIntegratorCassetteFor("legacy Integrator projection", [
-        recordFor(legacyResult, 20),
-        recordFor(legacyRead, 21),
-        recordFor(legacyObservation, 22),
+      const projected = recordedIntegratorCassetteFor("exact Integrator projection", [
+        ...exactRecords,
         recordFor(unrelated, 23)
       ])
       expect(projected.entries.map(({ _tag }) => _tag)).toEqual([
-        "IntegratorResultRecorded",
-        "IntegratorCandidateGitReadIntended",
-        "IntegratorCandidateGitObserved"
+        "IntegratorRunStarted",
+        "IntegratorRunResultRecorded",
+        "IntegratorRunCandidateGitReadIntended",
+        "IntegratorRunCandidateGitObserved"
       ])
       expect(projected.entries).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ _tag: "IntegratorResultRecorded", result: resultRecord.event.result }),
-          expect.objectContaining({ _tag: "IntegratorCandidateGitReadIntended", correlation }),
-          expect.objectContaining({ _tag: "IntegratorCandidateGitObserved", correlation })
+          expect.objectContaining({ _tag: "IntegratorRunStarted" }),
+          expect.objectContaining({ _tag: "IntegratorRunResultRecorded" }),
+          expect.objectContaining({ _tag: "IntegratorRunCandidateGitReadIntended" }),
+          expect.objectContaining({ _tag: "IntegratorRunCandidateGitObserved" })
         ])
       )
+      for (const entry of projected.entries) {
+        expect("run" in entry).toBe(true)
+        if ("run" in entry) expect(entry.run).toEqual(runStarted.event.run)
+      }
     })
   )
 

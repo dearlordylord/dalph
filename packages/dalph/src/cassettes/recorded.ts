@@ -590,9 +590,6 @@ type OuterIntegratorEvent = Extract<
   WorkflowJournalEvent,
   {
     readonly _tag:
-      | "IntegratorCandidateGitObserved"
-      | "IntegratorCandidateGitReadIntended"
-      | "IntegratorResultRecorded"
       | "IntegratorRunCandidateGitObserved"
       | "IntegratorRunCandidateGitReadIntended"
       | "IntegratorRunResultRecorded"
@@ -618,9 +615,6 @@ const isIntegrationQuarantineEvent = (event: WorkflowJournalEvent): event is Int
   event._tag === "IntegrationQuarantined"
 
 const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterIntegratorEvent =>
-  event._tag === "IntegratorCandidateGitObserved" ||
-  event._tag === "IntegratorCandidateGitReadIntended" ||
-  event._tag === "IntegratorResultRecorded" ||
   event._tag === "IntegratorRunCandidateGitObserved" ||
   event._tag === "IntegratorRunCandidateGitReadIntended" ||
   event._tag === "IntegratorRunResultRecorded" ||
@@ -631,9 +625,6 @@ const isOuterIntegratorEvent = (event: WorkflowJournalEvent): event is OuterInte
 type RecordedOuterIntegratorEntry = Extract<RecordedCassetteEntry, { readonly _tag: OuterIntegratorEvent["_tag"] }>
 
 const isRecordedOuterIntegratorEntry = (entry: RecordedCassetteEntry): entry is RecordedOuterIntegratorEntry =>
-  entry._tag === "IntegratorCandidateGitObserved" ||
-  entry._tag === "IntegratorCandidateGitReadIntended" ||
-  entry._tag === "IntegratorResultRecorded" ||
   entry._tag === "IntegratorRunCandidateGitObserved" ||
   entry._tag === "IntegratorRunCandidateGitReadIntended" ||
   entry._tag === "IntegratorRunResultRecorded" ||
@@ -655,18 +646,6 @@ const recordOuterIntegratorEntry = (event: OuterIntegratorEvent): RecordedOuterI
       quarantineAt: value.quarantineAt,
       successor: value.successor,
       successorGeneration: value.successorGeneration
-    }),
-    IntegratorResultRecorded: (value): RecordedOuterIntegratorEntry => ({ _tag: value._tag, result: value.result }),
-    IntegratorCandidateGitReadIntended: (value): RecordedOuterIntegratorEntry => ({
-      _tag: value._tag,
-      candidateText: value.candidateText,
-      correlation: value.correlation
-    }),
-    IntegratorCandidateGitObserved: (value): RecordedOuterIntegratorEntry => ({
-      _tag: value._tag,
-      candidateText: value.candidateText,
-      correlation: value.correlation,
-      observation: value.observation
     }),
     IntegratorRunStarted: (value): RecordedOuterIntegratorEntry => ({ _tag: value._tag, run: value.run }),
     IntegratorRunResultRecorded: (value): RecordedOuterIntegratorEntry => ({
@@ -723,7 +702,6 @@ const recordIntegrationQuarantineEntry = (event: IntegrationQuarantineEvent): Re
     })
   })
 
-// eslint-disable-next-line complexity -- The closed journal vocabulary has one total projection into recorded cassette entries.
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry => {
   if (isOuterIntegratorEvent(event)) return recordOuterIntegratorEntry(event)
   if (isIntegrationQuarantineEvent(event)) return recordIntegrationQuarantineEntry(event)
@@ -1240,7 +1218,6 @@ const eventForContinuationAuthorizationEntry = (entry: RecordedContinuationAutho
     witness: entry.witness
   })
 
-// eslint-disable-next-line complexity -- The inverse fold exhaustively routes the closed recorded cassette vocabulary.
 const eventForOtherRecordedEntry = (
   entry: Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>,
   entries: ReadonlyArray<RecordedCassetteEntry>,
@@ -1380,14 +1357,6 @@ const lyricForOuterIntegratorEntry = (entry: RecordedOuterIntegratorEntry): stri
       `Dalph coordinator fixed Integrator session ${value.correlation.sessionId} for target head ${value.correlation.expectedTargetHead}.`,
     IntegratorSuccessorSessionFixed: (value) =>
       `Dalph coordinator fixed FullRerun successor session ${value.successor.sessionId} after quarantining predecessor ${value.predecessor.sessionId}.`,
-    IntegratorResultRecorded: (value) =>
-      value.result._tag === "PreparedCandidate"
-        ? `The Integrator reported candidate ${value.result.candidateText} for session ${value.result.correlation.sessionId}.`
-        : `The Integrator reported NotPrepared for session ${value.result.correlation.sessionId}: ${value.result.detail}.`,
-    IntegratorCandidateGitReadIntended: (value) =>
-      `Dalph coordinator intended to ask Git about explicitly reported candidate ${value.candidateText}.`,
-    IntegratorCandidateGitObserved: (value) =>
-      `Git reported ${value.observation._tag} for explicitly reported candidate ${value.candidateText}.`,
     IntegratorRunStarted: (value) =>
       `Dalph coordinator intended Integrator run ${value.run.ordinal} in session ${value.run.session.sessionId}.`,
     IntegratorRunResultRecorded: (value) =>

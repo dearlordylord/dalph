@@ -10,7 +10,7 @@ import { StartedIntegrationResponsibility } from "../integration-admission/proto
 import { IntegratorJournalContradiction } from "./errors.js"
 import {
   IntegratorCandidateResourceLocator,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunStartedEvent,
@@ -38,7 +38,7 @@ export type IntegratorPreparationInput = typeof IntegratorPreparationInput.Type
 /** Inputs proving the fresh Git observation that may fix one FullRerun successor. */
 export const IntegratorSuccessorPreparationInput = Schema.Struct({
   directionAppliedAt: JournalPosition,
-  predecessor: IntegratorCorrelation,
+  predecessor: IntegratorSessionCorrelation,
   quarantineAt: JournalPosition,
   targetLineage: TargetLineageObservation,
   /** Position of the fresh durable TargetLineageObserved fact. */
@@ -54,7 +54,7 @@ export const IntegratorRunPreparationInput = Schema.Struct({
 export type IntegratorRunPreparationInput = typeof IntegratorRunPreparationInput.Type
 
 const runIdFor = (responsibility: StartedIntegrationResponsibility) => responsibility.plannedAttempt.runId
-const runIdForCorrelation = (correlation: IntegratorCorrelation) => correlation.plannedAttempt.runId
+const runIdForCorrelation = (correlation: IntegratorSessionCorrelation) => correlation.plannedAttempt.runId
 
 const correlationKeyMaterial = (input: IntegratorPreparationInput): string =>
   [
@@ -69,9 +69,9 @@ const correlationKeyMaterial = (input: IntegratorPreparationInput): string =>
   ].join(":")
 
 /** Derives one stable session/resource pair; replay with the same responsibility and H cannot create a successor. */
-export const integratorCorrelationFor = (input: IntegratorPreparationInput): IntegratorCorrelation => {
+export const integratorCorrelationFor = (input: IntegratorPreparationInput): IntegratorSessionCorrelation => {
   const material = correlationKeyMaterial(input)
-  return IntegratorCorrelation.make({
+  return IntegratorSessionCorrelation.make({
     acceptedResult: input.responsibility.acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make(`integrator-resource:${material}`),
     expectedTargetHead: input.targetLineage.targetHeadSha,
@@ -108,9 +108,9 @@ const successorCorrelationKeyMaterial = (input: IntegratorSuccessorPreparationIn
  */
 export const integratorSuccessorCorrelationFor = (
   input: IntegratorSuccessorPreparationInput
-): IntegratorCorrelation => {
+): IntegratorSessionCorrelation => {
   const material = successorCorrelationKeyMaterial(input)
-  return IntegratorCorrelation.make({
+  return IntegratorSessionCorrelation.make({
     acceptedResult: input.predecessor.acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make(`integrator-resource:${material}`),
     expectedTargetHead: input.targetLineage.targetHeadSha,
@@ -131,7 +131,7 @@ export const integratorRunCorrelationFor = (
 
 /** Constructs one run identity for an already-fixed session, including an operator-authorized Retry. */
 export const integratorRunCorrelationForSession = (
-  session: IntegratorCorrelation,
+  session: IntegratorSessionCorrelation,
   ordinal: IntegratorRunOrdinal
 ): IntegratorRunCorrelation => IntegratorRunCorrelation.make({ ordinal, session })
 
@@ -139,14 +139,14 @@ export const integratorRunCorrelationForSession = (
 export const integratorInitialRunCorrelationFor = (input: IntegratorPreparationInput): IntegratorRunCorrelation =>
   integratorRunCorrelationFor(input, IntegratorRunOrdinal.make(1))
 
-const sessionRecordMatches = (record: JournalRecord, correlation: IntegratorCorrelation): boolean =>
+const sessionRecordMatches = (record: JournalRecord, correlation: IntegratorSessionCorrelation): boolean =>
   record.event._tag === "IntegratorSessionFixed" &&
   integratorCorrelationsEqual(record.event.correlation, correlation) &&
   record.position > correlation.targetLineageObservedAt
 
 export const appendIntegratorSessionIfNeeded = Effect.fn("IntegratorProtocol.appendSessionIfNeeded")(function* (
   journal: InRunJournal["Service"],
-  correlation: IntegratorCorrelation,
+  correlation: IntegratorSessionCorrelation,
   records: ReadonlyArray<JournalRecord>
 ) {
   const key = integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(correlation))
@@ -254,7 +254,7 @@ export const hasMatchingIntegratorTargetLineageObservation = (
 export const readRecordedIntegratorSession = (
   records: ReadonlyArray<JournalRecord>,
   responsibility: StartedIntegrationResponsibility
-): Effect.Effect<Option.Option<IntegratorCorrelation>, IntegratorJournalContradiction> => {
+): Effect.Effect<Option.Option<IntegratorSessionCorrelation>, IntegratorJournalContradiction> => {
   const existing = integratorFindEventAtKey(
     records,
     integratorSessionFixedRecordKey(integratorResponsibilityFactsFor(responsibility))

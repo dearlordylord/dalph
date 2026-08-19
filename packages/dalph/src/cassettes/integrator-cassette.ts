@@ -9,6 +9,8 @@ import {
   IntegratorGit,
   IntegratorGitObservation,
   IntegratorGitReadFailure,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorResult,
   JournalPosition,
   JournalRecord,
@@ -16,10 +18,10 @@ import {
   TargetLineageObservedEvent,
   WorkflowActor,
   deriveIntegratorRunState,
-  deriveIntegratorState,
   describeJournalEvent,
+  integratorCorrelationFor,
   makeTargetLineageObservationOperation,
-  prepareIntegrationCandidate,
+  prepareIntegrationCandidateRun,
   workflowJournalEventVersion,
   type IntegratorCandidateText,
   type IntegratorRequest,
@@ -225,23 +227,17 @@ const outcomeFor = (result: IntegratorCassettePublicResult): RecordedIntegratorO
   })
 }
 
-const currentStateFor = (
-  records: ReadonlyArray<JournalRecord>,
-  responsibility: AuthoredIntegratorStartingFacts["responsibility"]
-) => {
-  const latestRun = records.reduce<
-    Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunStarted" }>["run"] | undefined
-  >((latest, record) => {
-    if (record.event._tag !== "IntegratorRunStarted") return latest
-    return latest === undefined || record.event.run.ordinal > latest.ordinal ? record.event.run : latest
-  }, undefined)
-  return latestRun === undefined
-    ? deriveIntegratorState(records, responsibility)
-    : deriveIntegratorRunState(records, responsibility, latestRun)
-}
+const initialRunFor = (input: IntegratorCassetteInput): IntegratorRunCorrelation =>
+  IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: integratorCorrelationFor(input) })
+
+const currentStateFor = (records: ReadonlyArray<JournalRecord>, input: IntegratorCassetteInput) =>
+  deriveIntegratorRunState(records, input.responsibility, initialRunFor(input))
 
 const runOne = Effect.fn("IntegratorCassette.runOne")(function* (runtime: IntegratorCassetteRuntime) {
-  const result = yield* prepareIntegrationCandidate(runtime.input).pipe(
+  const result = yield* prepareIntegrationCandidateRun({
+    preparation: runtime.input,
+    run: initialRunFor(runtime.input)
+  }).pipe(
     Effect.result,
     Effect.provideService(InRunJournal, runtime.journal.service),
     Effect.provideService(Integrator, Integrator.of(integratorServiceFor(runtime))),
@@ -271,7 +267,7 @@ const terminalObservationFor = Effect.fn("IntegratorCassette.terminalObservation
     outcomes,
     recordedTags: recorded.entries.map(({ _tag }) => _tag),
     sessionIdPrefixes: sessionIds.map((session) => session.slice(0, "integrator-session:".length)),
-    stateTag: currentStateFor(records, runtime.cassette.startingFacts.responsibility)._tag
+    stateTag: currentStateFor(records, runtime.input)._tag
   })
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     return yield* Effect.die(
@@ -322,7 +318,7 @@ export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.run
     records,
     recorded,
     sessionIds: requests.map(({ correlation }) => correlation.sessionId),
-    state: currentStateFor(records, cassette.startingFacts.responsibility)
+    state: currentStateFor(records, integratorPreparationInputFor(cassette.startingFacts))
   })
 })
 

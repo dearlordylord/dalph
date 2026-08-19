@@ -4,11 +4,11 @@ import { TargetLineageObservation } from "../../../authorities/git/target-lineag
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalAppendError, JournalReadError } from "../../../workflow-journal/store.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
-import { IntegratorCandidateText, IntegratorCorrelation } from "./events.js"
+import { IntegratorCandidateText, IntegratorSessionCorrelation } from "./events.js"
 
 /** The opaque provider call failed before Dalph received a conclusive outer result. */
 export class IntegratorCallFailure extends Schema.TaggedError<IntegratorCallFailure>()("IntegratorCallFailure", {
-  correlation: IntegratorCorrelation,
+  correlation: IntegratorSessionCorrelation,
   detail: Schema.String
 }) {}
 
@@ -19,7 +19,7 @@ export class IntegratorCallFailure extends Schema.TaggedError<IntegratorCallFail
  */
 export class IntegratorProviderActivityAbsent extends Schema.TaggedError<IntegratorProviderActivityAbsent>()(
   "IntegratorProviderActivityAbsent",
-  { correlation: IntegratorCorrelation, detail: Schema.NonEmptyString }
+  { correlation: IntegratorSessionCorrelation, detail: Schema.NonEmptyString }
 ) {}
 
 /** Git could not provide object kind and ordered direct-parent facts for M. */

@@ -9,10 +9,9 @@ import {
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorJournalEvent,
-  IntegratorProtocolResult,
   IntegratorRequest,
   IntegratorResult,
   IntegratorNotPreparedDetail,
@@ -25,9 +24,6 @@ import {
   integratorRetryRunOrdinal,
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
-  IntegratorState,
-  IntegratorQualifiedCandidate,
-  integratorQualifiedCandidateFromState,
   integratorCandidateHasExactParents,
   IntegratorSuccessorGeneration,
   firstFullRerunSuccessorGeneration
@@ -41,13 +37,12 @@ import {
   IntegratorTargetLineageIncompatible,
   IntegratorTargetLineageObservationChanged
 } from "./errors.js"
-import { deriveIntegratorRunState, deriveIntegratorState, integratorCorrelationsEqual } from "./state.js"
+import { deriveIntegratorRunState, integratorCorrelationsEqual } from "./state.js"
 import {
   appendIntegratorSessionIfNeeded,
   hasMatchingIntegratorTargetLineageObservation,
   IntegratorPreparationInput,
   integratorCorrelationFor,
-  integratorInitialRunCorrelationFor,
   integratorLineageIsCompatible,
   integratorRunCorrelationFor,
   integratorRunCorrelationForSession,
@@ -58,17 +53,15 @@ import { integratorRetryAuthorizationIssue } from "./retry-authorization.js"
 import { readActiveIntegratorSession } from "./successor-session.js"
 import {
   appendRunGitReadIntentIfNeeded,
-  readLegacyInitialResultForRun,
   readRecordedRunResult,
   readRunCandidateObservation,
   reconcileRunResult,
   runIdForCorrelation,
   runObservationFromAppendedRecord,
-  runResultFromAppendedRecord,
-  validateLegacyInitialResult
+  runResultFromAppendedRecord
 } from "./journal-record-reconciliation.js"
 
-export { deriveIntegratorRunState, deriveIntegratorState }
+export { deriveIntegratorRunState }
 export {
   IntegratorCallFailure,
   IntegratorGitReadFailure,
@@ -83,7 +76,6 @@ export type { IntegratorProtocolError } from "./errors.js"
 export {
   IntegratorPreparationInput,
   integratorCorrelationFor,
-  integratorInitialRunCorrelationFor,
   integratorRunCorrelationFor,
   integratorRunCorrelationForSession
 }
@@ -95,10 +87,9 @@ export type {
 export {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorJournalEvent,
-  IntegratorProtocolResult,
   IntegratorRunProtocolResult,
   IntegratorRunQualifiedCandidate,
   IntegratorRequest,
@@ -106,19 +97,15 @@ export {
   IntegratorNotPreparedDetail,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
-  IntegratorState,
-  IntegratorQualifiedCandidate,
-  integratorQualifiedCandidateFromState,
   IntegratorSessionId,
   integratorCandidateHasExactParents,
   IntegratorSuccessorGeneration,
   firstFullRerunSuccessorGeneration
 }
 export type {
-  IntegratorCorrelation as IntegratorCorrelationType,
+  IntegratorSessionCorrelation as IntegratorSessionCorrelationType,
   IntegratorGitObservation as IntegratorGitObservationType,
   IntegratorJournalEvent as IntegratorJournalEventType,
-  IntegratorProtocolResult as IntegratorProtocolResultType,
   IntegratorRequest as IntegratorRequestType,
   IntegratorResult as IntegratorResultType
 } from "./events.js"
@@ -164,26 +151,6 @@ const qualifyRunCandidate = (
     observation,
     run
   })
-}
-
-const legacyProtocolResultFromRun = (result: IntegratorRunProtocolResult): IntegratorProtocolResult => {
-  switch (result._tag) {
-    case "CandidateRejected":
-      return IntegratorProtocolResult.cases.CandidateRejected.make({
-        candidateText: result.candidateText,
-        correlation: result.run.session,
-        observation: result.observation
-      })
-    case "NotPrepared":
-      return IntegratorProtocolResult.cases.NotPrepared.make({ correlation: result.run.session, detail: result.detail })
-    case "PreparedCandidate":
-      return IntegratorProtocolResult.cases.PreparedCandidate.make({
-        candidateCommit: result.candidateCommit,
-        candidateText: result.candidateText,
-        correlation: result.run.session,
-        observation: result.observation
-      })
-  }
 }
 
 const correlationForPreparation = Effect.fn("IntegratorProtocol.correlationForPreparation")(function* (
@@ -295,8 +262,8 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
 ) {
   if (request.run.ordinal === 1) return yield* correlationForPreparation(journal, request.preparation, records)
   const runId = request.preparation.responsibility.plannedAttempt.runId
+  /* v8 ignore next -- @preserve prepareIntegrationCandidateRun rejects ordinals above Retry before this helper is called. */
   if (request.run.ordinal !== integratorRetryRunOrdinal) {
-    /* v8 ignore next -- @preserve prepareIntegrationCandidateRun rejects ordinals above Retry before this helper is called. */
     return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
   }
   const recordedSession = yield* readRecordedIntegratorSession(records, request.preparation.responsibility)
@@ -348,12 +315,6 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
   const run = requestInput.run
   const recordsAfterSession = yield* journal.read(runId)
   const recordedRunResult = yield* readRecordedRunResult(recordsAfterSession, run)
-  const recordedLegacyResult = yield* readLegacyInitialResultForRun(recordsAfterSession, run)
-
-  if (Option.isNone(recordedRunResult) && Option.isSome(recordedLegacyResult)) {
-    const legacyResult = yield* validateLegacyInitialResult(recordsAfterSession, run, recordedLegacyResult.value)
-    return yield* qualifyOrNotPreparedForRun(journal, run, legacyResult)
-  }
 
   const reconciledRunResult = yield* reconcileRunResult(
     journal,
@@ -379,13 +340,4 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
     result = yield* runResultFromAppendedRecord(appended, run, freshResult)
   }
   return yield* qualifyOrNotPreparedForRun(journal, run, result)
-})
-
-/** Compatibility wrapper for the initial run's session-level public result. */
-export const prepareIntegrationCandidate = Effect.fn("IntegratorProtocol.prepareIntegrationCandidate")(function* (
-  input: IntegratorPreparationInput
-) {
-  const run = integratorInitialRunCorrelationFor(input)
-  const result = yield* prepareIntegrationCandidateRun({ preparation: input, run })
-  return legacyProtocolResultFromRun(result)
 })

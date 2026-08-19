@@ -26,7 +26,7 @@ import { IntegratorGit, IntegratorGitReadFailure } from "../../workflow/protocol
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
@@ -128,7 +128,7 @@ const promotionCorrelationFor = (
     candidateText: IntegratorCandidateText.make("real-git-promotion-candidate"),
     run: IntegratorRunCorrelation.make({
       ordinal: IntegratorRunOrdinal.make(1),
-      session: IntegratorCorrelation.make({
+      session: IntegratorSessionCorrelation.make({
         acceptedResult,
         candidateResource: IntegratorCandidateResourceLocator.make("real-git-promotion-resource"),
         expectedTargetHead: expectedHead,

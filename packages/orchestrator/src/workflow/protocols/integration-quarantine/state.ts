@@ -111,26 +111,19 @@ const providerActivityAbsenceMatches = (
 }
 
 type IntegratorResultRecord = JournalRecord & {
-  readonly event: Extract<
-    JournalRecord["event"],
-    { readonly _tag: "IntegratorResultRecorded" | "IntegratorRunResultRecorded" }
-  >
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunResultRecorded" }>
 }
 
 type IntegratorCandidateObservationRecord = JournalRecord & {
-  readonly event: Extract<
-    JournalRecord["event"],
-    { readonly _tag: "IntegratorCandidateGitObserved" | "IntegratorRunCandidateGitObserved" }
-  >
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunCandidateGitObserved" }>
 }
 
 const isIntegratorResultRecord = (record: JournalRecord | undefined): record is IntegratorResultRecord =>
-  record?.event._tag === "IntegratorResultRecorded" || record?.event._tag === "IntegratorRunResultRecorded"
+  record?.event._tag === "IntegratorRunResultRecorded"
 
 const isIntegratorCandidateObservationRecord = (
   record: JournalRecord | undefined
-): record is IntegratorCandidateObservationRecord =>
-  record?.event._tag === "IntegratorCandidateGitObserved" || record?.event._tag === "IntegratorRunCandidateGitObserved"
+): record is IntegratorCandidateObservationRecord => record?.event._tag === "IntegratorRunCandidateGitObserved"
 
 const isDirectionRecord = (record: JournalRecord | undefined): record is DirectionRecord =>
   record?.event._tag === "IntegrationQuarantineDirectionApplied"
@@ -142,27 +135,21 @@ const resultRecordFor = (
 ): IntegratorResultRecord | undefined => {
   const record = recordAt(records, position)
   if (!isIntegratorResultRecord(record)) return undefined
-  const matchingRunStart = (() => {
-    if (record.event._tag === "IntegratorResultRecorded") return true
-    const run = record.event.run
-    return records.some(
-      (candidate) =>
-        candidate.position < record.position &&
-        candidate.event._tag === "IntegratorRunStarted" &&
-        (run.ordinal !== integratorRetryRunOrdinal || candidate.key === integratorRunStartedRecordKey(run)) &&
-        integratorRunCorrelationsEqual(candidate.event.run, run)
-    )
-  })()
-  const exactInitialRun =
-    record.event._tag === "IntegratorResultRecorded" ||
-    (record.event.run.ordinal === 1 &&
-      integratorCorrelationsEqual(record.event.run.session, quarantine.event.correlation)) ||
-    (record.event.run.ordinal === integratorRetryRunOrdinal &&
-      record.key === integratorRunResultRecordedRecordKey(record.event.run) &&
-      integratorCorrelationsEqual(record.event.run.session, quarantine.event.correlation))
+  const run = record.event.run
+  const matchingRunStart = records.some(
+    (candidate) =>
+      candidate.position < record.position &&
+      candidate.event._tag === "IntegratorRunStarted" &&
+      (run.ordinal !== integratorRetryRunOrdinal || candidate.key === integratorRunStartedRecordKey(run)) &&
+      integratorRunCorrelationsEqual(candidate.event.run, run)
+  )
+  const exactRun =
+    (run.ordinal === 1 || run.ordinal === integratorRetryRunOrdinal) &&
+    record.key === integratorRunResultRecordedRecordKey(run) &&
+    integratorCorrelationsEqual(run.session, quarantine.event.correlation)
   return record.position < quarantine.position &&
     matchingRunStart &&
-    exactInitialRun &&
+    exactRun &&
     integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation)
     ? record
     : undefined
@@ -191,15 +178,11 @@ const candidateObservationRecordFor = (
 ): IntegratorCandidateObservationRecord | undefined => {
   const record = recordAt(records, position)
   if (!isIntegratorCandidateObservationRecord(record)) return undefined
-  const exactInitialRun =
-    record.event._tag === "IntegratorCandidateGitObserved"
-      ? integratorCorrelationsEqual(record.event.correlation, quarantine.event.correlation)
-      : resultRecord.event._tag === "IntegratorRunResultRecorded" &&
-        record.event.run.ordinal === resultRecord.event.run.ordinal &&
-        integratorRunCorrelationsEqual(record.event.run, resultRecord.event.run) &&
-        (resultRecord.event.run.ordinal !== integratorRetryRunOrdinal ||
-          record.key === integratorRunCandidateGitObservedRecordKey(resultRecord.event.run, record.event.candidateText))
-  return record.position < quarantine.position && exactInitialRun ? record : undefined
+  const exactRun =
+    record.event.run.ordinal === resultRecord.event.run.ordinal &&
+    integratorRunCorrelationsEqual(record.event.run, resultRecord.event.run) &&
+    record.key === integratorRunCandidateGitObservedRecordKey(resultRecord.event.run, record.event.candidateText)
+  return record.position < quarantine.position && exactRun ? record : undefined
 }
 
 const candidateObservationMatches = (
@@ -223,10 +206,7 @@ const conclusiveEvidenceMatchesRecords = (
   const { cause, evidence } = quarantine.event.basis
   const resultRecord = resultRecordFor(records, evidence.resultRecordedAt, quarantine)
   if (resultRecord === undefined) return false
-  if (
-    resultRecord.event._tag === "IntegratorRunResultRecorded" &&
-    resultRecord.event.run.ordinal === integratorRetryRunOrdinal
-  ) {
+  if (resultRecord.event.run.ordinal === integratorRetryRunOrdinal) {
     const runStart = providerRunStartFor(records, resultRecord.event.run)
     if (runStart === undefined || runStart.position >= resultRecord.position) return false
     const authorization = evaluateIntegratorRetryAuthorization(records, resultRecord.event.run, {

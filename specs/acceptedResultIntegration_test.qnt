@@ -120,10 +120,10 @@ module acceptedResultIntegrationTest {
       .then(invokeIntegrator(1))
       .then(reportIntegratorCandidate(1, 31))
       .expect(and {
-        state.results.get(1).phase == IntegratorResultRecorded,
+        state.results.get(1).phase == IntegratorRunResultRecorded,
         state.results.get(1).integrationSession == 1,
         state.results.get(1).integratorInvocationCount == 1,
-        state.results.get(1).integratorResultRecorded,
+        state.results.get(1).integratorRunResultRecorded,
         state.results.get(1).candidateReported,
         state.results.get(1).submittedCandidate == 31,
         state.results.get(1).acceptedResultEvidence != 0,
@@ -147,7 +147,7 @@ module acceptedResultIntegrationTest {
       .expect(and {
         state.results.get(1).phase == IntegratorNotPrepared,
         state.results.get(1).integratorOutcome == NotPrepared,
-        state.results.get(1).integratorResultRecorded,
+        state.results.get(1).integratorRunResultRecorded,
         state.results.get(1).submittedCandidate == 0,
         state.results.get(1).targetHeld,
         not(state.results.get(1).promotionAuthorized),
@@ -264,7 +264,7 @@ module acceptedResultIntegrationTest {
         state.results.get(1).submittedCandidate == 31,
         state.results.get(1).integratorInvocationCount == 1,
         state.results.get(1).candidateGitReadIntentRecorded,
-        state.results.get(1).integratorResultRecorded,
+        state.results.get(1).integratorRunResultRecorded,
       })
   }
 

@@ -305,7 +305,7 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "integratorResponseLostReached",
     "integratorResumedReached",
     "integratorNotPreparedReached",
-    "integratorResultRecordedReached",
+    "integratorRunResultRecordedReached",
     "candidateGitReadIntentReached",
     "candidateGitReadPendingReached",
     "candidateReadyReached",

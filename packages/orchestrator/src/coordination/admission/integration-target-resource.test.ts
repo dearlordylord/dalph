@@ -4,9 +4,13 @@ import { expect } from "vitest"
 import { GitRepositoryLocator, IntegrationTarget, IntegrationTargetRef } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
+  acquireStartedIntegrationTarget,
   IntegrationTargetResourceUnavailable,
-  makeIntegrationTargetResourceController
+  makeIntegrationTargetResourceController,
+  releaseStartedIntegrationTarget
 } from "./integration-target-resource.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 
 const target = (repository: string) =>
   IntegrationTarget.make({
@@ -63,6 +67,26 @@ it.effect("publishes exact active ownership only while its target permit is runn
     expect((yield* controller.snapshot).activeResponsibilityPositions).toEqual(new Set())
 
     yield* controller.releaseAll
+    expect((yield* controller.snapshot).heldResponsibilityPositions).toEqual(new Set())
+  })
+)
+
+it.effect("executes accepted frontier acquire and release transitions through the resource owner", () =>
+  Effect.gen(function* () {
+    const controller = yield* makeIntegrationTargetResourceController()
+    const session = integrationFinalityFixture.qualifiedCandidate.run.session
+    const responsibility = StartedIntegrationResponsibility.make({
+      acceptedResult: session.acceptedResult,
+      integrationTarget: session.integrationTarget,
+      plannedAttempt: session.plannedAttempt,
+      queuedAt: session.queuedAt,
+      startedAt: session.startedAt
+    })
+
+    yield* acquireStartedIntegrationTarget(controller, { _tag: "AcquireStartedIntegrationTarget", responsibility })
+    expect((yield* controller.snapshot).heldResponsibilityPositions).toEqual(new Set([responsibility.queuedAt]))
+
+    yield* releaseStartedIntegrationTarget(controller, { _tag: "ReleaseStartedIntegrationTarget", responsibility })
     expect((yield* controller.snapshot).heldResponsibilityPositions).toEqual(new Set())
   })
 )

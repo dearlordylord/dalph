@@ -58,21 +58,18 @@ import {
 } from "./provider-failure.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
 import {
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorResult,
-  IntegratorCandidateGitObservedEvent,
-  IntegratorCandidateGitReadIntendedEvent,
   IntegratorRunCandidateGitObservedEvent,
   IntegratorRunCandidateGitReadIntendedEvent,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
-  IntegratorResultRecordedEvent,
   integratorRetryRunOrdinal,
   IntegratorSessionFixedEvent,
   IntegratorSessionId,
@@ -128,7 +125,7 @@ const makeHistory = Effect.fn("ProviderFailureTest.makeHistory")(function* () {
       version: workflowJournalEventVersion
     })
   )
-  const session = IntegratorCorrelation.make({
+  const session = IntegratorSessionCorrelation.make({
     acceptedResult: responsibility.acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:provider-failure"),
     expectedTargetHead: targetHead,
@@ -153,7 +150,7 @@ const makeHistory = Effect.fn("ProviderFailureTest.makeHistory")(function* () {
   return { journal, run, session }
 })
 
-const providerFailure = (session: IntegratorCorrelation): IntegratorProviderActivityAbsent =>
+const providerFailure = (session: IntegratorSessionCorrelation): IntegratorProviderActivityAbsent =>
   IntegratorProviderActivityAbsent.make({ correlation: session, detail })
 
 const absenceRecordFor = (run: IntegratorRunCorrelation, position: number, absenceDetail = detail): JournalRecord => ({
@@ -290,7 +287,7 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
       version: workflowJournalEventVersion
     })
   )
-  const successorSession = IntegratorCorrelation.make({
+  const successorSession = IntegratorSessionCorrelation.make({
     ...history.session,
     candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:provider-failure-successor"),
     sessionId: IntegratorSessionId.make("integrator-session:provider-failure-successor"),
@@ -435,7 +432,7 @@ it.effect("ignores an unrelated responsibility's run-one evidence", () =>
       taskRevision: TaskRevision.make("provider-failure-unrelated-revision"),
       worktree: WorktreeLocator.make("/worktrees/provider-failure-unrelated")
     })
-    const unrelatedSession = IntegratorCorrelation.make({
+    const unrelatedSession = IntegratorSessionCorrelation.make({
       ...history.session,
       plannedAttempt: unrelatedAttempt,
       candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:provider-failure-unrelated"),
@@ -465,7 +462,7 @@ it.effect("rejects a provider outcome bound to a foreign session", () =>
   Effect.gen(function* () {
     const history = yield* makeHistory()
     const foreignFailure = new IntegratorProviderActivityAbsent({
-      correlation: IntegratorCorrelation.make({
+      correlation: IntegratorSessionCorrelation.make({
         ...history.session,
         sessionId: IntegratorSessionId.make("foreign-session")
       }),
@@ -767,7 +764,7 @@ it.effect("covers exact fixed-session, run-start, and provider-evidence boundary
       )._tag
     ).toBe("Invalid")
 
-    const foreignSession = IntegratorCorrelation.make({
+    const foreignSession = IntegratorSessionCorrelation.make({
       ...history.session,
       sessionId: IntegratorSessionId.make("provider-foreign-evidence-session")
     })
@@ -776,34 +773,6 @@ it.effect("covers exact fixed-session, run-start, and provider-evidence boundary
     }
     const foreignAbsence: JournalRecord = { ...absence, event: { ...absence.event, correlation: foreignSession } }
     expect(validateProviderRunActivityAbsent(records, foreignAbsence)._tag).toBe("Invalid")
-
-    const legacyCandidateRead = {
-      event: IntegratorCandidateGitReadIntendedEvent.make({
-        candidateText,
-        correlation: foreignSession,
-        version: workflowJournalEventVersion
-      }),
-      key: JournalRecordKey.make("provider-legacy-candidate-read"),
-      position: JournalPosition.make(records.length + 1),
-      runId
-    }
-    const legacyCandidateObservation = {
-      event: IntegratorCandidateGitObservedEvent.make({
-        candidateText,
-        correlation: foreignSession,
-        observation: IntegratorGitObservation.cases.Missing.make({ candidateText }),
-        version: workflowJournalEventVersion
-      }),
-      key: JournalRecordKey.make("provider-legacy-candidate-observation"),
-      position: JournalPosition.make(records.length + 2),
-      runId
-    }
-    expect(
-      validateProviderRunActivityAbsent(
-        [...records, legacyCandidateRead, legacyCandidateObservation, candidateAbsence],
-        candidateAbsence
-      )._tag
-    ).toBe("Valid")
 
     const foreignRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: foreignSession })
     const foreignCandidate = {
@@ -1191,7 +1160,7 @@ it.effect("rejects successor, Retry, and legacy provider histories before record
 
     const successorFixed = successorRecords.find((record) => record.event._tag === "IntegratorSuccessorSessionFixed")
     if (successorFixed === undefined) return yield* Effect.die("provider fixture lacks successor session")
-    const foreignDirectSession = IntegratorCorrelation.make({
+    const foreignDirectSession = IntegratorSessionCorrelation.make({
       ...successorHistory.session,
       sessionId: IntegratorSessionId.make("provider-foreign-direct-session")
     })
@@ -1307,22 +1276,6 @@ it.effect("rejects successor, Retry, and legacy provider histories before record
     }
     expect(
       validateProviderRunActivityAbsent([...successorHistoryWithAbsence, resultRecord], successorAbsence)._tag
-    ).toBe("Invalid")
-
-    const legacyRecord = {
-      event: IntegratorResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({
-          correlation: successorHistory.successorSession,
-          detail: IntegratorNotPreparedDetail.make("legacy provider result blocks absence")
-        }),
-        version: workflowJournalEventVersion
-      }),
-      key: JournalRecordKey.make("provider-legacy-result"),
-      position: JournalPosition.make(successorAbsence.position - 1),
-      runId
-    }
-    expect(
-      validateProviderRunActivityAbsent([...successorHistoryWithAbsence, legacyRecord], successorAbsence)._tag
     ).toBe("Invalid")
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )

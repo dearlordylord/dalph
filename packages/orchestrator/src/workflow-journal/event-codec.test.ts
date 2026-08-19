@@ -21,7 +21,7 @@ import { makeTrackerGraphObservationOperation } from "../workflow/registry/opera
 import { integrationFinalityFixture } from "../workflow/protocols/integration-finality/fixtures.js"
 import {
   IntegratorCandidateResourceLocator,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorSessionFixedEvent,
   IntegratorSessionId
 } from "../workflow/protocols/integrator/events.js"
@@ -42,7 +42,7 @@ it.effect("round-trips the outer Integrator session with its exact causal identi
   Effect.gen(function* () {
     const fixture = integrationFinalityFixture
     const event = IntegratorSessionFixedEvent.make({
-      correlation: IntegratorCorrelation.make({
+      correlation: IntegratorSessionCorrelation.make({
         acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
         candidateResource: IntegratorCandidateResourceLocator.make("resource:event-codec-integrator"),
         expectedTargetHead: fixture.promotionCorrelation.qualifiedCandidate.run.session.expectedTargetHead,
@@ -71,6 +71,44 @@ it.effect("rejects malformed payloads, unsupported versions, and invalid event s
     ]
     for (const encoded of cases) {
       const issue = yield* decodeJournalEvent(encoded).pipe(Effect.flip)
+      expect(issue._tag).toBe("JournalEventDecodeIssue")
+    }
+  })
+)
+
+it.effect("rejects removed session-only Integrator journal rows", () =>
+  Effect.gen(function* () {
+    const qualifiedCandidate = integrationFinalityFixture.promotionCorrelation.qualifiedCandidate
+    const correlation = qualifiedCandidate.run.session
+    const preparedResult = {
+      _tag: "PreparedCandidate" as const,
+      candidateText: qualifiedCandidate.candidateText,
+      correlation
+    }
+    const observation = {
+      _tag: "Commit" as const,
+      candidateText: qualifiedCandidate.candidateText,
+      commit: qualifiedCandidate.candidateCommit,
+      directParents: qualifiedCandidate.directParents
+    }
+    const removedRows = [
+      { kind: "IntegratorResultRecorded", payload: { result: preparedResult } },
+      {
+        kind: "IntegratorCandidateGitReadIntended",
+        payload: { candidateText: qualifiedCandidate.candidateText, correlation }
+      },
+      {
+        kind: "IntegratorCandidateGitObserved",
+        payload: { candidateText: qualifiedCandidate.candidateText, correlation, observation }
+      }
+    ] as const
+
+    for (const removedRow of removedRows) {
+      const issue = yield* decodeJournalEvent({
+        kind: JournalEventKind.make(removedRow.kind),
+        payloadJson: JSON.stringify(removedRow.payload),
+        version: JournalEventVersion.make(workflowJournalEventVersion)
+      }).pipe(Effect.flip)
       expect(issue._tag).toBe("JournalEventDecodeIssue")
     }
   })

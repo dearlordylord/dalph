@@ -1,9 +1,9 @@
 # Outer Integrator boundary migration
 
-Status: implementation migration. Issues #222, #223, #68, #138, and #224
-establish the outer boundary, run-bound promotion/finality, recovery, blocker
-reconciliation, and graceful Exit behavior. Issue #225 removes the remaining
-legacy pipeline and evaluation vocabulary.
+Status: complete. Issues #222, #223, #68, #138, and #224 establish the outer
+boundary, run-bound promotion/finality, recovery, blocker reconciliation, and
+graceful Exit behavior. Issue #225 removed the remaining legacy pipeline and
+evaluation vocabulary.
 
 ## The corrected user story
 

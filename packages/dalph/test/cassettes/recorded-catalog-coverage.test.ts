@@ -18,6 +18,9 @@ import {
 const allMaintainedCassetteRoundTripTimeout = 600_000
 const removedIntegrationSurfacePrefixes = [
   "IntegrationCandidate",
+  "IntegratorCandidateGitObserved",
+  "IntegratorCandidateGitReadIntended",
+  "IntegratorResultRecorded",
   "TargetVerification",
   "RepositoryResourceLock",
   "continueIntegrationCandidateConstruction"

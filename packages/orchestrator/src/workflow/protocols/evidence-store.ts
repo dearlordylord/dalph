@@ -71,8 +71,8 @@ export const memoryEvidenceStoreLayer = Layer.effectContext(
             const next = new Map([...current, [digest, copy] as const])
             return [{ _tag: "Stored" }, next]
           }
+          /* v8 ignore next -- @preserve A false result requires a SHA-256 collision inside the private map. */
           if (equalBytes(existing, copy)) return [{ _tag: "Existing" }, current]
-          /* v8 ignore next -- @preserve Reaching this fail-closed guard requires a SHA-256 collision inside the private map. */
           return [{ _tag: "Collision" }, current]
         }
       )

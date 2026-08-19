@@ -7,7 +7,11 @@ import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationQuarantineBasis, IntegrationQuarantinedEvent } from "./events.js"
-import { IntegratorCorrelation, IntegratorRunCorrelation, integratorRetryRunOrdinal } from "../integrator/events.js"
+import {
+  IntegratorSessionCorrelation,
+  IntegratorRunCorrelation,
+  integratorRetryRunOrdinal
+} from "../integrator/events.js"
 import {
   evaluateIntegratorRetryAuthorization,
   type IntegratorRetryAuthorization
@@ -18,7 +22,7 @@ import { integratorCorrelationsEqual } from "../integrator/state.js"
 export const ChangedHeadRetryQuarantineInput = Schema.Struct({
   directionAppliedAt: JournalPosition,
   priorQuarantineAt: JournalPosition,
-  session: IntegratorCorrelation,
+  session: IntegratorSessionCorrelation,
   targetLineage: TargetLineageObservation,
   targetLineageObservedAt: JournalPosition
 })
@@ -34,10 +38,10 @@ type ChangedHeadQuarantineRecord = JournalRecord & { readonly event: Integration
 
 const targetLineageObservationEquivalence = Schema.toEquivalence(TargetLineageObservation)
 
-const runIdFor = (session: IntegratorCorrelation) => session.plannedAttempt.runId
+const runIdFor = (session: IntegratorSessionCorrelation) => session.plannedAttempt.runId
 
 const reject = (
-  session: IntegratorCorrelation,
+  session: IntegratorSessionCorrelation,
   detail: string
 ): Effect.Effect<never, IntegrationChangedHeadRetryQuarantineRejected> =>
   Effect.fail(new IntegrationChangedHeadRetryQuarantineRejected({ detail, runId: runIdFor(session) }))
@@ -53,7 +57,7 @@ const changedHeadBasisEquals = (
 
 const sameChangedHeadEvidence = (
   record: JournalRecord,
-  session: IntegratorCorrelation,
+  session: IntegratorSessionCorrelation,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "RetryTargetHeadChanged" }>
 ): record is ChangedHeadQuarantineRecord =>
   record.event._tag === "IntegrationQuarantined" &&

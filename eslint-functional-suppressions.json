@@ -281,11 +281,6 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/workflow-journal/run-lifecycle.ts": {
-    "import-x/no-unused-modules": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/workflow/interpretation/interpreter.ts": {
     "import-x/no-unused-modules": {
       "count": 3

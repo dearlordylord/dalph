@@ -79,18 +79,19 @@ import {
   Integrator,
   IntegratorGit,
   IntegratorPreparationInput,
-  prepareIntegrationCandidate
+  deriveIntegratorRunState,
+  integratorCorrelationFor,
+  prepareIntegrationCandidateRun
 } from "../../../orchestrator/src/workflow/protocols/integrator/protocol.js"
 import {
   IntegratorCandidateText,
   IntegratorGitObservation,
   IntegratorResult,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   integratorRunCorrelationsEqual
 } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
-import {
-  deriveCurrentIntegratorState,
-  integratorCorrelationsEqual
-} from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
+import { integratorCorrelationsEqual } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
 
 type Constraint =
   | "NoGitConstraint"
@@ -408,9 +409,13 @@ const makeProductionReconciliationTrace = () => {
       targetLineage: lineage,
       targetLineageObservedAt: observedAt
     })
+    const run = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: integratorCorrelationFor(input)
+    })
     return Effect.runSync(
       Effect.exit(
-        prepareIntegrationCandidate(input).pipe(
+        prepareIntegrationCandidateRun({ preparation: input, run }).pipe(
           Effect.provideService(InRunJournal, journal),
           Effect.provideService(Integrator, integrator),
           Effect.provideService(IntegratorGit, integratorGit)
@@ -450,7 +455,16 @@ const makeProductionReconciliationTrace = () => {
 
   const qualifiedCandidate = () => {
     const currentRecords = records()
-    const state = deriveCurrentIntegratorState(currentRecords, started)
+    const initialInput = IntegratorPreparationInput.make({
+      responsibility: started,
+      targetLineage,
+      targetLineageObservedAt: initialLineageRecord.position
+    })
+    const run = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: integratorCorrelationFor(initialInput)
+    })
+    const state = deriveIntegratorRunState(currentRecords, started, run)
     if (state._tag !== "GitQualifiedPrepared") {
       return Effect.runSync(Effect.die(`production MBT expected GitQualifiedPrepared, received ${state._tag}`))
     }

@@ -20,7 +20,7 @@ import {
   InRunJournal,
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
@@ -85,7 +85,7 @@ const preparedPromotion = (participant: PromotionParticipant) => {
     taskRevision: TaskRevision.make(`target-promotion-protocol-revision-${owner}`),
     worktree: WorktreeLocator.make(`/worktrees/target-promotion-protocol-${owner.toLowerCase()}`)
   })
-  const correlation = IntegratorCorrelation.make({
+  const correlation = IntegratorSessionCorrelation.make({
     acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make(`/candidates/${owner}`),
     expectedTargetHead: expectedHead,

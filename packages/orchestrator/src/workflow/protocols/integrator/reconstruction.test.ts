@@ -24,16 +24,15 @@ import { InRunJournal } from "../../../workflow-journal/store.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import {
-  integratorCandidateGitObservedRecordKey,
-  integratorCandidateGitReadIntendedRecordKey,
-  integratorResultRecordedRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunRecordKeyPrefix,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
-  integratorSuccessorSessionFixedRecordKey
+  integratorSuccessorSessionFixedRecordKey,
+  integrationQuarantinedRecordKey,
+  integrationQuarantineDirectionAppliedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
@@ -42,42 +41,37 @@ import {
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineDirectionSubject,
   IntegrationQuarantinedEvent
 } from "../integration-quarantine/events.js"
 import {
-  IntegratorCandidateGitObservedEvent,
-  IntegratorCandidateGitReadIntendedEvent,
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
-  IntegratorResult,
-  IntegratorResultRecordedEvent,
   IntegratorRunCandidateGitObservedEvent,
   IntegratorRunCandidateGitReadIntendedEvent,
   IntegratorRunOrdinal,
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
-  IntegratorSessionId,
+  IntegratorResult,
   IntegratorSessionFixedEvent,
-  IntegratorSuccessorSessionFixedEvent,
-  integratorQualifiedCandidateFromState
+  IntegratorSessionId,
+  IntegratorSuccessorSessionFixedEvent
 } from "./events.js"
 import { IntegratorJournalContradiction } from "./errors.js"
 import {
   appendRunGitReadIntentIfNeeded,
-  readLegacyInitialResultForRun,
   readRecordedRunResult,
   readRunCandidateObservation,
   reconcileRunResult,
   runObservationFromAppendedRecord,
-  runResultFromAppendedRecord,
-  validateLegacyInitialResult
+  runResultFromAppendedRecord
 } from "./journal-record-reconciliation.js"
 import {
-  integratorCorrelationFor,
   appendIntegratorRunStartedIfNeeded,
+  integratorCorrelationFor,
   integratorRunCorrelationForSession,
   integratorSuccessorCorrelationFor,
   IntegratorPreparationInput
@@ -85,9 +79,8 @@ import {
 import {
   deriveCurrentIntegratorState,
   deriveIntegratorRunState,
-  deriveIntegratorState,
-  integratorRunQualifiedCandidateFromState,
-  integratorResponsibilityFactsFor
+  integratorResponsibilityFactsFor,
+  integratorRunQualifiedCandidateFromState
 } from "./state.js"
 import type { IntegratorHistoryIndexes } from "../../../coordination/reconstruction/integrator-history.js"
 import { validateIntegratorHistoryEvent } from "../../../coordination/reconstruction/integrator-history.js"
@@ -171,18 +164,11 @@ const lineageRecords = (): ReadonlyArray<JournalRecord> => {
   ]
 }
 
-const sessionRecord = (correlation: IntegratorCorrelation = session, position = 6): JournalRecord =>
+const sessionRecord = (correlation: IntegratorSessionCorrelation = session, position = 6): JournalRecord =>
   record(
     position,
     IntegratorSessionFixedEvent.make({ correlation, version: workflowJournalEventVersion }),
     integratorSessionFixedRecordKey(integratorResponsibilityFactsFor(responsibility))
-  )
-
-const legacyResultRecord = (result: IntegratorResult, position = 7): JournalRecord =>
-  record(
-    position,
-    IntegratorResultRecordedEvent.make({ result, version: workflowJournalEventVersion }),
-    integratorResultRecordedRecordKey(session)
   )
 
 const runStartRecord = (run = runOne, position = 8, key = integratorRunStartedRecordKey(run)): JournalRecord =>
@@ -196,10 +182,10 @@ const runResultRecord = (
 ): JournalRecord =>
   record(position, IntegratorRunResultRecordedEvent.make({ result, run, version: workflowJournalEventVersion }), key)
 
-const preparedResult = (correlation: IntegratorCorrelation = session): IntegratorResult =>
+const preparedResult = (correlation: IntegratorSessionCorrelation = session): IntegratorResult =>
   IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation })
 
-const notPreparedResult = (correlation: IntegratorCorrelation = session): IntegratorResult =>
+const notPreparedResult = (correlation: IntegratorSessionCorrelation = session): IntegratorResult =>
   IntegratorResult.cases.NotPrepared.make({ correlation, detail })
 
 const candidateObservation = (
@@ -233,28 +219,6 @@ const runGitFacts = (
   )
 ]
 
-const legacyGitFacts = (observation = candidateObservation()): ReadonlyArray<JournalRecord> => [
-  record(
-    10,
-    IntegratorCandidateGitReadIntendedEvent.make({
-      candidateText,
-      correlation: session,
-      version: workflowJournalEventVersion
-    }),
-    integratorCandidateGitReadIntendedRecordKey(session, candidateText)
-  ),
-  record(
-    11,
-    IntegratorCandidateGitObservedEvent.make({
-      candidateText,
-      correlation: session,
-      observation,
-      version: workflowJournalEventVersion
-    }),
-    integratorCandidateGitObservedRecordKey(session, candidateText)
-  )
-]
-
 const makeJournal = (initial: ReadonlyArray<JournalRecord>) =>
   Effect.gen(function* () {
     const records = yield* Ref.make(initial)
@@ -277,12 +241,8 @@ const makeJournal = (initial: ReadonlyArray<JournalRecord>) =>
     return { journal, records }
   })
 
-const makeRunHistoryIndexes = (includeLegacyResult = true): IntegratorHistoryIndexes => {
+const makeRunHistoryIndexes = (): IntegratorHistoryIndexes => {
   const fixed = IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })
-  const legacyResult = IntegratorResultRecordedEvent.make({
-    result: preparedResult(),
-    version: workflowJournalEventVersion
-  })
   return {
     integrationStarted: new Map(),
     targetLineageReadIntents: new Map(),
@@ -293,24 +253,11 @@ const makeRunHistoryIndexes = (includeLegacyResult = true): IntegratorHistoryInd
     integratorSessionsByCandidateResource: new Map([[session.candidateResource, JournalPosition.make(6)]]),
     integratorSuccessorSessionFixed: new Map(),
     integratorSuccessorSessionsByPredecessor: new Map(),
-    integratorResultsByStartedAt: includeLegacyResult
-      ? new Map([[session.startedAt, { event: legacyResult, position: JournalPosition.make(7) }]])
-      : new Map(),
-    integratorCandidateGitReadIntents: new Map(),
-    integratorCandidateGitObservations: new Map(),
     integratorRunStarted: new Map(),
     integratorRunResults: new Map(),
     integratorRunCandidateGitReadIntents: new Map(),
     integratorRunCandidateGitObservations: new Map()
   }
-}
-
-const integratorHistoryIssue = (
-  recordToValidate: JournalRecord,
-  indexes: IntegratorHistoryIndexes
-): string | undefined => {
-  const result = validateIntegratorHistoryEvent(recordToValidate, indexes)
-  return result.handled ? result.issue : undefined
 }
 
 const makeSuccessorValidationFixture = () => {
@@ -343,7 +290,7 @@ const makeSuccessorValidationFixture = () => {
   const quarantine = IntegrationQuarantinedEvent.make({
     basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
       cause: { _tag: "NotPrepared", detail },
-      evidence: { resultRecordedAt: JournalPosition.make(7) }
+      evidence: { resultRecordedAt: JournalPosition.make(9) }
     }),
     correlation: session,
     occurrenceClassification: "NonActionOccurrence",
@@ -381,57 +328,31 @@ const makeSuccessorValidationFixture = () => {
     record(12, direction),
     record(16, successorEvent, integratorSuccessorSessionFixedRecordKey(session, quarantineAt, directionAppliedAt))
   ]
-  return { directionAppliedAt, indexes, records, successor, successorEvent }
+  return { freshLineage, indexes, records, successor, successorEvent }
 }
 
 describe("Integrator reconstruction states", () => {
-  it("reconstructs legacy and run-bound outcomes only from their exact chronology", () => {
-    const absent = deriveIntegratorState([], responsibility)
-    expect(absent._tag).toBe("Absent")
-    expect(deriveCurrentIntegratorState([], responsibility)._tag).toBe("Absent")
-
+  it("reconstructs only explicit run outcomes from their exact chronology", () => {
+    expect(deriveCurrentIntegratorState([], responsibility)).toMatchObject({ _tag: "Absent" })
     const fixed = [...lineageRecords(), sessionRecord()]
-    expect(deriveIntegratorState(fixed, responsibility)._tag).toBe("SessionUnfinished")
-    expect(deriveCurrentIntegratorState(fixed, responsibility)._tag).toBe("RunUnfinished")
+    expect(deriveCurrentIntegratorState(fixed, responsibility)).toMatchObject({ _tag: "RunUnfinished" })
 
-    const legacyNotPrepared = [...fixed, legacyResultRecord(notPreparedResult())]
-    expect(deriveIntegratorState(legacyNotPrepared, responsibility)._tag).toBe("NotPrepared")
-
-    const legacyPrepared = [...fixed, legacyResultRecord(preparedResult())]
-    expect(deriveIntegratorState(legacyPrepared, responsibility)._tag).toBe("PreparedAwaitingGit")
-    expect(deriveIntegratorState([...legacyPrepared, ...legacyGitFacts()], responsibility)._tag).toBe(
-      "GitQualifiedPrepared"
-    )
-    expect(
-      deriveIntegratorState(
-        [...legacyPrepared, ...legacyGitFacts(IntegratorGitObservation.cases.Missing.make({ candidateText }))],
-        responsibility
-      )._tag
-    ).toBe("CandidateRejected")
-
-    const runPrepared = [...fixed, runStartRecord(), runResultRecord(preparedResult()), ...runGitFacts()]
-    const current = deriveCurrentIntegratorState(runPrepared, responsibility)
+    const prepared = [...fixed, runStartRecord(), runResultRecord(preparedResult()), ...runGitFacts()]
+    const current = deriveCurrentIntegratorState(prepared, responsibility)
     expect(current._tag).toBe("GitQualifiedPrepared")
     if (current._tag === "GitQualifiedPrepared") {
       expect(integratorRunQualifiedCandidateFromState(current).run).toEqual(runOne)
     }
-    expect(deriveIntegratorRunState([...fixed, runStartRecord()], responsibility, runOne)._tag).toBe("RunUnfinished")
+    expect(deriveIntegratorRunState([...fixed, runStartRecord()], responsibility, runOne)).toMatchObject({
+      _tag: "RunUnfinished"
+    })
     expect(
       deriveIntegratorRunState(
         [...fixed, runStartRecord(), runResultRecord(notPreparedResult())],
         responsibility,
         runOne
-      )._tag
-    ).toBe("NotPrepared")
-
-    const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
-    expect(
-      deriveCurrentIntegratorState([...fixed, runStartRecord(), runStartRecord(runTwo, 12)], responsibility)
-    ).toMatchObject({ _tag: "RunUnfinished" })
-  })
-
-  it("keeps NotPrepared runs free of Git facts and restores a successor before its first run", () => {
-    const fixed = [...lineageRecords(), sessionRecord()]
+      )
+    ).toMatchObject({ _tag: "NotPrepared" })
     expect(
       deriveIntegratorRunState(
         [...fixed, runStartRecord(), runResultRecord(notPreparedResult()), ...runGitFacts()],
@@ -439,199 +360,63 @@ describe("Integrator reconstruction states", () => {
         runOne
       )
     ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("NotPrepared cannot") })
-
-    const fixture = makeSuccessorValidationFixture()
-    const freshLineage = fixture.indexes.targetLineageObservations.get(JournalPosition.make(15))
-    expect(freshLineage).toBeDefined()
-    if (freshLineage === undefined) return
-    const records = [...fixed, record(15, freshLineage), ...fixture.records]
-    const successorRun = integratorRunCorrelationForSession(fixture.successor, IntegratorRunOrdinal.make(1))
-    expect(deriveIntegratorRunState(records, responsibility, successorRun)).toMatchObject({
-      _tag: "RunUnfinished",
-      run: successorRun
-    })
-    const successorResult = runResultRecord(
-      IntegratorResult.cases.NotPrepared.make({ correlation: fixture.successor, detail }),
-      successorRun,
-      18
-    )
-    expect(deriveIntegratorRunState([...records, successorResult], responsibility, successorRun)).toMatchObject({
-      _tag: "Contradiction",
-      detail: expect.stringContaining("without IntegratorRunStarted")
-    })
-
-    const foreignPredecessor = IntegratorCorrelation.make({ ...session, expectedTargetHead: sha("f") })
-    const foreignSuccessor = IntegratorSuccessorSessionFixedEvent.make({
-      ...fixture.successorEvent,
-      predecessor: foreignPredecessor
-    })
     expect(
       deriveIntegratorRunState(
         [
           ...fixed,
-          record(15, freshLineage),
-          ...fixture.records.slice(0, 2),
-          record(
-            17,
-            foreignSuccessor,
-            integratorSuccessorSessionFixedRecordKey(session, JournalPosition.make(10), JournalPosition.make(12))
-          ),
-          runStartRecord(successorRun, 18)
+          runStartRecord(),
+          runResultRecord(preparedResult()),
+          ...runGitFacts(
+            undefined,
+            candidateObservation(IntegratorGitObservation.cases.Missing.make({ candidateText }))
+          )
         ],
-        responsibility,
-        successorRun
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("multiple fixed sessions") })
-
-    expect(
-      deriveIntegratorRunState(
-        [...fixed, record(15, freshLineage), ...fixture.records, runStartRecord(runOne, 18)],
         responsibility,
         runOne
       )
-    ).toMatchObject({ _tag: "RunUnfinished", run: runOne })
+    ).toMatchObject({ _tag: "CandidateRejected" })
   })
 
-  it("fails closed when session, result, or candidate Git facts bind a foreign chronology", () => {
+  it("fails closed when run-bound records are unbound or out of chronology", () => {
     const fixed = [...lineageRecords(), sessionRecord()]
     expect(
-      deriveIntegratorState(
-        fixed.map((item) =>
-          item.key === sessionRecord().key ? { ...item, key: JournalRecordKey.make("foreign-session-key") } : item
-        ),
-        responsibility
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("result or Git record") })
+      deriveIntegratorRunState([...fixed, runResultRecord(notPreparedResult())], responsibility, runOne)
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("without IntegratorRunStarted") })
     expect(
-      deriveIntegratorState(
-        [
-          ...fixed,
-          record(
-            12,
-            IntegratorResultRecordedEvent.make({ result: notPreparedResult(), version: workflowJournalEventVersion })
-          )
-        ],
+      deriveCurrentIntegratorState(
+        [...fixed, runStartRecord(runOne, 8, JournalRecordKey.make("foreign-run-start-key"))],
         responsibility
       )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("foreign result key") })
-    expect(
-      deriveIntegratorState(
-        fixed.map((item) =>
-          item.key === sessionRecord().key
-            ? {
-                ...item,
-                event: IntegratorResultRecordedEvent.make({
-                  result: notPreparedResult(),
-                  version: workflowJournalEventVersion
-                })
-              }
-            : item
-        ),
-        responsibility
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("non-session") })
-    expect(
-      deriveIntegratorState(
-        [
-          ...lineageRecords(),
-          sessionRecord(IntegratorCorrelation.make({ ...session, acceptedResult: acceptedResultFixture(sha("f")) }))
-        ],
-        responsibility
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("requested responsibility") })
-    expect(
-      deriveIntegratorState(
-        [
-          ...lineageRecords().map((item) =>
-            item.position === JournalPosition.make(5) && item.event._tag === "TargetLineageObserved"
-              ? {
-                  ...item,
-                  event: TargetLineageObservedEvent.make({
-                    ...item.event,
-                    observation: TargetLineageObservation.make({
-                      ...item.event.observation,
-                      plannedBaseIsAncestorOfTargetHead: false
-                    })
-                  })
-                }
-              : item
-          ),
-          sessionRecord()
-        ],
-        responsibility
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("target-lineage") })
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("foreign key") })
+    const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
+    expect(deriveIntegratorRunState(fixed, responsibility, runTwo)).toMatchObject({ _tag: "Absent" })
+  })
 
-    const prepared = [...fixed, legacyResultRecord(preparedResult())]
-    expect(
-      deriveIntegratorState(
-        [...prepared, ...legacyGitFacts()].map((item) =>
-          item.event._tag === "IntegratorCandidateGitReadIntended"
-            ? {
-                ...item,
-                event: IntegratorCandidateGitReadIntendedEvent.make({
-                  ...item.event,
-                  candidateText: IntegratorCandidateText.make("foreign")
-                })
-              }
-            : item
-        ),
-        responsibility
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("Git facts do not bind") })
-    expect(
-      deriveIntegratorState(
-        [...prepared, ...legacyGitFacts()].filter((item) => item.event._tag !== "IntegratorCandidateGitReadIntended"),
-        responsibility
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("without a read intent") })
-    expect(
-      deriveIntegratorState(
-        [...prepared, ...legacyGitFacts()].map((item) =>
-          item.event._tag === "IntegratorCandidateGitObserved"
-            ? {
-                ...item,
-                event: IntegratorCandidateGitObservedEvent.make({
-                  ...item.event,
-                  observation: IntegratorGitObservation.cases.Missing.make({
-                    candidateText: IntegratorCandidateText.make("foreign")
-                  })
-                })
-              }
-            : item
-        ),
-        responsibility
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("reported candidate") })
-    expect(
-      deriveIntegratorState([...fixed, legacyResultRecord(notPreparedResult()), ...legacyGitFacts()], responsibility)
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("NotPrepared") })
-    const foreignResult = IntegratorCorrelation.make({
-      ...session,
-      candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-result"),
-      sessionId: IntegratorSessionId.make("integrator-session:foreign-result")
+  it("fails closed when the exact run session index is missing or points to an unknown session", () => {
+    const missingSession = makeRunHistoryIndexes()
+    missingSession.integratorSessionsBySessionId.clear()
+    expect(validateIntegratorHistoryEvent(runStartRecord(), missingSession)).toMatchObject({
+      handled: true,
+      issue: expect.stringContaining("no exact earlier fixed session")
     })
-    expect(
-      deriveIntegratorState(
-        [
-          ...fixed,
-          legacyResultRecord(notPreparedResult()),
-          record(
-            12,
-            IntegratorResultRecordedEvent.make({
-              result: notPreparedResult(foreignResult),
-              version: workflowJournalEventVersion
-            })
-          )
-        ],
-        responsibility
-      )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("multiple outer results") })
+
+    const unknownSession = makeRunHistoryIndexes()
+    unknownSession.integratorSessionsBySessionId.set(session.sessionId, JournalPosition.make(99))
+    expect(validateIntegratorHistoryEvent(runStartRecord(), unknownSession)).toMatchObject({
+      handled: true,
+      issue: expect.stringContaining("no exact earlier fixed session")
+    })
+
+    const overRetry = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(3))
+    expect(validateIntegratorHistoryEvent(runStartRecord(overRetry, 12), makeRunHistoryIndexes())).toMatchObject({
+      handled: true,
+      issue: expect.stringContaining("exceeds Retry bound")
+    })
   })
 
-  it("rejects run histories with duplicate, unbound, and out-of-order records", () => {
+  it("rejects duplicate, foreign, and out-of-order exact run facts", () => {
     const fixed = [...lineageRecords(), sessionRecord()]
-    const duplicateStart = [...fixed, runStartRecord(), runStartRecord(undefined, 12)]
+    const duplicateStart = [...fixed, runStartRecord(), runStartRecord(runOne, 12)]
     expect(deriveIntegratorRunState(duplicateStart, responsibility, runOne)).toMatchObject({
       _tag: "Contradiction",
       detail: expect.stringContaining("started more than once")
@@ -640,22 +425,20 @@ describe("Integrator reconstruction states", () => {
       _tag: "Contradiction",
       detail: expect.stringContaining("repeats one exact session ordinal")
     })
+
     const beforeSession = [...lineageRecords(), runStartRecord(runOne, 3), sessionRecord()]
     expect(deriveIntegratorRunState(beforeSession, responsibility, runOne)).toMatchObject({
       _tag: "Contradiction",
       detail: expect.stringContaining("does not follow")
     })
+
     const gitWithoutResult = [...fixed, runStartRecord(), ...runGitFacts()]
     expect(deriveIntegratorRunState(gitWithoutResult, responsibility, runOne)).toMatchObject({
       _tag: "Contradiction",
       detail: expect.stringContaining("without a run result")
     })
-    const wrongResult = [
-      ...fixed,
-      runStartRecord(),
-      runResultRecord(preparedResult(), runOne, 9, integratorRunResultRecordedRecordKey(runOne)),
-      ...runGitFacts(runOne, candidateObservation(), 10, 11)
-    ]
+
+    const wrongResult = [...fixed, runStartRecord(), runResultRecord(preparedResult()), ...runGitFacts()]
     const firstLineage = lineageRecords()[0]
     expect(firstLineage).toBeDefined()
     if (firstLineage === undefined) return
@@ -666,6 +449,7 @@ describe("Integrator reconstruction states", () => {
       _tag: "Contradiction",
       detail: expect.stringContaining("foreign event")
     })
+
     const duplicateGit = [
       ...fixed,
       runStartRecord(),
@@ -679,49 +463,33 @@ describe("Integrator reconstruction states", () => {
     })
   })
 
-  it("keeps exact result, intent, and session keys closed over foreign facts", () => {
+  it("rejects foreign session, key, and target-lineage facts", () => {
     const fixed = [...lineageRecords(), sessionRecord()]
-    const foreign = IntegratorCorrelation.make({
+    const foreign = IntegratorSessionCorrelation.make({
       ...session,
       candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign"),
       sessionId: IntegratorSessionId.make("integrator-session:foreign")
     })
+    expect(
+      deriveIntegratorRunState(
+        [
+          ...fixed,
+          record(7, IntegratorSessionFixedEvent.make({ correlation: foreign, version: workflowJournalEventVersion })),
+          runStartRecord()
+        ],
+        responsibility,
+        runOne
+      )
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("multiple fixed sessions") })
 
     expect(
-      deriveIntegratorState([...fixed, legacyResultRecord(notPreparedResult(foreign), 7)], responsibility)
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("foreign correlation") })
-
-    const firstLineage = lineageRecords()[0]
-    expect(firstLineage).toBeDefined()
-    if (firstLineage === undefined) return
-    expect(
-      deriveIntegratorState(
-        [...fixed, { ...firstLineage, key: integratorResultRecordedRecordKey(session) }],
+      deriveCurrentIntegratorState(
+        [
+          ...fixed,
+          record(7, IntegratorSessionFixedEvent.make({ correlation: foreign, version: workflowJournalEventVersion }))
+        ],
         responsibility
       )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("non-result") })
-
-    expect(
-      deriveIntegratorState([...fixed, legacyResultRecord(preparedResult(foreign))], responsibility)
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("foreign correlation") })
-
-    const prepared = [...fixed, legacyResultRecord(preparedResult())]
-    const foreignIntent = record(
-      10,
-      firstLineage.event,
-      integratorCandidateGitReadIntendedRecordKey(session, candidateText)
-    )
-    expect(deriveIntegratorState([...prepared, foreignIntent], responsibility)).toMatchObject({
-      _tag: "Contradiction",
-      detail: expect.stringContaining("foreign correlation")
-    })
-
-    const duplicateSession = record(
-      7,
-      IntegratorSessionFixedEvent.make({ correlation: foreign, version: workflowJournalEventVersion })
-    )
-    expect(
-      deriveIntegratorState([...lineageRecords(), sessionRecord(), duplicateSession], responsibility)
     ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("multiple target heads") })
 
     expect(
@@ -730,90 +498,92 @@ describe("Integrator reconstruction states", () => {
         responsibility
       )
     ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("foreign key") })
-  })
 
-  it("maps every legacy state only to the initial explicit run", () => {
-    const fixed = [...lineageRecords(), sessionRecord()]
-    expect(deriveIntegratorRunState([], responsibility, runOne)).toMatchObject({ _tag: "Absent" })
-    expect(deriveIntegratorRunState(fixed, responsibility, runOne)).toMatchObject({ _tag: "RunUnfinished" })
-    expect(
-      deriveIntegratorRunState([...fixed, legacyResultRecord(preparedResult())], responsibility, runOne)
-    ).toMatchObject({ _tag: "PreparedAwaitingGit" })
-    expect(
-      deriveIntegratorRunState(
-        [...fixed, legacyResultRecord(preparedResult()), ...legacyGitFacts()],
-        responsibility,
-        runOne
-      )
-    ).toMatchObject({ _tag: "GitQualifiedPrepared" })
-    expect(
-      deriveIntegratorRunState(
-        [
-          ...fixed,
-          legacyResultRecord(preparedResult()),
-          ...legacyGitFacts(IntegratorGitObservation.cases.Missing.make({ candidateText }))
-        ],
-        responsibility,
-        runOne
-      )
-    ).toMatchObject({ _tag: "CandidateRejected" })
-    expect(
-      deriveIntegratorRunState([...fixed, legacyResultRecord(notPreparedResult())], responsibility, runOne)
-    ).toMatchObject({ _tag: "NotPrepared" })
-
-    const contradiction = fixed.map((item) =>
-      item.key === sessionRecord().key ? { ...item, key: JournalRecordKey.make("foreign-session-key") } : item
+    const foreignSessionRecord = record(
+      7,
+      IntegratorSessionFixedEvent.make({
+        correlation: IntegratorSessionCorrelation.make({ ...foreign, acceptedResult: acceptedResultFixture(sha("f")) }),
+        version: workflowJournalEventVersion
+      }),
+      integratorSessionFixedRecordKey(integratorResponsibilityFactsFor(responsibility))
     )
-    expect(deriveIntegratorRunState(contradiction, responsibility, runOne)).toMatchObject({ _tag: "Contradiction" })
-    const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
-    expect(deriveIntegratorRunState(fixed, responsibility, runTwo)).toMatchObject({ _tag: "Absent" })
-    expect(
-      deriveIntegratorRunState([...fixed, runResultRecord(notPreparedResult())], responsibility, runOne)
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("without IntegratorRunStarted") })
-  })
-
-  it("materializes legacy qualification and rejects malformed qualified parents", () => {
-    const qualified = deriveIntegratorState(
-      [...lineageRecords(), sessionRecord(), legacyResultRecord(preparedResult()), ...legacyGitFacts()],
-      responsibility
-    )
-    expect(qualified._tag).toBe("GitQualifiedPrepared")
-    if (qualified._tag !== "GitQualifiedPrepared") return
-    expect(integratorQualifiedCandidateFromState(qualified)).toMatchObject({
-      candidateText,
-      directParents: [targetHead, acceptedCommit]
+    expect(deriveCurrentIntegratorState([...lineageRecords(), foreignSessionRecord], responsibility)).toMatchObject({
+      _tag: "Contradiction",
+      detail: expect.stringContaining("does not bind")
     })
-    expect(() =>
-      integratorQualifiedCandidateFromState({
-        ...qualified,
-        observation: { directParents: [acceptedCommit, targetHead] }
-      })
-    ).toThrow()
+
+    const foreignLineage = lineageRecords().map((item) =>
+      item.position === JournalPosition.make(5) && item.event._tag === "TargetLineageObserved"
+        ? {
+            ...item,
+            event: TargetLineageObservedEvent.make({
+              ...item.event,
+              observation: TargetLineageObservation.make({
+                ...item.event.observation,
+                plannedBaseIsAncestorOfTargetHead: false
+              })
+            })
+          }
+        : item
+    )
+    expect(deriveCurrentIntegratorState([...foreignLineage, sessionRecord()], responsibility)).toMatchObject({
+      _tag: "Contradiction",
+      detail: expect.stringContaining("target-lineage")
+    })
+
+    const nonSessionAtSessionKey = runStartRecord(
+      runOne,
+      8,
+      integratorSessionFixedRecordKey(integratorResponsibilityFactsFor(responsibility))
+    )
+    expect(deriveCurrentIntegratorState([...lineageRecords(), nonSessionAtSessionKey], responsibility)).toMatchObject({
+      _tag: "Contradiction",
+      detail: expect.stringContaining("non-session")
+    })
   })
 
   it("promotes only one chronologically complete FullRerun successor", () => {
     const fixture = makeSuccessorValidationFixture()
-    const freshLineage = fixture.indexes.targetLineageObservations.get(JournalPosition.make(15))
-    const quarantineRecord = fixture.records[0]
-    const directionRecord = fixture.records[1]
-    const successorRecord = fixture.records[2]
-    expect(freshLineage).toBeDefined()
-    expect(quarantineRecord).toBeDefined()
-    expect(directionRecord).toBeDefined()
-    expect(successorRecord).toBeDefined()
-    if (
-      freshLineage === undefined ||
-      quarantineRecord === undefined ||
-      directionRecord === undefined ||
-      successorRecord === undefined
-    )
-      return
     const base = [...lineageRecords(), sessionRecord()]
-    const complete = [...base, record(15, freshLineage), ...fixture.records]
+    const complete = [...base, record(15, fixture.freshLineage), ...fixture.records]
     expect(deriveCurrentIntegratorState(complete, responsibility)).toMatchObject({ _tag: "RunUnfinished" })
-    expect(() =>
-      IntegratorSuccessorSessionFixedEvent.make({ ...fixture.successorEvent, predecessor: fixture.successor })
-    ).toThrow()
+
+    const successorRunOne = integratorRunCorrelationForSession(fixture.successor, IntegratorRunOrdinal.make(1))
+    expect(deriveIntegratorRunState(complete, responsibility, successorRunOne)).toMatchObject({
+      _tag: "RunUnfinished",
+      run: successorRunOne
+    })
+    expect(
+      deriveIntegratorRunState(
+        [
+          ...complete,
+          runResultRecord(
+            IntegratorResult.cases.NotPrepared.make({ correlation: fixture.successor, detail }),
+            successorRunOne,
+            17
+          )
+        ],
+        responsibility,
+        successorRunOne
+      )
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("without IntegratorRunStarted") })
+
+    const unrelatedPredecessor = IntegratorSessionCorrelation.make({
+      ...session,
+      candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:unrelated-predecessor"),
+      sessionId: IntegratorSessionId.make("integrator-session:unrelated-predecessor")
+    })
+    const unrelatedSuccessor = IntegratorSuccessorSessionFixedEvent.make({
+      ...fixture.successorEvent,
+      predecessor: unrelatedPredecessor
+    })
+    expect(
+      deriveIntegratorRunState(
+        [...complete, record(18, unrelatedSuccessor), runStartRecord(runOne, 19)],
+        responsibility,
+        runOne
+      )
+    ).toMatchObject({ _tag: "RunUnfinished", run: runOne })
 
     const successorRunTwo = integratorRunCorrelationForSession(fixture.successor, IntegratorRunOrdinal.make(2))
     expect(
@@ -823,11 +593,15 @@ describe("Integrator reconstruction states", () => {
       )
     ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("initial Integrator run") })
 
-    const successorRunOne = integratorRunCorrelationForSession(fixture.successor, IntegratorRunOrdinal.make(1))
     expect(
       deriveCurrentIntegratorState([...complete, runStartRecord(successorRunOne, 17)], responsibility)
     ).toMatchObject({ _tag: "RunUnfinished" })
 
+    const successorRecord = fixture.records[2]
+    const quarantineRecord = fixture.records[0]
+    expect(successorRecord).toBeDefined()
+    expect(quarantineRecord).toBeDefined()
+    if (successorRecord === undefined || quarantineRecord === undefined) return
     expect(
       deriveCurrentIntegratorState(
         [...complete, { ...successorRecord, position: JournalPosition.make(17) }],
@@ -835,7 +609,7 @@ describe("Integrator reconstruction states", () => {
       )
     ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("multiple FullRerun successors") })
 
-    const foreignPredecessor = IntegratorCorrelation.make({ ...session, expectedTargetHead: sha("f") })
+    const foreignPredecessor = IntegratorSessionCorrelation.make({ ...session, expectedTargetHead: sha("f") })
     const foreignPredecessorEvent = IntegratorSuccessorSessionFixedEvent.make({
       ...fixture.successorEvent,
       predecessor: foreignPredecessor
@@ -844,9 +618,9 @@ describe("Integrator reconstruction states", () => {
       deriveCurrentIntegratorState(
         [
           ...base,
-          record(15, freshLineage),
-          record(10, quarantineRecord.event),
-          record(12, directionRecord.event),
+          record(15, fixture.freshLineage),
+          record(10, fixture.records[0]?.event ?? fixture.successorEvent),
+          record(12, fixture.records[1]?.event ?? fixture.successorEvent),
           record(
             16,
             foreignPredecessorEvent,
@@ -861,6 +635,7 @@ describe("Integrator reconstruction states", () => {
       deriveCurrentIntegratorState(
         [
           ...base,
+          record(15, fixture.freshLineage),
           ...fixture.records.map((item, index) =>
             index === 2 ? { ...item, key: JournalRecordKey.make("foreign-successor-key") } : item
           )
@@ -869,15 +644,32 @@ describe("Integrator reconstruction states", () => {
       )
     ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("foreign key") })
 
-    expect(deriveCurrentIntegratorState([...base, ...fixture.records], responsibility)).toMatchObject({
-      _tag: "Contradiction",
-      detail: expect.stringContaining("chronology")
-    })
+    const invalidDirection = fixture.records[1]
+    expect(invalidDirection).toBeDefined()
+    if (invalidDirection === undefined || invalidDirection.event._tag !== "IntegrationQuarantineDirectionApplied")
+      return
+    const retryDirection = record(
+      invalidDirection.position,
+      IntegrationQuarantineDirectionAppliedEvent.make({
+        ...invalidDirection.event,
+        fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+          ...invalidDirection.event.fingerprint,
+          direction: "Retry"
+        })
+      }),
+      invalidDirection.key
+    )
+    expect(
+      deriveCurrentIntegratorState(
+        [...base, record(15, fixture.freshLineage), quarantineRecord, retryDirection, successorRecord],
+        responsibility
+      )
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("FullRerun successor does not preserve") })
   })
 })
 
 describe("Integrator reconstruction history indexes", () => {
-  it("accepts one exact run start, result, Git intent, and Git observation sequence", () => {
+  it("accepts and validates one exact run start, result, Git intent, and observation", () => {
     const indexes = makeRunHistoryIndexes()
     const start = runStartRecord()
     const result = runResultRecord(preparedResult())
@@ -885,7 +677,6 @@ describe("Integrator reconstruction history indexes", () => {
     expect(intent).toBeDefined()
     expect(observation).toBeDefined()
     if (intent === undefined || observation === undefined) return
-
     expect(validateIntegratorHistoryEvent(start, indexes, [start])).toEqual({ handled: true, issue: undefined })
     expect(validateIntegratorHistoryEvent(result, indexes, [start, result])).toEqual({
       handled: true,
@@ -899,7 +690,6 @@ describe("Integrator reconstruction history indexes", () => {
       handled: true,
       issue: undefined
     })
-
     expect(validateIntegratorHistoryEvent(runStartRecord(runOne, 12), indexes)).toMatchObject({
       handled: true,
       issue: expect.stringContaining("repeats exact session ordinal")
@@ -922,26 +712,128 @@ describe("Integrator reconstruction history indexes", () => {
       handled: true,
       issue: expect.stringContaining("repeats candidate text")
     })
-  })
-
-  it("rejects duplicate legacy candidate Git facts after indexing their first exact result", () => {
-    const indexes = makeRunHistoryIndexes()
-    const facts = legacyGitFacts()
-    const intent = facts[0]
-    const observation = facts[1]
-    expect(intent).toBeDefined()
-    expect(observation).toBeDefined()
-    if (intent === undefined || observation === undefined) return
-
-    expect(validateIntegratorHistoryEvent(intent, indexes)).toEqual({ handled: true, issue: undefined })
-    expect(validateIntegratorHistoryEvent(observation, indexes)).toEqual({ handled: true, issue: undefined })
-    expect(validateIntegratorHistoryEvent({ ...intent, position: JournalPosition.make(12) }, indexes)).toMatchObject({
+    const foreignKeyIndexes = makeRunHistoryIndexes()
+    expect(validateIntegratorHistoryEvent(start, foreignKeyIndexes, [start])).toEqual({
       handled: true,
-      issue: expect.stringContaining("repeats candidate text")
+      issue: undefined
+    })
+    expect(validateIntegratorHistoryEvent(result, foreignKeyIndexes, [start, result])).toEqual({
+      handled: true,
+      issue: undefined
     })
     expect(
-      validateIntegratorHistoryEvent({ ...observation, position: JournalPosition.make(13) }, indexes)
-    ).toMatchObject({ handled: true, issue: expect.stringContaining("repeats candidate text") })
+      validateIntegratorHistoryEvent({ ...intent, key: JournalRecordKey.make("foreign-key") }, foreignKeyIndexes, [
+        start,
+        result,
+        intent
+      ])
+    ).toMatchObject({ handled: true, issue: expect.stringContaining("foreign key") })
+  })
+
+  it("requires exact retry predecessor evidence before indexing run two", () => {
+    const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
+    const laterStart = runStartRecord(runTwo, 20)
+    expect(validateIntegratorHistoryEvent(laterStart, makeRunHistoryIndexes(), [laterStart])).toMatchObject({
+      handled: true,
+      issue: expect.any(String)
+    })
+    const indexes = makeRunHistoryIndexes()
+    const fixed = sessionRecord()
+    const previousStart = runStartRecord(runOne, 8)
+    const previousResult = runResultRecord(notPreparedResult(), runOne, 9)
+    const basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+      cause: { _tag: "NotPrepared", detail },
+      evidence: { resultRecordedAt: previousResult.position }
+    })
+    const quarantine = record(
+      10,
+      IntegrationQuarantinedEvent.make({
+        basis,
+        correlation: session,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      integrationQuarantinedRecordKey(session.sessionId, basis)
+    )
+    const directionFingerprint = IntegrationQuarantineDirectionFingerprint.make({
+      direction: "Retry",
+      quarantineAt: quarantine.position,
+      sessionId: session.sessionId
+    })
+    const direction = record(
+      11,
+      IntegrationQuarantineDirectionAppliedEvent.make({
+        fingerprint: directionFingerprint,
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "reconstruction-retry", runId }),
+        version: workflowJournalEventVersion
+      }),
+      integrationQuarantineDirectionAppliedRecordKey(
+        IntegrationQuarantineDirectionSubject.make({ quarantineAt: quarantine.position, sessionId: session.sessionId })
+      )
+    )
+    const freshLineageOperationId = OperationId.make("integrator-reconstruction-retry-lineage")
+    const freshLineageOperation = makeTargetLineageObservationOperation({
+      integrationTarget: target,
+      operationId: freshLineageOperationId,
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const freshIntent = record(
+      12,
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: freshLineageOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    const freshObservation = record(
+      13,
+      TargetLineageObservedEvent.make({
+        observation: input.targetLineage,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: freshLineageOperationId,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    indexes.integratorRunStarted.set(integratorRunRecordKeyPrefix(runOne), {
+      event: previousStart.event as Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunStarted" }>,
+      position: previousStart.position
+    })
+    indexes.integratorRunResults.set(integratorRunRecordKeyPrefix(runOne), {
+      event: previousResult.event as Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunResultRecorded" }>,
+      position: previousResult.position
+    })
+    const retryRecords = [
+      ...lineageRecords(),
+      fixed,
+      previousStart,
+      previousResult,
+      quarantine,
+      direction,
+      freshIntent,
+      freshObservation,
+      laterStart
+    ]
+    expect(
+      validateIntegratorHistoryEvent(laterStart, indexes, [
+        fixed,
+        previousStart,
+        previousResult,
+        quarantine,
+        direction,
+        freshIntent,
+        freshObservation,
+        laterStart
+      ])
+    ).toMatchObject({ handled: true, issue: undefined })
+    expect(deriveCurrentIntegratorState(retryRecords, responsibility)).toMatchObject({
+      _tag: "RunUnfinished",
+      run: runTwo
+    })
   })
 
   it("accepts a deterministic FullRerun successor only after its quarantine, direction, and fresh lineage", () => {
@@ -961,9 +853,12 @@ describe("Integrator reconstruction history indexes", () => {
     })
 
     const foreignKeyFixture = makeSuccessorValidationFixture()
-    const foreignKeyRecord = { ...successorRecord, key: JournalRecordKey.make("foreign-successor-key") }
     expect(
-      validateIntegratorHistoryEvent(foreignKeyRecord, foreignKeyFixture.indexes, foreignKeyFixture.records)
+      validateIntegratorHistoryEvent(
+        { ...successorRecord, key: JournalRecordKey.make("foreign-successor-key") },
+        foreignKeyFixture.indexes,
+        foreignKeyFixture.records
+      )
     ).toMatchObject({ handled: true, issue: expect.stringContaining("requires record key") })
 
     const missingLineageFixture = makeSuccessorValidationFixture()
@@ -987,15 +882,6 @@ describe("Integrator reconstruction history indexes", () => {
         missingPredecessorFixture.records
       )
     ).toMatchObject({ handled: true, issue: expect.stringContaining("no exact earlier predecessor") })
-
-    const reusedIdentityFixture = makeSuccessorValidationFixture()
-    reusedIdentityFixture.indexes.integratorSessionsBySessionId.set(
-      fixture.successor.sessionId,
-      JournalPosition.make(6)
-    )
-    expect(
-      validateIntegratorHistoryEvent(successorRecord, reusedIdentityFixture.indexes, reusedIdentityFixture.records)
-    ).toMatchObject({ handled: true, issue: expect.stringContaining("reuses a session or resource") })
 
     const missingQuarantineFixture = makeSuccessorValidationFixture()
     expect(
@@ -1027,145 +913,6 @@ describe("Integrator reconstruction history indexes", () => {
     ).toMatchObject({ handled: true, issue: expect.stringContaining("fixed after its fresh target-lineage") })
   })
 
-  it("rejects run facts whose key, session, retry, result, or Git chronology is not exact", () => {
-    const noLegacyResult = makeRunHistoryIndexes(false)
-    expect(validateIntegratorHistoryEvent(runStartRecord(), noLegacyResult)).toMatchObject({
-      handled: true,
-      issue: undefined
-    })
-
-    const foreignKey = runStartRecord(runOne, 8, JournalRecordKey.make("foreign-run-start-key"))
-    expect(validateIntegratorHistoryEvent(foreignKey, makeRunHistoryIndexes())).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("foreign key")
-    })
-
-    const missingSession = makeRunHistoryIndexes()
-    missingSession.integratorSessionsByStartedAt.clear()
-    missingSession.integratorSessionsBySessionId.clear()
-    expect(validateIntegratorHistoryEvent(runStartRecord(), missingSession)).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("no exact earlier fixed session")
-    })
-
-    const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
-    expect(validateIntegratorHistoryEvent(runStartRecord(runTwo, 12), makeRunHistoryIndexes())).toMatchObject({
-      handled: true,
-      issue: expect.any(String)
-    })
-    const runThree = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(3))
-    expect(validateIntegratorHistoryEvent(runStartRecord(runThree, 12), makeRunHistoryIndexes())).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("exceeds Retry bound")
-    })
-
-    const noStart = makeRunHistoryIndexes()
-    expect(validateIntegratorHistoryEvent(runResultRecord(preparedResult()), noStart)).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("no exact earlier run start")
-    })
-
-    const mismatchingResultIndexes = makeRunHistoryIndexes()
-    const start = runStartRecord()
-    expect(integratorHistoryIssue(start, mismatchingResultIndexes)).toBeUndefined()
-    const foreignResult = runResultRecord(
-      preparedResult(IntegratorCorrelation.make({ ...session, expectedTargetHead: sha("e") }))
-    )
-    expect(validateIntegratorHistoryEvent(foreignResult, mismatchingResultIndexes)).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("matching session")
-    })
-
-    const foreignResultKeyIndexes = makeRunHistoryIndexes()
-    expect(integratorHistoryIssue(start, foreignResultKeyIndexes)).toBeUndefined()
-    expect(
-      validateIntegratorHistoryEvent(
-        runResultRecord(preparedResult(), runOne, 9, JournalRecordKey.make("foreign-run-result-key")),
-        foreignResultKeyIndexes
-      )
-    ).toMatchObject({ handled: true, issue: expect.stringContaining("foreign key") })
-
-    const noPreparedResult = makeRunHistoryIndexes()
-    const noPreparedFacts = runGitFacts()
-    const noPreparedIntent = noPreparedFacts[0]
-    expect(noPreparedIntent).toBeDefined()
-    if (noPreparedIntent === undefined) return
-    expect(validateIntegratorHistoryEvent(noPreparedIntent, noPreparedResult)).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("no exact earlier PreparedCandidate result")
-    })
-
-    const foreignIntentKeyIndexes = makeRunHistoryIndexes()
-    expect(integratorHistoryIssue(start, foreignIntentKeyIndexes)).toBeUndefined()
-    const result = runResultRecord(preparedResult())
-    expect(integratorHistoryIssue(result, foreignIntentKeyIndexes)).toBeUndefined()
-    const intentFacts = runGitFacts()
-    const intent = intentFacts[0]
-    expect(intent).toBeDefined()
-    if (intent === undefined) return
-    expect(
-      validateIntegratorHistoryEvent(
-        { ...intent, key: JournalRecordKey.make("foreign-run-intent-key") },
-        foreignIntentKeyIndexes
-      )
-    ).toMatchObject({ handled: true, issue: expect.stringContaining("foreign key") })
-
-    const noIntentIndexes = makeRunHistoryIndexes()
-    expect(integratorHistoryIssue(start, noIntentIndexes)).toBeUndefined()
-    expect(integratorHistoryIssue(result, noIntentIndexes)).toBeUndefined()
-    const noIntentFacts = runGitFacts()
-    const noIntentObservation = noIntentFacts[1]
-    expect(noIntentObservation).toBeDefined()
-    if (noIntentObservation === undefined) return
-    expect(validateIntegratorHistoryEvent(noIntentObservation, noIntentIndexes)).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("no exact earlier intent")
-    })
-
-    const foreignObservationKeyIndexes = makeRunHistoryIndexes()
-    expect(integratorHistoryIssue(start, foreignObservationKeyIndexes)).toBeUndefined()
-    expect(integratorHistoryIssue(result, foreignObservationKeyIndexes)).toBeUndefined()
-    expect(integratorHistoryIssue(intent, foreignObservationKeyIndexes)).toBeUndefined()
-    const foreignObservationFacts = runGitFacts()
-    const foreignObservation = foreignObservationFacts[1]
-    expect(foreignObservation).toBeDefined()
-    if (foreignObservation === undefined) return
-    expect(
-      validateIntegratorHistoryEvent(
-        { ...foreignObservation, key: JournalRecordKey.make("foreign-run-observation-key") },
-        foreignObservationKeyIndexes
-      )
-    ).toMatchObject({ handled: true, issue: expect.stringContaining("foreign key") })
-
-    const mismatchingObservationIndexes = makeRunHistoryIndexes()
-    expect(integratorHistoryIssue(start, mismatchingObservationIndexes)).toBeUndefined()
-    expect(integratorHistoryIssue(result, mismatchingObservationIndexes)).toBeUndefined()
-    expect(integratorHistoryIssue(intent, mismatchingObservationIndexes)).toBeUndefined()
-    const observationFacts = runGitFacts()
-    const observation = observationFacts[1]
-    expect(observation).toBeDefined()
-    if (observation === undefined) return
-    expect(observation.event._tag).toBe("IntegratorRunCandidateGitObserved")
-    if (observation.event._tag !== "IntegratorRunCandidateGitObserved") return
-    expect(
-      validateIntegratorHistoryEvent(
-        {
-          ...observation,
-          event: IntegratorRunCandidateGitObservedEvent.make({
-            ...observation.event,
-            observation: IntegratorGitObservation.cases.Missing.make({
-              candidateText: IntegratorCandidateText.make("foreign-candidate")
-            })
-          })
-        },
-        mismatchingObservationIndexes
-      )
-    ).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("no exact earlier intent, result, and candidate text")
-    })
-  })
-
   it("checks every previous run fact before indexing a later run start", () => {
     const previousStart = runStartRecord(runOne, 8)
     const previousResult = runResultRecord(notPreparedResult(), runOne, 9)
@@ -1183,7 +930,7 @@ describe("Integrator reconstruction history indexes", () => {
         result: {
           ...previousResult,
           event: runResultRecord(
-            preparedResult(IntegratorCorrelation.make({ ...session, expectedTargetHead: sha("f") })),
+            preparedResult(IntegratorSessionCorrelation.make({ ...session, expectedTargetHead: sha("f") })),
             runOne,
             9
           ).event
@@ -1193,16 +940,18 @@ describe("Integrator reconstruction history indexes", () => {
 
     for (const { result, start } of cases) {
       const indexes = makeRunHistoryIndexes()
-      if (start !== undefined && start.event._tag === "IntegratorRunStarted")
+      if (start !== undefined && start.event._tag === "IntegratorRunStarted") {
         indexes.integratorRunStarted.set(integratorRunRecordKeyPrefix(runOne), {
           event: start.event,
           position: start.position
         })
-      if (result !== undefined && result.event._tag === "IntegratorRunResultRecorded")
+      }
+      if (result !== undefined && result.event._tag === "IntegratorRunResultRecorded") {
         indexes.integratorRunResults.set(integratorRunRecordKeyPrefix(runOne), {
           event: result.event,
           position: result.position
         })
+      }
       expect(validateIntegratorHistoryEvent(laterStart, indexes, [laterStart])).toMatchObject({ handled: true })
     }
   })
@@ -1212,6 +961,7 @@ describe("Integrator reconstruction history indexes", () => {
     const indexes = fixture.indexes
     indexes.integratorSessionFixed.set(JournalPosition.make(16), fixture.successorEvent)
     indexes.integratorSessionsBySessionId.set(fixture.successor.sessionId, JournalPosition.make(16))
+    indexes.integratorSessionsByCandidateResource.set(fixture.successor.candidateResource, JournalPosition.make(16))
     const successorRun = integratorRunCorrelationForSession(fixture.successor, IntegratorRunOrdinal.make(1))
 
     expect(validateIntegratorHistoryEvent(runStartRecord(successorRun, 17), indexes)).toEqual({
@@ -1222,17 +972,15 @@ describe("Integrator reconstruction history indexes", () => {
 })
 
 describe("Integrator journal-record reconciliation", () => {
-  it.effect("reuses exact durable results and candidate observations, rejecting lost races", () =>
+  it.effect("reuses exact durable results and candidate observations, rejecting foreign records", () =>
     Effect.gen(function* () {
       const expectedResult = preparedResult()
       const expectedObservation = candidateObservation()
       const resultRecord = runResultRecord(expectedResult)
       const observationRecord = runGitFacts()[1]
-      if (observationRecord === undefined) return yield* Effect.die("fixture lacks observation")
-      if (observationRecord.event._tag !== "IntegratorRunCandidateGitObserved") {
-        return yield* Effect.die("fixture has a non-run observation")
+      if (observationRecord === undefined || observationRecord.event._tag !== "IntegratorRunCandidateGitObserved") {
+        return yield* Effect.die("fixture lacks run observation")
       }
-
       expect(yield* runResultFromAppendedRecord(resultRecord, runOne, expectedResult)).toEqual(expectedResult)
       expect(yield* readRecordedRunResult([resultRecord], runOne)).toEqual(Option.some(expectedResult))
       expect(yield* readRecordedRunResult([], runOne)).toEqual(Option.none())
@@ -1242,6 +990,9 @@ describe("Integrator journal-record reconciliation", () => {
       expect(
         yield* readRunCandidateObservation([observationRecord, ...runGitFacts().slice(0, 1)], runOne, candidateText)
       ).toEqual(Option.some(expectedObservation))
+      expect(
+        yield* readRunCandidateObservation([observationRecord], runOne, candidateText).pipe(Effect.flip)
+      ).toBeInstanceOf(IntegratorJournalContradiction)
 
       const wrongResult = yield* runResultFromAppendedRecord(
         {
@@ -1252,19 +1003,6 @@ describe("Integrator journal-record reconciliation", () => {
         expectedResult
       ).pipe(Effect.flip)
       expect(wrongResult).toBeInstanceOf(IntegratorJournalContradiction)
-      const wrongObservation = yield* runObservationFromAppendedRecord(
-        {
-          ...observationRecord,
-          event: IntegratorRunCandidateGitObservedEvent.make({
-            ...observationRecord.event,
-            candidateText: IntegratorCandidateText.make("foreign")
-          })
-        },
-        runOne,
-        candidateText,
-        expectedObservation
-      ).pipe(Effect.flip)
-      expect(wrongObservation).toBeInstanceOf(IntegratorJournalContradiction)
       expect(
         yield* readRecordedRunResult(
           [
@@ -1276,151 +1014,78 @@ describe("Integrator journal-record reconciliation", () => {
           runOne
         ).pipe(Effect.flip)
       ).toBeInstanceOf(IntegratorJournalContradiction)
-      expect(
-        yield* readRunCandidateObservation([observationRecord], runOne, candidateText).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-    })
-  )
 
-  it.effect("records one run Git-read intent before an effect and reconciles retry starts", () =>
-    Effect.gen(function* () {
-      const { journal, records } = yield* makeJournal([...lineageRecords(), sessionRecord()])
-      const appended = yield* appendRunGitReadIntentIfNeeded(journal, runOne, candidateText, yield* Ref.get(records))
-      expect(appended.event._tag).toBe("IntegratorRunCandidateGitReadIntended")
-      const reused = yield* appendRunGitReadIntentIfNeeded(journal, runOne, candidateText, yield* Ref.get(records))
-      expect(reused).toEqual(appended)
-
-      const badExisting = [
-        ...lineageRecords(),
-        sessionRecord(),
-        { ...appended, event: IntegratorRunStartedEvent.make({ run: runOne, version: workflowJournalEventVersion }) }
-      ]
-      expect(
-        yield* appendRunGitReadIntentIfNeeded(journal, runOne, candidateText, badExisting).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-
-      const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
-      expect(
-        yield* reconcileRunResult(journal, runTwo, yield* Ref.get(records), Option.none(), false).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-      const started = yield* reconcileRunResult(journal, runOne, yield* Ref.get(records), Option.none(), false)
-      expect(started).toEqual(Option.none())
-      const withLegacyResult = [...lineageRecords(), sessionRecord(), legacyResultRecord(notPreparedResult())]
-      const { journal: migrationJournal, records: migrationRecords } = yield* makeJournal(withLegacyResult)
-      expect(yield* reconcileRunResult(migrationJournal, runTwo, withLegacyResult, Option.none(), false)).toEqual(
-        Option.none()
-      )
-      expect((yield* Ref.get(migrationRecords)).some((item) => item.event._tag === "IntegratorRunStarted")).toBe(true)
-    })
-  )
-
-  it.effect("reads legacy candidate facts only for ordinal one and rejects a legacy result/run collision", () =>
-    Effect.gen(function* () {
-      const legacy = [...lineageRecords(), sessionRecord(), legacyResultRecord(preparedResult()), ...legacyGitFacts()]
-      expect(yield* readLegacyInitialResultForRun(legacy, runOne)).toEqual(Option.some(preparedResult()))
-      expect(
-        yield* readLegacyInitialResultForRun(
-          legacy,
-          integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
-        )
-      ).toEqual(Option.none())
-      expect(yield* readRunCandidateObservation(legacy, runOne, candidateText)).toEqual(
-        Option.some(candidateObservation())
-      )
-      expect(
-        yield* readRunCandidateObservation(
-          legacy,
-          integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2)),
-          candidateText
-        )
-      ).toEqual(Option.none())
-      expect(yield* validateLegacyInitialResult(legacy, runOne, preparedResult())).toEqual(preparedResult())
-      expect(
-        yield* validateLegacyInitialResult([...legacy, runStartRecord()], runOne, preparedResult()).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-    })
-  )
-
-  it.effect("fails closed on legacy key races and reuses a durable predecessor for Retry", () =>
-    Effect.gen(function* () {
-      const foreign = IntegratorCorrelation.make({
+      const foreign = IntegratorSessionCorrelation.make({
         ...session,
         candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-reconcile"),
         sessionId: IntegratorSessionId.make("integrator-session:foreign-reconcile")
       })
-      const wrongResultRecord = {
-        ...legacyResultRecord(preparedResult()),
-        event: IntegratorRunStartedEvent.make({ run: runOne, version: workflowJournalEventVersion })
-      }
-      expect(yield* readLegacyInitialResultForRun([wrongResultRecord], runOne).pipe(Effect.flip)).toBeInstanceOf(
-        IntegratorJournalContradiction
+      expect(
+        yield* runResultFromAppendedRecord(runResultRecord(preparedResult(foreign)), runOne, expectedResult).pipe(
+          Effect.flip
+        )
+      ).toBeInstanceOf(IntegratorJournalContradiction)
+
+      const wrongObservation = yield* runObservationFromAppendedRecord(
+        {
+          ...observationRecord,
+          event: IntegratorRunCandidateGitObservedEvent.make({
+            ...observationRecord.event,
+            candidateText: IntegratorCandidateText.make("foreign-candidate")
+          })
+        },
+        runOne,
+        candidateText,
+        expectedObservation
+      ).pipe(Effect.flip)
+      expect(wrongObservation).toBeInstanceOf(IntegratorJournalContradiction)
+    })
+  )
+
+  it.effect("writes the run intent before an ambiguous boundary and refuses an unproved retry", () =>
+    Effect.gen(function* () {
+      const { journal, records } = yield* makeJournal([...lineageRecords(), sessionRecord()])
+      const appended = yield* appendRunGitReadIntentIfNeeded(journal, runOne, candidateText, yield* Ref.get(records))
+      expect(appended.event._tag).toBe("IntegratorRunCandidateGitReadIntended")
+      expect(yield* appendRunGitReadIntentIfNeeded(journal, runOne, candidateText, yield* Ref.get(records))).toEqual(
+        appended
       )
+      const existingIntent = runGitFacts()[0]
+      if (existingIntent === undefined) return yield* Effect.die("fixture lacks run Git-read intent")
       expect(
-        yield* readLegacyInitialResultForRun([legacyResultRecord(preparedResult(foreign))], runOne).pipe(Effect.flip)
+        yield* appendRunGitReadIntentIfNeeded(journal, runOne, candidateText, [
+          {
+            ...existingIntent,
+            event: IntegratorRunStartedEvent.make({ run: runOne, version: workflowJournalEventVersion })
+          }
+        ]).pipe(Effect.flip)
       ).toBeInstanceOf(IntegratorJournalContradiction)
+      const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
+      expect(
+        yield* reconcileRunResult(journal, runTwo, yield* Ref.get(records), Option.none(), false).pipe(Effect.flip)
+      ).toBeInstanceOf(IntegratorJournalContradiction)
+      expect(yield* reconcileRunResult(journal, runOne, yield* Ref.get(records), Option.none(), false)).toEqual(
+        Option.none()
+      )
+      const withPreviousRun = [
+        ...lineageRecords(),
+        sessionRecord(),
+        runStartRecord(),
+        runResultRecord(notPreparedResult())
+      ]
+      const { journal: retryJournal, records: retryRecords } = yield* makeJournal(withPreviousRun)
+      expect(yield* reconcileRunResult(retryJournal, runTwo, withPreviousRun, Option.none(), false)).toEqual(
+        Option.none()
+      )
+      expect((yield* Ref.get(retryRecords)).some((item) => item.event._tag === "IntegratorRunStarted")).toBe(true)
+    })
+  )
 
-      const legacyObservation = legacyGitFacts()[1]
-      expect(legacyObservation).toBeDefined()
-      if (legacyObservation === undefined) return
-      expect(legacyObservation.event._tag).toBe("IntegratorCandidateGitObserved")
-      if (legacyObservation.event._tag !== "IntegratorCandidateGitObserved") return
-      expect(
-        yield* readRunCandidateObservation(
-          [
-            {
-              ...legacyObservation,
-              event: IntegratorRunStartedEvent.make({ run: runOne, version: workflowJournalEventVersion })
-            }
-          ],
-          runOne,
-          candidateText
-        ).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-      expect(
-        yield* readRunCandidateObservation(
-          [
-            {
-              ...legacyObservation,
-              event: IntegratorCandidateGitObservedEvent.make({ ...legacyObservation.event, correlation: foreign })
-            }
-          ],
-          runOne,
-          candidateText
-        ).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-      expect(
-        yield* readRunCandidateObservation(
-          [
-            {
-              ...legacyObservation,
-              event: IntegratorCandidateGitObservedEvent.make({
-                ...legacyObservation.event,
-                observation: IntegratorGitObservation.cases.Missing.make({
-                  candidateText: IntegratorCandidateText.make("foreign-candidate")
-                })
-              })
-            }
-          ],
-          runOne,
-          candidateText
-        ).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-
-      const legacyIntent = legacyGitFacts()[0]
-      const legacyLineage = lineageRecords()[1]
-      expect(legacyIntent).toBeDefined()
-      expect(legacyLineage).toBeDefined()
-      if (legacyIntent === undefined || legacyLineage === undefined) return
-      expect(
-        yield* readRunCandidateObservation(
-          [{ ...legacyIntent, event: legacyLineage.event }],
-          runOne,
-          candidateText
-        ).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-
+  it.effect("fails closed on foreign append results and reuses a durable predecessor for Retry", () =>
+    Effect.gen(function* () {
       const wrongAppendJournal = InRunJournal.of({
-        append: (requestedRunId, key) => Effect.succeed({ ...runStartRecord(runOne, 8, key), runId: requestedRunId }),
+        append: (requestedRunId, key) =>
+          Effect.succeed({ ...runResultRecord(preparedResult(), runOne, 8, key), runId: requestedRunId }),
         read: () => Effect.succeed([])
       })
       expect(
@@ -1438,25 +1103,25 @@ describe("Integrator journal-record reconciliation", () => {
       expect(yield* reconcileRunResult(journal, runTwo, previousRunRecords, Option.none(), false)).toEqual(
         Option.none()
       )
-    })
-  )
-})
-
-describe("Integrator session intent races", () => {
-  it.effect("rejects an existing foreign run-start key and a losing append", () =>
-    Effect.gen(function* () {
-      const foreignEvent = sessionRecord(undefined, 8)
-      const foreignKey = { ...foreignEvent, key: integratorRunStartedRecordKey(runOne) }
-      const { journal } = yield* makeJournal([])
-      expect(yield* appendIntegratorRunStartedIfNeeded(journal, runOne, [foreignKey]).pipe(Effect.flip)).toBeInstanceOf(
-        IntegratorJournalContradiction
-      )
 
       const losingJournal = InRunJournal.of({
         append: (requestedRunId, key) => Effect.succeed({ ...runStartRecord(runOne, 5, key), runId: requestedRunId }),
         read: () => Effect.succeed([])
       })
       expect(yield* appendIntegratorRunStartedIfNeeded(losingJournal, runOne, []).pipe(Effect.flip)).toBeInstanceOf(
+        IntegratorJournalContradiction
+      )
+    })
+  )
+})
+
+describe("Integrator session intent races", () => {
+  it.effect("rejects a foreign run-start key and a losing append", () =>
+    Effect.gen(function* () {
+      const foreignEvent = sessionRecord(undefined, 8)
+      const foreignKey = { ...foreignEvent, key: integratorRunStartedRecordKey(runOne) }
+      const { journal } = yield* makeJournal([])
+      expect(yield* appendIntegratorRunStartedIfNeeded(journal, runOne, [foreignKey]).pipe(Effect.flip)).toBeInstanceOf(
         IntegratorJournalContradiction
       )
     })

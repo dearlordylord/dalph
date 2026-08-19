@@ -26,8 +26,7 @@ import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/ide
 import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
-  integrationQuarantinedRecordKey,
-  integratorResultRecordedRecordKey
+  integrationQuarantinedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
@@ -54,7 +53,6 @@ import {
   IntegratorTargetLineageObservationChanged,
   IntegratorPreparationInput,
   deriveIntegratorRunState,
-  prepareIntegrationCandidate,
   prepareIntegrationCandidateRun,
   type IntegratorRequest
 } from "./protocol.js"
@@ -80,9 +78,7 @@ import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorNotPreparedDetail,
-  IntegratorResultRecordedEvent,
-  IntegratorCorrelation,
-  type IntegratorProtocolResult,
+  IntegratorSessionCorrelation,
   type IntegratorRunProtocolResult,
   IntegratorResult
 } from "./events.js"
@@ -182,11 +178,11 @@ interface Harness {
   readonly gitCandidates: Ref.Ref<ReadonlyArray<IntegratorCandidateText>>
   readonly records: Ref.Ref<ReadonlyArray<JournalRecord>>
   readonly journal: InRunJournal["Service"]
-  readonly run: (input: IntegratorPreparationInput) => Effect.Effect<IntegratorProtocolResult, unknown>
+  readonly run: (input: IntegratorPreparationInput) => Effect.Effect<IntegratorRunProtocolResult, unknown>
   readonly runExact: (
     input: IntegratorPreparationInput,
     ordinal: IntegratorRunOrdinal,
-    session?: IntegratorCorrelation
+    session?: IntegratorSessionCorrelation
   ) => Effect.Effect<IntegratorRunProtocolResult, unknown>
   readonly readRecords: Effect.Effect<ReadonlyArray<JournalRecord>>
 }
@@ -264,7 +260,7 @@ const makeHarness = (
         )
     })
     const run = (input: IntegratorPreparationInput) =>
-      prepareIntegrationCandidate(input).pipe(
+      prepareIntegrationCandidateRun({ preparation: input, run: integratorInitialRunCorrelationFor(input) }).pipe(
         Effect.provideService(Integrator, integrator),
         Effect.provideService(IntegratorGit, git),
         Effect.provideService(InRunJournal, journal)
@@ -748,41 +744,6 @@ describe("outer Integrator protocol", () => {
       expect(
         records.filter(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2)
       ).toHaveLength(1)
-    })
-  )
-
-  it.effect("rejects legacy session-only initial-run result evidence for Retry", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness(
-        (request) => Effect.succeed(notPrepared(request)),
-        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
-      )
-      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
-      const authorization = yield* appendRetryAuthorization(harness)
-      yield* Ref.update(harness.records, (records) =>
-        records
-          .filter(({ event }) => event._tag !== "IntegratorRunStarted" || event.run.ordinal !== 1)
-          .map((record) =>
-            record.event._tag === "IntegratorRunResultRecorded" && record.event.run.ordinal === 1
-              ? {
-                  ...record,
-                  event: IntegratorResultRecordedEvent.make({
-                    result: record.event.result,
-                    version: workflowJournalEventVersion
-                  }),
-                  key: integratorResultRecordedRecordKey(authorization.session)
-                }
-              : record
-          )
-      )
-      expect(deriveCurrentIntegratorState(yield* harness.readRecords, responsibility)._tag).toBe("Contradiction")
-
-      const retried = yield* harness
-        .runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
-        .pipe(Effect.flip)
-
-      expect(retried).toBeInstanceOf(IntegratorJournalContradiction)
-      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
     })
   )
 
@@ -1435,7 +1396,7 @@ describe("outer Integrator protocol", () => {
         .pipe(Effect.flip)
       expect(incompatibleRetry).toBeInstanceOf(IntegratorTargetLineageIncompatible)
 
-      const foreignSession = IntegratorCorrelation.make({
+      const foreignSession = IntegratorSessionCorrelation.make({
         ...authorization.session,
         candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-request")
       })
@@ -1445,68 +1406,6 @@ describe("outer Integrator protocol", () => {
       expect(foreignRequest).toMatchObject({
         _tag: "IntegratorJournalContradiction",
         detail: expect.stringContaining("foreign session")
-      })
-    })
-  )
-
-  it.effect("reuses a legacy session result and rejects a foreign legacy correlation", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness(
-        (request) => Effect.succeed(notPrepared(request)),
-        successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
-      )
-      yield* harness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
-      const sessionRecord = (yield* harness.readRecords).find(({ event }) => event._tag === "IntegratorSessionFixed")
-      const runResult = (yield* harness.readRecords).find(({ event }) => event._tag === "IntegratorRunResultRecorded")
-      if (
-        sessionRecord?.event._tag !== "IntegratorSessionFixed" ||
-        runResult?.event._tag !== "IntegratorRunResultRecorded"
-      ) {
-        return yield* Effect.die("expected one fixed session and run result")
-      }
-      const legacyRecords = (yield* harness.readRecords)
-        .filter(({ event }) => event._tag !== "IntegratorRunStarted" && event._tag !== "IntegratorRunResultRecorded")
-        .concat({
-          ...runResult,
-          event: IntegratorResultRecordedEvent.make({
-            result: runResult.event.result,
-            version: workflowJournalEventVersion
-          }),
-          key: integratorResultRecordedRecordKey(sessionRecord.event.correlation)
-        })
-      yield* Ref.set(harness.records, legacyRecords)
-      const reused = yield* harness.runExact(
-        compatibleInput(),
-        IntegratorRunOrdinal.make(1),
-        sessionRecord.event.correlation
-      )
-      expect(reused._tag).toBe("NotPrepared")
-      expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
-
-      const foreignCorrelation = {
-        ...sessionRecord.event.correlation,
-        candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-legacy")
-      }
-      const legacyResultKey = integratorResultRecordedRecordKey(sessionRecord.event.correlation)
-      yield* Ref.update(harness.records, (records) =>
-        records.map((record) =>
-          record.key === legacyResultKey && record.event._tag === "IntegratorResultRecorded"
-            ? {
-                ...record,
-                event: IntegratorResultRecordedEvent.make({
-                  result: { ...record.event.result, correlation: foreignCorrelation },
-                  version: workflowJournalEventVersion
-                })
-              }
-            : record
-        )
-      )
-      const foreign = yield* harness
-        .runExact(compatibleInput(), IntegratorRunOrdinal.make(1), sessionRecord.event.correlation)
-        .pipe(Effect.flip)
-      expect(foreign).toMatchObject({
-        _tag: "IntegratorJournalContradiction",
-        detail: expect.stringContaining("foreign correlation")
       })
     })
   )

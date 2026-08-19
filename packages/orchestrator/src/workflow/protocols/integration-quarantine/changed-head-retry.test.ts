@@ -18,7 +18,6 @@ import {
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantinedRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
-  integratorResultRecordedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey
 } from "../../../workflow-journal/record-key.js"
@@ -31,10 +30,7 @@ import { OperationId } from "../../identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
 import {
-  IntegratorCorrelation,
-  IntegratorNotPreparedDetail,
-  IntegratorResult,
-  IntegratorResultRecordedEvent,
+  IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunStartedEvent,
@@ -44,13 +40,11 @@ import {
 import { integratorResponsibilityFactsFromCorrelation } from "../integrator/state.js"
 import {
   IntegrationQuarantineBasis,
-  IntegrationQuarantineCause,
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantineDirectionSubject,
   IntegrationQuarantineFailureDetail,
-  IntegrationQuarantineResultEvidence,
   IntegrationProviderRunActivityAbsentEvent,
   IntegrationQuarantinedEvent
 } from "./events.js"
@@ -72,11 +66,11 @@ type Scenario = {
   readonly lineage: JournalRecord
   readonly prior: JournalRecord
   readonly runId: RunId
-  readonly session: IntegratorCorrelation
+  readonly session: IntegratorSessionCorrelation
 }
 
-const sessionFor = (suffix: string): IntegratorCorrelation =>
-  IntegratorCorrelation.make({
+const sessionFor = (suffix: string): IntegratorSessionCorrelation =>
+  IntegratorSessionCorrelation.make({
     ...baseSession,
     plannedAttempt: { ...baseSession.plannedAttempt, runId: RunId.make(`changed-head-retry-run:${suffix}`) },
     queuedAt: JournalPosition.make(5),
@@ -85,7 +79,7 @@ const sessionFor = (suffix: string): IntegratorCorrelation =>
     targetLineageObservedAt: JournalPosition.make(3)
   })
 
-const lineageOperationFor = (session: IntegratorCorrelation, suffix: string) =>
+const lineageOperationFor = (session: IntegratorSessionCorrelation, suffix: string) =>
   makeTargetLineageObservationOperation({
     integrationTarget: session.integrationTarget,
     operationId: OperationId.make(`changed-head-retry-lineage:${suffix}`),
@@ -95,7 +89,7 @@ const lineageOperationFor = (session: IntegratorCorrelation, suffix: string) =>
 
 const appendLineage = Effect.fn("ChangedHeadRetryTest.appendLineage")(function* (
   journal: JournalStoreService,
-  session: IntegratorCorrelation,
+  session: IntegratorSessionCorrelation,
   head: GitCommitSha,
   suffix: string
 ) {
@@ -131,8 +125,7 @@ const appendScenario = Effect.fn("ChangedHeadRetryTest.appendScenario")(function
   suffix: string,
   direction: "Retry" | "FullRerun" = "Retry",
   freshHead: GitCommitSha = changedHead,
-  includeRunStart = true,
-  legacyResult = false
+  includeRunStart = true
 ) {
   const journal = yield* JournalStore
   const session = sessionFor(suffix)
@@ -157,37 +150,23 @@ const appendScenario = Effect.fn("ChangedHeadRetryTest.appendScenario")(function
       IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
     )
   }
-  const priorBasis = legacyResult
-    ? yield* Effect.gen(function* () {
-        const resultDetail = IntegratorNotPreparedDetail.make(`legacy result: ${suffix}`)
-        const result = IntegratorResult.cases.NotPrepared.make({ correlation: session, detail: resultDetail })
-        const resultRecord = yield* journal.append(
-          scenarioRunId,
-          integratorResultRecordedRecordKey(session),
-          IntegratorResultRecordedEvent.make({ result, version: workflowJournalEventVersion })
-        )
-        return IntegrationQuarantineBasis.cases.ConclusiveResult.make({
-          cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: resultDetail }),
-          evidence: IntegrationQuarantineResultEvidence.make({ resultRecordedAt: resultRecord.position })
-        })
+  const priorBasis = yield* Effect.gen(function* () {
+    const absence = yield* journal.append(
+      scenarioRunId,
+      integrationProviderRunActivityAbsentRecordKey(run),
+      IntegrationProviderRunActivityAbsentEvent.make({
+        correlation: session,
+        detail: absenceDetail,
+        occurrenceClassification: "NonActionOccurrence",
+        run,
+        version: workflowJournalEventVersion
       })
-    : yield* Effect.gen(function* () {
-        const absence = yield* journal.append(
-          scenarioRunId,
-          integrationProviderRunActivityAbsentRecordKey(run),
-          IntegrationProviderRunActivityAbsentEvent.make({
-            correlation: session,
-            detail: absenceDetail,
-            occurrenceClassification: "NonActionOccurrence",
-            run,
-            version: workflowJournalEventVersion
-          })
-        )
-        return IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
-          detail: absenceDetail,
-          ownedActivityProvenAbsentAt: absence.position
-        })
-      })
+    )
+    return IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+      detail: absenceDetail,
+      ownedActivityProvenAbsentAt: absence.position
+    })
+  })
   const prior = yield* journal.append(
     scenarioRunId,
     integrationQuarantinedRecordKey(session.sessionId, priorBasis),
@@ -432,22 +411,17 @@ it.effect("rejects a foreign target-lineage position and strict malformed input"
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 
-it.effect("rejects missing run-start and legacy session-only quarantine evidence", () =>
+it.effect("rejects missing run-start evidence", () =>
   Effect.gen(function* () {
     const missingStart = yield* appendScenario("missing-start", "Retry", changedHead, false)
     const missingStartFailure = yield* appendChangedHeadRetryQuarantine(inputFor(missingStart)).pipe(Effect.flip)
     expect(missingStartFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
 
-    const legacy = yield* appendScenario("legacy-result", "Retry", changedHead, true, true)
-    const legacyFailure = yield* appendChangedHeadRetryQuarantine(inputFor(legacy)).pipe(Effect.flip)
-    expect(legacyFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
-    for (const scenario of [missingStart, legacy]) {
-      expect(
-        (yield* scenario.journal.read(scenario.runId)).filter(
-          ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
-        )
-      ).toHaveLength(0)
-    }
+    expect(
+      (yield* missingStart.journal.read(missingStart.runId)).filter(
+        ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
+      )
+    ).toHaveLength(0)
   }).pipe(Effect.provide(legacyMemoryJournalStoreLayer))
 )
 

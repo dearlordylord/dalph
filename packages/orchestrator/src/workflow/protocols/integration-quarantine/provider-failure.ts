@@ -20,7 +20,7 @@ import {
 } from "./events.js"
 import { type IntegratorProviderActivityAbsent, IntegratorJournalContradiction } from "../integrator/errors.js"
 import {
-  type IntegratorCorrelation,
+  type IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   integratorRetryRunOrdinal,
@@ -56,14 +56,14 @@ const runIdFor = (run: IntegratorRunCorrelation) => run.session.plannedAttempt.r
 const reject = (run: IntegratorRunCorrelation, detail: string): Effect.Effect<never, IntegratorJournalContradiction> =>
   Effect.fail(new IntegratorJournalContradiction({ detail, runId: runIdFor(run) }))
 
-const fixedSessionKey = (session: IntegratorCorrelation) =>
+const fixedSessionKey = (session: IntegratorSessionCorrelation) =>
   integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(session))
 
 const initialRunOrdinal = IntegratorRunOrdinal.make(1)
 
 const absenceKey = integrationProviderRunActivityAbsentRecordKey
 
-const sameResponsibility = (left: IntegratorCorrelation, right: IntegratorCorrelation): boolean =>
+const sameResponsibility = (left: IntegratorSessionCorrelation, right: IntegratorSessionCorrelation): boolean =>
   integratorResponsibilityFactsEqual(
     integratorResponsibilityFactsFromCorrelation(left),
     integratorResponsibilityFactsFromCorrelation(right)
@@ -347,22 +347,6 @@ const validateRunOnePredecessors = (
     )
   ) {
     return invalidPredecessor("provider-run absence contradicts run-bound candidate evidence")
-  }
-  if (
-    run.ordinal === initialRunOrdinal &&
-    history.some(
-      (record) =>
-        (record.event._tag === "IntegratorResultRecorded" ||
-          record.event._tag === "IntegratorCandidateGitReadIntended" ||
-          record.event._tag === "IntegratorCandidateGitObserved") &&
-        ((record.event._tag === "IntegratorResultRecorded" &&
-          integratorCorrelationsEqual(record.event.result.correlation, run.session)) ||
-          ((record.event._tag === "IntegratorCandidateGitReadIntended" ||
-            record.event._tag === "IntegratorCandidateGitObserved") &&
-            integratorCorrelationsEqual(record.event.correlation, run.session)))
-    )
-  ) {
-    return invalidPredecessor("legacy session-only Integrator evidence cannot establish provider-run absence")
   }
   return validPredecessor({ session, runStart })
 }

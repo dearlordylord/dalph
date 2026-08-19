@@ -533,13 +533,10 @@ type NonProjectedJournalEvent = Exclude<WorkflowJournalEvent, ProjectedJournalEv
 const nonProjectedJournalEventKinds = {
   AttemptImplementationAbandoned: true,
   AttemptStoppageIntended: true,
-  IntegratorCandidateGitObserved: true,
-  IntegratorCandidateGitReadIntended: true,
   IntegratorRunCandidateGitObserved: true,
   IntegratorRunCandidateGitReadIntended: true,
   IntegratorRunResultRecorded: true,
   IntegratorRunStarted: true,
-  IntegratorResultRecorded: true,
   IntegratorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true,
   TargetPromotionAttemptIntended: true,
@@ -732,7 +729,6 @@ const projectDirectOccurrence = (
  * Projects immutable journal records in one pass. Missing relationships fail
  * before any partial semantic projection becomes visible.
  */
-// eslint-disable-next-line complexity -- One pass validates relationships while exhaustively projecting the closed event vocabulary.
 export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project")(function* (
   records: ReadonlyArray<JournalRecord>
 ) {

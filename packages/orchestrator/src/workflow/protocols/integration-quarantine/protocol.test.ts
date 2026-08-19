@@ -9,8 +9,8 @@ import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationQuarantinedRecordKey,
-  integratorCandidateGitObservedRecordKey,
-  integratorResultRecordedRecordKey,
+  integratorRunCandidateGitObservedRecordKey,
+  integratorRunResultRecordedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
   integratorSessionFixedRecordKey,
   integratorRunStartedRecordKey
@@ -46,17 +46,16 @@ import {
 } from "./events.js"
 import {
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
+  IntegratorRunCandidateGitObservedEvent,
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
   IntegratorResult,
-  IntegratorCandidateGitObservedEvent,
-  IntegratorResultRecordedEvent,
   IntegratorSessionId
 } from "../integrator/events.js"
 import { integratorResponsibilityFactsFromCorrelation } from "../integrator/state.js"
@@ -77,7 +76,7 @@ const target = FixtureTarget.make("integration-quarantine-target")
 const baseCorrelation = integrationFinalityFixture.qualifiedCandidate.run.session
 
 const correlationFor = (suffix: string) =>
-  IntegratorCorrelation.make({
+  IntegratorSessionCorrelation.make({
     ...baseCorrelation,
     queuedAt: JournalPosition.make(2),
     sessionId: IntegratorSessionId.make(`integration-quarantine-session-${suffix}`),
@@ -87,7 +86,7 @@ const correlationFor = (suffix: string) =>
 
 const conclusiveBasisFor = (
   cause: IntegrationQuarantineCause,
-  resultRecordedAt = JournalPosition.make(2),
+  resultRecordedAt = JournalPosition.make(4),
   candidateObservationAt?: JournalPosition
 ) =>
   IntegrationQuarantineBasis.cases.ConclusiveResult.make({
@@ -121,6 +120,24 @@ const appendQuarantine = Effect.fn("IntegrationQuarantineTest.appendQuarantine")
   yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
   if (event.basis._tag === "ConclusiveResult") {
     const correlation = event.correlation
+    const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
+    yield* journal.append(
+      runId,
+      JournalRecordKey.make(`integration-quarantine-test:conclusive-lineage:${correlation.sessionId}`),
+      TargetLineageObservedEvent.make({
+        observation: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: correlation.plannedAttempt.baseSha,
+          targetHeadSha: correlation.expectedTargetHead
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: OperationId.make(
+          `integration-quarantine-test:conclusive-lineage-operation:${correlation.sessionId}`
+        ),
+        plannedAttempt: correlation.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     const result =
       event.basis.cause._tag === "InvalidCandidate"
         ? IntegratorResult.cases.PreparedCandidate.make({ candidateText: event.basis.cause.candidateText, correlation })
@@ -133,8 +150,13 @@ const appendQuarantine = Effect.fn("IntegrationQuarantineTest.appendQuarantine")
           })
     yield* journal.append(
       runId,
-      integratorResultRecordedRecordKey(correlation),
-      IntegratorResultRecordedEvent.make({ result, version: workflowJournalEventVersion })
+      integratorRunStartedRecordKey(run),
+      IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      integratorRunResultRecordedRecordKey(run),
+      IntegratorRunResultRecordedEvent.make({ result, run, version: workflowJournalEventVersion })
     )
     if (event.basis.cause._tag === "InvalidCandidate") {
       const candidateObservationAt = event.basis.evidence.candidateObservationAt
@@ -143,15 +165,15 @@ const appendQuarantine = Effect.fn("IntegrationQuarantineTest.appendQuarantine")
       }
       yield* journal.append(
         runId,
-        integratorCandidateGitObservedRecordKey(correlation, event.basis.cause.candidateText),
-        IntegratorCandidateGitObservedEvent.make({
+        integratorRunCandidateGitObservedRecordKey(run, event.basis.cause.candidateText),
+        IntegratorRunCandidateGitObservedEvent.make({
           candidateText: event.basis.cause.candidateText,
-          correlation,
           observation: event.basis.cause.observation,
+          run,
           version: workflowJournalEventVersion
         })
       )
-      if (candidateObservationAt !== JournalPosition.make(3)) {
+      if (candidateObservationAt !== JournalPosition.make(5)) {
         return yield* Effect.die("invalid candidate test fixture must refer to the exact second evidence position")
       }
     }
@@ -225,7 +247,7 @@ const requestFor = (
   })
 
 const appendTargetLineageObservation = Effect.fn("IntegrationQuarantineTest.appendTargetLineageObservation")(function* (
-  correlation: IntegratorCorrelation,
+  correlation: IntegratorSessionCorrelation,
   targetHead: GitCommitSha,
   suffix: string
 ) {
@@ -284,17 +306,20 @@ it.effect("accepts conclusive evidence bound to the exact initial Integrator run
       target,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    const correlation = correlationFor("run-bound-not-prepared")
+    const correlation = IntegratorSessionCorrelation.make({
+      ...correlationFor("run-bound-not-prepared"),
+      targetLineageObservedAt: JournalPosition.make(1)
+    })
     const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
     yield* journal.append(
       runId,
-      JournalRecordKey.make("integration-quarantine-test:run-bound:start"),
+      integratorRunStartedRecordKey(run),
       IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
     )
     const detail = IntegratorNotPreparedDetail.make("the exact initial run returned no candidate")
     const result = yield* journal.append(
       runId,
-      JournalRecordKey.make("integration-quarantine-test:run-bound:result"),
+      integratorRunResultRecordedRecordKey(run),
       IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.NotPrepared.make({ correlation, detail }),
         run,
@@ -323,8 +348,8 @@ it.effect("reconstructs exact invalid-candidate quarantine evidence and rejects 
           candidateText,
           observation: IntegratorGitObservation.cases.Missing.make({ candidateText })
         }),
-        JournalPosition.make(2),
-        JournalPosition.make(3)
+        JournalPosition.make(4),
+        JournalPosition.make(5)
       )
     )
     const { journal, record } = yield* appendQuarantine("invalid-missing", missingEvent)
@@ -332,9 +357,9 @@ it.effect("reconstructs exact invalid-candidate quarantine evidence and rejects 
     expect(state._tag).toBe("Quarantined")
     expect(record.event).toEqual(missingEvent)
     const records = yield* journal.read(runId)
-    const candidateRecord = records.find(({ event: current }) => current._tag === "IntegratorCandidateGitObserved")
-    const foreignEvidenceRecord = records.find(({ event: current }) => current._tag === "IntegratorResultRecorded")
-    if (candidateRecord === undefined || foreignEvidenceRecord?.event._tag !== "IntegratorResultRecorded") {
+    const candidateRecord = records.find(({ event: current }) => current._tag === "IntegratorRunCandidateGitObserved")
+    const foreignEvidenceRecord = records.find(({ event: current }) => current._tag === "IntegratorRunResultRecorded")
+    if (candidateRecord === undefined || foreignEvidenceRecord?.event._tag !== "IntegratorRunResultRecorded") {
       return yield* Effect.die("invalid candidate fixture lacks its evidence records")
     }
     const nonCandidateObservation = records.map((current) =>
@@ -474,7 +499,7 @@ it.effect("authorizes Retry from exact provider-failure and run-bound conclusive
     expect(providerApplied._tag).toBe("DirectionApplied")
 
     const journal = yield* JournalStore
-    const correlation = IntegratorCorrelation.make({
+    const correlation = IntegratorSessionCorrelation.make({
       ...baseCorrelation,
       sessionId: IntegratorSessionId.make("run-bound-retry-eligible"),
       targetLineageObservedAt: JournalPosition.make(1)
@@ -488,7 +513,7 @@ it.effect("authorizes Retry from exact provider-failure and run-bound conclusive
     const detail = IntegratorNotPreparedDetail.make("run-bound Retry evidence is exact")
     const result = yield* journal.append(
       runId,
-      JournalRecordKey.make("run-bound-retry-result"),
+      integratorRunResultRecordedRecordKey(run),
       IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.NotPrepared.make({ correlation, detail }),
         run,
@@ -567,7 +592,7 @@ it.effect("distinguishes an unopened Run, a missing quarantine, and a session-mi
     const records = yield* journal.read(runId)
     const noQuarantineJournal: InRunJournal["Service"] = {
       append: () => Effect.die("missing quarantine must fail before append"),
-      read: () => Effect.succeed(records.filter((candidate) => candidate !== record))
+      read: () => Effect.succeed(records.filter((candidate) => candidate.position < event.correlation.queuedAt))
     }
     const noQuarantineControl = yield* makeIntegrationQuarantineDirectionControl(noQuarantineJournal)
     const missing = yield* noQuarantineControl.apply(request).pipe(Effect.flip)
@@ -596,7 +621,7 @@ it.effect("rejects incomplete conclusive run-one evidence and reports an absent 
     const request = requestFor(fingerprintFor(event, record.position, "Retry"), "control-incomplete-result-request")
     const incompleteJournal: InRunJournal["Service"] = {
       append: () => Effect.die("incomplete conclusive evidence must fail before append"),
-      read: () => Effect.succeed(records.filter((candidate) => candidate.event._tag !== "IntegratorResultRecorded"))
+      read: () => Effect.succeed(records.filter((candidate) => candidate.event._tag !== "IntegratorRunResultRecorded"))
     }
     const incompleteControl = yield* makeIntegrationQuarantineDirectionControl(incompleteJournal)
     const incomplete = yield* incompleteControl.apply(request).pipe(Effect.flip)
@@ -723,11 +748,12 @@ it.effect("reconciles every ambiguous direction append outcome against the Journ
     const foreignAppendJournal: InRunJournal["Service"] = {
       append: (requestedRunId, key) =>
         Effect.succeed({
-          event: IntegratorResultRecordedEvent.make({
+          event: IntegratorRunResultRecordedEvent.make({
             result: IntegratorResult.cases.NotPrepared.make({
               correlation: event.correlation,
               detail: IntegratorNotPreparedDetail.make("foreign append result")
             }),
+            run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: event.correlation }),
             version: workflowJournalEventVersion
           }),
           key,
@@ -1010,11 +1036,12 @@ it.effect("detects duplicate directions on an earlier quarantine even after a la
     yield* journal.append(
       runId,
       JournalRecordKey.make("later-quarantine-result"),
-      IntegratorResultRecordedEvent.make({
+      IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.NotPrepared.make({
           correlation: prior.correlation,
           detail: IntegratorNotPreparedDetail.make("later conclusive result")
         }),
+        run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: prior.correlation }),
         version: workflowJournalEventVersion
       })
     )
@@ -1155,7 +1182,7 @@ it.effect("rejects a direction request bound to a different Run than the quarant
           detail: IntegratorNotPreparedDetail.make("subject run differs from journal route")
         })
       ),
-      correlation: IntegratorCorrelation.make({ ...baseCorrelation, plannedAttempt: subjectAttempt }),
+      correlation: IntegratorSessionCorrelation.make({ ...baseCorrelation, plannedAttempt: subjectAttempt }),
       occurrenceClassification: "NonActionOccurrence",
       version: workflowJournalEventVersion
     })
@@ -1187,11 +1214,12 @@ it.effect("narrows only the closed Integration Quarantine Journal event vocabula
   Effect.sync(() => {
     const quarantine = quarantineEventFor("event-vocabulary")
     expect(isIntegrationQuarantineEvent(quarantine)).toBe(true)
-    const result = IntegratorResultRecordedEvent.make({
+    const result = IntegratorRunResultRecordedEvent.make({
       result: IntegratorResult.cases.NotPrepared.make({
         correlation: quarantine.correlation,
         detail: IntegratorNotPreparedDetail.make("event vocabulary probe")
       }),
+      run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: quarantine.correlation }),
       version: workflowJournalEventVersion
     })
     expect(isIntegrationQuarantineEvent(result)).toBe(false)

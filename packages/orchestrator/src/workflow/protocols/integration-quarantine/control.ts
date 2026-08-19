@@ -177,15 +177,7 @@ const conclusiveResultIsFromRunOne = (
   /* v8 ignore next -- @preserve quarantineRecordForFingerprint admits only evidence records before Q; an absent or post-Q result is rejected before this eligibility helper. */
   if (record === undefined || record.position >= quarantine.position) return false
 
-  // Session-only results predate the run-bound vocabulary and can only denote
-  // the original session result. Run-bound results must explicitly name run 1.
-  if (record.event._tag === "IntegratorResultRecorded") {
-    return (
-      record.runId === quarantine.runId &&
-      integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation)
-    )
-  }
-  /* v8 ignore next -- @preserve a ConclusiveResult quarantine basis can only name the two result event vocabularies handled above. */
+  /* v8 ignore next -- @preserve quarantineRecordForFingerprint admits only the exact conclusive-result event selected by this basis. */
   if (record.event._tag !== "IntegratorRunResultRecorded") return false
   const run = runOneFor(quarantine)
   return (

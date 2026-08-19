@@ -2,11 +2,10 @@
 
 Issue: [#225](https://github.com/dearlordylord/dalph/issues/225)
 
-Status: accepted behavior from issue #225, materialized as chronological
-operational scenarios before implementation. Issues #222, #223, #68, #138,
-and #224 have already moved every accepted live path to the outer Integrator.
-This contract step removes the superseded candidate-agent and Dalph-owned
-target-verification workflows; it does not create a compatibility mode.
+Status: implemented. Issues #222, #223, #68, #138, and #224 moved every
+accepted live path to the outer Integrator. Issue #225 removed the superseded
+candidate-agent and Dalph-owned target-verification workflows without creating
+a compatibility mode.
 
 ## One accepted result reaches completion through only the outer Integrator
 

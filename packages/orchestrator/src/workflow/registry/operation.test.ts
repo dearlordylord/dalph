@@ -7,6 +7,12 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { OperationId } from "../identity.js"
 import { TaskClaimReleaseAuthority, WorkflowOperation } from "./operation.js"
 import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
+import {
+  CompletionTaskConfirmationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskRequestOrdinal
+} from "../protocols/integration-finality/events.js"
+import { integrationFinalityFixture } from "../protocols/integration-finality/fixtures.js"
 
 const claim = ActiveTaskClaim.make({
   operationId: OperationId.make("operation-test-acquisition"),
@@ -63,5 +69,23 @@ it.effect("requires a stopped-attempt claim release to name its focused claim ob
         release
       })
     ).toMatchObject({ authority: stoppedAuthority })
+  })
+)
+
+it.effect("requires a completion facts read to use its deterministic operation identity", () =>
+  Effect.gen(function* () {
+    const purpose = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+      attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+      confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
+    })
+    const failure = yield* Schema.decodeUnknownEffect(WorkflowOperation)({
+      _tag: "ReadCompletionTaskFacts",
+      operationId: OperationId.make("foreign-completion-facts-read"),
+      predecessorOperationIds: [],
+      purpose,
+      request: integrationFinalityFixture.completionRequest,
+      target: integrationFinalityFixture.target
+    }).pipe(Effect.flip)
+    expect(failure._tag).toBe("SchemaError")
   })
 )

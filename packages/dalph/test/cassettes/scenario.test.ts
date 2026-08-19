@@ -42,7 +42,7 @@ import {
   IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantineFailureDetail,
   IntegratorCandidateResourceLocator,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorSessionId,
@@ -6515,9 +6515,6 @@ it.effect(
         IntegrationFinalitySettled: true,
         IntegratorSessionFixed: true,
         IntegratorSuccessorSessionFixed: true,
-        IntegratorResultRecorded: true,
-        IntegratorCandidateGitReadIntended: true,
-        IntegratorCandidateGitObserved: true,
         IntegratorRunStarted: true,
         IntegratorRunResultRecorded: true,
         IntegratorRunCandidateGitReadIntended: true,
@@ -6814,7 +6811,7 @@ it.effect(
       const absenceAt = JournalPosition.make(1)
       const quarantineAt = JournalPosition.make(2)
       const directionAppliedAt = JournalPosition.make(3)
-      const successor = IntegratorCorrelation.make({
+      const successor = IntegratorSessionCorrelation.make({
         ...fixedSession.correlation,
         candidateResource: IntegratorCandidateResourceLocator.make("cassette:alpha-renaming:successor-resource"),
         sessionId: IntegratorSessionId.make("cassette:alpha-renaming:successor-session"),
@@ -6884,9 +6881,6 @@ it.effect(
               !tag.startsWith("CompletionTask") &&
               !tag.startsWith("CompletionClaim") &&
               !tag.startsWith("PostPromotionBlocker") &&
-              tag !== "IntegratorResultRecorded" &&
-              tag !== "IntegratorCandidateGitReadIntended" &&
-              tag !== "IntegratorCandidateGitObserved" &&
               tag !== "IntegrationFinalitySettled"
           )
         )

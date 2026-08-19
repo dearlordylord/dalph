@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
 import { Deferred, Effect, Option, Ref, Schema, Stream, SubscriptionRef } from "effect"
 import type { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
-import { IntegratorCorrelation, type IntegratorCandidateText } from "@dalph/orchestrator"
+import { IntegratorSessionCorrelation, type IntegratorCandidateText } from "@dalph/orchestrator"
 import {
   type AuthoredCassetteDecision as CassetteDecision,
   AuthoredCassetteStoryItem,
@@ -77,7 +77,7 @@ const promotionGitStoryItemMatches = (
   return candidate !== null && gitRequestMatches(candidate, repository, candidateCommit)
 }
 
-const integratorCorrelationEquivalence = Schema.toEquivalence(IntegratorCorrelation)
+const integratorCorrelationEquivalence = Schema.toEquivalence(IntegratorSessionCorrelation)
 /** SubscriptionRef.changes replays the current position before later updates, so a completed advance cannot be lost between an ownership signal and this wait. */
 const awaitsLaterStoryItem = (position: SubscriptionRef.SubscriptionRef<number>, index: number) =>
   SubscriptionRef.changes(position).pipe(
@@ -292,7 +292,7 @@ export interface StoryCursor {
   >
   /** The authored outer Integrator request must equal the exact production correlation. */
   readonly consumeIntegratorRequest: (
-    correlation: IntegratorCorrelation
+    correlation: IntegratorSessionCorrelation
   ) => Effect.Effect<typeof AuthoredCassetteStoryItem.cases.IntegratorRequestReceived.Type, CursorFailure>
   /** The authored outer Integrator returns only PreparedCandidate or NotPrepared. */
   readonly consumeIntegratorResult: Effect.Effect<
@@ -841,7 +841,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   )
   const consumeIntegratorRequest = Effect.fn("AuthoredCassette.consumeIntegratorRequest")(function* (
-    correlation: IntegratorCorrelation
+    correlation: IntegratorSessionCorrelation
   ) {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.IntegratorRequestReceived.Type =>

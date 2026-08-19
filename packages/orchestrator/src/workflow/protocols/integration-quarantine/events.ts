@@ -5,7 +5,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import {
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorRunCorrelation,
@@ -18,7 +18,7 @@ export const IntegrationQuarantineFailureDetail = Schema.NonEmptyString.pipe(
 )
 export type IntegrationQuarantineFailureDetail = typeof IntegrationQuarantineFailureDetail.Type
 
-const integratorCorrelationEquivalence = Schema.toEquivalence(IntegratorCorrelation)
+const integratorCorrelationEquivalence = Schema.toEquivalence(IntegratorSessionCorrelation)
 
 /** Conclusive outer-Integrator facts that stop automatic work for one session. */
 export const IntegrationQuarantineCause = Schema.TaggedUnion({
@@ -65,7 +65,7 @@ const exactCandidateParentCount = 2
 /** Stops one exact integration session while preserving its responsibility and conclusive evidence. */
 const conclusiveBasisIsValid = (event: {
   readonly basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ConclusiveResult" }>
-  readonly correlation: IntegratorCorrelation
+  readonly correlation: IntegratorSessionCorrelation
 }): string | undefined => {
   const requiresCandidateObservation = event.basis.cause._tag === "InvalidCandidate"
   const hasCandidateObservation = event.basis.evidence.candidateObservationAt !== undefined
@@ -87,7 +87,7 @@ const conclusiveBasisIsValid = (event: {
 
 const retryTargetHeadBasisIsValid = (
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "RetryTargetHeadChanged" }>,
-  correlation: IntegratorCorrelation
+  correlation: IntegratorSessionCorrelation
 ): string | undefined =>
   basis.priorQuarantineAt < basis.directionAppliedAt &&
   basis.directionAppliedAt < basis.targetLineageObservedAt &&
@@ -97,7 +97,7 @@ const retryTargetHeadBasisIsValid = (
 
 const quarantineBasisIsValid = (event: {
   readonly basis: IntegrationQuarantineBasis
-  readonly correlation: IntegratorCorrelation
+  readonly correlation: IntegratorSessionCorrelation
 }): string | undefined => {
   const { basis, correlation } = event
   return basis._tag === "ProviderRunFailure"
@@ -112,7 +112,7 @@ const quarantineBasisIsValid = (event: {
 
 export const IntegrationQuarantinedEvent = Schema.TaggedStruct("IntegrationQuarantined", {
   basis: IntegrationQuarantineBasis,
-  correlation: IntegratorCorrelation,
+  correlation: IntegratorSessionCorrelation,
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),
   version: Schema.Literal(workflowJournalEventVersion)
 }).check(Schema.makeFilter(quarantineBasisIsValid))
@@ -120,7 +120,7 @@ export type IntegrationQuarantinedEvent = typeof IntegrationQuarantinedEvent.Typ
 
 /** Exact non-action evidence that a provider run has no owned activity left. */
 export const IntegrationProviderRunActivityAbsentEvent = Schema.TaggedStruct("IntegrationProviderRunActivityAbsent", {
-  correlation: IntegratorCorrelation,
+  correlation: IntegratorSessionCorrelation,
   detail: IntegrationQuarantineFailureDetail,
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),
   run: IntegratorRunCorrelation,
@@ -210,5 +210,5 @@ export const sameIntegrationQuarantineDirectionRequestId = (
 ): boolean => left.nonce === right.nonce && left.runId === right.runId
 
 /** Derives the workflow Run from the responsibility bound to a quarantine. */
-export const integrationQuarantineDirectionRunId = (correlation: IntegratorCorrelation): RunId =>
+export const integrationQuarantineDirectionRunId = (correlation: IntegratorSessionCorrelation): RunId =>
   correlation.plannedAttempt.runId

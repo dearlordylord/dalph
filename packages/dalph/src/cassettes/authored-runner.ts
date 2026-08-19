@@ -59,7 +59,7 @@ import {
   GitTargetLineage,
   GitTargetLineageReadFailure,
   Integrator,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGit,
   IntegratorGitReadFailure,
   IntegratorResult,
@@ -434,11 +434,14 @@ const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId
 }
 
 /** Authored stories use the cassette run placeholder while preserving every other Integrator request fact exactly. */
-const authoredIntegratorCorrelationOf = (correlation: IntegratorCorrelation, runId: RunId): IntegratorCorrelation => {
-  const normalized = Schema.decodeUnknownSync(IntegratorCorrelation)(
+const authoredIntegratorSessionCorrelationOf = (
+  correlation: IntegratorSessionCorrelation,
+  runId: RunId
+): IntegratorSessionCorrelation => {
+  const normalized = Schema.decodeUnknownSync(IntegratorSessionCorrelation)(
     JSON.parse(JSON.stringify(correlation).replaceAll(String(runId), "$authored-run"))
   )
-  return Schema.decodeUnknownSync(IntegratorCorrelation)({
+  return Schema.decodeUnknownSync(IntegratorSessionCorrelation)({
     ...normalized,
     acceptedResult: {
       ...normalized.acceptedResult,
@@ -1847,7 +1850,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           Integrator.of({
             prepare: (request) =>
               Effect.gen(function* () {
-                const authoredCorrelation = authoredIntegratorCorrelationOf(request.correlation, runId)
+                const authoredCorrelation = authoredIntegratorSessionCorrelationOf(request.correlation, runId)
                 yield* cursor.consumeIntegratorRequest(authoredCorrelation)
                 const authored = yield* cursor.consumeIntegratorResult
                 return Match.valueTags(authored.result, {

@@ -69,14 +69,12 @@ import {
   deriveIntegratorRunState,
   integratorCorrelationFor,
   integratorRunCorrelationForSession,
-  prepareIntegrationCandidateRun,
-  prepareIntegrationCandidate
+  prepareIntegrationCandidateRun
 } from "../../../orchestrator/src/workflow/protocols/integrator/protocol.js"
 import {
   appendIntegratorSuccessorSessionIfNeeded,
   type IntegratorSuccessorSessionFixedRecord
 } from "../../../orchestrator/src/workflow/protocols/integrator/successor-session.js"
-import { deriveCurrentIntegratorState } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
 import { appendInitialConclusiveIntegrationQuarantine } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/initial-conclusive.js"
 import { appendRetryConclusiveIntegrationQuarantine } from "../../../orchestrator/src/workflow/protocols/integration-quarantine/retry-conclusive.js"
 import {
@@ -89,12 +87,11 @@ import {
   IntegratorRunOrdinal,
   IntegratorRunCandidateGitReadIntendedEvent,
   IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
-  type IntegratorCorrelation,
-  type IntegratorProtocolResult,
+  type IntegratorSessionCorrelation,
   type IntegratorRunProtocolResult,
-  type IntegratorRunState,
-  type IntegratorState
+  type IntegratorRunState
 } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 import { IntegratorSuccessorPreparationInput } from "../../../orchestrator/src/workflow/protocols/integrator/session.js"
 
@@ -147,7 +144,7 @@ type Phase =
   | "IntegratorInFlight"
   | "IntegratorResponseLost"
   | "IntegratorNotPrepared"
-  | "IntegratorResultRecorded"
+  | "IntegratorRunResultRecorded"
   | "RetrySelected"
   | "RetryInFlight"
   | "RetryNotApplicable"
@@ -221,7 +218,7 @@ type ModelResult = {
   readonly integratorInvocationCount: bigint
   readonly integratorResumeCount: bigint
   readonly integratorOutcome: IntegratorOutcome
-  readonly integratorResultRecorded: boolean
+  readonly integratorRunResultRecorded: boolean
   readonly candidateReported: boolean
   readonly integratorResponseAmbiguous: boolean
   readonly submittedCandidate: bigint
@@ -306,7 +303,7 @@ const initialResult = (id: bigint): ModelResult => ({
   integratorInvocationCount: 0n,
   integratorResumeCount: 0n,
   integratorOutcome: "NoIntegratorOutcome",
-  integratorResultRecorded: false,
+  integratorRunResultRecorded: false,
   candidateReported: false,
   integratorResponseAmbiguous: false,
   submittedCandidate: 0n,
@@ -387,7 +384,7 @@ const SpecResult = Schema.Struct({
   integratorInvocationCount: ITFBigInt,
   integratorOutcome: Schema.Unknown,
   integratorResponseAmbiguous: Schema.Boolean,
-  integratorResultRecorded: Schema.Boolean,
+  integratorRunResultRecorded: Schema.Boolean,
   integratorResumeCount: ITFBigInt,
   lineageCompatible: Schema.Boolean,
   sessionFixed: Schema.Boolean,
@@ -474,7 +471,7 @@ type GitMode = "Exact" | "Missing" | "NonCommit" | "WrongParents"
 type RuntimeState = {
   readonly journal: InRunJournal["Service"]
   readonly readRecords: () => ReadonlyArray<JournalRecord>
-  readonly runProtocol: (id: bigint) => Effect.Effect<IntegratorProtocolResult, unknown>
+  readonly runProtocol: (id: bigint) => Effect.Effect<IntegratorRunProtocolResult, unknown>
   readonly runProtocolFor: (
     input: IntegratorPreparationInput,
     run: IntegratorRunCorrelation
@@ -617,7 +614,7 @@ const resultCorrelation = (
   id: bigint,
   records: ReadonlyArray<JournalRecord>,
   modelResults: ReadonlyMap<bigint, ModelResult>
-): IntegratorCorrelation => {
+): IntegratorSessionCorrelation => {
   const facts = IntegratorResponsibilityFacts.make(makeResponsibility(id, modelResults, records))
   const key = integratorSessionFixedRecordKey(facts)
   const session = records.find(
@@ -627,7 +624,10 @@ const resultCorrelation = (
   return session?.event.correlation ?? integratorCorrelationFor(makeInput(id, modelResults, records))
 }
 
-type ReconstructedIntegratorState = IntegratorState | IntegratorRunState
+const initialRunFor = (input: IntegratorPreparationInput): IntegratorRunCorrelation =>
+  IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: integratorCorrelationFor(input) })
+
+type ReconstructedIntegratorState = IntegratorRunState
 
 const isIntegratorResultState = (state: ReconstructedIntegratorState): boolean =>
   state._tag === "NotPrepared" ||
@@ -691,7 +691,7 @@ const phaseNeedsSession = (phase: Phase): boolean =>
 const phaseNeedsResult = (phase: Phase): boolean =>
   new Set<Phase>([
     "IntegratorNotPrepared",
-    "IntegratorResultRecorded",
+    "IntegratorRunResultRecorded",
     "RetrySelected",
     "RetryInFlight",
     "RetryNotApplicable",
@@ -719,7 +719,7 @@ const phaseNeedsResult = (phase: Phase): boolean =>
 
 const phaseNeedsPreparedResult = (phase: Phase): boolean =>
   new Set<Phase>([
-    "IntegratorResultRecorded",
+    "IntegratorRunResultRecorded",
     "CandidateGitReadIntent",
     "CandidateGitReadPending",
     "CandidateReady",
@@ -813,12 +813,14 @@ const makeRuntime = (
     }
   })
 
-  const runProtocol = (id: bigint) =>
-    prepareIntegrationCandidate(makeInput(id, modelResultsRef(), records)).pipe(
+  const runProtocol = (id: bigint) => {
+    const input = makeInput(id, modelResultsRef(), records)
+    return prepareIntegrationCandidateRun({ preparation: input, run: initialRunFor(input) }).pipe(
       Effect.provideService(InRunJournal, journal),
       Effect.provideService(Integrator, integrator),
       Effect.provideService(IntegratorGit, git)
     )
+  }
 
   const runProtocolFor = (input: IntegratorPreparationInput, run: IntegratorRunCorrelation) =>
     prepareIntegrationCandidateRun({ preparation: input, run }).pipe(
@@ -973,7 +975,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     const appendEvent = (key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
       runtime.journal.append(runId, key, event)
 
-    const correlationFor = (id: bigint): IntegratorCorrelation =>
+    const correlationFor = (id: bigint): IntegratorSessionCorrelation =>
       resultCorrelation(id, runtime.readRecords(), modelResults)
 
     const runFor = (id: bigint, ordinal?: bigint): IntegratorRunCorrelation => {
@@ -981,6 +983,34 @@ const acceptedResultIntegrationDriver = defineDriver(
       const runOrdinal =
         ordinal ?? (modelResultFor(id).integratorRunOrdinal === 0n ? 1n : modelResultFor(id).integratorRunOrdinal)
       return integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(Number(runOrdinal)))
+    }
+
+    const currentRunFor = (id: bigint): IntegratorRunCorrelation => {
+      const predecessor = correlationFor(id)
+      const successor = runtime
+        .readRecords()
+        .findLast(
+          (record) =>
+            record.event._tag === "IntegratorSuccessorSessionFixed" &&
+            record.event.predecessor.sessionId === predecessor.sessionId
+        )
+      const session =
+        successor?.event._tag === "IntegratorSuccessorSessionFixed" ? successor.event.successor : predecessor
+      const started = runtime
+        .readRecords()
+        .findLast(
+          (record) =>
+            record.event._tag === "IntegratorRunStarted" && record.event.run.session.sessionId === session.sessionId
+        )
+      return IntegratorRunCorrelation.make({
+        ordinal:
+          started?.event._tag === "IntegratorRunStarted"
+            ? started.event.run.ordinal
+            : IntegratorRunOrdinal.make(
+                modelResultFor(id).integratorRunOrdinal === 0n ? 1 : Number(modelResultFor(id).integratorRunOrdinal)
+              ),
+        session
+      })
     }
 
     const responsibilityFor = (id: bigint): StartedIntegrationResponsibility =>
@@ -996,21 +1026,34 @@ const acceptedResultIntegrationDriver = defineDriver(
       )
     }
 
+    const appendRunStart = (run: IntegratorRunCorrelation) => {
+      const key = integratorRunStartedRecordKey(run)
+      return runtime.readRecords().some((record) => record.key === key)
+        ? Effect.void
+        : appendEvent(key, IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }))
+    }
+
     const appendIntegratorResult = (id: bigint, result: IntegratorResult) => {
       const run = runFor(id)
-      return appendEvent(
-        integratorRunResultRecordedRecordKey(run),
-        IntegratorRunResultRecordedEvent.make({ result, run, version: workflowJournalEventVersion })
-      )
+      return Effect.gen(function* () {
+        yield* appendRunStart(run)
+        yield* appendEvent(
+          integratorRunResultRecordedRecordKey(run),
+          IntegratorRunResultRecordedEvent.make({ result, run, version: workflowJournalEventVersion })
+        )
+      })
     }
 
     const appendCandidateIntent = (id: bigint) => {
       const run = runFor(id)
       const candidateText = candidateTextOf(modelResultFor(id).submittedCandidate)
-      return appendEvent(
-        integratorRunCandidateGitReadIntendedRecordKey(run, candidateText),
-        IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion })
-      )
+      return Effect.gen(function* () {
+        yield* appendRunStart(run)
+        yield* appendEvent(
+          integratorRunCandidateGitReadIntendedRecordKey(run, candidateText),
+          IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion })
+        )
+      })
     }
 
     const appendResponsibility = (id: bigint) =>
@@ -1239,7 +1282,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         "IntegratorSessionFixed",
         "IntegratorInFlight",
         "IntegratorResponseLost",
-        "IntegratorResultRecorded",
+        "IntegratorRunResultRecorded",
         "CandidateGitReadIntent",
         "CandidateGitReadPending",
         "CandidateReady",
@@ -1306,7 +1349,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         phase: "IntegratorNotPrepared",
         targetHeld: true,
         integratorOutcome: "NotPrepared",
-        integratorResultRecorded: true,
+        integratorRunResultRecorded: true,
         candidateReported: false,
         promotionAuthorized: false,
         integratorResponseAmbiguous: false
@@ -1434,9 +1477,9 @@ const acceptedResultIntegrationDriver = defineDriver(
     const modelCandidate = (id: bigint, candidate: bigint): void =>
       updateModelResult(id, (result) => ({
         ...result,
-        phase: "IntegratorResultRecorded",
+        phase: "IntegratorRunResultRecorded",
         integratorOutcome: "PreparedCandidate",
-        integratorResultRecorded: true,
+        integratorRunResultRecorded: true,
         candidateReported: true,
         submittedCandidate: candidate,
         candidateGitObservation: "NoCandidateGitObservation",
@@ -1696,7 +1739,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       const model = modelResultFor(id)
       const records = runtime.readRecords()
       const responsibility = responsibilityFor(id)
-      const actual = deriveCurrentIntegratorState(records, responsibility)
+      const actual = deriveIntegratorRunState(records, responsibility, currentRunFor(id))
       if (actual._tag === "Contradiction") {
         return rejectImpossibleTransition(`integrator adapter contradiction: ${actual.detail}`)
       }
@@ -1797,7 +1840,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           .readRecords()
           .some((record) => record.key === integratorRunCandidateGitReadIntendedRecordKey(resultRun, actualText))
 
-      if (model.integratorResultRecorded !== isIntegratorResultState(resultState)) {
+      if (model.integratorRunResultRecorded !== isIntegratorResultState(resultState)) {
         return rejectImpossibleTransition("model/runtime durable outer-result flag mismatch")
       }
       if (model.integratorOutcome === "NotPrepared" && resultState._tag !== "NotPrepared") {
@@ -1845,7 +1888,7 @@ const acceptedResultIntegrationDriver = defineDriver(
                 resultState._tag === "GitQualifiedPrepared"
               ? "PreparedCandidate"
               : "NoIntegratorOutcome",
-        integratorResultRecorded: isIntegratorResultState(resultState),
+        integratorRunResultRecorded: isIntegratorResultState(resultState),
         candidateReported: actualText !== undefined,
         submittedCandidate: actualCandidate ?? 0n,
         candidateGitReadIntentRecorded: candidateIntent,
@@ -2236,7 +2279,7 @@ quintIt(
             expected.integratorInvocationCount === actual.integratorInvocationCount &&
             expected.integratorOutcome === actual.integratorOutcome &&
             expected.integratorResponseAmbiguous === actual.integratorResponseAmbiguous &&
-            expected.integratorResultRecorded === actual.integratorResultRecorded &&
+            expected.integratorRunResultRecorded === actual.integratorRunResultRecorded &&
             expected.integratorResumeCount === actual.integratorResumeCount &&
             expected.lineageCompatible === actual.lineageCompatible &&
             expected.sessionFixed === actual.sessionFixed &&

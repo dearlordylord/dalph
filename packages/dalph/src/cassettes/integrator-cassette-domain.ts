@@ -19,8 +19,7 @@ import {
   IntegratorCandidateText,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
-  IntegratorState,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorSessionId,
   IntegratorResult,
   IntegratorRunCorrelation,
@@ -31,7 +30,7 @@ import {
   TargetLineageObservation,
   WorkflowOperation,
   type IntegratorPreparationInput,
-  type IntegratorProtocolResult,
+  type IntegratorRunProtocolResult,
   type IntegratorRequest,
   type JournalRecord as JournalRecordType
 } from "@dalph/orchestrator"
@@ -106,24 +105,11 @@ export const RecordedIntegratorCassetteEntry = Schema.TaggedUnion({
     responsibilityBeganAt: JournalPosition,
     runId: RunId
   },
-  IntegratorCandidateGitObserved: {
-    candidateText: IntegratorCandidateText,
-    correlation: Schema.suspend(() => IntegratorCorrelation),
-    observation: IntegratorGitObservation,
-    position: JournalPosition,
-    runId: RunId
-  },
   IntegratorRunCandidateGitObserved: {
     candidateText: IntegratorCandidateText,
     observation: IntegratorGitObservation,
     position: JournalPosition,
     run: IntegratorRunCorrelation,
-    runId: RunId
-  },
-  IntegratorCandidateGitReadIntended: {
-    candidateText: IntegratorCandidateText,
-    correlation: Schema.suspend(() => IntegratorCorrelation),
-    position: JournalPosition,
     runId: RunId
   },
   IntegratorRunCandidateGitReadIntended: {
@@ -132,7 +118,6 @@ export const RecordedIntegratorCassetteEntry = Schema.TaggedUnion({
     run: IntegratorRunCorrelation,
     runId: RunId
   },
-  IntegratorResultRecorded: { position: JournalPosition, result: Schema.suspend(() => IntegratorResult), runId: RunId },
   IntegratorRunResultRecorded: {
     position: JournalPosition,
     result: Schema.suspend(() => IntegratorResult),
@@ -140,7 +125,7 @@ export const RecordedIntegratorCassetteEntry = Schema.TaggedUnion({
     runId: RunId
   },
   IntegratorSessionFixed: {
-    correlation: Schema.suspend(() => IntegratorCorrelation),
+    correlation: Schema.suspend(() => IntegratorSessionCorrelation),
     position: JournalPosition,
     runId: RunId
   },
@@ -189,8 +174,7 @@ export const IntegratorCassetteTerminalExpectation = Schema.Struct({
     "GitQualifiedPrepared",
     "NotPrepared",
     "PreparedAwaitingGit",
-    "RunUnfinished",
-    "SessionUnfinished"
+    "RunUnfinished"
   ])
 })
 export type IntegratorCassetteTerminalExpectation = typeof IntegratorCassetteTerminalExpectation.Type
@@ -215,7 +199,7 @@ const RecordedIntegratorRunState = Schema.TaggedUnion({
   PreparedAwaitingGit: { candidateText: IntegratorCandidateText, run: IntegratorRunCorrelation },
   RunUnfinished: { run: IntegratorRunCorrelation }
 })
-const RecordedIntegratorState = Schema.Union([IntegratorState, RecordedIntegratorRunState])
+const RecordedIntegratorState = RecordedIntegratorRunState
 
 /** A run result keeps authored input and recorded output together for cassette review. */
 export const IntegratorCassetteRun = Schema.Struct({
@@ -273,20 +257,12 @@ const recordedDeliveryEntryFor = (record: JournalRecordType): RecordedIntegrator
   return undefined
 }
 
-// eslint-disable-next-line complexity -- The maintained projection exhaustively names every legacy and run-bound Integrator occurrence.
 const recordedOuterIntegratorEntryFor = (record: JournalRecordType): RecordedIntegratorCassetteEntry | undefined => {
   const { event } = record
   if (event._tag === "IntegratorSessionFixed") {
     return RecordedIntegratorCassetteEntry.cases.IntegratorSessionFixed.make({
       correlation: event.correlation,
       position: record.position,
-      runId: record.runId
-    })
-  }
-  if (event._tag === "IntegratorResultRecorded") {
-    return RecordedIntegratorCassetteEntry.cases.IntegratorResultRecorded.make({
-      position: record.position,
-      result: event.result,
       runId: record.runId
     })
   }
@@ -305,28 +281,11 @@ const recordedOuterIntegratorEntryFor = (record: JournalRecordType): RecordedInt
       runId: record.runId
     })
   }
-  if (event._tag === "IntegratorCandidateGitReadIntended") {
-    return RecordedIntegratorCassetteEntry.cases.IntegratorCandidateGitReadIntended.make({
-      candidateText: event.candidateText,
-      correlation: event.correlation,
-      position: record.position,
-      runId: record.runId
-    })
-  }
   if (event._tag === "IntegratorRunCandidateGitReadIntended") {
     return RecordedIntegratorCassetteEntry.cases.IntegratorRunCandidateGitReadIntended.make({
       candidateText: event.candidateText,
       position: record.position,
       run: event.run,
-      runId: record.runId
-    })
-  }
-  if (event._tag === "IntegratorCandidateGitObserved") {
-    return RecordedIntegratorCassetteEntry.cases.IntegratorCandidateGitObserved.make({
-      candidateText: event.candidateText,
-      correlation: event.correlation,
-      observation: event.observation,
-      position: record.position,
       runId: record.runId
     })
   }
@@ -391,5 +350,5 @@ export const maintainedIntegratorFixture = {
 } as const
 
 export type IntegratorCassetteInput = ReturnType<typeof integratorPreparationInputFor>
-export type IntegratorCassettePublicResult = IntegratorProtocolResult
+export type IntegratorCassettePublicResult = IntegratorRunProtocolResult
 export type IntegratorCassetteRequest = IntegratorRequest

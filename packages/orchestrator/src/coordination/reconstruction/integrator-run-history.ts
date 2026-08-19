@@ -23,7 +23,6 @@ type IntegratorSessionFixed = Extract<
   WorkflowJournalEvent,
   { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
 >
-type IntegratorResultRecorded = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorResultRecorded" }>
 type IntegratorRunStarted = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunStarted" }>
 type IntegratorRunResultRecorded = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunResultRecorded" }>
 type IntegratorRunCandidateGitReadIntended = Extract<
@@ -54,7 +53,6 @@ interface IntegratorRunHistoryValidationIndexes extends IntegratorRunHistoryInde
   readonly integratorSessionFixed: Map<JournalPosition, IntegratorSessionFixed>
   readonly integratorSessionsByStartedAt: Map<JournalPosition, JournalPosition>
   readonly integratorSessionsBySessionId: Map<string, JournalPosition>
-  readonly integratorResultsByStartedAt: Map<JournalPosition, PositionedIntegratorEvent<IntegratorResultRecorded>>
 }
 
 const integratorRunKey = integratorRunRecordKeyPrefix
@@ -89,20 +87,6 @@ const previousIntegratorRun = (run: IntegratorRunCorrelation): IntegratorRunCorr
         session: run.session
       })
 
-const legacyInitialResultForRun = (
-  run: IntegratorRunCorrelation,
-  indexes: IntegratorRunHistoryValidationIndexes,
-  record: JournalRecord
-): boolean => {
-  if (run.ordinal !== 1) return false
-  const result = indexes.integratorResultsByStartedAt.get(run.session.startedAt)
-  return (
-    result !== undefined &&
-    result.position < record.position &&
-    integratorCorrelationsEqual(result.event.result.correlation, run.session)
-  )
-}
-
 const runRecordsAreConclusive = (
   previous: IntegratorRunCorrelation,
   record: JournalRecord,
@@ -124,10 +108,7 @@ const previousRunIsConclusive = (
   previous: IntegratorRunCorrelation | undefined,
   record: JournalRecord,
   indexes: IntegratorRunHistoryValidationIndexes
-): boolean =>
-  previous === undefined ||
-  runRecordsAreConclusive(previous, record, indexes) ||
-  legacyInitialResultForRun(previous, indexes, record)
+): boolean => previous === undefined || runRecordsAreConclusive(previous, record, indexes)
 
 const invalidIntegratorRunStarted = (
   record: JournalRecord,

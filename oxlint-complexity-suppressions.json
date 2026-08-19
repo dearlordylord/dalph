@@ -16,7 +16,7 @@
   },
   "packages/orchestrator/src/coordination/reconstruction/integrator-history.ts": {
     "complexity": {
-      "count": 3
+      "count": 2
     }
   },
   "packages/orchestrator/src/coordination/reconstruction/integrator-run-history.ts": {
@@ -31,7 +31,7 @@
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/control.ts": {
     "complexity": {
-      "count": 3
+      "count": 2
     }
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/initial-conclusive.ts": {
@@ -51,7 +51,7 @@
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/state.ts": {
     "complexity": {
-      "count": 4
+      "count": 3
     }
   },
   "packages/orchestrator/src/workflow/protocols/integrator/events.ts": {
@@ -72,6 +72,11 @@
   "packages/orchestrator/src/workflow/protocols/integrator/successor-session.ts": {
     "complexity": {
       "count": 4
+    }
+  },
+  "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
+    "complexity": {
+      "count": 1
     }
   }
 }

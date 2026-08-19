@@ -68,7 +68,7 @@ import {
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorNotPreparedDetail,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
@@ -433,7 +433,7 @@ const directionProjectionFixture = (direction: "Retry" | "FullRerun", graphAfter
       version: workflowJournalEventVersion
     })
   )
-  const correlation = IntegratorCorrelation.make({
+  const correlation = IntegratorSessionCorrelation.make({
     acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make(`direction-resource-${direction.toLowerCase()}`),
     expectedTargetHead: coverageAttempt.baseSha,

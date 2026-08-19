@@ -46,7 +46,7 @@ import {
   type IntegratorCandidateResourceLocator,
   type IntegratorCandidateText,
   IntegratorSessionId,
-  type IntegratorCorrelation,
+  type IntegratorSessionCorrelation,
   type IntegratorGitObservationType,
   type IntegratorNotPreparedDetail,
   type IntegratorResultType,
@@ -283,11 +283,11 @@ const renameIntegratorSession = (sessionId: IntegratorSessionId, maps: IdentityR
     String(maps.integratorSessionIds.get(IntegratorSessionId.make(String(sessionId))) ?? sessionId)
   )
 
-const renameIntegratorCorrelation = (
-  correlation: IntegratorCorrelation,
+const renameIntegratorSessionCorrelation = (
+  correlation: IntegratorSessionCorrelation,
   maps: IdentityRenamingMaps
-): IntegratorCorrelation =>
-  completeFields<IntegratorCorrelation>({
+): IntegratorSessionCorrelation =>
+  completeFields<IntegratorSessionCorrelation>({
     acceptedResult: completeFields<typeof correlation.acceptedResult>({
       commit: preserveCassetteValue(correlation.acceptedResult.commit),
       evidenceManifest: completeFields<typeof correlation.acceptedResult.evidenceManifest>({
@@ -314,7 +314,7 @@ const renameIntegratorRunCorrelation = (
 ): IntegratorRunCorrelation =>
   completeFields<IntegratorRunCorrelation>({
     ordinal: run.ordinal,
-    session: renameIntegratorCorrelation(run.session, maps)
+    session: renameIntegratorSessionCorrelation(run.session, maps)
   })
 
 const renameIntegratorRunQualifiedCandidate = (
@@ -328,7 +328,7 @@ const renameIntegratorRunQualifiedCandidate = (
     qualifiedAt: preserveCassetteValue(candidate.qualifiedAt),
     run: completeFields<typeof candidate.run>({
       ordinal: candidate.run.ordinal,
-      session: renameIntegratorCorrelation(candidate.run.session, maps)
+      session: renameIntegratorSessionCorrelation(candidate.run.session, maps)
     })
   })
 
@@ -415,14 +415,14 @@ const renameIntegratorResult = (result: IntegratorResultType, maps: IdentityRena
     NotPrepared: (value) =>
       completeFields<typeof value>({
         _tag: "NotPrepared",
-        correlation: renameIntegratorCorrelation(value.correlation, maps),
+        correlation: renameIntegratorSessionCorrelation(value.correlation, maps),
         detail: preserveCassetteValue(value.detail)
       }),
     PreparedCandidate: (value) =>
       completeFields<typeof value>({
         _tag: "PreparedCandidate",
         candidateText: preserveCassetteValue(value.candidateText),
-        correlation: renameIntegratorCorrelation(value.correlation, maps)
+        correlation: renameIntegratorSessionCorrelation(value.correlation, maps)
       })
   })
 
@@ -536,7 +536,6 @@ const renameCompletionClaimDeletionRequest = (
   successObservation: renameCompletionSuccessObservation(request.successObservation, maps)
 })
 
-// eslint-disable-next-line complexity -- Distinct worktree facts carry different generated locators and require exhaustive renaming.
 const renamePlannedAttemptWorktreeObservation = (
   observation: PlannedAttemptWorktreeObservation,
   maps: IdentityRenamingMaps
@@ -755,35 +754,17 @@ const renameRecordedCassetteEntry = (
       IntegratorSessionFixed: (entry) =>
         completeFields<typeof entry>({
           _tag: "IntegratorSessionFixed",
-          correlation: renameIntegratorCorrelation(entry.correlation, maps)
+          correlation: renameIntegratorSessionCorrelation(entry.correlation, maps)
         }),
       IntegratorSuccessorSessionFixed: (entry) =>
         completeFields<typeof entry>({
           _tag: "IntegratorSuccessorSessionFixed",
           direction: preserveCassetteValue(entry.direction),
           directionAppliedAt: preserveCassetteValue(entry.directionAppliedAt),
-          predecessor: renameIntegratorCorrelation(entry.predecessor, maps),
+          predecessor: renameIntegratorSessionCorrelation(entry.predecessor, maps),
           quarantineAt: preserveCassetteValue(entry.quarantineAt),
-          successor: renameIntegratorCorrelation(entry.successor, maps),
+          successor: renameIntegratorSessionCorrelation(entry.successor, maps),
           successorGeneration: preserveCassetteValue(entry.successorGeneration)
-        }),
-      IntegratorResultRecorded: (entry) =>
-        completeFields<typeof entry>({
-          _tag: "IntegratorResultRecorded",
-          result: renameIntegratorResult(entry.result, maps)
-        }),
-      IntegratorCandidateGitReadIntended: (entry) =>
-        completeFields<typeof entry>({
-          _tag: "IntegratorCandidateGitReadIntended",
-          candidateText: preserveCassetteValue(entry.candidateText),
-          correlation: renameIntegratorCorrelation(entry.correlation, maps)
-        }),
-      IntegratorCandidateGitObserved: (entry) =>
-        completeFields<typeof entry>({
-          _tag: "IntegratorCandidateGitObserved",
-          candidateText: preserveCassetteValue(entry.candidateText),
-          correlation: renameIntegratorCorrelation(entry.correlation, maps),
-          observation: renameIntegratorGitObservation(entry.observation)
         }),
       IntegratorRunStarted: (entry) =>
         completeFields<typeof entry>({
@@ -812,7 +793,7 @@ const renameRecordedCassetteEntry = (
       IntegrationProviderRunActivityAbsent: (entry) =>
         completeFields<typeof entry>({
           _tag: "IntegrationProviderRunActivityAbsent",
-          correlation: renameIntegratorCorrelation(entry.correlation, maps),
+          correlation: renameIntegratorSessionCorrelation(entry.correlation, maps),
           detail: preserveCassetteValue(entry.detail),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           run: renameIntegratorRunCorrelation(entry.run, maps)
@@ -821,7 +802,7 @@ const renameRecordedCassetteEntry = (
         completeFields<typeof entry>({
           _tag: "IntegrationQuarantined",
           basis: renameIntegrationQuarantineBasis(entry.basis),
-          correlation: renameIntegratorCorrelation(entry.correlation, maps),
+          correlation: renameIntegratorSessionCorrelation(entry.correlation, maps),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
       IntegrationQuarantineDirectionApplied: (entry) =>

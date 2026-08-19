@@ -20,7 +20,7 @@ import {
   FixtureTarget,
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
-  IntegratorCorrelation,
+  IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   IntegratorSessionId,
@@ -42,7 +42,7 @@ const taskId = TaskId.make("authored-integrator-task")
 const attemptId = AttemptId.make("authored-integrator-attempt")
 const candidateText = IntegratorCandidateText.make("refs/heads/authored-integrator-candidate")
 const candidateResource = IntegratorCandidateResourceLocator.make("resource:authored-integrator")
-const correlation = IntegratorCorrelation.make({
+const correlation = IntegratorSessionCorrelation.make({
   acceptedResult: AcceptedResult.make({
     commit: sha("a"),
     evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("1".repeat(64)) })
@@ -174,7 +174,7 @@ it.effect("fails closed when an Integrator recovery read has no exact owner", ()
 
 it.effect("rejects a foreign request correlation and a Git observation for another candidate", () =>
   Effect.gen(function* () {
-    const foreignCorrelation = IntegratorCorrelation.make({ ...correlation, expectedTargetHead: sha("c") })
+    const foreignCorrelation = IntegratorSessionCorrelation.make({ ...correlation, expectedTargetHead: sha("c") })
     const requestCursor = yield* makeStoryCursor([requestItem])
     const requestResult = yield* requestCursor.consumeIntegratorRequest(foreignCorrelation).pipe(Effect.exit)
     expect(Exit.isFailure(requestResult)).toBe(true)

@@ -92,17 +92,6 @@ const sameRunCandidateEvent = (record: JournalRecord, run: IntegratorRunCorrelat
   record.runId === runIdFor(run) &&
   integratorRunCorrelationsEqual(record.event.run, run)
 
-const hasLegacySessionEvidence = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation): boolean =>
-  records.some(({ event }) => {
-    if (event._tag === "IntegratorResultRecorded") {
-      return integratorCorrelationsEqual(event.result.correlation, run.session)
-    }
-    if (event._tag === "IntegratorCandidateGitReadIntended" || event._tag === "IntegratorCandidateGitObserved") {
-      return integratorCorrelationsEqual(event.correlation, run.session)
-    }
-    return false
-  })
-
 const sameExpectedQuarantine = (
   record: JournalRecord,
   run: IntegratorRunCorrelation,
@@ -346,9 +335,6 @@ const validateModernRunEvidence = (
 ): EvidenceValidation<ConclusiveBasis> => {
   const run = result.run
   if (run.ordinal !== 1) return invalidEvidence("initial conclusive quarantine requires Integrator run 1")
-  if (hasLegacySessionEvidence(records, run)) {
-    return invalidEvidence("legacy session-only Integrator evidence cannot create modern run quarantine")
-  }
   const session = validateFixedSession(records, run)
   if (session._tag === "Invalid") return session
   const start = validateRunStart(records, run, session.value)

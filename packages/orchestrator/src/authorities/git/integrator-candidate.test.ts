@@ -49,6 +49,21 @@ it.effect("canonicalizes the reported text and reads that commit's exact ordered
   })
 )
 
+it.effect("reads commit headers even when Git returns no message separator", () =>
+  Effect.gen(function* () {
+    const observation = yield* readWith([
+      GitCommandResult.make({ exitCode: 0, stderr: "", stdout: `${candidate}\n` }),
+      GitCommandResult.make({ exitCode: 0, stderr: "", stdout: "commit\n" }),
+      GitCommandResult.make({
+        exitCode: 0,
+        stderr: "",
+        stdout: `tree ${"a".repeat(40)}\nparent ${head}\nparent ${accepted}`
+      })
+    ])
+    expect(observation).toEqual({ _tag: "Commit", candidateText, commit: candidate, directParents: [head, accepted] })
+  })
+)
+
 it.effect("distinguishes missing and non-commit reported objects", () =>
   Effect.gen(function* () {
     expect(

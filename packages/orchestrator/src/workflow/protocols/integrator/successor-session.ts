@@ -17,7 +17,7 @@ import { IntegratorJournalContradiction } from "./errors.js"
 import {
   firstFullRerunSuccessorGeneration,
   IntegratorSuccessorSessionFixedEvent,
-  type IntegratorCorrelation
+  type IntegratorSessionCorrelation
 } from "./events.js"
 import {
   IntegratorSuccessorPreparationInput,
@@ -36,10 +36,10 @@ export type IntegratorSuccessorSessionFixedRecord = JournalRecord & {
 const successorEventEquivalence = Schema.toEquivalence(IntegratorSuccessorSessionFixedEvent)
 const targetLineageEquivalence = Schema.toEquivalence(TargetLineageObservation)
 
-const runIdFor = (correlation: IntegratorCorrelation) => correlation.plannedAttempt.runId
+const runIdFor = (correlation: IntegratorSessionCorrelation) => correlation.plannedAttempt.runId
 
 const reject = (
-  correlation: IntegratorCorrelation,
+  correlation: IntegratorSessionCorrelation,
   detail: string
 ): Effect.Effect<never, IntegratorJournalContradiction> =>
   Effect.fail(new IntegratorJournalContradiction({ detail, runId: runIdFor(correlation) }))
@@ -58,7 +58,7 @@ const invalidSuccessor = (detail: string): SuccessorValidation => ({ _tag: "Inva
 const targetLineageMatches = (
   records: ReadonlyArray<JournalRecord>,
   input: IntegratorSuccessorPreparationInput,
-  correlation: IntegratorCorrelation
+  correlation: IntegratorSessionCorrelation
 ): boolean => {
   const observationRecord = exactRecordAt(records, input.targetLineageObservedAt)
   if (observationRecord?.event._tag !== "TargetLineageObserved") return false
@@ -88,7 +88,7 @@ const targetLineageMatches = (
 
 const predecessorFixedAt = (
   records: ReadonlyArray<JournalRecord>,
-  predecessor: IntegratorCorrelation
+  predecessor: IntegratorSessionCorrelation
 ): JournalRecord | undefined => {
   const key = integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(predecessor))
   const record = records.find((candidate) => candidate.key === key)
@@ -98,7 +98,10 @@ const predecessorFixedAt = (
     : undefined
 }
 
-const integrationStartedMatches = (record: JournalRecord | undefined, predecessor: IntegratorCorrelation): boolean =>
+const integrationStartedMatches = (
+  record: JournalRecord | undefined,
+  predecessor: IntegratorSessionCorrelation
+): boolean =>
   record?.event._tag === "IntegrationStarted" &&
   record.position === predecessor.startedAt &&
   record.event.responsibilityBeganAt === predecessor.queuedAt &&
@@ -108,7 +111,7 @@ const integrationStartedMatches = (record: JournalRecord | undefined, predecesso
 
 const quarantineMatches = (
   record: JournalRecord | undefined,
-  predecessor: IntegratorCorrelation,
+  predecessor: IntegratorSessionCorrelation,
   quarantineAt: JournalPosition
 ): boolean =>
   record?.event._tag === "IntegrationQuarantined" &&
@@ -119,7 +122,7 @@ const quarantineMatches = (
 
 const directionMatches = (
   record: JournalRecord | undefined,
-  predecessor: IntegratorCorrelation,
+  predecessor: IntegratorSessionCorrelation,
   quarantineAt: JournalPosition,
   directionAppliedAt: JournalPosition
 ): boolean =>
@@ -135,7 +138,7 @@ const directionMatches = (
 const validateFreshSuccessorPreconditions = (
   records: ReadonlyArray<JournalRecord>,
   input: IntegratorSuccessorPreparationInput,
-  successor: IntegratorCorrelation
+  successor: IntegratorSessionCorrelation
 ): SuccessorValidation => {
   const predecessor = input.predecessor
   const fixed = predecessorFixedAt(records, predecessor)
@@ -186,7 +189,7 @@ const validateFreshSuccessorPreconditions = (
 
 const existingSuccessorFor = (
   records: ReadonlyArray<JournalRecord>,
-  predecessor: IntegratorCorrelation
+  predecessor: IntegratorSessionCorrelation
 ): ReadonlyArray<IntegratorSuccessorSessionFixedRecord> =>
   records.filter(
     (record): record is IntegratorSuccessorSessionFixedRecord =>
@@ -197,7 +200,7 @@ const existingSuccessorFor = (
 const validateSuccessorUniqueness = (
   records: ReadonlyArray<JournalRecord>,
   input: IntegratorSuccessorPreparationInput,
-  successor: IntegratorCorrelation,
+  successor: IntegratorSessionCorrelation,
   expectedKey: JournalRecord["key"]
 ):
   | { readonly _tag: "Available" }
@@ -216,6 +219,7 @@ const validateSuccessorUniqueness = (
     ) {
       return { _tag: "Invalid", detail: "FullRerun predecessor already has a different successor subject" }
     }
+    /* v8 ignore next -- @preserve fresh-successor precondition validation rejects a related successor under a foreign key before uniqueness reconstruction. */
     if (existing.key !== expectedKey)
       return { _tag: "Invalid", detail: "FullRerun successor exists under a foreign key" }
     /* v8 ignore next -- @preserve a related successor at the expected key is returned by the earlier exact-key lookup. */
@@ -249,7 +253,7 @@ const validateSuccessorUniqueness = (
 
 const successorEventFor = (
   input: IntegratorSuccessorPreparationInput,
-  successor: IntegratorCorrelation
+  successor: IntegratorSessionCorrelation
 ): IntegratorSuccessorSessionFixedEvent =>
   IntegratorSuccessorSessionFixedEvent.make({
     direction: "FullRerun",
@@ -273,11 +277,11 @@ const successorRecordMatches = (
 /** Pure, fail-closed lookup used before reconstruction or delivery selects S2. */
 const activeIntegratorSuccessorFor = (
   records: ReadonlyArray<JournalRecord>,
-  predecessor: IntegratorCorrelation
+  predecessor: IntegratorSessionCorrelation
 ):
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
-  | { readonly _tag: "Valid"; readonly successor: IntegratorCorrelation } => {
+  | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
   const related = existingSuccessorFor(records, predecessor)
   if (related.length > 1) {
     return { _tag: "Invalid", detail: "Journal history contains multiple successors for one Integrator session" }

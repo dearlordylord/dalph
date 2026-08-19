@@ -142,9 +142,6 @@ const emptyIndexes = (): FoldIndexes => ({
   integratorRunResults: new Map(),
   integratorRunCandidateGitReadIntents: new Map(),
   integratorRunCandidateGitObservations: new Map(),
-  integratorResultsByStartedAt: new Map(),
-  integratorCandidateGitReadIntents: new Map(),
-  integratorCandidateGitObservations: new Map(),
   firstRestartChoiceAppliedAt: new Map(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
   integrationFinalityHistory: makeIntegrationFinalityHistoryIndexes(),
@@ -192,9 +189,6 @@ const copyIndexes = (source: FoldIndexes): FoldIndexes => ({
   integratorRunResults: copyMap(source.integratorRunResults),
   integratorRunCandidateGitReadIntents: copyMap(source.integratorRunCandidateGitReadIntents),
   integratorRunCandidateGitObservations: copyMap(source.integratorRunCandidateGitObservations),
-  integratorResultsByStartedAt: copyMap(source.integratorResultsByStartedAt),
-  integratorCandidateGitReadIntents: copyMap(source.integratorCandidateGitReadIntents),
-  integratorCandidateGitObservations: copyMap(source.integratorCandidateGitObservations),
   firstRestartChoiceAppliedAt: copyMap(source.firstRestartChoiceAppliedAt),
   targetPromotionHistory: {
     attempts: copyNestedMap(source.targetPromotionHistory.attempts),
@@ -780,7 +774,6 @@ const validateAttemptStop = (
             prior.some(
               ({ event: priorEvent, position }) =>
                 position > abandonment.position &&
-                /* v8 ignore next -- @preserve Valid record keys admit only one terminal stopped-attempt claim disposition for this request. */
                 ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
                   sameAttemptChoiceRequestId(priorEvent.requestId, authority.requestId)) ||
                   (priorEvent._tag === "TaskClaimReleased" &&
