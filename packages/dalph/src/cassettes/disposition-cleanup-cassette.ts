@@ -218,11 +218,11 @@ export type DispositionCleanupCassetteRun = typeof DispositionCleanupCassetteRun
 const issue69RunId = RunId.make("issue-69-maintained-cassette-run")
 const issue69ShaLength = 40
 const issue69EvidenceDigestLength = 64
-const issue69DispositionPosition = 3
+const issue69DispositionPosition = 5
 const issue69CandidateDispositionPosition = 9
 const issue69AuthorityObservationPosition = 3
 const issue69DirectionPosition = 10
-const issue69CandidateObservationPosition = 14
+const issue69CandidateObservationPosition = 4
 const issue69QueuedAtPosition = 2
 const issue69StartedAtPosition = 6
 const issue69TargetLineagePosition = 4
@@ -258,7 +258,7 @@ const issue69WorktreeAuthorization = WorktreeCleanupAuthorization.make({
   expectedHead: issue69BaseSha,
   locator: issue69Attempt.worktree,
   observationAt: JournalPosition.make(issue69AuthorityObservationPosition),
-  observationOperationId: OperationId.make("issue-69-maintained-worktree-read"),
+  observationOperationId: OperationId.make(`cleanup-provenance:${issue69Attempt.attemptId}:worktree-observation`),
   operationId: OperationId.make("issue-69-maintained-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: issue69Attempt.attemptId, branch: issue69Attempt.branch }),
   writerQuiescent: true
@@ -270,7 +270,7 @@ const issue69BranchAuthorization = BranchCleanupAuthorization.make({
   expectedHead: issue69BaseSha,
   locator: issue69Attempt.branch,
   observationAt: JournalPosition.make(issue69AuthorityObservationPosition),
-  observationOperationId: OperationId.make("issue-69-maintained-branch-read"),
+  observationOperationId: OperationId.make(`cleanup-provenance:${issue69Attempt.attemptId}:worktree-observation`),
   operationId: OperationId.make("issue-69-maintained-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: issue69Attempt.attemptId }),
   worktreeCleanupOperationId: issue69WorktreeAuthorization.operationId,
@@ -315,7 +315,7 @@ const issue69CandidateAuthorization = IntegratorCandidateCleanupAuthorization.ma
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: issue69Predecessor.candidateResource,
   observationAt: JournalPosition.make(issue69CandidateObservationPosition),
-  observationOperationId: OperationId.make("issue-69-maintained-candidate-read"),
+  observationOperationId: OperationId.make("session:issue-69-maintained-p1:predecessor-lineage"),
   operationId: OperationId.make("issue-69-maintained-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: issue69Predecessor.sessionId }),
   writerQuiescent: true

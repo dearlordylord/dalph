@@ -58,7 +58,12 @@ import {
   runWorktreeCleanup,
   worktreeCleanupTestLayer
 } from "@dalph/orchestrator"
-import { appendCandidateProvenance, appendReplacementProvenance, replacementPredecessorsFor } from "@dalph/orchestrator"
+import {
+  appendCandidateProvenance,
+  appendReplacementProvenance,
+  replacementPredecessorsFor,
+  replacementWorktreeObservationOperationIdFor
+} from "@dalph/orchestrator"
 import {
   expectedRecoveryPrefix,
   prefixThrough,
@@ -90,7 +95,7 @@ const successor = PlannedTaskAttempt.make({
 const authorization = WorktreeCleanupAuthorization.make({
   causalPredecessors: replacementPredecessorsFor(attempt),
   disposition: PlannedAttemptCleanupDisposition.cases.Superseded.make({
-    dispositionAt: JournalPosition.make(3),
+    dispositionAt: JournalPosition.make(5),
     plannedAttempt: attempt,
     successorAttempt: successor
   }),
@@ -98,7 +103,7 @@ const authorization = WorktreeCleanupAuthorization.make({
   expectedHead: baseSha,
   locator: attempt.worktree,
   observationAt: JournalPosition.make(3),
-  observationOperationId: OperationId.make("issue-69-recovery-worktree-read"),
+  observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-recovery-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
   writerQuiescent: true
@@ -122,8 +127,8 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.branch,
-  observationAt: JournalPosition.make(5),
-  observationOperationId: OperationId.make("issue-69-recovery-branch-read"),
+  observationAt: JournalPosition.make(3),
+  observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-recovery-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
   worktreeCleanupOperationId: authorization.operationId,
@@ -175,8 +180,8 @@ const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   }),
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
-  observationAt: JournalPosition.make(14),
-  observationOperationId: OperationId.make("issue-69-recovery-candidate-read"),
+  observationAt: JournalPosition.make(4),
+  observationOperationId: OperationId.make("session:issue-69-recovery-p1:predecessor-lineage"),
   operationId: OperationId.make("issue-69-recovery-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
   writerQuiescent: true

@@ -13,7 +13,7 @@ import {
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
@@ -37,6 +37,7 @@ import {
 } from "./integrator-candidate.js"
 import { attempt, baseSha, runId } from "./fixtures.js"
 import { appendCandidateProvenance } from "./provenance-fixtures.js"
+import { validateIntegratorCandidateCleanupProvenance } from "./provenance.js"
 
 const acceptedResult = AcceptedResult.make({
   commit: baseSha,
@@ -74,8 +75,8 @@ const authorization = IntegratorCandidateCleanupAuthorization.make({
   disposition,
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: predecessor.candidateResource,
-  observationAt: JournalPosition.make(14),
-  observationOperationId: OperationId.make("issue-69-candidate-read"),
+  observationAt: JournalPosition.make(4),
+  observationOperationId: OperationId.make("session:issue-69-p1:predecessor-lineage"),
   operationId: OperationId.make("issue-69-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: predecessor.sessionId }),
   writerQuiescent: true
@@ -223,3 +224,37 @@ it("rejects a FullRerun successor that changes responsibility facts", () => {
     })
   ).toThrow()
 })
+
+it.effect("rejects a FullRerun quarantine under a foreign key", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-foreign-quarantine-key"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const records = yield* journal.read(runId)
+    const foreign = records.map((record) =>
+      record.event._tag === "IntegrationQuarantined"
+        ? { ...record, key: JournalRecordKey.make("foreign-quarantine-key") }
+        : record
+    )
+    expect(validateIntegratorCandidateCleanupProvenance(foreign, authorization)._tag).toBe("Invalid")
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("rejects a provider-failure quarantine without its activity-absence witness", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-incomplete-quarantine"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const records = yield* journal.read(runId)
+    const incomplete = records.filter(({ event }) => event._tag !== "IntegrationProviderRunActivityAbsent")
+    expect(validateIntegratorCandidateCleanupProvenance(incomplete, authorization)._tag).toBe("Invalid")
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)

@@ -16,10 +16,20 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { OperationId } from "../../identity.js"
+import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
+  outcomeRecordKey,
+  intentRecordKey,
+  worktreeCleanupObservationIntendedRecordKey
+} from "../../../workflow-journal/record-key.js"
+import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
+import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
+import { IntegrationTarget, IntegrationTargetRef, GitRepositoryLocator } from "@dalph/contracts"
+import {
+  CleanupObservationOrdinal,
   isCleanupEligibleDisposition,
   PlannedAttemptCleanupDisposition,
   WorktreeCleanupAuthorization,
@@ -31,9 +41,15 @@ import {
   TestWorktreeCleanupBoundary,
   worktreeCleanupTestLayer,
   WorktreeCleanupMutationResult,
+  WorktreeCleanupObservationIntendedEvent,
   WorktreeCleanupObservation
 } from "./worktree.js"
-import { appendReplacementProvenance, replacementPredecessorsFor } from "./provenance-fixtures.js"
+import {
+  appendReplacementProvenance,
+  replacementPredecessorsFor,
+  replacementWorktreeObservationOperationIdFor
+} from "./provenance-fixtures.js"
+import { validateWorktreeCleanupHistory } from "./provenance.js"
 
 const runId = RunId.make("issue-69-worktree-run")
 const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
@@ -55,7 +71,7 @@ const successor = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
-  dispositionAt: JournalPosition.make(3),
+  dispositionAt: JournalPosition.make(5),
   plannedAttempt: attempt,
   successorAttempt: successor
 })
@@ -66,7 +82,7 @@ const authorization = WorktreeCleanupAuthorization.make({
   expectedHead: baseSha,
   locator: attempt.worktree,
   observationAt: JournalPosition.make(3),
-  observationOperationId: OperationId.make("issue-69-worktree-read"),
+  observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
   writerQuiescent: true
@@ -340,6 +356,212 @@ it.effect("stops after the three-request cleanup bound", () =>
   }).pipe(Effect.provide(boundBoundaryLayer), Effect.provide(memoryJournalTestLayer))
 )
 
+it.effect("rejects a settlement whose result names a foreign worktree", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-foreign-settlement"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendReplacementProvenance(attempt, successor)
+    const settled = yield* runWorktreeCleanup(authorization)
+    expect(settled._tag).toBe("Settled")
+    const records = yield* journal.read(runId)
+    const foreign = records.map((record) =>
+      record.event._tag === "WorktreeCleanupSettled"
+        ? {
+            ...record,
+            event: {
+              ...record.event,
+              result: { ...record.event.result, locator: WorktreeLocator.make("/tmp/foreign-settlement") }
+            }
+          }
+        : record
+    )
+    expect(validateWorktreeCleanupHistory(foreign, authorization)._tag).toBe("Invalid")
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          present,
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("preserves a cleanup family event that has no authorization prefix", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-missing-authorization-prefix"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendReplacementProvenance(attempt, successor)
+    const ordinal = CleanupObservationOrdinal.make(1)
+    const operationId = OperationId.make(`${authorization.operationId}:observe:${ordinal}`)
+    yield* journal.append(
+      runId,
+      worktreeCleanupObservationIntendedRecordKey(authorization.operationId, ordinal),
+      WorktreeCleanupObservationIntendedEvent.make({
+        authorization,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operationId,
+        ordinal,
+        version: workflowJournalEventVersion
+      })
+    )
+    const result = yield* runWorktreeCleanup(authorization)
+    expect(result._tag).toBe("Preserved")
+    expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
+  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("ignores malformed cleanup history for an unrelated operation", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-unrelated-operation"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendReplacementProvenance(attempt, successor)
+    const unrelated = WorktreeCleanupAuthorization.make({
+      ...authorization,
+      operationId: OperationId.make("issue-69-unrelated-cleanup")
+    })
+    const ordinal = CleanupObservationOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      worktreeCleanupObservationIntendedRecordKey(unrelated.operationId, ordinal),
+      WorktreeCleanupObservationIntendedEvent.make({
+        authorization: unrelated,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operationId: OperationId.make(`${unrelated.operationId}:observe:${ordinal}`),
+        ordinal,
+        version: workflowJournalEventVersion
+      })
+    )
+    const result = yield* runWorktreeCleanup(authorization)
+    expect(result._tag).toBe("Settled")
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          present,
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
 it("does not authorize cleanup for a current quarantine without a terminal disposal", () => {
   expect(isCleanupEligibleDisposition({ _tag: "CurrentQuarantine", sessionId: "live-session" })).toBe(false)
 })
+
+it.effect("does not treat nonterminal TargetLineageObserved as a planned-attempt settlement", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-nonterminal-settlement"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const settlementOperationId = OperationId.make("issue-69-nonterminal-settlement-read")
+    const operation = makeTargetLineageObservationOperation({
+      integrationTarget: IntegrationTarget.make({
+        ref: IntegrationTargetRef.make("refs/heads/main"),
+        repository: GitRepositoryLocator.make("repo:issue-69")
+      }),
+      operationId: settlementOperationId,
+      plannedAttempt: attempt,
+      predecessorOperationIds: []
+    })
+    yield* journal.append(
+      runId,
+      intentRecordKey(settlementOperationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(settlementOperationId),
+      TargetLineageObservedEvent.make({
+        observation: {
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: attempt.baseSha,
+          targetHeadSha: attempt.baseSha
+        },
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: settlementOperationId,
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const settledAuthorization = WorktreeCleanupAuthorization.make({
+      ...authorization,
+      disposition: PlannedAttemptCleanupDisposition.cases.Settled.make({
+        dispositionAt: JournalPosition.make(3),
+        plannedAttempt: attempt,
+        settlementOperationId
+      }),
+      observationAt: JournalPosition.make(2),
+      observationOperationId: settlementOperationId
+    })
+    const result = yield* runWorktreeCleanup(settledAuthorization)
+    expect(result._tag).toBe("Preserved")
+    expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
+  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("preserves an authorization whose observation provenance is forged", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-forged-observation"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendReplacementProvenance(attempt, successor)
+    const forged = WorktreeCleanupAuthorization.make({
+      ...authorization,
+      observationAt: authorization.disposition.dispositionAt,
+      observationOperationId: OperationId.make("issue-69-fake-observation")
+    })
+    const result = yield* runWorktreeCleanup(forged)
+    expect(result._tag).toBe("Preserved")
+    expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
+  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+)

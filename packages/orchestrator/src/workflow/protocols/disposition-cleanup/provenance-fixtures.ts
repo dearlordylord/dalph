@@ -19,7 +19,11 @@ import {
   outcomeRecordKey,
   plannedAttemptReplacedRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { TargetLineageObservedEvent, GitReadIntentRecordedEvent } from "../../registry/event.js"
+import {
+  GitReadIntentRecordedEvent,
+  PlannedAttemptWorktreeObservedEvent,
+  TargetLineageObservedEvent
+} from "../../registry/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "../integration-admission/events.js"
 import {
   IntegrationProviderRunActivityAbsentEvent,
@@ -49,7 +53,9 @@ const quarantinePositionOffset = 5
 const activityAbsencePositionOffset = 4
 
 /** Stable operation identities carried by the replacement event's complete authority chain. */
-export const replacementPredecessorsFor = (attempt: PlannedTaskAttempt): readonly [OperationId, ...OperationId[]] => {
+export const replacementPredecessorsFor = (
+  attempt: PlannedTaskAttempt
+): readonly [OperationId, OperationId, OperationId, OperationId, OperationId, OperationId] => {
   const prefix = `cleanup-provenance:${attempt.attemptId}`
   return [
     OperationId.make(`${prefix}:claim`),
@@ -60,6 +66,10 @@ export const replacementPredecessorsFor = (attempt: PlannedTaskAttempt): readonl
     OperationId.make(`${prefix}:target-lineage`)
   ]
 }
+
+/** The exact old-worktree authority read carried by the replacement witness. */
+export const replacementWorktreeObservationOperationIdFor = (attempt: PlannedTaskAttempt): OperationId =>
+  OperationId.make(`cleanup-provenance:${attempt.attemptId}:worktree-observation`)
 
 /** Builds the same typed P1 -> P2 terminal evidence used by cleanup tests and cassettes. */
 export const replacementProvenanceFor = (
@@ -123,6 +133,37 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
 ) {
   const journal = yield* JournalStore
   const event = replacementProvenanceFor(plannedAttempt, successorAttempt)
+  const worktreeObservationOperationId = replacementWorktreeObservationOperationIdFor(plannedAttempt)
+  const worktreeObservationOperation = WorkflowOperation.cases.ReadTaskWorktree.make({
+    operationId: worktreeObservationOperationId,
+    plannedAttempt,
+    predecessorOperationIds: []
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(worktreeObservationOperationId),
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: worktreeObservationOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(worktreeObservationOperationId),
+    PlannedAttemptWorktreeObservedEvent.make({
+      observation: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: worktreeObservationOperationId,
+      version: workflowJournalEventVersion
+    })
+  )
   yield* journal.append(
     plannedAttempt.runId,
     attemptChoiceAppliedRecordKey(event.requestId),

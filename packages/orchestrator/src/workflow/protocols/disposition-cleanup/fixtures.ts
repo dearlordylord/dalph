@@ -17,10 +17,10 @@ import {
   WorktreeCleanupEvidenceRevision,
   WorktreeCleanupOwner
 } from "./disposition.js"
-import { replacementPredecessorsFor } from "./provenance-fixtures.js"
+import { replacementPredecessorsFor, replacementWorktreeObservationOperationIdFor } from "./provenance-fixtures.js"
 
-const dispositionPosition = 3
-const authorizationObservationPosition = 4
+const dispositionPosition = 5
+const authorizationObservationPosition = 3
 
 export const runId = RunId.make("issue-69-worktree-run")
 export const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
@@ -53,7 +53,7 @@ export const authorization = WorktreeCleanupAuthorization.make({
   expectedHead: baseSha,
   locator: attempt.worktree,
   observationAt: JournalPosition.make(authorizationObservationPosition),
-  observationOperationId: OperationId.make("issue-69-worktree-read"),
+  observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
   writerQuiescent: true

@@ -169,7 +169,8 @@ export {
   appendCandidateProvenance,
   appendReplacementProvenance,
   replacementPredecessorsFor,
-  replacementProvenanceFor
+  replacementProvenanceFor,
+  replacementWorktreeObservationOperationIdFor
 } from "./workflow/protocols/disposition-cleanup/provenance-fixtures.js"
 export { nodeGitTargetPromotionLayer } from "./authorities/git/target-promotion.js"
 export * from "./workflow/protocols/integrator/protocol.js"

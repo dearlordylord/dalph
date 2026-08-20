@@ -7,6 +7,14 @@ authorization, fresh observation, mutation request/result, contradiction, and
 terminal settlement events. A family never reuses another family's locator or
 approval.
 
+The planned-attempt `Settled` compatibility shape is not an authority source:
+the journal currently has no canonical terminal settlement event for a planned
+attempt. `TargetLineageObserved`, executor reports, and a cleanup family's own
+settlement are not interchangeable terminal witnesses, so a caller supplying
+only that shape is preserved with zero boundary calls. `Superseded` and
+`Abandoned` remain eligible only when their exact durable events, keys, Run, and
+causal witnesses are reconstructed.
+
 ## Alice restarts a changed task
 
 Alice's tracker has an exact claim for P1. The journal records first-choice-wins

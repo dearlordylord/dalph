@@ -36,8 +36,15 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
       expect(run.boundaryCalls).toEqual(cassette.expectedBoundaryCalls)
       const tags = run.records.map(({ event }) => event._tag)
       if (cassette.scenario === "SupersededWorktreeAndBranch") {
-        expect(tags).toEqual(["WorkflowRunBegan", "AttemptChoiceApplied", "PlannedAttemptReplaced", ...expected.events])
-        const replacement = run.records[2]?.event
+        expect(tags).toEqual([
+          "WorkflowRunBegan",
+          "GitReadIntentRecorded",
+          "PlannedAttemptWorktreeObserved",
+          "AttemptChoiceApplied",
+          "PlannedAttemptReplaced",
+          ...expected.events
+        ])
+        const replacement = run.records[4]?.event
         if (replacement?._tag !== "PlannedAttemptReplaced")
           return yield* Effect.die("missing exact replacement evidence")
         expect(replacement.successorPlan.plannedAttempt).toMatchObject({
@@ -48,7 +55,14 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         })
       }
       if (cassette.scenario === "ChangedGitFactsPreserveResources") {
-        expect(tags).toEqual(["WorkflowRunBegan", "AttemptChoiceApplied", "PlannedAttemptReplaced", ...expected.events])
+        expect(tags).toEqual([
+          "WorkflowRunBegan",
+          "GitReadIntentRecorded",
+          "PlannedAttemptWorktreeObserved",
+          "AttemptChoiceApplied",
+          "PlannedAttemptReplaced",
+          ...expected.events
+        ])
       }
       if (cassette.scenario === "FullRerunPredecessorCandidate") {
         expect(tags).toEqual([

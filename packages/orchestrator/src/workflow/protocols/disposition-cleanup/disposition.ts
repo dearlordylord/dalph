@@ -40,6 +40,11 @@ export const PlannedAttemptCleanupDisposition = Schema.Union([
   Schema.TaggedStruct("Settled", {
     dispositionAt: JournalPosition,
     plannedAttempt: PlannedTaskAttempt,
+    /**
+     * Compatibility data only.  The journal has no canonical planned-attempt
+     * terminal-settlement event, so this variant is deliberately rejected by
+     * cleanup provenance validation until such an event is introduced.
+     */
     settlementOperationId: OperationId
   }),
   PlannedAttemptCleanupDispositionSuperseded
