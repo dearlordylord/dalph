@@ -9,6 +9,12 @@ The task tracker remains authoritative for work identity and dependencies. Git
 remains authoritative for source lineage and accepted integration. Dalph owns
 only its managed execution history and typed orchestration decisions.
 
+## Dalph in motion
+
+The delivery workflow and its live orchestration state, side by side:
+
+![Dalph delivery workflow and orchestration state](docs/assets/dalph-delivery-workflow.gif)
+
 ## Status
 
 Production implementation is split across the packages described below. The current
