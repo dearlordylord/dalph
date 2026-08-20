@@ -15,7 +15,7 @@ import type { TaskWorkCapacity } from "@dalph/orchestrator"
  */
 export const deliveryPlaybackViewContract = {
   groupLabel: "Delivery playback controls",
-  help: "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
+  help: "Moment = one captured story, Delivery, or runtime observation · Jump = frontier, held positions, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
   nextFrame: { accessibleName: "Next moment", label: "Moment →", shortcut: "ArrowRight" },
   nextLandmark: { accessibleName: "Next delivery landmark", label: "Jump →", shortcut: "]" },
   previousFrame: { accessibleName: "Previous moment", label: "← Moment", shortcut: "ArrowLeft" },
@@ -241,10 +241,50 @@ const currentFrameIndex = (model: DeliveryPlaybackModel): DeliveryFrameIndex | n
   return model.position.frameIndex
 }
 
-const landmarkIndexes = (model: DeliveryPlaybackModel): ReadonlyArray<DeliveryFrameIndex> =>
-  model._tag === "EmptyDeliveryPlayback"
-    ? []
-    : model.frames.flatMap((frame, index) => frame.landmarks.length === 0 ? [] : [DeliveryFrameIndex.make(index)])
+const isJumpLandmark = (landmark: DeliveryLandmark): boolean =>
+  landmark._tag === "InitialPublication"
+  || landmark._tag === "CoordinatorRestart"
+  || landmark._tag === "EligibleFrontierWave"
+  || landmark._tag === "HeldPositionsChanged"
+  || landmark._tag === "TerminalPublication"
+
+interface DeliveryJumpStop {
+  readonly frameIndex: DeliveryFrameIndex
+  readonly landmarks: ReadonlyArray<DeliveryLandmark>
+}
+
+/**
+ * Jump stays bounded to the primary delivery transitions promised by the Lab.
+ * A held-position change immediately before a restart is one chronological
+ * boundary. A restart followed within six captures by its first frontier is
+ * likewise one establishment boundary. The later frame carries both labels.
+ */
+const deliveryJumpStops = (frames: ReadonlyArray<DeliveryPlaybackFrame>): ReadonlyArray<DeliveryJumpStop> => {
+  const stops: Array<DeliveryJumpStop> = []
+  for (const [index, frame] of frames.entries()) {
+    const landmarks = frame.landmarks.filter(isJumpLandmark)
+    if (landmarks.length === 0) continue
+    const previous = stops.at(-1)
+    const joinsPreviousHeldBoundary = landmarks.some(({ _tag }) => _tag === "CoordinatorRestart")
+      && previous?.frameIndex === index - 1
+      && previous.landmarks.every(({ _tag }) => _tag === "HeldPositionsChanged")
+    const joinsPreviousRestartBoundary = landmarks.some(({ _tag }) => _tag === "EligibleFrontierWave")
+      && previous !== undefined
+      && index - previous.frameIndex <= 6
+      && previous.landmarks.some(({ _tag }) => _tag === "CoordinatorRestart")
+      && previous.landmarks.every(({ _tag }) => _tag !== "EligibleFrontierWave")
+    if ((joinsPreviousHeldBoundary || joinsPreviousRestartBoundary) && previous !== undefined) {
+      stops.pop()
+      stops.push({
+        frameIndex: DeliveryFrameIndex.make(index),
+        landmarks: [...previous.landmarks, ...landmarks]
+      })
+    } else {
+      stops.push({ frameIndex: DeliveryFrameIndex.make(index), landmarks })
+    }
+  }
+  return stops
+}
 
 const landmarkLabel = (landmarks: ReadonlyArray<DeliveryLandmark>): string | null => {
   if (landmarks.length === 0) return null
@@ -292,7 +332,11 @@ export interface DeliveryPlaybackProjection {
 export const projectDeliveryPlayback = (model: DeliveryPlaybackModel): DeliveryPlaybackProjection => {
   const selectedIndex = currentFrameIndex(model)
   const frames = model._tag === "EmptyDeliveryPlayback" ? [] : model.frames
-  const landmarks = landmarkIndexes(model)
+  const jumpStops = deliveryJumpStops(frames)
+  const landmarks = jumpStops.map(({ frameIndex }) => frameIndex)
+  const jumpLandmarksByFrame = new Map(jumpStops.map(({ frameIndex, landmarks: stopLandmarks }) =>
+    [frameIndex, stopLandmarks] as const
+  ))
   const previousFrameAvailable = selectedIndex !== null && selectedIndex > 0
   const nextFrameAvailable = selectedIndex !== null && selectedIndex < frames.length - 1
   const previousLandmarkAvailable = selectedIndex !== null && landmarks.some((index) => index < selectedIndex)
@@ -309,7 +353,7 @@ export const projectDeliveryPlayback = (model: DeliveryPlaybackModel): DeliveryP
     frameOptions: frames.map((frame, index) => ({
       frameIndex: DeliveryFrameIndex.make(index),
       label: frame.label,
-      landmarkLabel: landmarkLabel(frame.landmarks),
+      landmarkLabel: landmarkLabel(jumpLandmarksByFrame.get(DeliveryFrameIndex.make(index)) ?? []),
       selected: selectedIndex === index
     })),
     landmarkIndexes: landmarks,

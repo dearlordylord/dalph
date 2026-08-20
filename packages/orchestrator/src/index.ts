@@ -226,6 +226,11 @@ export {
   WorkflowRunTargetMismatch
 } from "./workflow-journal/store.js"
 export {
+  JournalReadSource,
+  journalReadSourceLayer,
+  type JournalReadSourceService
+} from "./workflow-journal/read-source.js"
+export {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TargetLineageObservedEvent,
@@ -388,6 +393,42 @@ export {
   PlannedTaskAttemptPlanner
 } from "./workflow/protocols/task-attempt-planning/plan.js"
 export { TraceOutput, TraceOutputError } from "./presentation/trace-output.js"
+export {
+  TraceAtCursor,
+  TraceCausalPredecessorContradiction,
+  TraceCausalPredecessorMissing,
+  TraceCausalPredecessorNotProjected,
+  TraceCursor,
+  TraceCursorNotCommitted,
+  TraceDerivedTaskOrder,
+  TraceHistory,
+  TraceHistoryItem,
+  TraceItemIdentity,
+  TracePositionIdentity,
+  TraceJournalPrefixInvalid,
+  TracePrefixIssue,
+  TraceProcessLocalResourceSerialization,
+  TraceProjectionInvalid,
+  TraceReader,
+  TraceReaderLayer,
+  TraceRunNotFound,
+  TraceTaskGraph,
+  TraceTaskGraphEdge,
+  TraceWorkflowCausalEdge,
+  TraceOutsideAuthorityAcknowledgement,
+  TraceRelationships,
+  makeTracePresentation,
+  makeTracePresentationWithStatusSource,
+  makeTraceReader,
+  readTraceAt,
+  readTracePresentation,
+  traceReaderSchemaVersion,
+  type TraceJournalReadSource,
+  type TracePresentation,
+  type TracePresentationSource,
+  type TraceReaderError,
+  type TraceReaderService
+} from "./presentation/trace-reader.js"
 export {
   FixtureReader,
   fixtureReaderFileLayer,

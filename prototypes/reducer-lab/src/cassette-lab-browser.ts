@@ -40,6 +40,7 @@ export interface CassetteLabBrowserInput {
 }
 
 const browserBatchConcurrency = 1
+const liveDeliveryRenderIntervalMs = 100
 
 const appendTextElement = <K extends keyof HTMLElementTagNameMap>(
   parent: HTMLElement,
@@ -246,6 +247,7 @@ const defectDetail = (error: unknown): string => error instanceof Error ? error.
 /** Mounts one shared maintainer workbench over the production-owned cassette catalogs. */
 export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const { revision, root, rows, runCassette } = input
+  const coalesceLiveDeliveryRenders = typeof globalThis.requestAnimationFrame === "function"
   const reloadLab = input.reloadLab ?? (() => globalThis.location.reload())
   document.title = "Dalph reducer lab"
   const rowByKey = new Map(rows.map((row) => [row.catalogKey, row]))
@@ -540,7 +542,26 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
         const catalogKey = keys[nextIndex]
         nextIndex += 1
         if (catalogKey === undefined) return
+        let hasRenderedLiveObservation = false
+        let liveDeliveryRenderTimer: ReturnType<typeof setTimeout> | undefined
         try {
+          const renderLatestLiveObservation = (): void => {
+            liveDeliveryRenderTimer = undefined
+            const latestState = states.get(catalogKey)
+            if (
+              latestState?._tag !== "Running"
+              || latestState.deliveryFrames === null
+              || latestState.observationMoments === null
+            ) return
+            if (selectedSurface?.catalogKey === catalogKey) selectedSurface.updateDeliveryFrame(latestState)
+            root.dispatchEvent(new CustomEvent(deliveryFrameEvent, {
+              detail: {
+                catalogKey,
+                frameCount: latestState.deliveryFrames.length,
+                momentCount: latestState.observationMoments.length
+              }
+            }))
+          }
           const observer: CassetteRunObserver = {
             onObservationMoment: (moment) => {
               const state = states.get(catalogKey)
@@ -557,18 +578,21 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
                 observationMoments: [...state.observationMoments, moment]
               } as const
               states.set(catalogKey, nextState)
-              if (selectedSurface?.catalogKey === catalogKey) selectedSurface.updateDeliveryFrame(nextState)
-              root.dispatchEvent(new CustomEvent(deliveryFrameEvent, {
-                detail: {
-                  catalogKey,
-                  frameCount: nextState.deliveryFrames.length,
-                  momentCount: nextState.observationMoments.length
-                }
-              }))
+              if (!hasRenderedLiveObservation) {
+                hasRenderedLiveObservation = true
+                renderLatestLiveObservation()
+              } else if (!coalesceLiveDeliveryRenders) {
+                renderLatestLiveObservation()
+              } else {
+                liveDeliveryRenderTimer ??= setTimeout(renderLatestLiveObservation, liveDeliveryRenderIntervalMs)
+              }
             }
           }
-          states.set(catalogKey, { _tag: "Settled", result: await runCassette(catalogKey, observer) })
+          const result = await runCassette(catalogKey, observer)
+          if (liveDeliveryRenderTimer !== undefined) clearTimeout(liveDeliveryRenderTimer)
+          states.set(catalogKey, { _tag: "Settled", result })
         } catch (error) {
+          if (liveDeliveryRenderTimer !== undefined) clearTimeout(liveDeliveryRenderTimer)
           states.set(catalogKey, { _tag: "LabDefect", catalogKey, detail: defectDetail(error) })
         }
         refreshSelector()

@@ -7,6 +7,7 @@ import {
   type AuthoredDeliveryFrame,
   type AuthoredObservationCapture,
   type AuthoredObservationMoment,
+  type AuthoredScenarioCassetteRun,
   evaluateAuthoredObservationCapture,
   runAuthoredScenarioCassette
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
@@ -49,6 +50,13 @@ type ApplicationExitCassetteKey =
   `application-exit:${keyof typeof maintainedApplicationExitProtocolCassetteCatalog & string}`
 type CodexExecutorCassetteKey =
   `codex-executor:${keyof typeof maintainedCodexPlannedAttemptExecutorCassetteCatalog & string}`
+type ProductionTraceAtCursor = AuthoredScenarioCassetteRun["traceHistories"][number]
+
+/** Keep raw evidence inspectable without embedding every repeated historical prefix. */
+const authoredExecutionEvidence = (run: AuthoredScenarioCassetteRun): unknown => ({
+  ...run,
+  traceHistories: run.traceHistories.map(({ cursor }) => cursor)
+})
 
 export type MaintainedCassetteKey =
   | AuthoredCassetteKey
@@ -108,6 +116,7 @@ interface CassetteExecution {
   readonly activationOrdinals: ReadonlyArray<number>
   readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
   readonly observationMoments: ReadonlyArray<AuthoredObservationMoment> | null
+  readonly traceHistories: ReadonlyArray<ProductionTraceAtCursor> | null
   readonly evidence: unknown
   readonly journalRecords: ReadonlyArray<unknown>
   readonly runId: string | null
@@ -164,6 +173,7 @@ export type CassetteLabResult =
       readonly consumedItemCount: number
       readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
       readonly observationMoments: ReadonlyArray<AuthoredObservationMoment> | null
+      readonly traceHistories: ReadonlyArray<ProductionTraceAtCursor> | null
       readonly executionEvidence: unknown
       readonly journalRecordCount: number
       readonly journalRecords: ReadonlyArray<unknown>
@@ -233,7 +243,8 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
       activationOrdinals: run.activationOrdinals,
       deliveryFrames: run.deliveryFrames,
       observationMoments: run.observationMoments,
-      evidence: run,
+      traceHistories: run.traceHistories,
+      evidence: authoredExecutionEvidence(run),
       journalRecords: run.records,
       runId: run.runId
     }))
@@ -272,6 +283,7 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
       activationOrdinals: [],
       deliveryFrames: null,
       observationMoments: null,
+      traceHistories: null,
       evidence: run,
       journalRecords: run.records,
       runId: null
@@ -298,6 +310,7 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
       activationOrdinals: [],
       deliveryFrames: null,
       observationMoments: null,
+      traceHistories: null,
       evidence: run,
       journalRecords: run.records,
       runId: null
@@ -324,6 +337,7 @@ const applicationExitDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
       activationOrdinals: [],
       deliveryFrames: null,
       observationMoments: null,
+      traceHistories: null,
       evidence: run,
       journalRecords: [],
       runId: null
@@ -350,6 +364,7 @@ const codexExecutorDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Ob
       activationOrdinals: [],
       deliveryFrames: null,
       observationMoments: null,
+      traceHistories: null,
       evidence: run,
       journalRecords: [],
       runId: null
@@ -478,7 +493,8 @@ const completedResult = (
     consumedItemCount: descriptor.story.length,
     deliveryFrames: execution.deliveryFrames,
     observationMoments: execution.observationMoments,
-  executionEvidence: execution.evidence,
+    traceHistories: execution.traceHistories,
+    executionEvidence: execution.evidence,
   journalRecordCount: execution.journalRecords.length,
   journalRecords: execution.journalRecords,
   runnerName: cassetteCategoryMetadata[descriptor.category].runnerName,
@@ -520,7 +536,8 @@ export const runAuthoredCassetteInput = async (
         activationOrdinals: exit.value.activationOrdinals,
         deliveryFrames: exit.value.deliveryFrames,
         observationMoments: exit.value.observationMoments,
-        evidence: exit.value,
+        traceHistories: exit.value.traceHistories,
+        evidence: authoredExecutionEvidence(exit.value),
         journalRecords: exit.value.records,
         runId: exit.value.runId
       })
