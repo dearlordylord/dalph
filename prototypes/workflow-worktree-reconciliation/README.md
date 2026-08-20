@@ -142,14 +142,15 @@ pnpm --filter @dalph/workflow-worktree-reconciliation-prototype typecheck  PASS
 pnpm --filter @dalph/workflow-worktree-reconciliation-prototype test       PASS (9/9)
 ```
 
-The repository-wide `pnpm check:all` result is recorded below. The one final
-`pnpm check:quint` run remains a parent-owned pending gate; no successor
-experiment or production integration is part of this prototype.
+The repository-wide `pnpm check:all` result and the one final
+`pnpm check:quint` run are recorded below. No successor experiment or
+production integration is part of this prototype.
 
 Final gate results after this reviewer correction:
 
 ```text
 pnpm check:all    PASS (369/400 successful output lines; 193 test files passed,
                        1 skipped; 1,789 tests passed, 2 skipped; no leaks)
-pnpm check:quint  PENDING (the parent performs the one final model run)
+pnpm check:quint  PASS (complete model gate in 280.60s; maintained models found
+                        no violations and negative controls found counterexamples)
 ```
