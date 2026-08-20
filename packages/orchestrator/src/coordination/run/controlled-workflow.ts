@@ -15,6 +15,7 @@ import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./j
 import { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { runWorkflow } from "./run.js"
 import { validatedRunActivationLayer } from "./startup-recovery.js"
+import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 import { ApplicationExitRequestBoundary, makeApplicationExitShell } from "../application-exit/application-shell.js"
 
 const controlledOwnership = CoordinatorOwnership.of({
@@ -40,7 +41,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer
         )
-        return validatedRunActivationLayer(activeRunId, undefined).pipe(
+        return validatedRunActivationLayer(activeRunId, undefined, undefined, undefined, undefined, preservingDispositionCleanupBoundaryLayer).pipe(
           Layer.provide(
             journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
           ),

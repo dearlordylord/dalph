@@ -325,10 +325,7 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
       version: workflowJournalEventVersion
     })
   )
-  const successorRun = IntegratorRunCorrelation.make({
-    ordinal: IntegratorRunOrdinal.make(1),
-    session: successorSession
-  })
+  const successorRun = IntegratorRunCorrelation.make({ ordinal: integratorRetryRunOrdinal, session: successorSession })
   yield* history.journal.append(
     runId,
     integratorRunStartedRecordKey(successorRun),

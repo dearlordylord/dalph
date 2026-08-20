@@ -35,8 +35,32 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
       if (expected.events.length > 0) expect(renderRecordedCassetteLyrics(recorded)).toContain("cleanup")
       else expect(filteredCleanupTags).toEqual([])
       expect(run.boundaryCalls).toEqual(cassette.expectedBoundaryCalls)
+      expect(run.forbiddenBoundaryCalls, `${key} forbidden boundary calls`).toEqual([])
+      expect(run.forbiddenJournalTags, `${key} forbidden journal events`).toEqual([])
+      expect(run.sentinelsAfter, `${key} upstream sentinels`).toEqual(run.sentinelsBefore)
       const tags = run.records.map(({ event }) => event._tag)
+      const transcriptTags = run.transcript.map(({ _tag }) => _tag)
+      for (const entry of run.transcript) {
+        expect(entry.authorization.disposition, `${key} disposition witness`).toBeDefined()
+        expect(entry.authorization.owner, `${key} owner witness`).toBeDefined()
+        expect(entry.authorization.evidenceRevision, `${key} revision witness`).toBeGreaterThan(0)
+        if ("ordinal" in entry) {
+          expect(entry.operationId).toBeDefined()
+          expect(entry.ordinal).toBeGreaterThan(0)
+        } else {
+          expect(entry.attempt).toBeGreaterThan(0)
+          expect(entry.result, `${key} mutation response witness`).toBeDefined()
+        }
+      }
       if (cassette.scenario === "SupersededWorktreeAndBranch") {
+        expect(transcriptTags).toEqual([
+          "WorktreeObserved",
+          "WorktreeMutationResult",
+          "WorktreeObserved",
+          "BranchObserved",
+          "BranchMutationResult",
+          "BranchObserved"
+        ])
         expect(tags).toEqual([
           "WorkflowRunBegan",
           "TaskClaimAcquisitionIntended",
@@ -72,6 +96,7 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         })
       }
       if (cassette.scenario === "ChangedGitFactsPreserveResources") {
+        expect(transcriptTags).toEqual(["WorktreeObserved"])
         expect(tags).toEqual([
           "WorkflowRunBegan",
           "TaskClaimAcquisitionIntended",
@@ -96,6 +121,12 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         ])
       }
       if (cassette.scenario === "AbandonedWorktree") {
+        expect(transcriptTags).toEqual([
+          "WorktreeObserved",
+          "WorktreeMutationResult",
+          "WorktreeObserved",
+          "BranchObserved"
+        ])
         expect(tags).toEqual([
           "WorkflowRunBegan",
           "TaskClaimAcquisitionIntended",
@@ -112,6 +143,11 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         ])
       }
       if (cassette.scenario === "FullRerunPredecessorCandidate") {
+        expect(transcriptTags).toEqual([
+          "CandidateObserved",
+          "CandidateMutationResult",
+          "CandidateObserved"
+        ])
         expect(tags).toEqual([
           "WorkflowRunBegan",
           "IntegrationResponsibilityBegan",
@@ -137,6 +173,7 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         expect(successorFixed.predecessor.sessionId).not.toBe(successorFixed.successor.sessionId)
       }
       if (cassette.scenario === "CurrentQuarantinePreserved") {
+        expect(transcriptTags).toEqual([])
         expect(tags).toEqual([
           "WorkflowRunBegan",
           "IntegrationResponsibilityBegan",

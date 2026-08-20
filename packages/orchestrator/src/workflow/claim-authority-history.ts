@@ -1,24 +1,73 @@
 /* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; claim authority stays journal-derived. */
 import { type AttemptId, type PlannedTaskAttempt } from "@dalph/contracts"
 import type { JournalRecord } from "../workflow-journal/store.js"
-import { causalPredecessorOperationIds } from "./causal-history.js"
 import type { WorkflowJournalEvent } from "./registry/event.js"
+import { causalPredecessorOperationIds } from "./causal-history.js"
 import { taskClaimReacquisitionOperationId } from "./protocols/task-claim-reacquisition/plan.js"
-import { recordedTaskAttemptPlans } from "./protocols/task-attempt-planning/journal-evidence.js"
 import { journalPrefixPredecessorOf } from "../workflow-journal/prefix-lineage.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptReplacedRecordKey
+} from "../workflow-journal/record-key.js"
 
 /** Finds the exact acquired claim in one planned attempt's causal history. */
 export const causalClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,
   attemptId: AttemptId
 ): Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }> | undefined => {
-  const plan = recordedTaskAttemptPlans(records).find(({ plannedAttempt }) => plannedAttempt.attemptId === attemptId)
+  const plans = records.flatMap((record) => {
+    if (
+      record.event._tag === "TaskAttemptPlanned" &&
+      record.event.operation.plannedAttempt.attemptId === attemptId &&
+      record.runId === record.event.operation.plannedAttempt.runId &&
+      record.key === attemptPlanRecordKey(attemptId)
+    ) {
+      return [{ record, operation: record.event.operation }]
+    }
+    if (
+      record.event._tag === "PlannedAttemptReplaced" &&
+      record.event.successorPlan.plannedAttempt.attemptId === attemptId &&
+      record.runId === record.event.successorPlan.plannedAttempt.runId &&
+      record.key === plannedAttemptReplacedRecordKey(record.event.subject.plannedAttempt.attemptId)
+    ) {
+      return [{ record, operation: record.event.successorPlan }]
+    }
+    return []
+  })
+  const plan = plans.length === 1 ? plans[0] : undefined
   if (plan === undefined) return undefined
-  const causalOperationIds = causalPredecessorOperationIds(records, plan)
-  const claim = records.find(
-    ({ event }) => event._tag === "TaskClaimAcquired" && causalOperationIds.has(event.claim.operationId)
-  )?.event
-  return claim?._tag === "TaskClaimAcquired" ? claim : undefined
+
+  const claimOutcomes = records.filter(
+    (
+      record
+    ): record is JournalRecord & {
+      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }>
+    } =>
+      record.event._tag === "TaskClaimAcquired" &&
+      record.runId === plan.record.runId &&
+      causalPredecessorOperationIds(records, plan.operation).has(record.event.claim.operationId) &&
+      record.key === outcomeRecordKey(record.event.claim.operationId)
+  )
+  if (claimOutcomes.length !== 1) return undefined
+  const claimOutcome = claimOutcomes[0]
+  if (claimOutcome === undefined || claimOutcome.position >= plan.record.position) return undefined
+  const claim = claimOutcome.event.claim
+  const claimIntents = records.filter(
+    (record) =>
+      record.event._tag === "TaskClaimAcquisitionIntended" &&
+      record.runId === plan.record.runId &&
+      record.key === intentRecordKey(claim.operationId) &&
+      record.event.operation.acquisition.operationId === claim.operationId &&
+      record.event.operation.acquisition.owner === claim.owner &&
+      record.event.operation.acquisition.taskId === claim.taskId &&
+      record.event.operation.acquisition.token === claim.token
+  )
+  const claimIntent = claimIntents[0]
+  return claimIntents.length === 1 && claimIntent !== undefined && claimIntent.position < claimOutcome.position
+    ? claimOutcome.event
+    : undefined
 }
 
 /** Finds the original planned claim or the latest claim authorized by an exact accepted reacquisition direction. */

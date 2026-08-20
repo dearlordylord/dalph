@@ -24,6 +24,7 @@ import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
 import { currentSignalOf, type DeliveryRelationInputBundle, TrackerGraphState } from "../delivery/relations.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
+import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
   InRunJournal,
@@ -160,7 +161,14 @@ const runtimeLayer = (runId: RunId, trackerGraphReader: TrackerGraphReader["Serv
       runId,
       Layer.mock(WorkflowInterpreter, { readTrackerGraph: (operation) => trackerGraphReader.read(operation.target) })
     ),
-    Layer.mock(WorkflowTrace, { emit: () => Effect.void })
+    Layer.mock(WorkflowTrace, { emit: () => Effect.void }),
+    Layer.succeed(
+      DispositionCleanupActivation,
+      DispositionCleanupActivation.of({
+        responsibilities: { branch: [], candidate: [], worktree: [] },
+        run: Effect.die("cleanup activation is not used by this bootstrap fixture")
+      })
+    )
   )
 
 const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (

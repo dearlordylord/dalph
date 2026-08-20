@@ -57,6 +57,7 @@ import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/r
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { validatedRunActivationLayer } from "../../../orchestrator/src/coordination/run/startup-recovery.js"
+import { preservingDispositionCleanupBoundaryLayer } from "../../../orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
 import {
   decideWorkflowRunBeginning,
@@ -514,7 +515,7 @@ const makeRunActivationDriverImplementation = () => {
             taskClaimReacquisitionControlLayer,
             taskWorkCapacityControlLayer
           )
-          return validatedRunActivationLayer(activeRunId, undefined).pipe(
+          return validatedRunActivationLayer(activeRunId, undefined, undefined, undefined, undefined, preservingDispositionCleanupBoundaryLayer).pipe(
             Layer.provide(
               journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
             ),

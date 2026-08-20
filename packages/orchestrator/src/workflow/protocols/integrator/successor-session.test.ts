@@ -191,7 +191,8 @@ const makeFixture = (observedHead: GitCommitSha = freshHead, observedAt: number 
         occurrenceClassification: "InitiatedAction",
         operation: originalOperation,
         version: workflowJournalEventVersion
-      })
+      }),
+      intentRecordKey(originalOperationId)
     ),
     journalRecord(
       5,
@@ -201,7 +202,8 @@ const makeFixture = (observedHead: GitCommitSha = freshHead, observedAt: number 
         operationId: originalOperationId,
         plannedAttempt,
         version: workflowJournalEventVersion
-      })
+      }),
+      outcomeRecordKey(originalOperationId)
     ),
     journalRecord(
       6,

@@ -52,7 +52,7 @@ import {
 } from "./worktree.js"
 import { branchCleanupTestLayer } from "./branch.js"
 import { integratorCandidateCleanupTestLayer } from "./integrator-candidate.js"
-import { activateDispositionCleanup, runDispositionCleanupLoop } from "./loop.js"
+import { activateDispositionCleanup, makeDispositionCleanupActivation, runDispositionCleanupLoop } from "./loop.js"
 import {
   appendAbandonedProvenance,
   appendReplacementProvenance,
@@ -225,6 +225,140 @@ it.effect("ordinary activation selects two exact worktree operations independent
     expect((yield* (yield* TestWorktreeCleanupBoundary).calls()).map(({ operationId }) => operationId)).not.toContain(
       contradictoryAuthorization.operationId
     )
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          present,
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          }),
+          WorktreeCleanupObservation.cases.Present.make({
+            attemptId: secondAttempt.attemptId,
+            branch: secondAttempt.branch,
+            headSha: secondAttempt.baseSha,
+            locator: secondAttempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(1),
+            writerQuiescent: true
+          }),
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: secondAttempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          }),
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: secondAttempt.branch,
+            locator: secondAttempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(branchCleanupTestLayer({ observations: [] })),
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("ordinary activation derives authorization from terminal facts before crossing the boundary", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-terminal-facts-activation"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-terminal-facts"))
+    const before = yield* journal.read(runId)
+    expect(before.some(({ event }) => event._tag === "WorktreeCleanupAuthorized")).toBe(false)
+
+    const activated = yield* makeDispositionCleanupActivation(runId)
+    const authorization = activated.responsibilities.worktree[0]
+    expect(authorization).toBeDefined()
+    if (authorization === undefined) return
+    const afterAuthorization = yield* journal.read(runId)
+    expect(afterAuthorization.map(({ event }) => event._tag)).toContain("WorktreeCleanupAuthorized")
+
+    const result = yield* activated.run
+    expect(result.worktreeOutcomes.map(({ _tag }) => _tag)).toEqual(["Settled"])
+    expect(result.worktreeOutcomes[0]?.authorization.operationId).toBe(authorization.operationId)
+    expect((yield* (yield* TestWorktreeCleanupBoundary).calls()).map(({ _tag }) => _tag)).toEqual([
+      "Observe",
+      "Remove",
+      "Observe"
+    ])
+    const finalRecords = yield* journal.read(runId)
+    expect(finalRecords.map(({ event }) => event._tag)).toContain("WorktreeCleanupSettled")
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          present,
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(branchCleanupTestLayer({ observations: [] })),
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("ordinary activation runs two terminal responsibilities and excludes a forged authorization", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-two-terminal-facts"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-two-terminal-first"))
+    yield* appendAbandonedProvenance(secondAttempt, OperationId.make("issue-69-two-terminal-second"))
+    const activation = yield* makeDispositionCleanupActivation(runId)
+    const validAuthorizations = activation.responsibilities.worktree
+    expect(validAuthorizations).toHaveLength(2)
+    const first = validAuthorizations[0]
+    if (first === undefined) return
+    const forged = WorktreeCleanupAuthorization.make({
+      ...first,
+      expectedHead: GitCommitSha.make("2".repeat(40)),
+      operationId: OperationId.make("issue-69-forged-terminal-authorization")
+    })
+    yield* journal.append(
+      runId,
+      worktreeCleanupAuthorizedRecordKey(forged.operationId),
+      WorktreeCleanupAuthorizedEvent.make({
+        authorization: forged,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    const result = yield* activation.run
+    expect(result.worktreeOutcomes.map(({ _tag }) => _tag)).toEqual(["Settled", "Settled"])
+    expect(result.worktreeOutcomes.map(({ authorization }) => authorization.operationId)).toEqual(
+      validAuthorizations.map(({ operationId }) => operationId)
+    )
+    const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
+    expect(calls.filter(({ operationId }) => operationId === forged.operationId)).toEqual([])
+    expect(calls.filter(({ _tag }) => _tag === "Remove")).toHaveLength(2)
   }).pipe(
     Effect.provide(
       worktreeCleanupTestLayer({

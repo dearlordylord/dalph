@@ -27,10 +27,14 @@ export type RecoveryPrefixResume = (context: {
   readonly journal: JournalStore["Service"]
 }) => Effect.Effect<unknown, unknown>
 
-interface RecoveryStoreReplay {
+export interface RecoveryStoreReplay {
   readonly decodedRecords: ReadonlyArray<JournalRecord>
   readonly historyTag: "ValidWorkflowJournalHistory" | "InvalidWorkflowJournalHistory"
   readonly projection: Schema.Schema.Type<typeof WorkflowOccurrenceProjection>
+  /** Durable state reread, reduced, and projected after the optional resume. */
+  readonly finalDecodedRecords?: ReadonlyArray<JournalRecord>
+  readonly finalHistoryTag?: "ValidWorkflowJournalHistory" | "InvalidWorkflowJournalHistory"
+  readonly finalProjection?: Schema.Schema.Type<typeof WorkflowOccurrenceProjection>
   readonly resumption?: unknown
 }
 
@@ -75,10 +79,24 @@ const inspectJournal = Effect.fn("RecoveryStoreLanes.inspectJournal")(function* 
 ) {
   yield* appendRetainedPrefix(journal, prefix)
   const replay = yield* inspectExisting(prefix, journal)
-  if (resume === undefined) return replay
+  if (resume === undefined) {
+    return {
+      ...replay,
+      finalDecodedRecords: replay.decodedRecords,
+      finalHistoryTag: replay.historyTag,
+      finalProjection: replay.projection
+    }
+  }
   const inRunJournal = InRunJournal.of({ append: journal.append, read: journal.read })
   const resumption = yield* resume({ inRunJournal, journal })
-  return { ...replay, resumption }
+  const final = yield* inspectExisting(prefix, journal)
+  return {
+    ...replay,
+    finalDecodedRecords: final.decodedRecords,
+    finalHistoryTag: final.historyTag,
+    finalProjection: final.projection,
+    resumption
+  }
 })
 
 const inspectExisting = Effect.fn("RecoveryStoreLanes.inspectExisting")(function* (
@@ -98,10 +116,24 @@ const inspectExistingWithResume = Effect.fn("RecoveryStoreLanes.inspectExistingW
   resume?: RecoveryPrefixResume
 ) {
   const replay = yield* inspectExisting(prefix, journal)
-  if (resume === undefined) return replay
+  if (resume === undefined) {
+    return {
+      ...replay,
+      finalDecodedRecords: replay.decodedRecords,
+      finalHistoryTag: replay.historyTag,
+      finalProjection: replay.projection
+    }
+  }
   const inRunJournal = InRunJournal.of({ append: journal.append, read: journal.read })
   const resumption = yield* resume({ inRunJournal, journal })
-  return { ...replay, resumption }
+  const final = yield* inspectExisting(prefix, journal)
+  return {
+    ...replay,
+    finalDecodedRecords: final.decodedRecords,
+    finalHistoryTag: final.historyTag,
+    finalProjection: final.projection,
+    resumption
+  }
 })
 
 const replayMemory = Effect.fn("RecoveryStoreLanes.replayMemory")(function* (
@@ -170,6 +202,26 @@ export const recoveryPrefixMismatch = (
   if (canonicalSemanticProjection(expected.projection) !== canonicalSemanticProjection(actual.projection)) {
     return `recovery prefix ${cut} / ${lane}: production semantic projection differs`
   }
+  if (expected.finalHistoryTag !== undefined && actual.finalHistoryTag !== undefined) {
+    if (expected.finalHistoryTag !== actual.finalHistoryTag) {
+      return `recovery prefix ${cut} / ${lane}: resumed history validity differs`
+    }
+    if (
+      expected.finalDecodedRecords === undefined ||
+      actual.finalDecodedRecords === undefined ||
+      canonicalDecodedJournalHistory(expected.finalDecodedRecords) !==
+        canonicalDecodedJournalHistory(actual.finalDecodedRecords)
+    ) {
+      return `recovery prefix ${cut} / ${lane}: resumed decoded history differs`
+    }
+    if (
+      expected.finalProjection === undefined ||
+      actual.finalProjection === undefined ||
+      canonicalSemanticProjection(expected.finalProjection) !== canonicalSemanticProjection(actual.finalProjection)
+    ) {
+      return `recovery prefix ${cut} / ${lane}: resumed production semantic projection differs`
+    }
+  }
   return undefined
 }
 
@@ -180,7 +232,11 @@ export const expectedRecoveryPrefix = Effect.fn("RecoveryStoreLanes.expectedReco
   const runId = prefix.records[0].runId
   const history = reduceWorkflowJournalHistory(runId, prefix.records)
   const projection = yield* projectWorkflowOccurrences(prefix.records)
-  return { decodedRecords: prefix.records, historyTag: history._tag, projection }
+  return {
+    decodedRecords: prefix.records,
+    historyTag: history._tag,
+    projection
+  }
 })
 
 /** Builds one prefix record from an endpoint in a production-produced chronology. */

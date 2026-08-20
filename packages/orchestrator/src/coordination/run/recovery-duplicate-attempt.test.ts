@@ -13,17 +13,25 @@ import {
   WorktreeLocator,
   PlannedAttemptExecutor
 } from "@dalph/contracts"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { JournalDatabaseLocator, JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import { InRunJournal, JournalRecord, JournalStore } from "../../workflow-journal/store.js"
-import { TaskAttemptPlannedEvent } from "../../workflow/registry/event.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent
+} from "../../workflow/registry/event.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
+import { makeTaskAttemptPlanOperation, makeTaskClaimAcquisitionOperation } from "../../workflow/registry/operation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { causalClaimForAttempt } from "./recovery-authority.js"
@@ -89,6 +97,67 @@ it("fails closed when a planned attempt or one of its causal predecessors is abs
           position: JournalPosition.make(1),
           runId
         }
+      ],
+      firstAttempt.attemptId
+    )
+  ).toBeUndefined()
+})
+
+it("requires one exact run-bound claim intent and outcome for the attempt plan", () => {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make("exact-claim-pair"),
+    owner: ClaimOwner.make("exact-owner"),
+    taskId,
+    token: ClaimToken.make("exact-token")
+  })
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("exact-claim-plan"),
+    plannedAttempt: firstAttempt,
+    predecessorOperationIds: [claim.operationId]
+  })
+  const intent = TaskClaimAcquisitionIntendedEvent.make({
+    operation: makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] }),
+    version: workflowJournalEventVersion
+  })
+  const outcome = TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+  const exact: ReadonlyArray<JournalRecord> = [
+    { event: intent, key: intentRecordKey(claim.operationId), position: JournalPosition.make(1), runId },
+    { event: outcome, key: outcomeRecordKey(claim.operationId), position: JournalPosition.make(2), runId },
+    {
+      event: TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion }),
+      key: attemptPlanRecordKey(firstAttempt.attemptId),
+      position: JournalPosition.make(3),
+      runId
+    }
+  ]
+  expect(causalClaimForAttempt(exact, firstAttempt.attemptId)?.claim).toEqual(claim)
+
+  const foreignRun = RunId.make("foreign-claim-run")
+  expect(
+    causalClaimForAttempt(
+      exact.map((record) =>
+        record.event._tag === "TaskClaimAcquisitionIntended" || record.event._tag === "TaskClaimAcquired"
+          ? { ...record, runId: foreignRun }
+          : record
+      ),
+      firstAttempt.attemptId
+    )
+  ).toBeUndefined()
+  expect(
+    causalClaimForAttempt(
+      exact.map((record) =>
+        record.event._tag === "TaskClaimAcquired"
+          ? { ...record, key: outcomeRecordKey(OperationId.make("miskeyed-claim")) }
+          : record
+      ),
+      firstAttempt.attemptId
+    )
+  ).toBeUndefined()
+  expect(
+    causalClaimForAttempt(
+      [
+        ...exact,
+        { event: outcome, key: outcomeRecordKey(claim.operationId), position: JournalPosition.make(4), runId }
       ],
       firstAttempt.attemptId
     )

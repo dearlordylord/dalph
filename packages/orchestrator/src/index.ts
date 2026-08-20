@@ -166,6 +166,8 @@ export * from "./workflow/protocols/disposition-cleanup/branch.js"
 export * from "./workflow/protocols/disposition-cleanup/integrator-candidate.js"
 export * from "./workflow/protocols/disposition-cleanup/provenance.js"
 export * from "./workflow/protocols/disposition-cleanup/loop.js"
+export * from "./workflow/protocols/disposition-cleanup/activation.js"
+export * from "./workflow/protocols/disposition-cleanup/boundaries.js"
 export {
   appendCandidateProvenance,
   appendAbandonedProvenance,

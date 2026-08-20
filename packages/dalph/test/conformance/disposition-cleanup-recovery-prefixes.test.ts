@@ -397,10 +397,41 @@ it.effect("reopens every cleanup P0-P6 prefix through memory and SQLite", () =>
     })
     expect(cuts).toHaveLength(7)
     for (const prefix of cuts) {
-      const expected = yield* expectedRecoveryPrefix(prefix)
+      const expectedPrefix = yield* expectedRecoveryPrefix(prefix)
+      // Use one fresh memory replay as the authoritative post-resume lane for
+      // this cut.  P2 legitimately resumes without the lost mutation result,
+      // so the final durable record sequence is cut-specific rather than the
+      // same raw sequence as the fully exercised source.  Both physical
+      // stores must nevertheless match this independently reopened lane in
+      // decoded history, validity, and production projection.
+      const canonical = yield* replayRecoveryPrefix(prefix, "memory", resumeCleanupAfter(prefix.cut))
+      if (
+        canonical.finalDecodedRecords === undefined ||
+        canonical.finalHistoryTag === undefined ||
+        canonical.finalProjection === undefined
+      ) {
+        return yield* Effect.die(`${prefix.cut} canonical recovery lane did not reread final state`)
+      }
+      const expected = {
+        ...expectedPrefix,
+        finalDecodedRecords: canonical.finalDecodedRecords,
+        finalHistoryTag: canonical.finalHistoryTag,
+        finalProjection: canonical.finalProjection
+      }
+      const actualByLane = {
+        memory: yield* replayRecoveryPrefix(prefix, "memory", resumeCleanupAfter(prefix.cut)),
+        sqlite: yield* replayRecoveryPrefix(prefix, "sqlite", resumeCleanupAfter(prefix.cut))
+      }
+      expect(
+        recoveryPrefixMismatch(prefix.cut, "sqlite", actualByLane.memory, actualByLane.sqlite),
+        `${prefix.cut}/memory-vs-sqlite resumed final projection`
+      ).toBeUndefined()
       for (const lane of ["memory", "sqlite"] as const) {
-        const actual = yield* replayRecoveryPrefix(prefix, lane, resumeCleanupAfter(prefix.cut))
+        const actual = actualByLane[lane]
         expect(recoveryPrefixMismatch(prefix.cut, lane, expected, actual), `${prefix.cut}/${lane}`).toBeUndefined()
+        expect(actual.finalHistoryTag, `${prefix.cut}/${lane} final history reread`).toBeDefined()
+        expect(actual.finalDecodedRecords, `${prefix.cut}/${lane} final records`).toBeDefined()
+        expect(actual.finalProjection, `${prefix.cut}/${lane} final projection`).toBeDefined()
         const evidence = actual.resumption as CleanupResumeEvidence | undefined
         expect(evidence, `${prefix.cut}/${lane} must resume production cleanup`).toBeDefined()
         if (evidence === undefined) continue
@@ -669,10 +700,35 @@ const assertCleanupRecoveryFamily = (
     })
     expect(cuts).toHaveLength(7)
     for (const prefix of cuts) {
-      const expected = yield* expectedRecoveryPrefix(prefix)
+      const expectedPrefix = yield* expectedRecoveryPrefix(prefix)
+      const canonical = yield* replayRecoveryPrefix(prefix, "memory", resume(prefix.cut))
+      if (
+        canonical.finalDecodedRecords === undefined ||
+        canonical.finalHistoryTag === undefined ||
+        canonical.finalProjection === undefined
+      ) {
+        return yield* Effect.die(`${prefix.cut} canonical recovery lane did not reread final state`)
+      }
+      const expected = {
+        ...expectedPrefix,
+        finalDecodedRecords: canonical.finalDecodedRecords,
+        finalHistoryTag: canonical.finalHistoryTag,
+        finalProjection: canonical.finalProjection
+      }
+      const actualByLane = {
+        memory: yield* replayRecoveryPrefix(prefix, "memory", resume(prefix.cut)),
+        sqlite: yield* replayRecoveryPrefix(prefix, "sqlite", resume(prefix.cut))
+      }
+      expect(
+        recoveryPrefixMismatch(prefix.cut, "sqlite", actualByLane.memory, actualByLane.sqlite),
+        `${prefix.cut}/memory-vs-sqlite resumed final projection`
+      ).toBeUndefined()
       for (const lane of ["memory", "sqlite"] as const) {
-        const actual = yield* replayRecoveryPrefix(prefix, lane, resume(prefix.cut))
+        const actual = actualByLane[lane]
         expect(recoveryPrefixMismatch(prefix.cut, lane, expected, actual), `${prefix.cut}/${lane}`).toBeUndefined()
+        expect(actual.finalHistoryTag, `${prefix.cut}/${lane} final history reread`).toBeDefined()
+        expect(actual.finalDecodedRecords, `${prefix.cut}/${lane} final records`).toBeDefined()
+        expect(actual.finalProjection, `${prefix.cut}/${lane} final projection`).toBeDefined()
         const evidence = actual.resumption as CleanupResumeEvidence | undefined
         expect(evidence, `${prefix.cut}/${lane} must resume production cleanup`).toBeDefined()
         if (evidence === undefined) continue

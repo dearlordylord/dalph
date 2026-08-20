@@ -46,7 +46,13 @@ import {
 } from "./run.js"
 import { inspectStartupRecovery, StartupRecoveryBlocked } from "./startup-recovery.js"
 import { observePauseProgress } from "./pause-progress-observer.js"
-import { InRunJournal, type JournalReadError, JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
+import {
+  InRunJournal,
+  type JournalAppendError,
+  type JournalReadError,
+  JournalStore,
+  RunLifecycleJournal
+} from "../../workflow-journal/store.js"
 import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
@@ -58,7 +64,7 @@ export interface JournaledRuntimeLayerInput {
 
 export type JournaledRuntimeLayer = Layer.Layer<
   Exclude<JournaledRunServices, Journal | JournaledRunProcessServices>,
-  InvalidWorkflowJournalHistory | JournalReadError | StartupRecoveryBlocked,
+  InvalidWorkflowJournalHistory | JournalAppendError | JournalReadError | StartupRecoveryBlocked,
   ApplicationExitAdmission | CoordinatorOwnership | InRunJournal
 >
 

@@ -52,6 +52,7 @@ import {
   type ResponsibilityFreshFacts
 } from "../frontier/fresh-facts.js"
 import { RunnableFrontierTransition, RunFinalityDecision } from "../frontier/frontier.js"
+import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { runDeliveryRuntime } from "../delivery/run-delivery-runtime.js"
 import { Journal } from "../delivery/journal.js"
@@ -405,7 +406,14 @@ const runtimeLayer = (
       runId,
       Layer.succeed(WorkflowInterpreter, boundaryWorkflowInterpreter(graph, calls, reconcileTaskWorktree))
     ),
-    Layer.mock(WorkflowTrace, { emit: () => Effect.void })
+    Layer.mock(WorkflowTrace, { emit: () => Effect.void }),
+    Layer.succeed(
+      DispositionCleanupActivation,
+      DispositionCleanupActivation.of({
+        responsibilities: { branch: [], candidate: [], worktree: [] },
+        run: Effect.die("cleanup activation is not used by this acceptance fixture")
+      })
+    )
   )
 
 const countingStore = (delegate: JournalStore["Service"], calls: Ref.Ref<BoundaryCalls>) =>

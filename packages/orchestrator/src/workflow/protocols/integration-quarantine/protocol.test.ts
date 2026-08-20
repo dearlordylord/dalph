@@ -13,7 +13,9 @@ import {
   integratorRunResultRecordedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
   integratorSessionFixedRecordKey,
-  integratorRunStartedRecordKey
+  integratorRunStartedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import {
   type InRunJournal,
@@ -25,7 +27,8 @@ import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/ide
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
-import { TargetLineageObservedEvent } from "../../registry/event.js"
+import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
+import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
 import {
   deriveIntegrationQuarantineState,
   isIntegrationQuarantineEvent,
@@ -107,7 +110,13 @@ const quarantineEventFor = (
 ) =>
   IntegrationQuarantinedEvent.make({
     basis,
-    correlation: correlationFor(suffix),
+    correlation:
+      basis._tag === "ProviderRunFailure"
+        ? IntegratorSessionCorrelation.make({
+            ...correlationFor(suffix),
+            targetLineageObservedAt: JournalPosition.make(3)
+          })
+        : correlationFor(suffix),
     occurrenceClassification: "NonActionOccurrence",
     version: workflowJournalEventVersion
   })
@@ -179,9 +188,27 @@ const appendQuarantine = Effect.fn("IntegrationQuarantineTest.appendQuarantine")
     }
   } else if (event.basis._tag === "ProviderRunFailure") {
     const correlation = event.correlation
+    const operationId = OperationId.make(
+      `integration-quarantine-test:provider-lineage-operation:${correlation.sessionId}`
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: makeTargetLineageObservationOperation({
+          integrationTarget: correlation.integrationTarget,
+          operationId,
+          plannedAttempt: correlation.plannedAttempt,
+          predecessorOperationIds: []
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
     const lineage = yield* journal.append(
       runId,
-      JournalRecordKey.make(`integration-quarantine-test:provider-lineage:${correlation.sessionId}`),
+      outcomeRecordKey(operationId),
       TargetLineageObservedEvent.make({
         observation: TargetLineageObservation.make({
           plannedBaseIsAncestorOfTargetHead: true,
@@ -189,9 +216,7 @@ const appendQuarantine = Effect.fn("IntegrationQuarantineTest.appendQuarantine")
           targetHeadSha: correlation.expectedTargetHead
         }),
         occurrenceClassification: "NonActionOccurrence",
-        operationId: OperationId.make(
-          `integration-quarantine-test:provider-lineage-operation:${correlation.sessionId}`
-        ),
+        operationId,
         plannedAttempt: correlation.plannedAttempt,
         version: workflowJournalEventVersion
       })
@@ -472,13 +497,13 @@ it.effect("records provider-run failure only after owned activity is proved abse
   Effect.gen(function* () {
     const basis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
       detail: IntegrationQuarantineFailureDetail.make("provider run ended after no owned activity remained"),
-      ownedActivityProvenAbsentAt: JournalPosition.make(5)
+      ownedActivityProvenAbsentAt: JournalPosition.make(6)
     })
     const event = quarantineEventFor("provider-failure", basis)
     const { journal } = yield* appendQuarantine("provider-failure", event)
     const state = deriveIntegrationQuarantineState(yield* journal.read(runId), event.correlation.sessionId)
     expect(state._tag).toBe("Quarantined")
-    expect(event.basis).toMatchObject({ _tag: "ProviderRunFailure", ownedActivityProvenAbsentAt: 5 })
+    expect(event.basis).toMatchObject({ _tag: "ProviderRunFailure", ownedActivityProvenAbsentAt: 6 })
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
@@ -486,7 +511,7 @@ it.effect("authorizes Retry from exact provider-failure and run-bound conclusive
   Effect.gen(function* () {
     const providerBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
       detail: IntegrationQuarantineFailureDetail.make("provider activity was proved absent for Retry"),
-      ownedActivityProvenAbsentAt: JournalPosition.make(5)
+      ownedActivityProvenAbsentAt: JournalPosition.make(6)
     })
     const provider = yield* appendQuarantine(
       "provider-retry-eligible",
@@ -561,7 +586,7 @@ it.effect("rejects arbitrary Journal history as proof that a provider run has no
   Effect.gen(function* () {
     const basis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
       detail: IntegrationQuarantineFailureDetail.make("provider activity absence is required"),
-      ownedActivityProvenAbsentAt: JournalPosition.make(5)
+      ownedActivityProvenAbsentAt: JournalPosition.make(6)
     })
     const event = quarantineEventFor("provider-negative", basis)
     const { journal } = yield* appendQuarantine("provider-negative", event)

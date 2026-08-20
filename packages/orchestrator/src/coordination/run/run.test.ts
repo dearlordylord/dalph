@@ -224,7 +224,7 @@ it("uses one exact-history projection for newly begun and reconstructed finality
 it("ordinary Run activation reconstructs bounded cleanup responsibilities from its journal", () => {
   const source = readFileSync(fileURLToPath(new URL("./startup-recovery.ts", import.meta.url)), "utf8")
 
-  expect(source).toContain("activateDispositionCleanup(runId)")
+  expect(source).toContain("makeDispositionCleanupActivation(runId)")
   expect(source).toContain("DispositionCleanupActivation")
   expect(source).not.toContain("proposals")
 })

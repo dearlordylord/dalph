@@ -12,6 +12,7 @@ import type { PlannedAttemptProtocolController } from "../../workflow/protocols/
 import type { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import type {
   JournalError,
+  JournalAppendError,
   InRunJournal,
   InRunJournalRunMismatch,
   JournalStoreError,
@@ -46,6 +47,7 @@ import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
+import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
@@ -64,10 +66,12 @@ export type JournaledRunServices =
   | RunRecoveryProjection
   | TaskWorkCapacityControl
   | TaskClaimReacquisitionControl
+  | DispositionCleanupActivation
   | WorkflowInterpreter
   | WorkflowTrace
 
 export type JournaledRunBootstrapError =
+  | JournalAppendError
   | JournalInitialHistoryInvalid
   | JournalError
   | InRunJournalRunMismatch
@@ -242,15 +246,34 @@ const liveDeliveryActionExecutorFactory = (runId: RunId, target: TrackerTarget) 
 const runJournaledDelivery = <E, R>(
   runId: RunId,
   target: TrackerTarget,
-  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
-) => runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () => executorFactory(runId, target))
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
+  activateCleanup: boolean
+) => {
+  if (activateCleanup) {
+    return Effect.gen(function* () {
+      // Ordinary Run activation owns the one journal-derived cleanup
+      // capability. It executes before delivery and captures the real family
+      // boundaries at activation, so production and controlled runs share the
+      // same loop.
+      const cleanup = yield* DispositionCleanupActivation
+      yield* cleanup.run
+      return yield* runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
+        executorFactory(runId, target)
+      )
+    })
+  }
+  return runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
+    executorFactory(runId, target)
+  )
+}
 
 /** Explicit controlled composition; production callers use {@link runWorkflow}. */
 export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RInitial, E, R>(
   target: TrackerTarget,
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: AllocatedWorkflowRunId,
-  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
+  activateCleanup = true
 ) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
@@ -258,7 +281,7 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
       target,
       initialControlPolicySource,
       runId,
-      runJournaledDelivery(runId, target, executorFactory)
+      runJournaledDelivery(runId, target, executorFactory, activateCleanup)
     )
   })
 

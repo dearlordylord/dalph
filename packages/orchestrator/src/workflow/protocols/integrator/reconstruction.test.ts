@@ -32,7 +32,9 @@ import {
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
   integrationQuarantinedRecordKey,
-  integrationQuarantineDirectionAppliedRecordKey
+  integrationQuarantineDirectionAppliedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
@@ -42,7 +44,8 @@ import {
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantineDirectionSubject,
-  IntegrationQuarantinedEvent
+  IntegrationQuarantinedEvent,
+  integrationQuarantineDirectionSubject
 } from "../integration-quarantine/events.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -149,7 +152,8 @@ const lineageRecords = (): ReadonlyArray<JournalRecord> => {
         occurrenceClassification: "InitiatedAction",
         operation,
         version: workflowJournalEventVersion
-      })
+      }),
+      intentRecordKey(operationId)
     ),
     record(
       5,
@@ -159,7 +163,8 @@ const lineageRecords = (): ReadonlyArray<JournalRecord> => {
         operationId,
         plannedAttempt,
         version: workflowJournalEventVersion
-      })
+      }),
+      outcomeRecordKey(operationId)
     )
   ]
 }
@@ -280,6 +285,12 @@ const makeSuccessorValidationFixture = () => {
     plannedAttempt,
     version: workflowJournalEventVersion
   })
+  const freshIntent = GitReadIntentRecordedEvent.make({
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    operation: freshOperation,
+    version: workflowJournalEventVersion
+  })
   indexes.targetLineageReadIntents.set(freshOperationId, {
     operation: freshOperation,
     position: JournalPosition.make(14)
@@ -324,12 +335,23 @@ const makeSuccessorValidationFixture = () => {
     version: workflowJournalEventVersion
   })
   const records = [
-    record(10, quarantine),
-    record(12, direction),
+    record(10, quarantine, integrationQuarantinedRecordKey(session.sessionId, quarantine.basis)),
+    record(
+      12,
+      direction,
+      integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(direction.fingerprint))
+    ),
     record(16, successorEvent, integratorSuccessorSessionFixedRecordKey(session, quarantineAt, directionAppliedAt))
   ]
-  return { freshLineage, indexes, records, successor, successorEvent }
+  return { freshIntent, freshLineage, indexes, records, successor, successorEvent }
 }
+
+const freshLineageRecordsFor = (
+  fixture: ReturnType<typeof makeSuccessorValidationFixture>
+): ReadonlyArray<JournalRecord> => [
+  record(14, fixture.freshIntent, intentRecordKey(fixture.freshLineage.operationId)),
+  record(15, fixture.freshLineage, outcomeRecordKey(fixture.freshLineage.operationId))
+]
 
 describe("Integrator reconstruction states", () => {
   it("reconstructs only explicit run outcomes from their exact chronology", () => {
@@ -545,7 +567,7 @@ describe("Integrator reconstruction states", () => {
   it("promotes only one chronologically complete FullRerun successor", () => {
     const fixture = makeSuccessorValidationFixture()
     const base = [...lineageRecords(), sessionRecord()]
-    const complete = [...base, record(15, fixture.freshLineage), ...fixture.records]
+    const complete = [...base, ...freshLineageRecordsFor(fixture), ...fixture.records]
     expect(deriveCurrentIntegratorState(complete, responsibility)).toMatchObject({ _tag: "RunUnfinished" })
 
     const successorRunOne = integratorRunCorrelationForSession(fixture.successor, IntegratorRunOrdinal.make(1))
@@ -618,7 +640,7 @@ describe("Integrator reconstruction states", () => {
       deriveCurrentIntegratorState(
         [
           ...base,
-          record(15, fixture.freshLineage),
+          ...freshLineageRecordsFor(fixture),
           record(10, fixture.records[0]?.event ?? fixture.successorEvent),
           record(12, fixture.records[1]?.event ?? fixture.successorEvent),
           record(
@@ -635,7 +657,7 @@ describe("Integrator reconstruction states", () => {
       deriveCurrentIntegratorState(
         [
           ...base,
-          record(15, fixture.freshLineage),
+          ...freshLineageRecordsFor(fixture),
           ...fixture.records.map((item, index) =>
             index === 2 ? { ...item, key: JournalRecordKey.make("foreign-successor-key") } : item
           )
@@ -653,7 +675,7 @@ describe("Integrator reconstruction states", () => {
     )
     expect(deriveCurrentIntegratorState([...base, wrongLineage, ...fixture.records], responsibility)).toMatchObject({
       _tag: "Contradiction",
-      detail: expect.stringContaining("FullRerun successor does not preserve")
+      detail: expect.stringContaining("exact fresh target-lineage read")
     })
 
     const wrongResponsibilitySuccessor = {
@@ -664,25 +686,25 @@ describe("Integrator reconstruction states", () => {
       deriveCurrentIntegratorState(
         [
           ...base,
-          record(15, fixture.freshLineage),
+          ...freshLineageRecordsFor(fixture),
           ...fixture.records.slice(0, 2),
           record(16, wrongResponsibilitySuccessor, successorRecord.key)
         ],
         responsibility
       )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("FullRerun successor does not preserve") })
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("changes the planned responsibility") })
 
     expect(
       deriveCurrentIntegratorState(
         [
           ...base,
-          record(15, fixture.freshLineage),
+          ...freshLineageRecordsFor(fixture),
           ...fixture.records.slice(0, 2),
           { ...successorRecord, position: JournalPosition.make(15) }
         ],
         responsibility
       )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("FullRerun successor does not preserve") })
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("exact fresh target-lineage read") })
 
     const invalidDirection = fixture.records[1]
     expect(invalidDirection).toBeDefined()
@@ -701,10 +723,47 @@ describe("Integrator reconstruction states", () => {
     )
     expect(
       deriveCurrentIntegratorState(
-        [...base, record(15, fixture.freshLineage), quarantineRecord, retryDirection, successorRecord],
+        [...base, ...freshLineageRecordsFor(fixture), quarantineRecord, retryDirection, successorRecord],
         responsibility
       )
-    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("FullRerun successor does not preserve") })
+    ).toMatchObject({ _tag: "Contradiction", detail: expect.stringContaining("exact canonical FullRerun direction") })
+  })
+
+  it("rejects an S2 chronology whose Q, D, or fresh lineage is under a foreign key", () => {
+    const fixture = makeSuccessorValidationFixture()
+    const base = [...lineageRecords(), sessionRecord()]
+    const complete = [...base, ...freshLineageRecordsFor(fixture), ...fixture.records]
+    const quarantine = fixture.records[0]
+    const direction = fixture.records[1]
+    const freshLineage = complete.find((candidate) => candidate.position === JournalPosition.make(15))
+    expect(quarantine).toBeDefined()
+    expect(direction).toBeDefined()
+    if (quarantine === undefined || direction === undefined) return
+
+    expect(
+      deriveCurrentIntegratorState(
+        complete.map((candidate) =>
+          candidate === quarantine ? { ...candidate, key: JournalRecordKey.make("foreign-full-rerun-q") } : candidate
+        ),
+        responsibility
+      )
+    ).toMatchObject({ _tag: "Contradiction" })
+    expect(
+      deriveCurrentIntegratorState(
+        complete.map((candidate) =>
+          candidate === direction ? { ...candidate, key: JournalRecordKey.make("foreign-full-rerun-d") } : candidate
+        ),
+        responsibility
+      )
+    ).toMatchObject({ _tag: "Contradiction" })
+    expect(
+      deriveCurrentIntegratorState(
+        complete.map((candidate) =>
+          candidate === freshLineage ? { ...candidate, key: JournalRecordKey.make("foreign-full-rerun-l") } : candidate
+        ),
+        responsibility
+      )
+    ).toMatchObject({ _tag: "Contradiction" })
   })
 })
 
@@ -827,7 +886,8 @@ describe("Integrator reconstruction history indexes", () => {
         occurrenceClassification: "InitiatedAction",
         operation: freshLineageOperation,
         version: workflowJournalEventVersion
-      })
+      }),
+      intentRecordKey(freshLineageOperationId)
     )
     const freshObservation = record(
       13,
@@ -837,7 +897,8 @@ describe("Integrator reconstruction history indexes", () => {
         operationId: freshLineageOperationId,
         plannedAttempt,
         version: workflowJournalEventVersion
-      })
+      }),
+      outcomeRecordKey(freshLineageOperationId)
     )
     indexes.integratorRunStarted.set(integratorRunRecordKeyPrefix(runOne), {
       event: previousStart.event as Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunStarted" }>,

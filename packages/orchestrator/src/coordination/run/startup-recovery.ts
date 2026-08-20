@@ -47,8 +47,11 @@ import {
 import { ApplicationExitAdmission } from "../application-exit/lifecycle.js"
 import {
   DispositionCleanupActivation,
-  activateDispositionCleanup
+  type DispositionCleanupActivationService,
+  makeDispositionCleanupActivation
 } from "../../workflow/protocols/disposition-cleanup/loop.js"
+import type { DispositionCleanupBoundaryServices } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
+import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -107,10 +110,25 @@ interface RunActivationContextInput {
   readonly integrationFinality: CompletionClaimBoundaryService | undefined
   readonly completionTask: CompletionTaskBoundaryService | undefined
   readonly acceptedResultEvidenceStore: EvidenceStoreService | undefined
+  readonly cleanupActivation: boolean
 }
+
+const noCleanupActivation = (): DispositionCleanupActivationService => ({
+  responsibilities: { branch: [], candidate: [], worktree: [] },
+  run: Effect.succeed({
+    branch: undefined,
+    branchOutcomes: [],
+    candidate: undefined,
+    candidateOutcomes: [],
+    selected: { branch: undefined, candidate: undefined, worktree: undefined },
+    worktree: undefined,
+    worktreeOutcomes: []
+  })
+})
 
 const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function* ({
   acceptedResultEvidenceStore,
+  cleanupActivation,
   completionTask,
   integrationFinality,
   integrationTarget,
@@ -156,7 +174,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   // journal before the caller receives its workflow context.  No caller-made
   // resource candidate is admitted at this boundary; the composed cleanup
   // loop consumes this validated set (and family protocols revalidate it).
-  const cleanupResponsibilities = yield* activateDispositionCleanup(runId)
+  const cleanup = cleanupActivation ? yield* makeDispositionCleanupActivation(runId) : noCleanupActivation()
   const evidenceStore = acceptedResultEvidenceStore
   const requiredContext = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
@@ -171,10 +189,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),
     Context.add(WorkflowTrace, trace),
     Context.add(CoordinatorOwnership, ownership),
-    Context.add(
-      DispositionCleanupActivation,
-      DispositionCleanupActivation.of({ responsibilities: cleanupResponsibilities })
-    )
+    Context.add(DispositionCleanupActivation, DispositionCleanupActivation.of(cleanup))
   )
   const optionalContext = Context.empty().pipe(
     Context.add(DeliveryRuntimeResources, runtimeResources),
@@ -206,7 +221,9 @@ export const validatedRunActivationLayer = (
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
   completionTask?: CompletionTaskBoundaryService,
-  acceptedResultEvidenceStore?: EvidenceStoreService
+  cleanupBoundaryLayer: Layer.Layer<DispositionCleanupBoundaryServices> = preservingDispositionCleanupBoundaryLayer,
+  acceptedResultEvidenceStore?: EvidenceStoreService,
+  cleanupActivation = true
 ) =>
   Layer.effectContext(
     makeRunActivationContext({
@@ -215,6 +232,7 @@ export const validatedRunActivationLayer = (
       targetPromotion,
       integrationFinality,
       completionTask,
-      acceptedResultEvidenceStore
+      acceptedResultEvidenceStore,
+      cleanupActivation
     })
-  )
+  ).pipe(Layer.provide(cleanupBoundaryLayer))

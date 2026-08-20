@@ -31,6 +31,7 @@ import {
 } from "./events.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
+import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
 
 type SessionRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
@@ -562,12 +563,45 @@ export const evaluateIntegratorFullRerunAuthorization = (
   run: IntegratorRunCorrelation,
   predecessorSession: IntegratorRunCorrelation["session"],
   targetLineageObservedAt: JournalPosition
-) =>
-  evaluateIntegratorRetryAuthorization(records, run, {
-    predecessorSession,
-    requiredDirection: "FullRerun",
-    requiredTargetLineageObservedAt: targetLineageObservedAt
-  })
+): IntegratorRetryAuthorizationResult => {
+  if (run.ordinal !== integratorRetryRunOrdinal)
+    return rejected("FullRerun authorization applies only to run ordinal two")
+  const preflightIssue = retryPreflightIssue(records, run, predecessorSession)
+  if (preflightIssue !== undefined) return rejected(preflightIssue)
+  const candidates = records.filter(
+    (record): record is SuccessorSessionRecord =>
+      record.event._tag === "IntegratorSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(record.event.successor, run.session) &&
+      integratorCorrelationsEqual(record.event.predecessor, predecessorSession)
+  )
+  if (candidates.length !== 1) return rejected("FullRerun requires one exact successor session relation")
+  const successorRecord = candidates[0]
+  if (successorRecord === undefined) return rejected("FullRerun requires one exact successor session relation")
+  const relation = evaluateIntegratorFullRerunSuccessor(records, successorRecord, predecessorSession)
+  if (relation._tag === "Invalid") return rejected(relation.detail)
+  if (relation.successor.targetLineageObservedAt !== targetLineageObservedAt) {
+    return rejected("FullRerun successor uses a foreign target-lineage observation")
+  }
+  const predecessorSessionRecord = exactSessionRecord(records, predecessorSession, "Retry", predecessorSession)
+  if (predecessorSessionRecord === undefined) return rejected("FullRerun has no exact predecessor fixed session S1")
+  const evidence = ordinalOneEvidence(records, predecessorSessionRecord, relation.quarantine, predecessorSession)
+  if (evidence === undefined) return rejected("FullRerun predecessor has no exact terminal evidence")
+  if (relation.lineage.observation.event.observation.targetHeadSha !== run.session.expectedTargetHead) {
+    return rejected("FullRerun requires the fresh target-lineage observation bound to S2")
+  }
+  return {
+    _tag: "Authorized",
+    authorization: {
+      direction: relation.direction,
+      lineage: relation.lineage,
+      ordinalOneEvidence: evidence,
+      quarantine: relation.quarantine,
+      run,
+      session: run.session,
+      sessionRecord: relation.record
+    }
+  }
+}
 
 const retryPreflightIssue = (
   records: ReadonlyArray<JournalRecord>,

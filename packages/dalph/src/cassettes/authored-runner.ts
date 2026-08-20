@@ -87,6 +87,7 @@ import {
   runGitWorktreeReconciliation,
   runWorkflowWithControlledDeliveryActionExecutor,
   validatedRunActivationLayer,
+  preservingDispositionCleanupBoundaryLayer,
   taskWorkCapacityControlLayer,
   type TaskWorkCapacity,
   TargetLineageObservation,
@@ -1906,7 +1907,9 @@ const runAuthoredScenarioCassetteWith = (request: {
           command.targetPromotionConfigured === true || targetPromotionStory ? { git: targetPromotionGit } : undefined,
           completionFinalityConfigured ? completionClaimBoundary : undefined,
           completionTaskConfigured ? completionTaskBoundary : undefined,
-          evidenceStore
+          preservingDispositionCleanupBoundaryLayer,
+          evidenceStore,
+          false
         ).pipe(
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
@@ -2614,7 +2617,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                 command.target,
                 initialControlPolicySource,
                 runId,
-                controlledExecutorFactory
+                controlledExecutorFactory,
+                false
               ).pipe(Effect.provide(planningLayer(activationOrdinal)))
             )
           )

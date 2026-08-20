@@ -211,7 +211,7 @@ const makeHarness = (
           }),
           version: workflowJournalEventVersion
         }),
-        key: JournalRecordKey.make("target-lineage:integrator-222:intent"),
+        key: intentRecordKey(OperationId.make("operation-target-lineage-222")),
         position: JournalPosition.make(5),
         runId
       },
@@ -227,7 +227,7 @@ const makeHarness = (
           plannedAttempt,
           version: workflowJournalEventVersion
         }),
-        key: JournalRecordKey.make("target-lineage:integrator-222"),
+        key: outcomeRecordKey(OperationId.make("operation-target-lineage-222")),
         position: targetLineageObservedAt,
         runId
       }

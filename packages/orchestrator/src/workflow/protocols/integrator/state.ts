@@ -1,13 +1,9 @@
 import { Schema } from "effect"
-import { PlannedTaskAttempt } from "@dalph/contracts"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
-import {
-  integratorRunStartedRecordKey,
-  integratorSessionFixedRecordKey,
-  integratorSuccessorSessionFixedRecordKey
-} from "../../../workflow-journal/record-key.js"
+import { integratorRunStartedRecordKey, integratorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../registry/event.js"
+import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import {
   IntegratorResponsibilityFacts,
   IntegratorRunCorrelation,
@@ -17,9 +13,9 @@ import {
 } from "./events.js"
 import type { IntegratorSessionCorrelation, IntegratorRunState } from "./events.js"
 import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
+import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
 
 const responsibilityFactsEquivalence = Schema.toEquivalence(IntegratorResponsibilityFacts)
-const plannedAttemptEquivalence = Schema.toEquivalence(PlannedTaskAttempt)
 
 export const integratorResponsibilityFactsFor = (
   responsibility: StartedIntegrationResponsibility
@@ -78,11 +74,6 @@ type IntegratorCurrentAbsent = { readonly _tag: "Absent"; readonly responsibilit
 
 type IntegratorCurrentContradiction = { readonly _tag: "Contradiction"; readonly detail: string }
 
-type IntegratorSuccessorSessionFixed = Extract<
-  WorkflowJournalEvent,
-  { readonly _tag: "IntegratorSuccessorSessionFixed" }
->
-
 /** The latest exact run state, or the responsibility-bound absence/contradiction before a session exists. */
 export type CurrentIntegratorState = IntegratorCurrentAbsent | IntegratorCurrentContradiction | IntegratorRunState
 
@@ -105,14 +96,20 @@ const runEventMatchesResponsibility = (event: WorkflowJournalEvent, facts: Integ
 }
 
 const lineageMatchesCorrelation = (
-  record: JournalRecord | undefined,
-  correlation: IntegratorSessionCorrelation
+  records: ReadonlyArray<JournalRecord>,
+  correlation: IntegratorSessionCorrelation,
+  beforePosition: JournalRecord["position"]
 ): boolean =>
-  record?.event._tag === "TargetLineageObserved" &&
-  record.event.observation.targetHeadSha === correlation.expectedTargetHead &&
-  record.event.observation.plannedBaseSha === correlation.plannedAttempt.baseSha &&
-  record.event.observation.plannedBaseIsAncestorOfTargetHead &&
-  plannedAttemptEquivalence(record.event.plannedAttempt, correlation.plannedAttempt)
+  exactTargetLineageRecord(
+    records,
+    {
+      expectedTargetHead: correlation.expectedTargetHead,
+      integrationTarget: correlation.integrationTarget,
+      plannedAttempt: correlation.plannedAttempt,
+      targetLineageObservedAt: correlation.targetLineageObservedAt
+    },
+    { beforePosition }
+  ) !== undefined
 
 const latestStartedRunFor = (
   records: ReadonlyArray<JournalRecord>,
@@ -148,101 +145,6 @@ const latestStartedRunFor = (
   return latest === undefined ? { _tag: "Absent" } : { _tag: "Valid", run: latest }
 }
 
-const activeSuccessorQuarantineAndDirectionMatch = (
-  records: ReadonlyArray<JournalRecord>,
-  event: IntegratorSuccessorSessionFixed,
-  predecessor: IntegratorSessionCorrelation
-): boolean => {
-  const quarantine = records.find(({ position }) => position === event.quarantineAt)
-  const direction = records.find(({ position }) => position === event.directionAppliedAt)
-  return (
-    quarantine?.event._tag === "IntegrationQuarantined" &&
-    integratorCorrelationsEqual(quarantine.event.correlation, predecessor) &&
-    direction?.event._tag === "IntegrationQuarantineDirectionApplied" &&
-    direction.event.fingerprint.direction === "FullRerun" &&
-    direction.event.fingerprint.quarantineAt === event.quarantineAt &&
-    direction.event.fingerprint.sessionId === predecessor.sessionId
-  )
-}
-
-const activeSuccessorLineageMatches = (
-  records: ReadonlyArray<JournalRecord>,
-  event: IntegratorSuccessorSessionFixed
-): boolean => {
-  const lineage = records.find(({ position }) => position === event.successor.targetLineageObservedAt)
-  return (
-    lineage?.event._tag === "TargetLineageObserved" &&
-    lineage.event.observation.targetHeadSha === event.successor.expectedTargetHead &&
-    lineage.event.observation.plannedBaseSha === event.successor.plannedAttempt.baseSha &&
-    lineage.event.observation.plannedBaseIsAncestorOfTargetHead &&
-    plannedAttemptEquivalence(lineage.event.plannedAttempt, event.successor.plannedAttempt)
-  )
-}
-
-const activeSuccessorResponsibilityMatches = (
-  event: IntegratorSuccessorSessionFixed,
-  predecessor: IntegratorSessionCorrelation
-): boolean =>
-  integratorResponsibilityFactsEqual(
-    integratorResponsibilityFactsFromCorrelation(predecessor),
-    integratorResponsibilityFactsFromCorrelation(event.successor)
-  )
-
-const activeSuccessorChronologyMatches = (
-  record: JournalRecord,
-  event: IntegratorSuccessorSessionFixed,
-  predecessor: IntegratorSessionCorrelation
-): boolean =>
-  event.quarantineAt > predecessor.targetLineageObservedAt &&
-  event.directionAppliedAt > event.quarantineAt &&
-  event.successor.targetLineageObservedAt > event.directionAppliedAt &&
-  record.position > event.successor.targetLineageObservedAt
-
-type ActiveSuccessorValidation =
-  | { readonly _tag: "Invalid"; readonly detail: string }
-  | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation }
-
-const validateActiveSuccessorRecord = (
-  records: ReadonlyArray<JournalRecord>,
-  record: JournalRecord,
-  event: IntegratorSuccessorSessionFixed,
-  predecessor: IntegratorSessionCorrelation
-): ActiveSuccessorValidation => {
-  if (!integratorCorrelationsEqual(event.predecessor, predecessor)) {
-    return { _tag: "Invalid", detail: "FullRerun successor names a foreign predecessor" }
-  }
-  if (
-    record.key !== integratorSuccessorSessionFixedRecordKey(predecessor, event.quarantineAt, event.directionAppliedAt)
-  ) {
-    return { _tag: "Invalid", detail: "FullRerun successor appears under a foreign key" }
-  }
-  if (!activeSuccessorQuarantineAndDirectionMatch(records, event, predecessor)) {
-    return {
-      _tag: "Invalid",
-      detail: "FullRerun successor does not preserve the exact Q, D, fresh-lineage, and responsibility chronology"
-    }
-  }
-  if (!activeSuccessorLineageMatches(records, event)) {
-    return {
-      _tag: "Invalid",
-      detail: "FullRerun successor does not preserve the exact Q, D, fresh-lineage, and responsibility chronology"
-    }
-  }
-  if (!activeSuccessorResponsibilityMatches(event, predecessor)) {
-    return {
-      _tag: "Invalid",
-      detail: "FullRerun successor does not preserve the exact Q, D, fresh-lineage, and responsibility chronology"
-    }
-  }
-  if (!activeSuccessorChronologyMatches(record, event, predecessor)) {
-    return {
-      _tag: "Invalid",
-      detail: "FullRerun successor does not preserve the exact Q, D, fresh-lineage, and responsibility chronology"
-    }
-  }
-  return { _tag: "Valid", successor: event.successor }
-}
-
 const activeSuccessorFor = (
   records: ReadonlyArray<JournalRecord>,
   predecessor: IntegratorSessionCorrelation
@@ -259,7 +161,7 @@ const activeSuccessorFor = (
   }
   const record = related[0]
   if (record === undefined || record.event._tag !== "IntegratorSuccessorSessionFixed") return { _tag: "Absent" }
-  return validateActiveSuccessorRecord(records, record, record.event, predecessor)
+  return evaluateIntegratorFullRerunSuccessor(records, record, predecessor)
 }
 
 /**
@@ -308,8 +210,7 @@ const validateCurrentFixedSession = (
   if (!integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(predecessor), facts)) {
     return { _tag: "Invalid", detail: "the fixed session does not bind the requested responsibility" }
   }
-  const lineageRecord = records.find(({ position }) => position === predecessor.targetLineageObservedAt)
-  if (!lineageMatchesCorrelation(lineageRecord, predecessor)) {
+  if (!lineageMatchesCorrelation(records, predecessor, sessionRecord.position)) {
     return { _tag: "Invalid", detail: "the fixed session does not follow its durable target-lineage observation" }
   }
   const foreignSession = records.some(

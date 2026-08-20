@@ -1,7 +1,7 @@
 import { Context, Effect } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type { OperationId } from "../../identity.js"
-import type { JournalRecord } from "../../../workflow-journal/store.js"
+import type { JournalAppendError, JournalReadError, JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import {
   isCleanupEligibleDisposition,
@@ -9,9 +9,24 @@ import {
   type IntegratorCandidateCleanupAuthorization,
   type WorktreeCleanupAuthorization
 } from "./disposition.js"
-import { BranchCleanupOutcome, runBranchCleanup } from "./branch.js"
-import { IntegratorCandidateCleanupOutcome, runIntegratorCandidateCleanup } from "./integrator-candidate.js"
-import { WorktreeCleanupOutcome, runWorktreeCleanup } from "./worktree.js"
+import {
+  BranchCleanupAuthorizedEvent,
+  BranchCleanupBoundary,
+  BranchCleanupOutcome,
+  runBranchCleanup
+} from "./branch.js"
+import {
+  IntegratorCandidateCleanupAuthorizedEvent,
+  IntegratorCandidateCleanupBoundary,
+  IntegratorCandidateCleanupOutcome,
+  runIntegratorCandidateCleanup
+} from "./integrator-candidate.js"
+import {
+  WorktreeCleanupAuthorizedEvent,
+  WorktreeCleanupBoundary,
+  WorktreeCleanupOutcome,
+  runWorktreeCleanup
+} from "./worktree.js"
 import {
   validateBranchCleanupHistory,
   validateIntegratorCandidateCleanupHistory,
@@ -19,6 +34,9 @@ import {
   validateWorktreeCleanupHistory,
   validateWorktreeCleanupProvenance
 } from "./provenance.js"
+import { WorkflowActor } from "../../registry/actor.js"
+import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { cleanupAuthorizationKey, deriveCleanupAuthorizations } from "./activation.js"
 
 /** The three independent cleanup responsibilities reconstructed for one Run. */
 export type DispositionCleanupResponsibilities = {
@@ -62,6 +80,8 @@ export const cleanupResponsibilitySelectionLimit = 3 as const // eslint-disable-
 /** Journal-derived cleanup authority made available to ordinary Run activation. */
 export interface DispositionCleanupActivationService {
   readonly responsibilities: DispositionCleanupResponsibilitySet
+  /** Executes the same bounded protocol loop used by controlled compositions. */
+  readonly run: Effect.Effect<DispositionCleanupLoopResult, JournalAppendError | JournalReadError>
 }
 
 export class DispositionCleanupActivation extends Context.Service<
@@ -182,17 +202,26 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   proposals: DispositionCleanupProposals = { branch: [], candidate: [], worktree: [] }
 ) {
   const journal = yield* InRunJournal
+  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "candidate"])
   const initialRecords = yield* journal.read(runId)
   let selectedSet = selectCleanupResponsibilitySet(initialRecords)
-  const worktreeCandidates = bounded(byOperation([...selectedSet.worktree, ...proposals.worktree]))
+  const scopedProposals = {
+    branch: proposals.branch.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId),
+    candidate: proposals.candidate.filter(
+      (authorization) => authorization.disposition.predecessor.plannedAttempt.runId === runId
+    ),
+    worktree: proposals.worktree.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId)
+  } satisfies DispositionCleanupProposals
+  const worktreeCandidates = bounded(byOperation([...selectedSet.worktree, ...scopedProposals.worktree]))
   const worktreeOutcomes = yield* Effect.forEach(worktreeCandidates, (authorization) =>
     isCleanupEligibleDisposition(authorization.disposition)
       ? runWorktreeCleanup(authorization)
       : Effect.succeed(WorktreeCleanupOutcome.cases.Preserved.make({ authorization, reason: "ineligible disposition" }))
   )
 
+  yield* appendDerivedCleanupAuthorizations(runId, ["branch"])
   selectedSet = selectCleanupResponsibilitySet(yield* journal.read(runId))
-  const branchCandidates = bounded(byOperation([...selectedSet.branch, ...proposals.branch]))
+  const branchCandidates = bounded(byOperation([...selectedSet.branch, ...scopedProposals.branch]))
   const branchOutcomes = yield* Effect.forEach(branchCandidates, (authorization) =>
     isCleanupEligibleDisposition(authorization.disposition)
       ? runBranchCleanup(authorization)
@@ -200,7 +229,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   )
 
   selectedSet = selectCleanupResponsibilitySet(yield* journal.read(runId))
-  const candidateCandidates = bounded(byOperation([...selectedSet.candidate, ...proposals.candidate]))
+  const candidateCandidates = bounded(byOperation([...selectedSet.candidate, ...scopedProposals.candidate]))
   const candidateOutcomes = yield* Effect.forEach(candidateCandidates, (authorization) =>
     isCleanupEligibleDisposition(authorization.disposition)
       ? runIntegratorCandidateCleanup(authorization)
@@ -232,6 +261,74 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
  * shared execution path used by controlled cassettes and production callers.
  */
 export const activateDispositionCleanup = Effect.fn("DispositionCleanup.activate")(function* (runId: RunId) {
+  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "candidate"])
   const journal = yield* InRunJournal
   return selectCleanupResponsibilitySet(yield* journal.read(runId))
 })
+
+/**
+ * Installs ordinary Run activation as a complete capability: terminal facts
+ * are reconstructed and authorized before the caller receives it, and the
+ * captured boundary services execute the same loop that controlled runs use.
+ */
+export const makeDispositionCleanupActivation = Effect.fn("DispositionCleanup.makeActivation")(function* (
+  runId: RunId
+) {
+  const journal = yield* InRunJournal
+  const worktreeBoundary = yield* WorktreeCleanupBoundary
+  const branchBoundary = yield* BranchCleanupBoundary
+  const candidateBoundary = yield* IntegratorCandidateCleanupBoundary
+  const responsibilities = yield* activateDispositionCleanup(runId)
+  const run = runDispositionCleanupLoop(runId).pipe(
+    Effect.provideService(InRunJournal, journal),
+    Effect.provideService(WorktreeCleanupBoundary, worktreeBoundary),
+    Effect.provideService(BranchCleanupBoundary, branchBoundary),
+    Effect.provideService(IntegratorCandidateCleanupBoundary, candidateBoundary)
+  )
+  return { responsibilities, run } satisfies DispositionCleanupActivationService
+})
+
+/**
+ * Appends only canonical, validated authorizations. A same-key existing row is
+ * never overwritten: a contradiction remains preserved for reconstruction.
+ */
+export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.appendDerivedAuthorizations")(
+  function* (runId: RunId, families: ReadonlyArray<"branch" | "candidate" | "worktree">) {
+    const journal = yield* InRunJournal
+    let records = yield* journal.read(runId)
+    const derived = deriveCleanupAuthorizations(records)
+    const appendOne = Effect.fn("DispositionCleanup.appendOne")(function* (
+      authorization: WorktreeCleanupAuthorization | BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization
+    ) {
+      const key = cleanupAuthorizationKey(authorization)
+      if (records.some((record) => record.key === key)) return
+      const event =
+        "worktreeCleanupOperationId" in authorization
+          ? BranchCleanupAuthorizedEvent.make({
+              authorization,
+              initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+              occurrenceClassification: "InitiatedAction",
+              version: workflowJournalEventVersion
+            })
+          : "expectedHead" in authorization
+            ? WorktreeCleanupAuthorizedEvent.make({
+                authorization,
+                initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+                occurrenceClassification: "InitiatedAction",
+                version: workflowJournalEventVersion
+              })
+            : IntegratorCandidateCleanupAuthorizedEvent.make({
+                authorization,
+                initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+                occurrenceClassification: "InitiatedAction",
+                version: workflowJournalEventVersion
+              })
+      yield* journal.append(runId, key, event)
+      records = yield* journal.read(runId)
+    })
+    for (const family of families) {
+      const authorizations = derived[family]
+      for (const authorization of authorizations) yield* appendOne(authorization)
+    }
+  }
+)

@@ -330,6 +330,33 @@ it.effect("rejects a FullRerun quarantine under a foreign key", () =>
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
+it.effect("rejects a FullRerun direction or target-lineage intent under a foreign key", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-foreign-full-rerun-key"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const records = yield* journal.read(runId)
+    const foreignDirection = records.map((record) =>
+      record.event._tag === "IntegrationQuarantineDirectionApplied"
+        ? { ...record, key: JournalRecordKey.make("foreign-full-rerun-direction-key") }
+        : record
+    )
+    expect(validateIntegratorCandidateCleanupProvenance(foreignDirection, authorization)._tag).toBe("Invalid")
+
+    const foreignLineageIntent = records.map((record) =>
+      record.event._tag === "GitReadIntentRecorded" && record.event.operation._tag === "ReadTargetLineage" &&
+          record.event.operation.operationId === authorization.observationOperationId
+        ? { ...record, key: JournalRecordKey.make("foreign-target-lineage-intent-key") }
+        : record
+    )
+    expect(validateIntegratorCandidateCleanupProvenance(foreignLineageIntent, authorization)._tag).toBe("Invalid")
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
 it.effect("rejects a provider-failure quarantine without its activity-absence witness", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore

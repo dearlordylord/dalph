@@ -34,7 +34,8 @@ import {
   type EvidenceStoreService,
   type TargetPromotionRuntimeInput,
   type CompletionClaimBoundaryService,
-  type CompletionTaskBoundaryService
+  type CompletionTaskBoundaryService,
+  gitDispositionCleanupBoundaryLayer
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Effect, Layer } from "effect"
@@ -122,6 +123,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           targetPromotion,
           integrationFinality,
           completionTask,
+          gitDispositionCleanupBoundaryLayer(target).pipe(
+            Layer.provide(nodeGitCommandLayer),
+            Layer.provide(NodeServices.layer)
+          ),
           acceptedResultEvidenceStore
         ).pipe(
           Layer.provide(interpreterLayer),
