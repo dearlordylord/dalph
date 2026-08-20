@@ -182,6 +182,12 @@ type PreservableCassetteValue<Value> = true extends ContainsGeneratedOrUnclassif
 type CompleteFields<Value> = { readonly [Key in keyof Value]-?: Value[Key] }
 
 const completeFields = <Value>(value: CompleteFields<Value>): Value => value
+function completeFieldsWithOptionalRoot<Value extends { readonly rootTaskId?: TaskId }>(
+  value: CompleteFields<Omit<Value, "rootTaskId">> & Pick<Value, "rootTaskId">
+): Value
+function completeFieldsWithOptionalRoot(value: unknown): unknown {
+  return value
+}
 
 const preserveCassetteValue = <Value>(value: PreservableCassetteValue<Value>): Value => value
 
@@ -649,10 +655,11 @@ const renameTrackerFactsObservation = (
   Match.value(observation).pipe(
     Match.tagsExhaustive({
       CompleteTaskTrackerFacts: (value) =>
-        completeFields<typeof value>({
+        completeFieldsWithOptionalRoot<typeof value>({
           _tag: "CompleteTaskTrackerFacts",
           factFamilies: renameFactFamilies(value.factFamilies, maps),
           operationId: renamed(value.operationId, maps.operationIds),
+          ...(value.rootTaskId === undefined ? {} : { rootTaskId: preserveCassetteValue(value.rootTaskId) }),
           target: preserveCassetteValue(value.target)
         }),
       FocusedTaskCompletionFacts: (value) =>
@@ -703,11 +710,12 @@ const renameTrackerFactsObservation = (
           target: preserveCassetteValue(value.target)
         }),
       UnchangedTaskTrackerFactsReconfirmed: (value) =>
-        completeFields<typeof value>({
+        completeFieldsWithOptionalRoot<typeof value>({
           _tag: "UnchangedTaskTrackerFactsReconfirmed",
           factFamilies: renameFactFamilies(value.factFamilies, maps),
           operationId: renamed(value.operationId, maps.operationIds),
           priorFullObservationOperationId: renamed(value.priorFullObservationOperationId, maps.operationIds),
+          ...(value.rootTaskId === undefined ? {} : { rootTaskId: preserveCassetteValue(value.rootTaskId) }),
           target: preserveCassetteValue(value.target)
         })
     })

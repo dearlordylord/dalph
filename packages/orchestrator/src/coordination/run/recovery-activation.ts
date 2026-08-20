@@ -1851,7 +1851,7 @@ export const filterFrontierForActivePauses = (
       event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
   )?.position
   // A cancellation is the same selection boundary for already-admitted
-  // integration reconciliation, but it is not persisted as a synthetic
+  // integration reconciliation, but it is not persisted as a derived
   // ControlDirectionApplied event.  Use its durable position only for the
   // pre-boundary intent check below.
   const cancellationPosition =
@@ -2809,7 +2809,7 @@ const isAuthoritativeRunRecoveryProjection = (
 
 /**
  * Production recovery consumes the journal service's validated current state.
- * Controlled projection sources retain their explicit read boundary.
+ * Explicit projection sources retain their read boundary.
  */
 export const readDeliveryProjectionFrom = (
   source: RunRecoveryProjectionSource,

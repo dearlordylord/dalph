@@ -541,8 +541,20 @@ module runActivation {
   // cancellation direction, never from enum ordering or a task outcome alone.
   val terminalDispositionMatchesAcceptedFacts: bool =
     state.trace.terminationAppends == 0
-      or state.durable.terminationDisposition
-        == terminalDispositionFor(state.trackerFinality.graphOutcome, state.durable.cancellationApplied)
+      or and {
+        state.trace.terminationAppends == 1,
+        (state.trackerFinality.graphOutcome == GraphAllSucceeded
+          and state.durable.terminationDisposition == Completed)
+          or (state.trackerFinality.graphOutcome != GraphAllSucceeded
+            and state.durable.cancellationApplied
+            and state.durable.terminationDisposition == Cancelled)
+          or (state.trackerFinality.graphOutcome == GraphBlocked
+            and not(state.durable.cancellationApplied)
+            and state.durable.terminationDisposition == Blocked)
+          or (state.trackerFinality.graphOutcome == GraphUnsettled
+            and not(state.durable.cancellationApplied)
+            and state.durable.terminationDisposition == NoTerminal),
+      }
 
   val completedRequiresAllCurrentTasksSuccessful: bool =
     state.durable.terminationDisposition != Completed
@@ -569,12 +581,17 @@ module runActivation {
 
   val terminationRequiresExactFreshGraphEvidence: bool =
     state.trace.terminationAppends == 0
-      or evidenceIsExactFor(
-        state.trackerFinality.evidence,
-        state.requestedRunId,
-        state.requestedTarget,
-        state.trace.trackerCalls,
-      )
+      or match state.trackerFinality.evidence {
+        | ExactGraphReadEvidence(facts) => and {
+            facts.runId == state.requestedRunId,
+            facts.target == state.requestedTarget,
+            facts.operationOrdinal == state.trace.trackerCalls,
+            facts.revision == state.trace.trackerCalls,
+            facts.complete,
+            facts.rootPresent,
+          }
+        | _ => false
+      }
 
   val cancellationAppliedAtMostOnce: bool = state.trace.cancellationAppends <= 1
 
@@ -1150,6 +1167,7 @@ module runActivation {
     state.process.otherHeldPosition == NoTaskPosition,
     unfinishedFacts(state.durable.history).retainedAttempt == NoRetainedAttempt,
     unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt,
+    state.trace.executorCalls == 0,
     not(state.durable.cancellationApplied),
     state.trace.cancellationAppends == 0,
     state.trace.terminationAppends == 0,

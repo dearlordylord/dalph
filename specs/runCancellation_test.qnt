@@ -160,7 +160,10 @@ module runCancellationTest {
       .then(rejectTerminalHistory)
       .expect(and {
         terminalHistoryRejectedReached,
+        state.process.cancellationRejected,
+        state.process.phase == TerminalHistory,
         terminalHistoryCannotReopen,
+        state.durable.cancellationAppends == 0,
         not(state.durable.cancellationAppends > 0),
       })
   }

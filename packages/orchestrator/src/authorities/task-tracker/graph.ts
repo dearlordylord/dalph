@@ -18,6 +18,7 @@ export const ProjectionIssue = Schema.TaggedUnion({
   MissingPrerequisite: { dependant: TaskId, prerequisite: TaskId },
   SelfPrerequisite: { taskId: TaskId },
   MissingParent: { child: TaskId, parent: TaskId },
+  MissingRootTask: { taskId: TaskId },
   SelfParent: { taskId: TaskId },
   Cycle: { taskIds: Schema.Array(TaskId) },
   ContainmentCycle: { taskIds: Schema.Array(TaskId) }
@@ -274,6 +275,8 @@ const cycleTaskIds = (
 export class TaskDagSnapshot {
   private constructor(
     readonly revision: TrackerRevision,
+    /** The exact task tracker root resolved for this read, when the boundary supplied one. */
+    readonly rootTaskId: TaskId | undefined,
     private readonly graph: Graph.DirectedGraph<TaskGraphNode, TaskGraphEdge>,
     private readonly nodeIndexByTaskId: HashMap.HashMap<TaskId, Graph.NodeIndex>
   ) {}
@@ -290,6 +293,9 @@ export class TaskDagSnapshot {
       validatePrerequisites(record, recordsById, issues)
       validateParent(record, recordsById, issues)
     }
+    if (decoded.rootTaskId !== undefined && !recordsById.has(decoded.rootTaskId)) {
+      issues.push(ProjectionIssue.cases.MissingRootTask.make({ taskId: decoded.rootTaskId }))
+    }
 
     const representation = taskGraphRepresentationFrom(recordsById)
 
@@ -305,7 +311,12 @@ export class TaskDagSnapshot {
       ? { _tag: "Invalid", issues }
       : {
           _tag: "Valid",
-          snapshot: new TaskDagSnapshot(decoded.revision, representation.graph, representation.nodeIndexByTaskId)
+          snapshot: new TaskDagSnapshot(
+            decoded.revision,
+            decoded.rootTaskId,
+            representation.graph,
+            representation.nodeIndexByTaskId
+          )
         }
   }
 

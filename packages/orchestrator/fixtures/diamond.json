@@ -1,5 +1,6 @@
 {
   "revision": "fixture-diamond-v1",
+  "rootTaskId": "group",
   "tasks": [
     {
       "id": "join",

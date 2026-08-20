@@ -19,6 +19,7 @@ export const reconfirmationMatchesPriorFullObservation = (
   const [, reconfirmedLifecycles] = reconfirmation.factFamilies
   return (
     taskTrackerTargetKey(prior.target) === taskTrackerTargetKey(reconfirmation.target) &&
+    prior.rootTaskId === reconfirmation.rootTaskId &&
     prior.factFamilies[0].contentIdentity === reconfirmation.factFamilies[0].contentIdentity &&
     exactTaskIdSetKey(prior.factFamilies[0].taskIds) === exactTaskIdSetKey(reconfirmedLifecycles.subjectTaskIds)
   )

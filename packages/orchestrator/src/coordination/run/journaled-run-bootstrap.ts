@@ -149,12 +149,15 @@ const terminalProofMatchesGraphRead = (
   graphRead: ReturnType<typeof terminalGraphReadFor>
 ): boolean => {
   if (graphRead === undefined) return false
+  const rootTaskId = graphRead.graph.observation.snapshot.rootTaskId
+  if (rootTaskId === undefined) return false
   return (
     runFinalityEvidenceMatches(proof.evidence, {
       operationId: graphRead.graph.observation.operationId,
       observedAt: graphRead.graph.observation.recordedAt,
       readShape: graphRead.operation.operation.readShape,
       revision: graphRead.graph.observation.snapshot.revision,
+      rootTaskId,
       runId,
       target
     }) && taskTrackerTargetKey(graphRead.operation.operation.target) === taskTrackerTargetKey(target)

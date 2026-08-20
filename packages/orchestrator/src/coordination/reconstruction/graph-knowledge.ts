@@ -91,6 +91,7 @@ export const reconstructedTaskGraphFor = (
     if (observation?._tag !== "CompleteTaskTrackerFacts") return Option.none<TaskDagSnapshot>()
     const projected = projectTrackerSnapshot({
       revision: observation.factFamilies[0].contentIdentity,
+      ...(observation.rootTaskId === undefined ? {} : { rootTaskId: observation.rootTaskId }),
       tasks: graphTasksFrom(observation)
     })
     return projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none<TaskDagSnapshot>()

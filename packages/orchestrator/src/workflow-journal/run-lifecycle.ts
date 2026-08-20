@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data -- Validation accumulates private diagnostics and graph reachability only. */
-import { type RunId } from "@dalph/contracts"
+import { type RunId, type TaskId } from "@dalph/contracts"
 import { Effect } from "effect"
 import type { TrackerTarget } from "../authorities/task-tracker/target.js"
 import { exactTaskIdSetKey, taskTrackerTargetKey } from "../authorities/task-tracker/target.js"
@@ -23,6 +23,7 @@ import {
 } from "./store.js"
 import type { InitialControlPolicy } from "../control/policy.js"
 import { terminationPreconditionIssues } from "./termination-preconditions.js"
+import { hasLaterCompleteObservation } from "./run-termination-freshness.js"
 import type {
   CompleteTaskTrackerFactsObserved,
   TaskTrackerFactsObservedEvent,
@@ -113,7 +114,8 @@ export const decideWorkflowRunTermination = (
       failure: new WorkflowRunAlreadyTerminated({ runId, terminatedAt: terminated.position })
     }
   }
-  const invalidEvidence = terminationEvidenceIssues(records, runId, disposition, evidence, records.length + 1)[0]
+  const terminationPosition = JournalPosition.make(records.length + 1)
+  const invalidEvidence = terminationEvidenceIssues(records, runId, disposition, evidence, terminationPosition)[0]
   const invalidPrecondition =
     invalidEvidence === undefined ? terminationPreconditionIssues(records, runId, evidence)[0] : undefined
   if (invalidEvidence !== undefined || invalidPrecondition !== undefined) {
@@ -127,7 +129,7 @@ export const decideWorkflowRunTermination = (
   }
   return {
     _tag: "LifecycleTransitionAccepted",
-    record: makeWorkflowRunTerminatedRecord(runId, JournalPosition.make(records.length + 1), disposition, evidence)
+    record: makeWorkflowRunTerminatedRecord(runId, terminationPosition, disposition, evidence)
   }
 }
 
@@ -139,7 +141,7 @@ export const decideWorkflowRunTermination = (
 const observedFinalityRecord = (
   records: ReadonlyArray<JournalRecord>,
   evidence: RunFinalityEvidence,
-  terminationPosition: number
+  terminationPosition: JournalPosition
 ): TrackerFactsObservedRecord | undefined => {
   const observed = records.find(
     (candidate): candidate is TrackerFactsObservedRecord =>
@@ -173,6 +175,20 @@ const completeObservationFor = (
     : undefined
 }
 
+/** Returns the first tracker-resolved root for this target; later reads may change graph membership but not Run input. */
+const firstObservedRootTaskIdFor = (
+  records: ReadonlyArray<JournalRecord>,
+  target: TrackerTarget
+): TaskId | undefined => {
+  const first = records.find(
+    (candidate): candidate is TrackerFactsObservedRecord =>
+      candidate.event._tag === "TaskTrackerFactsObserved" &&
+      ["CompleteTaskTrackerFacts", "UnchangedTaskTrackerFactsReconfirmed"].includes(candidate.event.observation._tag) &&
+      taskTrackerTargetKey(candidate.event.observation.target) === taskTrackerTargetKey(target)
+  )
+  return first === undefined ? undefined : completeObservationFor(records, first)?.rootTaskId
+}
+
 const readIntentIssues = (
   records: ReadonlyArray<JournalRecord>,
   evidence: RunFinalityEvidence
@@ -194,15 +210,12 @@ const readIntentIssues = (
 const freshObservationIssues = (
   freshObservation: FinalityObservation,
   evidence: RunFinalityEvidence
-): ReadonlyArray<string> => {
-  const issues: Array<string> = []
-  if (
+): ReadonlyArray<string> =>
+  [
     freshObservation.operationId !== evidence.operationId ||
     taskTrackerTargetKey(freshObservation.target) !== taskTrackerTargetKey(evidence.target)
-  ) {
-    issues.push("termination evidence operation or target does not match the observed graph")
-  }
-  if (
+      ? "termination evidence operation or target does not match the observed graph"
+      : undefined,
     freshObservation.factFamilies.some(
       ({ contentIdentity, coverage }) =>
         contentIdentity !== evidence.contentIdentity ||
@@ -210,11 +223,9 @@ const freshObservationIssues = (
         exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) !==
           exactTaskIdSetKey(evidence.coverage.explicitlyCoveredTaskIds)
     )
-  ) {
-    issues.push("termination evidence does not match the fresh observation's identity and coverage")
-  }
-  return issues
-}
+      ? "termination evidence does not match the fresh observation's identity and coverage"
+      : undefined
+  ].filter((issue): issue is string => issue !== undefined)
 
 const blockedTaskIdsFor = (
   observation: CompleteTaskTrackerFactsObserved
@@ -242,25 +253,28 @@ const completeFactFamilyIssues = (
   observation: CompleteTaskTrackerFactsObserved,
   evidence: RunFinalityEvidence
 ): ReadonlyArray<string> => {
-  const issues: Array<string> = []
   const [, , , groupings] = observation.factFamilies
-  if (evidence.requiredFactFamilies.some((family, index) => family !== requiredRunFinalityFactFamilies[index])) {
-    issues.push("termination evidence must include every complete graph fact family")
-  }
-  if (
+  const rootPresentInGrouping = groupings.groupings.some(({ taskId }) => taskId === evidence.rootTaskId)
+  return [
+    evidence.requiredFactFamilies.some((family, index) => family !== requiredRunFinalityFactFamilies[index])
+      ? "termination evidence must include every complete graph fact family"
+      : undefined,
     observation.factFamilies.some(
       ({ coverage }) =>
         taskTrackerTargetKey(coverage.target) !== taskTrackerTargetKey(evidence.target) ||
         exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) !==
           exactTaskIdSetKey(evidence.coverage.explicitlyCoveredTaskIds)
     )
-  ) {
-    issues.push("termination evidence must match every fact-family target and coverage")
-  }
-  if (evidence.rootPresent !== groupings.groupings.some(({ parentTaskId }) => parentTaskId === null)) {
-    issues.push("termination evidence root presence does not match the complete grouping facts")
-  }
-  return issues
+      ? "termination evidence must match every fact-family target and coverage"
+      : undefined,
+    evidence.rootTaskId !== observation.rootTaskId
+      ? "termination evidence must retain the exact tracker-selected Run root"
+      : undefined,
+    !rootPresentInGrouping ? "termination evidence Run root must belong to the complete grouping facts" : undefined,
+    evidence.rootPresent !== rootPresentInGrouping
+      ? "termination evidence root presence does not match the exact grouping fact"
+      : undefined
+  ].filter((issue): issue is string => issue !== undefined)
 }
 
 const completeGraphOutcomeIssues = (
@@ -322,6 +336,17 @@ const dispositionIssues = (
     : ["termination disposition does not follow graph evidence and cancellation precedence"]
 }
 
+const cancellationEvidenceIssues = (
+  records: ReadonlyArray<JournalRecord>,
+  disposition: RunTerminationDisposition,
+  evidence: RunFinalityEvidence
+): ReadonlyArray<string> => {
+  const cancellation = records.findLast(({ event }) => event._tag === "RunCancellationApplied")
+  return disposition === "Cancelled" && cancellation !== undefined && evidence.observedAt <= cancellation.position
+    ? ["cancellation terminal evidence must use a graph observation after RunCancellationApplied"]
+    : []
+}
+
 const basicEvidenceIssues = (
   runId: RunId,
   beganTarget: TrackerTarget,
@@ -332,54 +357,62 @@ const basicEvidenceIssues = (
   if (taskTrackerTargetKey(evidence.target) !== taskTrackerTargetKey(beganTarget)) {
     issues.push("termination evidence must name the beginning target")
   }
-  if (!evidence.complete || !evidence.rootPresent) issues.push("termination evidence must prove complete root coverage")
+  if (!evidence.complete || !evidence.rootPresent || evidence.rootTaskId.length === 0) {
+    issues.push("termination evidence must prove complete root coverage")
+  }
   return issues
 }
 
-const hasLaterCompleteObservation = (
+const initialTerminationEvidence = (
   records: ReadonlyArray<JournalRecord>,
+  runId: RunId,
   evidence: RunFinalityEvidence,
-  terminationPosition: number
-): boolean =>
-  records.some(({ event, position }) => {
-    if (
-      position <= evidence.observedAt ||
-      position >= terminationPosition ||
-      event._tag !== "TaskTrackerFactsObserved"
-    ) {
-      return false
+  terminationPosition: JournalPosition
+) => {
+  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  if (began?.event._tag !== "WorkflowRunBegan") {
+    return { issues: ["termination evidence requires the exact Run beginning"] }
+  }
+  const issues: Array<string> = [...basicEvidenceIssues(runId, began.event.target, evidence)]
+  const observed = observedFinalityRecord(records, evidence, terminationPosition)
+  if (observed === undefined) {
+    return {
+      issues: [
+        ...issues,
+        "termination evidence must name one earlier complete or unchanged tracker observation position"
+      ]
     }
-    return (
-      event.observation._tag === "CompleteTaskTrackerFacts" ||
-      event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
-    )
-  })
+  }
+  const observation = completeObservationFor(records, observed)
+  if (observation === undefined) {
+    return {
+      issues: [...issues, "unchanged termination evidence must link to its earlier complete tracker observation"]
+    }
+  }
+  return { issues, observed, observation }
+}
 
 const terminationEvidenceIssues = (
   records: ReadonlyArray<JournalRecord>,
   runId: RunId,
   disposition: RunTerminationDisposition,
   evidence: RunFinalityEvidence | undefined,
-  terminationPosition: number
+  terminationPosition: JournalPosition
 ): ReadonlyArray<string> => {
   if (evidence === undefined) return ["termination evidence is required"]
-  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
-  if (began?.event._tag !== "WorkflowRunBegan") return ["termination evidence requires the exact Run beginning"]
-  const issues: Array<string> = [...basicEvidenceIssues(runId, began.event.target, evidence)]
-  const observed = observedFinalityRecord(records, evidence, terminationPosition)
-  if (observed === undefined) {
-    issues.push("termination evidence must name one earlier complete or unchanged tracker observation position")
-    return issues
-  }
-  const observation = completeObservationFor(records, observed)
-  if (observation === undefined) {
-    issues.push("unchanged termination evidence must link to its earlier complete tracker observation")
-    return issues
-  }
+  const initial = initialTerminationEvidence(records, runId, evidence, terminationPosition)
+  if (initial.observed === undefined) return initial.issues
+  const { observation, observed } = initial
+  const issues: Array<string> = [...initial.issues]
   issues.push(...readIntentIssues(records, evidence))
   issues.push(...freshObservationIssues(observed.event.observation, evidence))
   issues.push(...completeObservationIssues(observation, evidence))
+  const firstRootTaskId = firstObservedRootTaskIdFor(records, evidence.target)
+  if (firstRootTaskId === undefined || firstRootTaskId !== evidence.rootTaskId) {
+    issues.push("termination evidence must retain the first tracker-selected Run root")
+  }
   issues.push(...dispositionIssues(records, disposition, evidence.graphOutcome))
+  issues.push(...cancellationEvidenceIssues(records, disposition, evidence))
   if (hasLaterCompleteObservation(records, evidence, terminationPosition)) {
     issues.push("termination evidence must use the latest complete graph observation")
   }

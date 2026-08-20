@@ -336,6 +336,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         )
         const secondSnapshot = validSnapshot({
           revision: `incomparable-graph:${runId}`,
+          rootTaskId: "root",
           tasks: [
             { id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
             { id: "child", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: "root", prerequisiteIds: [] }
@@ -352,7 +353,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
           observedAt: observed.position,
           operationId: secondOperation.operationId,
           readShape: secondOperation.readShape,
-          rootPresent: true,
+          rootTaskId: TaskId.make("root"),
           runId,
           snapshot: secondSnapshot,
           target
@@ -384,6 +385,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         )
         const secondSnapshot = validSnapshot({
           revision: `causal-graph:${runId}`,
+          rootTaskId: "root",
           tasks: [
             { id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
             { id: "child", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: "root", prerequisiteIds: [] }
@@ -406,7 +408,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
           observedAt: observed.position,
           operationId: secondOperation.operationId,
           readShape: secondOperation.readShape,
-          rootPresent: true,
+          rootTaskId: TaskId.make("root"),
           runId,
           snapshot: secondSnapshot,
           target

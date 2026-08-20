@@ -1,4 +1,4 @@
-import type { RunId } from "@dalph/contracts"
+import { TaskId, type RunId } from "@dalph/contracts"
 import { validSnapshot } from "./task-dag.js"
 import type { TrackerTarget } from "../src/authorities/task-tracker/target.js"
 import { makeRunFinalityEvidence } from "../src/coordination/frontier/run-finality.js"
@@ -24,6 +24,7 @@ export const completedRunFinalityFixture = (input: {
   )
   const snapshot = validSnapshot({
     revision: `completed-finality:${input.runId}`,
+    rootTaskId: "root",
     tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
   })
   const observedAt = input.observedAt ?? JournalPosition.make(observedJournalPosition)
@@ -32,7 +33,7 @@ export const completedRunFinalityFixture = (input: {
       observedAt,
       operationId: operation.operationId,
       readShape: operation.readShape,
-      rootPresent: true,
+      rootTaskId: TaskId.make("root"),
       runId: input.runId,
       snapshot,
       target: input.target

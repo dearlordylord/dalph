@@ -170,7 +170,8 @@ module runCancellation {
 
   val claimReleaseFollowsSafeExecutor: bool =
     state.durable.claimReleaseIntents == 0
-      or executorSafeForRelease(state.durable.executor)
+      or state.durable.executor == SafelySuspended
+      or state.durable.executor == NoExecutor
 
   val claimReleaseIsExactAndBounded: bool = and {
     state.durable.claimReleaseIntents <= 1,
@@ -212,7 +213,12 @@ module runCancellation {
     state.process.phase != ReadyForClassification
       or and {
         state.process.responsibilitiesSettled,
-        noOutstandingResponsibility(state.durable),
+        state.durable.executor == NoExecutor or state.durable.executor == SafelySuspended,
+        state.durable.claim == NoClaim
+          or state.durable.claim == Released
+          or state.durable.claim == ForeignClaim,
+        state.durable.integration == NoIntegration
+          or state.durable.integration == IntegrationSettled,
       }
 
   val handoffRequiresFreshGraph: bool =
@@ -281,7 +287,8 @@ module runCancellation {
   val applicationExitWinsReached: bool = state.process.exitCutoff and state.process.cancellationRejected
   val foreignCancellationRejectedReached: bool =
     state.process.cancellationRejected and state.process.requestedRunId == R2
-  val terminalHistoryRejectedReached: bool = state.process.phase == TerminalHistory
+  val terminalHistoryRejectedReached: bool =
+    state.process.phase == TerminalHistory and state.process.cancellationRejected
 
   action init: bool = all {
     state' = {
@@ -685,7 +692,11 @@ module runCancellation {
   action rejectTerminalHistory: bool = all {
     state.process.phase == TerminalHistory,
     state.durable.terminalHistory != NoTermination,
-    state' = state,
+    not(state.process.cancellationRejected),
+    state' = {
+      ...state,
+      process: { ...state.process, cancellationRejected: true },
+    },
   }
 
   action admitForwardWork: bool = all {

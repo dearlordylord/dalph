@@ -694,6 +694,7 @@ it("does not let a terminal report and pre-cancellation claim release bypass can
     readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [] }),
     requiredFactFamilies: requiredRunFinalityFactFamilies,
     rootPresent: true,
+    rootTaskId: TaskId.make("root"),
     runId,
     target,
     terminalTaskIds: [],

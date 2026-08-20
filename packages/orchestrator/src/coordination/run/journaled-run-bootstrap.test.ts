@@ -100,6 +100,7 @@ const defaultOwnership = CoordinatorOwnership.of({ release: Effect.void, runMuta
 const settledGraph = TaskDagSnapshot.project(
   TrackerSnapshot.make({
     revision: TrackerRevision.make("bootstrap-control-settled"),
+    rootTaskId: TaskId.make("bootstrap-control-root"),
     tasks: [
       {
         id: TaskId.make("bootstrap-control-root"),
@@ -132,7 +133,7 @@ const completedFinalityProof = (runId: RunId, target: ReturnType<typeof FixtureT
       observedAt: observation.position,
       operationId: operation.operationId,
       readShape: operation.readShape,
-      rootPresent: true,
+      rootTaskId: snapshot.rootTaskId ?? TaskId.make("root"),
       runId,
       snapshot,
       target

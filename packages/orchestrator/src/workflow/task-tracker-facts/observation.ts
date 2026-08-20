@@ -16,6 +16,7 @@ import { TaskClaimObservation } from "../../authorities/task-tracker/claim-mutat
 import { taskClaimObservationAttemptBound } from "../protocols/task-claim-observation/bound.js"
 import { FocusedTaskCompletionFactsObserved } from "./focused-completion-observation.js"
 import { TaskTrackerFactsReadFailed } from "./read-observation.js"
+import { reconfirmedGraphSubjectIssue } from "./graph-subject-validation.js"
 export {
   FocusedTaskCompletionFactsObserved,
   makeFocusedTaskCompletionFactsObserved
@@ -136,6 +137,7 @@ const invalidCompleteCoverage = (
 const invalidCompleteTaskGraphFacts = (observation: {
   readonly factFamilies: typeof CompleteTaskGraphFactFamilies.Type
   readonly operationId: OperationId
+  readonly rootTaskId?: TaskId
   readonly target: TrackerTarget
 }) => {
   const [identities, , prerequisites, , membership] = observation.factFamilies
@@ -153,6 +155,8 @@ const invalidCompleteTaskGraphFacts = (observation: {
   const coverageIssue = invalidCompleteCoverage(observation, identities, membership)
   if (coverageIssue !== undefined) return coverageIssue
   const knownTaskIds = new Set(identities.taskIds)
+  if (observation.rootTaskId !== undefined && !knownTaskIds.has(observation.rootTaskId))
+    return "the selected tracker root must belong to the complete observed graph"
   if (
     prerequisites.prerequisites.some(({ prerequisiteTaskIds }) =>
       prerequisiteTaskIds.some((taskId) => !knownTaskIds.has(taskId))
@@ -167,6 +171,7 @@ const invalidCompleteTaskGraphFacts = (observation: {
 export const CompleteTaskTrackerFactsObserved = Schema.TaggedStruct("CompleteTaskTrackerFacts", {
   factFamilies: CompleteTaskGraphFactFamilies,
   operationId: OperationId,
+  rootTaskId: Schema.optionalKey(TaskId),
   target: TrackerTarget
 }).check(Schema.makeFilter(invalidCompleteTaskGraphFacts))
 export type CompleteTaskTrackerFactsObserved = typeof CompleteTaskTrackerFactsObserved.Type
@@ -209,17 +214,9 @@ const ReconfirmedTaskGraphFactFamilies = Schema.Tuple([
   TaskTargetMembershipReconfirmed
 ])
 
-const reconfirmedFactFamilySubjectsDiffer = (factFamilies: typeof ReconfirmedTaskGraphFactFamilies.Type): boolean => {
-  const [, lifecycles, prerequisites, groupings] = factFamilies
-  const subjectKey = exactTaskIdSetKey(lifecycles.subjectTaskIds)
-  return (
-    exactTaskIdSetKey(prerequisites.subjectTaskIds) !== subjectKey ||
-    exactTaskIdSetKey(groupings.subjectTaskIds) !== subjectKey
-  )
-}
-
 const invalidReconfirmedCoverage = (reconfirmation: {
   readonly factFamilies: typeof ReconfirmedTaskGraphFactFamilies.Type
+  readonly rootTaskId?: TaskId
   readonly target: TrackerTarget
 }): string | undefined => {
   if (!factFamiliesCoverTarget(reconfirmation.factFamilies, reconfirmation.target)) {
@@ -234,7 +231,12 @@ const invalidReconfirmedCoverage = (reconfirmation: {
   const [identities, , , , membership] = reconfirmation.factFamilies
   return taskTrackerTargetKey(identities.target) === taskTrackerTargetKey(reconfirmation.target) &&
     taskTrackerTargetKey(membership.target) === taskTrackerTargetKey(reconfirmation.target)
-    ? undefined
+    ? reconfirmedGraphSubjectIssue({
+        groupingTaskIds: reconfirmation.factFamilies[3].subjectTaskIds,
+        lifecycleTaskIds: reconfirmation.factFamilies[1].subjectTaskIds,
+        prerequisiteTaskIds: reconfirmation.factFamilies[2].subjectTaskIds,
+        rootTaskId: reconfirmation.rootTaskId
+      })
     : "reconfirmed identity and membership facts must cover the logical read target"
 }
 
@@ -243,6 +245,7 @@ export const UnchangedTaskTrackerFactsReconfirmed = Schema.TaggedStruct("Unchang
   factFamilies: ReconfirmedTaskGraphFactFamilies,
   operationId: OperationId,
   priorFullObservationOperationId: OperationId,
+  rootTaskId: Schema.optionalKey(TaskId),
   target: TrackerTarget
 }).check(
   Schema.makeFilter((reconfirmation) => {
@@ -256,12 +259,7 @@ export const UnchangedTaskTrackerFactsReconfirmed = Schema.TaggedStruct("Unchang
     if (contentIdentities.some((contentIdentity) => contentIdentity !== contentIdentities[0])) {
       return "one unchanged logical read must carry one normalized content identity"
     }
-    const coverageIssue = invalidReconfirmedCoverage(reconfirmation)
-    if (coverageIssue !== undefined) return coverageIssue
-    if (reconfirmedFactFamilySubjectsDiffer(reconfirmation.factFamilies)) {
-      return "every reconfirmed graph fact family must name the same task subjects"
-    }
-    return undefined
+    return invalidReconfirmedCoverage(reconfirmation)
   })
 )
 export type UnchangedTaskTrackerFactsReconfirmed = typeof UnchangedTaskTrackerFactsReconfirmed.Type
@@ -339,7 +337,6 @@ export const TaskTrackerFactsObservation = Schema.Union([
 ])
 export type TaskTrackerFactsObservation = typeof TaskTrackerFactsObservation.Type
 
-/** The canonical task-tracker observation event. */
 export const TaskTrackerFactsObservedEvent = Schema.TaggedStruct("TaskTrackerFactsObserved", {
   observation: TaskTrackerFactsObservation,
   operationId: OperationId,
@@ -368,7 +365,6 @@ const completeTargetClosureCoverage = (operation: typeof WorkflowOperation.cases
     target: operation.target
   })
 
-/** Normalizes one complete provider-neutral graph result into durable fact families. */
 export const makeCompleteTaskTrackerFactsObserved = (
   operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
   snapshot: TaskDagSnapshot
@@ -404,6 +400,7 @@ export const makeCompleteTaskTrackerFactsObserved = (
       TaskTargetMembershipObserved.make({ ...evidence, coverage, memberTaskIds: taskIds, target: operation.target })
     ],
     operationId: operation.operationId,
+    ...(snapshot.rootTaskId === undefined ? {} : { rootTaskId: snapshot.rootTaskId }),
     target: operation.target
   })
 }

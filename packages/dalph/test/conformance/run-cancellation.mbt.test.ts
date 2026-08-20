@@ -4,8 +4,13 @@ import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
+  AcceptedResult,
   AttemptId,
+  EvidenceDigest,
+  GitRepositoryLocator,
   GitCommitSha,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
@@ -23,6 +28,8 @@ import { expect } from "vitest"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { DeliveryRuntimeResources } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-resources.js"
+import { executeIntegrationAction } from "../../../orchestrator/src/coordination/delivery/integration-delivery-action-adapter.js"
 import { JournalPosition, type JournalRecordKey } from "../../../orchestrator/src/workflow-journal/identity.js"
 import {
   journalStoreCapabilities,
@@ -84,6 +91,7 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
+  makeTargetLineageObservationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../../orchestrator/src/workflow/registry/operation.js"
@@ -91,21 +99,57 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  GitReadIntentRecordedEvent,
+  TargetLineageObservedEvent,
   taskTrackerReadIntent
 } from "../../../orchestrator/src/workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
-import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../../orchestrator/src/workflow/protocols/integration-admission/events.js"
+import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 import {
   taskTrackerFactsObservedEvent,
   makeCompleteTaskTrackerFactsObserved
 } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import {
   attemptPlanRecordKey,
+  integrationResponsibilityBeganRecordKey,
+  integrationStartedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
+import {
+  IntegratorCandidateText,
+  IntegratorGitObservation,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate
+} from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
+import {
+  Integrator,
+  IntegratorGit,
+  IntegratorResult,
+  IntegratorPreparationInput,
+  integratorCorrelationFor
+} from "../../../orchestrator/src/workflow/protocols/integrator/protocol.js"
+import {
+  TargetPromotionGitReadObservation,
+  TargetPromotionCompareAndSetFailure
+} from "../../../orchestrator/src/workflow/protocols/target-promotion/events.js"
+import { TargetPromotionRuntime } from "../../../orchestrator/src/workflow/protocols/target-promotion/runtime.js"
+import { StartedIntegrationResponsibility } from "../../../orchestrator/src/workflow/protocols/integration-admission/protocol.js"
 
 const RunIdVariant = Schema.Struct({ tag: Schema.Literals(["R1", "R2"]), value: Schema.Unknown })
 const TargetVariant = Schema.Struct({ tag: Schema.Literals(["Target1", "Target2"]), value: Schema.Unknown })
@@ -293,6 +337,10 @@ type RuntimeCommand =
       readonly completed: Deferred.Deferred<void>
       readonly operationId: OperationId
     }
+  | { readonly _tag: "PrepareIntegrationQualification"; readonly completed: Deferred.Deferred<void> }
+  | { readonly _tag: "RunIntegrationPromotion"; readonly completed: Deferred.Deferred<void> }
+  | { readonly _tag: "ObserveIntegrationPromotion"; readonly completed: Deferred.Deferred<void> }
+  | { readonly _tag: "ReleaseIntegration"; readonly completed: Deferred.Deferred<void> }
 
 const runId = RunId.make("run-cancellation-R1")
 const target = FixtureTarget.make("run-cancellation-T1")
@@ -312,6 +360,62 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: taskSpecification.fingerprint,
   worktree: WorktreeLocator.make("/tmp/dalph-run-cancellation-task")
 })
+const integrationPlannedAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("run-cancellation-integration-attempt"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/run-cancellation-integration-task"),
+  executor: TaskExecutorLocator.make("executor:run-cancellation-integration-fake"),
+  runId,
+  taskId: TaskId.make("run-cancellation-integration-task"),
+  taskRevision: taskSpecification.fingerprint,
+  worktree: WorktreeLocator.make("/tmp/dalph-run-cancellation-integration-task")
+})
+const integrationTarget = IntegrationTarget.make({
+  repository: GitRepositoryLocator.make("/tmp/dalph-run-cancellation-integration.git"),
+  ref: IntegrationTargetRef.make("refs/heads/main")
+})
+const integrationAcceptedResult = AcceptedResult.make({
+  commit: GitCommitSha.make("2".repeat(40)),
+  evidenceManifest: { byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) }
+})
+const integrationExpectedTargetHead = GitCommitSha.make("1".repeat(40))
+const integrationCandidateCommit = GitCommitSha.make("3".repeat(40))
+const integrationCandidateText = IntegratorCandidateText.make("refs/heads/dalph/run-cancellation-candidate")
+
+interface IntegrationFixture {
+  readonly responsibility: StartedIntegrationResponsibility
+  readonly lineage: TargetLineageObservation
+  readonly run: ReturnType<typeof RunnableFrontierTransition.RunIntegrator>["run"]
+  readonly candidate: IntegratorRunQualifiedCandidate
+}
+
+const integrationRunTransitionFor = (fixture: IntegrationFixture) =>
+  RunnableFrontierTransition.RunIntegrator({
+    lineage: fixture.lineage,
+    lineageObservedAt: fixture.run.session.targetLineageObservedAt,
+    responsibility: fixture.responsibility,
+    run: fixture.run
+  })
+
+const identityFreeIntegrationActionFor = (
+  transition: RunnableFrontierTransition,
+  responsibility: StartedIntegrationResponsibility
+): { readonly _tag: "IdentityFreeAction"; readonly proposal: IdentityFreeDeliveryProposal } => {
+  const derived = deliveryProposalsOf({
+    acceptedOperationIds: new Set(),
+    fresh: [],
+    integrationResponsibilities: [responsibility],
+    responsibilities: [],
+    runId,
+    transitions: [transition]
+  })
+  const proposal = [...derived.ticketDelivery, ...derived.deliverySettlement][0]
+  if (proposal === undefined) return expect.fail(`missing integration proposal for ${transition._tag}`)
+  if (proposal.actionIdentity._tag !== "NoWorkflowOperationIdentity") {
+    return expect.fail(`missing identity-free integration proposal for ${transition._tag}`)
+  }
+  return { _tag: "IdentityFreeAction", proposal: proposal as IdentityFreeDeliveryProposal }
+}
 const activeClaim = ActiveTaskClaim.make({
   operationId: OperationId.make("run-cancellation-claim-acquisition"),
   owner: ClaimOwner.make("dalph-run-cancellation"),
@@ -331,6 +435,11 @@ const planOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("run-cancellation-attempt-plan"),
   plannedAttempt,
   predecessorOperationIds: [activeClaim.operationId]
+})
+const integrationPlanOperation = makeTaskAttemptPlanOperation({
+  operationId: OperationId.make("run-cancellation-integration-attempt-plan"),
+  plannedAttempt: integrationPlannedAttempt,
+  predecessorOperationIds: []
 })
 const claimReadOperationId = OperationId.make("run-cancellation-claim-read")
 const claimReadOperation = makeTaskClaimObservationOperation(claimReadOperationId, target, taskId, [
@@ -568,6 +677,48 @@ const makeCancellationDriverImplementation = () => {
   let effectivePause: "RunPaused" | "RunUnpaused" | undefined
   let executorAuthority: "Running" | "SafelySuspended" = "Running"
   let claimHeld = true
+  let promotionReadCount = 0
+  let integrationFixture: IntegrationFixture | undefined
+
+  const targetPromotionGit: TargetPromotionRuntime["Service"]["git"] = {
+    compareAndSet: (request) =>
+      Effect.fail(
+        new TargetPromotionCompareAndSetFailure({
+          candidateCommit: request.candidateCommit,
+          detail: "controlled cancellation conformance promotion response is ambiguous",
+          expectedHead: request.expectedTargetHead,
+          target: request.integrationTarget
+        })
+      ),
+    read: (request) =>
+      Effect.sync(() => {
+        promotionReadCount += 1
+        return promotionReadCount === 1
+          ? TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+              currentHeadSha: request.expectedTargetHead
+            })
+          : TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: request.candidateCommit })
+      })
+  }
+  const integrator = Integrator.of({
+    prepare: (request) =>
+      Effect.succeed(
+        IntegratorResult.cases.PreparedCandidate.make({
+          candidateText: integrationCandidateText,
+          correlation: request.correlation
+        })
+      )
+  })
+  const integratorGit = IntegratorGit.of({
+    readCandidate: (_target, candidateText) =>
+      Effect.succeed(
+        IntegratorGitObservation.cases.Commit.make({
+          candidateText,
+          commit: integrationCandidateCommit,
+          directParents: [integrationExpectedTargetHead, integrationAcceptedResult.commit]
+        })
+      )
+  })
 
   const executorReportFor = (correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>) =>
     executorAuthority === "Running"
@@ -645,7 +796,19 @@ const makeCancellationDriverImplementation = () => {
     const program = Effect.gen(function* () {
       const journal = yield* Journal
       const protocolController = yield* PlannedAttemptProtocolController
+      const runtimeResources = yield* DeliveryRuntimeResources
       const settlementLease = settlementLeaseOf(protocolController)
+      const integrationLease: DeliveryActionExecutionLease = {
+        ...settlementLease,
+        forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (section) => section } },
+        integrationTargets: runtimeResources.integrationTargets
+      }
+      const ensureIntegrationTarget = Effect.gen(function* () {
+        const fixture = integrationFixture
+        if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
+        yield* runtimeResources.integrationTargets.acquire(fixture.responsibility)
+        yield* runtimeResources.integrationTargets.publishAcceptedOwnership(fixture.responsibility)
+      })
       yield* Deferred.succeed(ready, undefined)
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- the runtime remains leased until crash or init.
       while (true) {
@@ -719,8 +882,210 @@ const makeCancellationDriverImplementation = () => {
         } else if (command._tag === "ExecutePlannedSettlement") {
           yield* executePlannedAttemptTransition(command.action, command.transition, settlementLease)
           yield* Deferred.succeed(command.completed, undefined)
-        } else {
+        } else if (command._tag === "ExecuteRecoveredSettlement") {
           yield* executeNewRecoveredAction(command.action, command.operationId, settlementLease, runId)
+          yield* Deferred.succeed(command.completed, undefined)
+        } else if (command._tag === "PrepareIntegrationQualification") {
+          const currentFixture = integrationFixture
+          if (currentFixture === undefined) {
+            yield* journal.append(
+              runId,
+              attemptPlanRecordKey(integrationPlannedAttempt.attemptId),
+              TaskAttemptPlannedEvent.make({
+                operation: integrationPlanOperation,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorWorkResponsibilityBeganRecordKey(integrationPlannedAttempt.attemptId),
+              PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+                plannedAttempt: integrationPlannedAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorCommandIntendedRecordKey(
+                integrationPlannedAttempt.attemptId,
+                PlannedAttemptExecutorCommandOrdinal.make(1)
+              ),
+              PlannedAttemptExecutorCommandIntendedEvent.make({
+                command: "StartOrContinue",
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+                plannedAttempt: integrationPlannedAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorWorkReportedRecordKey(
+                integrationPlannedAttempt.attemptId,
+                PlannedAttemptExecutorReportOrdinal.make(1)
+              ),
+              PlannedAttemptExecutorWorkReportedEvent.make({
+                ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+                report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                  correlation: plannedAttemptExecutorCorrelation(integrationPlannedAttempt),
+                  result: { _tag: "Accepted", acceptedResult: integrationAcceptedResult }
+                }),
+                version: workflowJournalEventVersion
+              })
+            )
+            const began = yield* journal.append(
+              runId,
+              integrationResponsibilityBeganRecordKey(integrationPlannedAttempt.attemptId),
+              IntegrationResponsibilityBeganEvent.make({
+                acceptedResult: integrationAcceptedResult,
+                integrationTarget,
+                plannedAttempt: integrationPlannedAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            const started = yield* journal.append(
+              runId,
+              integrationStartedRecordKey(integrationPlannedAttempt.attemptId),
+              IntegrationStartedEvent.make({
+                acceptedResult: integrationAcceptedResult,
+                integrationTarget,
+                plannedAttempt: integrationPlannedAttempt,
+                responsibilityBeganAt: began.position,
+                version: workflowJournalEventVersion
+              })
+            )
+            const lineageOperation = makeTargetLineageObservationOperation({
+              integrationTarget,
+              operationId: OperationId.make("run-cancellation-integration-lineage"),
+              plannedAttempt: integrationPlannedAttempt,
+              predecessorOperationIds: []
+            })
+            yield* journal.append(
+              runId,
+              intentRecordKey(lineageOperation.operationId),
+              GitReadIntentRecordedEvent.make({
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                operation: lineageOperation,
+                version: workflowJournalEventVersion
+              })
+            )
+            const lineageObserved = yield* journal.append(
+              runId,
+              outcomeRecordKey(lineageOperation.operationId),
+              TargetLineageObservedEvent.make({
+                observation: TargetLineageObservation.make({
+                  plannedBaseIsAncestorOfTargetHead: true,
+                  plannedBaseSha: integrationPlannedAttempt.baseSha,
+                  targetHeadSha: integrationExpectedTargetHead
+                }),
+                occurrenceClassification: "NonActionOccurrence",
+                operationId: lineageOperation.operationId,
+                plannedAttempt: integrationPlannedAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            const responsibility = StartedIntegrationResponsibility.make({
+              acceptedResult: integrationAcceptedResult,
+              integrationTarget,
+              plannedAttempt: integrationPlannedAttempt,
+              queuedAt: began.position,
+              startedAt: started.position
+            })
+            const lineage = TargetLineageObservation.make({
+              plannedBaseIsAncestorOfTargetHead: true,
+              plannedBaseSha: integrationPlannedAttempt.baseSha,
+              targetHeadSha: integrationExpectedTargetHead
+            })
+            const preparation = IntegratorPreparationInput.make({
+              responsibility,
+              targetLineage: lineage,
+              targetLineageObservedAt: lineageObserved.position
+            })
+            const run = { ordinal: IntegratorRunOrdinal.make(1), session: integratorCorrelationFor(preparation) }
+            const fixtureWithoutCandidate = { lineage, responsibility, run }
+            integrationFixture = {
+              ...fixtureWithoutCandidate,
+              candidate: IntegratorRunQualifiedCandidate.make({
+                candidateCommit: integrationCandidateCommit,
+                candidateText: integrationCandidateText,
+                directParents: [integrationExpectedTargetHead, integrationAcceptedResult.commit],
+                qualifiedAt: JournalPosition.make(Number(lineageObserved.position) + 1),
+                run
+              })
+            }
+            yield* ensureIntegrationTarget
+            const result = yield* executeIntegrationAction(
+              identityFreeIntegrationActionFor(integrationRunTransitionFor(integrationFixture), responsibility),
+              integrationRunTransitionFor(integrationFixture),
+              integrationLease,
+              target
+            )
+            if (result._tag !== "ActionCompleted") {
+              return yield* Effect.die(`production Integrator qualification was not completed: ${result._tag}`)
+            }
+            const qualified = yield* journal.read(runId)
+            const observed = qualified.findLast(
+              (record) =>
+                record.event._tag === "IntegratorRunCandidateGitObserved" &&
+                record.event.run.session.sessionId === run.session.sessionId
+            )
+            if (observed?.event._tag !== "IntegratorRunCandidateGitObserved") {
+              return yield* Effect.die("production Integrator qualification did not persist Git evidence")
+            }
+            integrationFixture = {
+              ...fixtureWithoutCandidate,
+              candidate: IntegratorRunQualifiedCandidate.make({
+                candidateCommit: integrationCandidateCommit,
+                candidateText: integrationCandidateText,
+                directParents: [integrationExpectedTargetHead, integrationAcceptedResult.commit],
+                qualifiedAt: observed.position,
+                run
+              })
+            }
+          } else {
+            yield* ensureIntegrationTarget
+          }
+          yield* Deferred.succeed(command.completed, undefined)
+        } else if (command._tag === "RunIntegrationPromotion" || command._tag === "ObserveIntegrationPromotion") {
+          const fixture = integrationFixture
+          if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
+          yield* ensureIntegrationTarget
+          const result = yield* executeIntegrationAction(
+            identityFreeIntegrationActionFor(
+              RunnableFrontierTransition.RunTargetPromotion({
+                candidate: fixture.candidate,
+                responsibility: fixture.responsibility
+              }),
+              fixture.responsibility
+            ),
+            RunnableFrontierTransition.RunTargetPromotion({
+              candidate: fixture.candidate,
+              responsibility: fixture.responsibility
+            }),
+            integrationLease,
+            target
+          )
+          if (result._tag !== "ActionCompleted") {
+            return yield* Effect.die(`production integration promotion was not completed: ${result._tag}`)
+          }
+          yield* Deferred.succeed(command.completed, undefined)
+        } else {
+          const fixture = integrationFixture
+          if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
+          const result = yield* executeIntegrationAction(
+            identityFreeIntegrationActionFor(
+              RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility: fixture.responsibility }),
+              fixture.responsibility
+            ),
+            RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility: fixture.responsibility }),
+            integrationLease,
+            target
+          )
+          if (result._tag !== "ActionCompleted") {
+            return yield* Effect.die(`production integration release was not completed: ${result._tag}`)
+          }
           yield* Deferred.succeed(command.completed, undefined)
         }
       }
@@ -738,7 +1103,11 @@ const makeCancellationDriverImplementation = () => {
               owner: ClaimOwner.make("dalph-run-cancellation-planner"),
               tokenPrefix: "run-cancellation"
             })
-          )
+          ),
+          Effect.provideService(CoordinatorOwnership, ownership),
+          Effect.provideService(Integrator, integrator),
+          Effect.provideService(IntegratorGit, integratorGit),
+          Effect.provideService(TargetPromotionRuntime, TargetPromotionRuntime.of({ git: targetPromotionGit }))
         )
       )
     ).pipe(Effect.provideService(Scope.Scope, scope))
@@ -800,6 +1169,23 @@ const makeCancellationDriverImplementation = () => {
       if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
       const completed = yield* Deferred.make<void>()
       yield* Queue.offer(commands, { _tag: "ExecuteRecoveredSettlement", action, completed, operationId })
+      yield* awaitSettlementCommand(completed)
+    })
+
+  const executeIntegrationCommand = (
+    tag: Extract<
+      RuntimeCommand["_tag"],
+      | "PrepareIntegrationQualification"
+      | "RunIntegrationPromotion"
+      | "ObserveIntegrationPromotion"
+      | "ReleaseIntegration"
+    >
+  ) =>
+    Effect.gen(function* () {
+      const commands = runtimeCommands
+      if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
+      const completed = yield* Deferred.make<void>()
+      yield* Queue.offer(commands, { _tag: tag, completed })
       yield* awaitSettlementCommand(completed)
     })
 
@@ -901,6 +1287,8 @@ const makeCancellationDriverImplementation = () => {
         effectivePause = undefined
         executorAuthority = "Running"
         claimHeld = true
+        promotionReadCount = 0
+        integrationFixture = undefined
         yield* startRuntime
       }),
     selectIdleRun: () =>
@@ -914,7 +1302,8 @@ const makeCancellationDriverImplementation = () => {
         process = { ...process, executorPositionHeld: true, responsibilitiesSettled: false }
       }),
     selectIntegrationOwned: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        yield* executeIntegrationCommand("PrepareIntegrationQualification")
         durable = { ...durable, integration: "IntegrationOwned" }
         process = { ...process, responsibilitiesSettled: false }
       }),
@@ -1054,7 +1443,8 @@ const makeCancellationDriverImplementation = () => {
         }
       }),
     recordIntegrationIntent: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        yield* executeIntegrationCommand("RunIntegrationPromotion")
         durable = {
           ...durable,
           integration: "PromotionIntentRecorded",
@@ -1062,11 +1452,13 @@ const makeCancellationDriverImplementation = () => {
         }
       }),
     observePromotedIntegration: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        yield* executeIntegrationCommand("ObserveIntegrationPromotion")
         durable = { ...durable, integration: "PromotionAccepted", promotionAccepted: true }
       }),
     settlePromotedIntegration: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        yield* executeIntegrationCommand("ReleaseIntegration")
         durable = {
           ...durable,
           integration: "IntegrationSettled",
@@ -1160,7 +1552,8 @@ const makeCancellationDriverImplementation = () => {
         durable = { ...durable, claim: "Released", claimReleaseObservations: 1, claimReleases: 1 }
       }),
     reconcileIntegrationAfterRestart: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        yield* executeIntegrationCommand("ObserveIntegrationPromotion")
         durable = { ...durable, integration: "PromotionAccepted", promotionAccepted: true }
       }),
     settleAfterIdleCancellation: () => Effect.sync(() => (process = { ...process, responsibilitiesSettled: true })),
@@ -1182,7 +1575,8 @@ const makeCancellationDriverImplementation = () => {
       Effect.sync(() => {
         process = { ...process, phase: "Rejected", cancellationRejected: true }
       }),
-    rejectTerminalHistory: () => Effect.sync(() => (process = { ...process, phase: "TerminalHistory" })),
+    rejectTerminalHistory: () =>
+      Effect.sync(() => (process = { ...process, phase: "TerminalHistory", cancellationRejected: true })),
     admitForwardWork: () =>
       Effect.sync(() => (process = { ...process, forwardAdmissions: process.forwardAdmissions + 1 })),
     getProductionEvidence: () => {

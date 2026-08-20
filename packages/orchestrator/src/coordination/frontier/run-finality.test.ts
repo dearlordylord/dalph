@@ -23,6 +23,7 @@ const readShape = RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [] })
 
 const blockedGraph = validSnapshot({
   revision: "blocked-revision",
+  rootTaskId: "root",
   tasks: [
     { id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
     { id: "A", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: "root", prerequisiteIds: [] },
@@ -60,7 +61,7 @@ it("constructs exact terminal evidence without a default read shape", () => {
     observedAt,
     operationId,
     readShape,
-    rootPresent: true,
+    rootTaskId: TaskId.make("root"),
     runId,
     snapshot: blockedGraph,
     target
@@ -70,7 +71,7 @@ it("constructs exact terminal evidence without a default read shape", () => {
     complete: true,
     contentIdentity: TrackerRevision.make("blocked-revision"),
     graphOutcome: "Blocked",
-    rootPresent: true,
+    rootTaskId: TaskId.make("root"),
     runId,
     target,
     terminalTaskIds: [TaskId.make("A")],
@@ -83,6 +84,7 @@ it("constructs exact terminal evidence without a default read shape", () => {
       operationId,
       readShape,
       revision: TrackerRevision.make("blocked-revision"),
+      rootTaskId: TaskId.make("root"),
       runId,
       target
     })
@@ -93,6 +95,7 @@ it("constructs exact terminal evidence without a default read shape", () => {
       operationId,
       readShape,
       revision: TrackerRevision.make("blocked-revision"),
+      rootTaskId: TaskId.make("root"),
       runId,
       target
     })
@@ -104,7 +107,7 @@ it("rejects missing root, incomplete family coverage, and mismatched graph ident
     observedAt,
     operationId,
     readShape,
-    rootPresent: true,
+    rootTaskId: TaskId.make("root"),
     runId,
     snapshot: blockedGraph,
     target
@@ -114,7 +117,19 @@ it("rejects missing root, incomplete family coverage, and mismatched graph ident
   expect(
     Schema.is(RunFinalityEvidence)({
       ...evidence,
-      requiredFactFamilies: ["TaskIdentities", "TaskLifecycles", "TaskPrerequisites", "TaskGroupings", "TaskIdentities"]
+      requiredFactFamilies: [
+        "TaskLifecycles",
+        "TaskIdentities",
+        "TaskPrerequisites",
+        "TaskGroupings",
+        "TaskTargetMembership"
+      ]
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(RunFinalityEvidence)({
+      ...evidence,
+      readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [TaskId.make("different-coverage")] })
     })
   ).toBe(false)
   expect(
@@ -123,6 +138,7 @@ it("rejects missing root, incomplete family coverage, and mismatched graph ident
       operationId,
       readShape,
       revision: TrackerRevision.make("different-revision"),
+      rootTaskId: TaskId.make("root"),
       runId,
       target
     })

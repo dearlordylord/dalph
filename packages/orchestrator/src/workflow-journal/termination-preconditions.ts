@@ -12,6 +12,7 @@ import type {
   UnchangedTaskTrackerFactsReconfirmed
 } from "../workflow/task-tracker-facts/observation.js"
 import type { RunFinalityEvidence } from "../coordination/frontier/run-finality.js"
+import type { JournalPosition } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../workflow/protocols/attempt-choice/events.js"
 
@@ -20,7 +21,7 @@ type GraphFactsObservation = CompleteTaskTrackerFactsObserved | UnchangedTaskTra
 type GraphObservationRecord = {
   readonly operationId: OperationId
   readonly observation: GraphFactsObservation
-  readonly position: number
+  readonly position: JournalPosition
 }
 
 type GraphReadOperation = Extract<
@@ -287,7 +288,7 @@ const latestExecutorReport = (records: ReadonlyArray<JournalRecord>, plannedAtte
 const latestTerminalExecutorReportPosition = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
-): number | undefined => {
+): JournalPosition | undefined => {
   const latest = latestExecutorReport(records, plannedAttempt)
   return latest?.event._tag === "PlannedAttemptExecutorWorkReported" && latest.event.report._tag === "Terminal"
     ? latest.position
@@ -323,9 +324,6 @@ const executorReportSettled = (records: ReadonlyArray<JournalRecord>, plannedAtt
   const cancellationRelinquished = hasCancellationRelinquishment(records, plannedAttempt)
   const integrationSettled = hasIntegrationSettlement(records, plannedAttempt)
   const terminalAt = latestTerminalExecutorReportPosition(records, plannedAttempt)
-  if (cancellationApplied !== undefined && terminalAt !== undefined && terminalAt < cancellationApplied.position) {
-    return true
-  }
   if (cancellationApplied !== undefined) {
     return cancellationRelinquished || integrationSettled
   }

@@ -257,7 +257,7 @@ const snapshotForGraphOutcome = (outcome: "GraphAllSucceeded" | "GraphBlocked" |
             prerequisiteIds: []
           }
         ]
-  const projected = projectTrackerSnapshot({ revision: `run-activation-${outcome}`, tasks })
+  const projected = projectTrackerSnapshot({ revision: `run-activation-${outcome}`, rootTaskId: taskA, tasks })
   if (projected._tag !== "Valid") {
     expect.fail(`invalid finality fixture graph: ${JSON.stringify(projected.issues)}`)
   }
@@ -276,7 +276,7 @@ const finalityEvidenceFor = (
     operationId,
     observedAt,
     readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: snapshot.taskIds() }),
-    rootPresent: true,
+    rootTaskId: taskA,
     runId: eventRunId,
     snapshot,
     target: eventTarget
@@ -984,7 +984,7 @@ const makeRunActivationDriverImplementation = () => {
                       operationId: operation.operationId,
                       observedAt: observation.position,
                       readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: snapshot.taskIds() }),
-                      rootPresent: true,
+                      rootTaskId: taskA,
                       runId,
                       snapshot,
                       target
