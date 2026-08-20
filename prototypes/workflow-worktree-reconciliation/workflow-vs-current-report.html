@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Effect Workflow vs Dalph recovery — issue #234 decision report</title>
+  <title>Should Effect Workflow replace Dalph's durable-computation layer?</title>
   <style>
     :root {
       --paper: #f6f7f4;
@@ -189,37 +189,57 @@
   <a class="skip" href="#main">Skip to report</a>
   <header class="topbar">
     <div class="topbar-inner">
-      <div class="brand">Dalph / #234 <small>decision evidence</small></div>
+      <div class="brand">Dalph / #232–#234 <small>durable-computation decision</small></div>
       <nav aria-label="Report sections">
-        <a href="#decision">Decision</a><a href="#read">How to read</a><a href="#scenarios">Scenarios</a><a href="#authority">Ownership</a><a href="#comparison">Comparison</a><a href="#deletion">Deletion test</a><a href="#evidence">Evidence</a><a href="#appendix">Appendix</a>
+        <a href="#decision">Decision</a><a href="#question">What we evaluated</a><a href="#read">How to read</a><a href="#scenarios">Scenarios</a><a href="#authority">Ownership</a><a href="#comparison">Comparison</a><a href="#deletion">Deletion test</a><a href="#evidence">Evidence</a><a href="#appendix">Appendix</a>
       </nav>
     </div>
   </header>
 
   <main id="main" tabindex="-1">
     <section class="hero" id="decision" aria-labelledby="report-title">
-      <p class="eyebrow">Effect Workflow vs current Dalph worktree recovery · disposable experiment</p>
-      <h1 id="report-title">Workflow replays a result.<br>Dalph still owns recovery.</h1>
-      <div class="verdict" aria-label="Decision: no-go">● No-go</div>
-      <p class="lede"><strong>Do not adopt Effect Workflow for worktree reconciliation, and stop further Workflow evaluation.</strong> The prototype preserved the required recovery behavior, but it did not make Dalph’s existing restart procedure deletable. It added a second durable store and more identity, schema, fault, inventory, and test machinery around responsibilities that remain necessary.</p>
+      <p class="eyebrow">Effect Workflow as Dalph's durable-computation runtime · evidence from #232 → #233 → #234</p>
+      <h1 id="report-title">Could Workflow replace Dalph's home-grown durable computation?</h1>
+      <div class="verdict" aria-label="Decision: evidence says no">● Evidence says no</div>
+      <p class="lede"><strong>We evaluated Effect Workflow as a possible replacement for Dalph’s home-grown durable-computation layer—the Journal-backed continuation, replay, and restart coordination for an entire Run.</strong> The answer is closer to no than yes: Workflow’s durable replay worked, but once the Journal’s accepted chronology remained necessary, Workflow did not delete enough lifecycle and recovery machinery to justify its additional store, identities, schemas, versioning, and test surface.</p>
+      <p>This is a candidate-level conclusion, not a claim that Workflow is broken, has no value, or must never be used for an unrelated future problem. <a href="workflow-evaluation-purpose-research.md">Read the reconstructed evaluation purpose</a>.</p>
       <p><span class="evidence e-test">Observed test</span><span class="evidence e-source">Source inspected</span><span class="evidence e-judge">Decision judgment</span></p>
 
       <div class="hero-grid" aria-label="Decision summary">
+        <article class="card hero-card next">
+          <span class="kicker">What we evaluated</span>
+          <h3>Replace custom durable computation</h3>
+          <p>Could Workflow own Run continuation, replay, waits, and remembered results while Dalph retained only independently required semantic evidence and fresh authority reads?</p>
+        </article>
         <article class="card hero-card good">
-          <span class="kicker">Workflow helped</span>
-          <h3>Stored Activity result replay</h3>
-          <p>After the result was durably stored, restart returned it without another controlled Git call. That is real leverage, demonstrated under <code>SIGKILL</code>.</p>
+          <span class="kicker">What worked</span>
+          <h3>Durable execution and result replay</h3>
+          <p>Workflow survived real process death, resumed one execution, and reused stored Activity results without repeating completed controlled calls. That is genuine positive evidence.</p>
         </article>
         <article class="card hero-card bad">
-          <span class="kicker">Workflow did not replace</span>
-          <h3>Authority and restart procedure</h3>
-          <p>Git still resolves ambiguous creation and supplies current truth. The Journal still accepts Run chronology. Outer Dalph code still rereads, publishes, folds, and gates the next decision.</p>
+          <span class="kicker">Why the answer is no</span>
+          <h3>Too little machinery became deletable</h3>
+          <p>The Journal, external reconciliation, fresh reads, runtime ownership, and concrete restart procedure remained. Workflow added a second durable runtime around them instead of replacing them.</p>
         </article>
-        <article class="card hero-card next">
-          <span class="kicker">Action</span>
-          <h3>Retain the current design</h3>
-          <p>Keep <code>recoverTaskWorktreeOperation</code>, the controlled read/create/reread protocol, Journal intent/outcome publication, and process-local runtime. Do not prototype promotion or integration as a successor.</p>
-        </article>
+      </div>
+    </section>
+
+    <section id="question" aria-labelledby="question-title">
+      <div class="section-head">
+        <p class="eyebrow">The decision hierarchy</p>
+        <h2 id="question-title">Worktree reconciliation was the probe, not the point</h2>
+        <p>The evaluation narrowed in stages. Reading only the final tracer makes a strategic durable-computation question look like a worktree-feature comparison.</p>
+      </div>
+      <ol class="flow" aria-label="Effect Workflow evaluation sequence">
+        <li class="flow-step"><span class="kicker">Strategic question</span><strong>Replace Dalph's durable-computation layer?</strong><small>Test whether an industry runtime can own continuation, replay, waits, and remembered results.</small></li>
+        <li class="flow-step"><span class="kicker">#232 · viability</span><strong>Workflow-only replay worked</strong><small>One narrow Run chronology survived real restarts without a Dalph Journal.</small></li>
+        <li class="flow-step"><span class="kicker">#233 · fit</span><strong>The real delivery loop worked</strong><small>But a raw Activity result could not replace the Journal's accepted, ordered chronology.</small></li>
+        <li class="flow-step"><span class="kicker">#234 · deletion probe</span><strong>Can the narrower placement delete recovery code?</strong><small>Worktree reconciliation supplied a hard ambiguity seam and explicit deletion targets.</small></li>
+        <li class="flow-step"><span class="kicker">Candidate result</span><strong>No adoption case</strong><small>Replay remained useful, but the recovery duties stayed and the candidate added machinery.</small></li>
+      </ol>
+      <div class="grid-2">
+        <div class="callout"><strong>Why Effect Workflow?</strong>Dalph already uses Effect V4, so Workflow had the least integration distance among the durable-runtime candidates. The hypothesis was that its SQL-backed execution, handler replay, and named Activity results could replace custom lifecycle plumbing.</div>
+        <div class="callout warning"><strong>What the worktree experiment asked</strong>Not “can Workflow reconcile a worktree?” The existing Git protocol already owns that. It asked whether replay below <code>DeliveryActionExecutor</code> made the dispatcher, retained-intent lookup, manual reinvocation, or route-specific recovery state safely deletable.</div>
       </div>
     </section>
 
@@ -230,7 +250,7 @@
         <p>The conclusion is not hidden behind interaction. Filters narrow evidence; they never change the verdict.</p>
       </div>
       <div class="grid-3 reading-path">
-        <article class="card"><h3>60 seconds</h3><p>Read the decision above, then the <a href="#scorecard">decision scorecard</a>. It answers whether Workflow crossed the deletion bar.</p></article>
+        <article class="card"><h3>60 seconds</h3><p>Read the decision above, the <a href="#question">evaluation sequence</a>, then the <a href="#scorecard">decision scorecard</a>. Together they separate the strategic question from its final deletion probe.</p></article>
         <article class="card"><h3>5 minutes</h3><p>Read the <a href="#scenarios">three crash chronologies</a>, <a href="#authority">ownership map</a>, and <a href="#deletion">deletion ledger</a>.</p></article>
         <article class="card"><h3>Deep evidence</h3><p>Use the source-linked <a href="#evidence">test matrix</a>, durable inventory, limitations, glossary, and appendix.</p></article>
       </div>
@@ -419,6 +439,7 @@
         </table>
       </div>
       <p class="callout danger"><strong>Decision rule applied</strong>Issue #234 requires <em>no-go and stop</em> if the existing restart procedure must remain, the Activity reimplements it, both histories reconstruct progress, or Workflow adds more identity/schema/version/storage machinery than it removes. More than one of those conditions is true. No numeric weighting is needed or defensible. <span class="evidence e-judge">Decision judgment</span> <a href="https://github.com/dearlordylord/dalph/issues/234">Accepted issue rule</a>; <a href="README.md">prototype deletion report, lines 101–134</a>.</p>
+      <p class="callout warning"><strong>What this means for the original evaluation</strong>Effect Workflow proved that it can supply durable execution and replay. But after #233 established that the Journal's accepted Run chronology still had to remain, #234 found no net deletion leverage in the next concrete recovery slice. The combined evidence therefore does not justify adopting Effect Workflow as Dalph's durable-computation replacement. Under the accepted stopping rule, the candidate does not advance to target promotion or another Workflow tracer. <a href="workflow-evaluation-purpose-research.md">Evaluation-purpose reconstruction and conclusion hierarchy</a>.</p>
     </section>
 
     <section id="evidence" aria-labelledby="evidence-title">
@@ -447,6 +468,7 @@
             <tr><th scope="row">Candidate keeps Workflow below <code>DeliveryActionExecutor</code>.</th><td>Ordinary runtime materializes accepted action; executor invokes exact Workflow; outer code publishes the Journal.</td><td><span class="evidence e-source">Source inspected</span></td><td><a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:407–515</a></td><td>Prototype composition evidence; production composition was not changed.</td></tr>
             <tr><th scope="row">Application Exit remains outside Run Workflow.</th><td>The application lifecycle is constructed before the Workflow handler/runtime; architecture defines Exit facts outside every Run journal.</td><td><span class="evidence e-source">Source inspected</span></td><td><a href="src/workflow-reconciliation.ts">prototype:362–369</a>; <a href="../../docs/ARCHITECTURE.md">architecture:205–235</a></td><td>No live Exit request or five-second drain was exercised by this experiment.</td></tr>
             <tr><th scope="row">Workflow is not deletion-positive under #234’s rule.</th><td>All three named deletion targets lack supersession evidence; execution storage, schema, identity, and tests are added.</td><td><span class="evidence e-judge">Decision judgment</span></td><td><a href="https://github.com/dearlordylord/dalph/issues/234">Accepted issue decision rule</a>; <a href="README.md">deletion report:101–134</a></td><td>Decision is scoped to worktree reconciliation and this accepted rule; no production performance or provider trial was run.</td></tr>
+            <tr><th scope="row">The combined evidence does not justify Workflow as Dalph's durable-computation replacement.</th><td>#232 demonstrated replay viability; #233 preserved the real delivery loop but exposed the irreplaceable Journal chronology; #234 retained the recovery duties and added machinery.</td><td><span class="evidence e-judge">Decision synthesis</span></td><td><a href="workflow-evaluation-purpose-research.md">Research reconstruction</a>; <a href="../durable-computation/evidence.md">#232 evidence</a>; <a href="../durable-computation/code-shape-evaluation.md">#233 evidence</a>; <a href="README.md">#234 result</a></td><td>Does not mean Workflow is broken, universally useless, or forbidden for every materially different future problem. It decides this candidate evaluation under the accepted evidence and stopping rule.</td></tr>
           </tbody>
         </table>
       </div>
@@ -539,12 +561,15 @@
           <dt><strong>Deletion leverage</strong></dt><dd>Recovery responsibility and conceptual/test surface that can actually be removed because Workflow supersedes it.</dd>
           <dt><strong>Process-local runtime</strong></dt><dd>Planning, admission, live ownership, and current signals rebuilt from accepted history and current facts; never durable authority.</dd>
         </dl></article>
-        <article class="card"><h3>Decision provenance</h3><p><strong>Issue:</strong> <a href="https://github.com/dearlordylord/dalph/issues/234">GitHub #234, “test Workflow deletion leverage through controlled worktree reconciliation”</a>.</p><p><strong>Exact base:</strong> <span class="mono">b0b4a15d3a4c1e75b129c0c620042a64c2178692</span>.</p><p><strong>Final prototype evidence commit:</strong> <span class="mono">5b31129f3</span>.</p><p><strong>Dependencies:</strong> Effect, <code>@effect/platform-node</code>, and <code>@effect/sql-sqlite-node</code> <span class="mono">4.0.0-beta.106</span>; Vitest <span class="mono">4.1.10</span>.</p><p><strong>Isolation:</strong> dedicated branch/worktree; production and predecessor #233 were unchanged; no adoption or integration occurred.</p></article>
+        <article class="card"><h3>Decision provenance</h3><p><strong>Governing question:</strong> <a href="https://github.com/dearlordylord/dalph/issues/232">GitHub #232, evaluate an industry durable-computation runtime for Dalph</a>.</p><p><strong>Architectural-fit experiment:</strong> <a href="https://github.com/dearlordylord/dalph/issues/233">GitHub #233, close the result-publication loop through delivery</a>.</p><p><strong>Deletion tracer:</strong> <a href="https://github.com/dearlordylord/dalph/issues/234">GitHub #234, test Workflow deletion leverage through worktree reconciliation</a>.</p><p><strong>Exact #234 base:</strong> <span class="mono">b0b4a15d3a4c1e75b129c0c620042a64c2178692</span>.</p><p><strong>Final prototype evidence commit:</strong> <span class="mono">5b31129f3</span>.</p><p><strong>Dependencies:</strong> Effect, <code>@effect/platform-node</code>, and <code>@effect/sql-sqlite-node</code> <span class="mono">4.0.0-beta.106</span>; Vitest <span class="mono">4.1.10</span>.</p><p><strong>Isolation:</strong> dedicated branch/worktree; production and predecessor #233 were unchanged; no adoption or integration occurred.</p></article>
       </div>
 
       <h3 style="margin-top:2rem">Local source map</h3>
       <ol class="refs">
+        <li><a href="workflow-evaluation-purpose-research.md">Evaluation-purpose reconstruction</a> — original durable-computation question, experiment sequence, conclusion hierarchy, and claim limits.</li>
         <li><a href="README.md">Prototype README</a> — chronological evidence, deletion ledger, verdict, and final gates.</li>
+        <li><a href="../durable-computation/evidence.md">Issue #232 comparative evidence</a> — Workflow-only viability, shared chronology, retained responsibilities, and operating evidence.</li>
+        <li><a href="../durable-computation/code-shape-evaluation.md">Issue #233 code-shape evidence</a> — production-shaped loop, domain-colour preservation, and result-publication findings.</li>
         <li><a href="package.json">Prototype package.json:10–19</a> — exact Effect and test dependency versions.</li>
         <li><a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:185–251</a> — narrow Workflow payload, execution identity, typed result/error, and Activity protocol.</li>
         <li><a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:362–515</a> — Application Exit boundary, ordinary runtime, executor seam, Workflow execution, Journal publication.</li>
@@ -566,7 +591,7 @@
   </main>
 
   <footer>
-    <p><strong>Decision-grade prototype report · issue #234.</strong> Generated from repository evidence at final prototype evidence commit <span class="mono">5b31129f3</span>, based on <span class="mono">b0b4a15d3a4c1e75b129c0c620042a64c2178692</span>.</p>
+    <p><strong>Decision-grade durable-computation report · issues #232–#234.</strong> The strategic question comes from #232; #233 supplies architectural-fit evidence; #234 supplies the final deletion tracer at prototype evidence commit <span class="mono">5b31129f3</span>, based on <span class="mono">b0b4a15d3a4c1e75b129c0c620042a64c2178692</span>.</p>
     <p>This artifact is self-contained: no scripts, fonts, styles, images, analytics, or other assets are fetched from the network. Local evidence links are relative so the report works when opened with <code>file://</code>. The external issue link is optional provenance.</p>
   </footer>
 
