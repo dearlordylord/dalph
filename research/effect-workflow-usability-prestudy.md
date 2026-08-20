@@ -7,6 +7,17 @@
 **Effect baseline:** `effect@4.0.0-beta.106`, tag
 [`fb75264`](https://github.com/Effect-TS/effect/tree/effect%404.0.0-beta.106)
 
+## Final disposition (2026-08-20)
+
+The evaluation is complete: retain Dalph's Journal-backed durable-computation
+architecture and do not adopt Effect Workflow as its replacement. Durable
+replay worked, but the accepted Journal chronology and existing reconciliation
+and recovery duties remained, so the candidate did not delete enough machinery
+to justify its added runtime surface. Preserve the full disposable evidence on
+branch [`prototype/issue-234-workflow-deletion-leverage`](https://github.com/dearlordylord/dalph/tree/prototype/issue-234-workflow-deletion-leverage)
+at exact commit [`75edd8547b1ebe9d33cd0fb49284570c9ff31b7c`](https://github.com/dearlordylord/dalph/commit/75edd8547b1ebe9d33cd0fb49284570c9ff31b7c);
+do not merge that prototype branch into `master`.
+
 ## Status and decision boundary
 
 This is pre-research for an evaluation, not an adoption decision. It changes no
