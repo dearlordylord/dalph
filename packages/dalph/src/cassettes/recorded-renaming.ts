@@ -26,7 +26,7 @@ import {
   type GithubIssueNumber,
   type GithubRepositoryName,
   type GithubRepositoryOwner,
-  type OperationId,
+  OperationId,
   type ActiveTaskClaim,
   type TaskClaimObservation,
   type PlannedAttemptWorktreeObservation,
@@ -70,6 +70,25 @@ import {
   type CompletionTaskConfirmationReadOrdinal,
   type CompletionTaskFocusedReadPurpose,
   completionTaskFocusedReadOperationIdFor,
+  type BranchCleanupAuthorization,
+  type BranchCleanupMutationResult,
+  type BranchCleanupObservation,
+  type CleanupMutationOrdinal,
+  type CleanupObservationOrdinal,
+  type IntegratorCandidateCleanupAuthorization,
+  type IntegratorCandidateCleanupDisposition,
+  type IntegratorCandidateCleanupMutationResult,
+  type IntegratorCandidateCleanupObservation,
+  type PlannedAttemptCleanupDisposition,
+  type WorktreeCleanupAuthorization,
+  type WorktreeCleanupMutationResult,
+  type WorktreeCleanupObservation,
+  WorktreeCleanupOwner,
+  BranchCleanupOwner,
+  IntegratorCandidateCleanupOwner,
+  type BranchCleanupEvidenceRevision,
+  type IntegratorCandidateCleanupEvidenceRevision,
+  type WorktreeCleanupEvidenceRevision,
   type TargetPromotionAttemptOrdinal,
   type TargetPromotionAttemptLimit,
   targetPromotionRequestIdForCandidate,
@@ -158,6 +177,11 @@ type PreservedCassetteBrand =
   | TaskId
   | TaskRevision
   | TrackerRevision
+  | BranchCleanupEvidenceRevision
+  | CleanupMutationOrdinal
+  | CleanupObservationOrdinal
+  | IntegratorCandidateCleanupEvidenceRevision
+  | WorktreeCleanupEvidenceRevision
 
 type ContainsGeneratedOrUnclassifiedBrand<Value> = Value extends GeneratedCassetteIdentity
   ? true
@@ -738,6 +762,595 @@ function renameRecordedOperationEntry(
   })
 }
 
+const renameOperationIdTuple = (
+  operationIds: readonly [OperationId, ...Array<OperationId>],
+  maps: IdentityRenamingMaps
+): readonly [OperationId, ...Array<OperationId>] =>
+  Schema.decodeUnknownSync(Schema.NonEmptyArray(OperationId))(
+    operationIds.map((operationId) => renamed(operationId, maps.operationIds))
+  )
+
+const renamePlannedAttemptCleanupDisposition = (
+  disposition: PlannedAttemptCleanupDisposition,
+  maps: IdentityRenamingMaps
+): PlannedAttemptCleanupDisposition =>
+  Match.valueTags(disposition, {
+    Abandoned: (value) =>
+      completeFields<typeof value>({
+        _tag: "Abandoned",
+        dispositionAt: preserveCassetteValue(value.dispositionAt),
+        plannedAttempt: renamePlannedAttempt(value.plannedAttempt, maps),
+        requestId: renameAttemptChoiceRequestId(value.requestId, maps)
+      }),
+    Settled: (value) =>
+      completeFields<typeof value>({
+        _tag: "Settled",
+        dispositionAt: preserveCassetteValue(value.dispositionAt),
+        plannedAttempt: renamePlannedAttempt(value.plannedAttempt, maps),
+        settlementOperationId: renamed(value.settlementOperationId, maps.operationIds)
+      }),
+    Superseded: (value) =>
+      completeFields<typeof value>({
+        _tag: "Superseded",
+        dispositionAt: preserveCassetteValue(value.dispositionAt),
+        plannedAttempt: renamePlannedAttempt(value.plannedAttempt, maps),
+        successorAttempt: renamePlannedAttempt(value.successorAttempt, maps)
+      })
+  })
+
+const renameIntegratorCandidateCleanupDisposition = (
+  disposition: IntegratorCandidateCleanupDisposition,
+  maps: IdentityRenamingMaps
+): IntegratorCandidateCleanupDisposition =>
+  completeFields<IntegratorCandidateCleanupDisposition>({
+    _tag: "Superseded",
+    directionAppliedAt: preserveCassetteValue(disposition.directionAppliedAt),
+    dispositionAt: preserveCassetteValue(disposition.dispositionAt),
+    predecessor: renameIntegratorSessionCorrelation(disposition.predecessor, maps),
+    successor: renameIntegratorSessionCorrelation(disposition.successor, maps)
+  })
+
+const renameWorktreeCleanupAuthorization = (
+  authorization: WorktreeCleanupAuthorization,
+  maps: IdentityRenamingMaps
+): WorktreeCleanupAuthorization =>
+  completeFields<WorktreeCleanupAuthorization>({
+    causalPredecessors: renameOperationIdTuple(authorization.causalPredecessors, maps),
+    disposition: renamePlannedAttemptCleanupDisposition(authorization.disposition, maps),
+    evidenceRevision: preserveCassetteValue(authorization.evidenceRevision),
+    expectedHead: preserveCassetteValue(authorization.expectedHead),
+    locator: renamed(authorization.locator, maps.worktreeLocators),
+    observationAt: preserveCassetteValue(authorization.observationAt),
+    observationOperationId: renamed(authorization.observationOperationId, maps.operationIds),
+    operationId: renamed(authorization.operationId, maps.operationIds),
+    owner: WorktreeCleanupOwner.make({
+      attemptId: renamed(authorization.owner.attemptId, maps.attemptIds),
+      branch: renamed(authorization.owner.branch, maps.taskBranchRefs)
+    }),
+    writerQuiescent: preserveCassetteValue(authorization.writerQuiescent)
+  })
+
+const renameBranchCleanupAuthorization = (
+  authorization: BranchCleanupAuthorization,
+  maps: IdentityRenamingMaps
+): BranchCleanupAuthorization =>
+  completeFields<BranchCleanupAuthorization>({
+    causalPredecessors: renameOperationIdTuple(authorization.causalPredecessors, maps),
+    disposition: renamePlannedAttemptCleanupDisposition(authorization.disposition, maps),
+    evidenceRevision: preserveCassetteValue(authorization.evidenceRevision),
+    expectedHead: preserveCassetteValue(authorization.expectedHead),
+    locator: renamed(authorization.locator, maps.taskBranchRefs),
+    observationAt: preserveCassetteValue(authorization.observationAt),
+    observationOperationId: renamed(authorization.observationOperationId, maps.operationIds),
+    operationId: renamed(authorization.operationId, maps.operationIds),
+    owner: BranchCleanupOwner.make({ attemptId: renamed(authorization.owner.attemptId, maps.attemptIds) }),
+    worktreeCleanupOperationId: renamed(authorization.worktreeCleanupOperationId, maps.operationIds),
+    writerQuiescent: preserveCassetteValue(authorization.writerQuiescent)
+  })
+
+const renameIntegratorCandidateCleanupAuthorization = (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  maps: IdentityRenamingMaps
+): IntegratorCandidateCleanupAuthorization =>
+  completeFields<IntegratorCandidateCleanupAuthorization>({
+    causalPredecessors: renameOperationIdTuple(authorization.causalPredecessors, maps),
+    disposition: renameIntegratorCandidateCleanupDisposition(authorization.disposition, maps),
+    evidenceRevision: preserveCassetteValue(authorization.evidenceRevision),
+    locator: renameIntegratorCandidateResource(authorization.locator, maps),
+    observationAt: preserveCassetteValue(authorization.observationAt),
+    observationOperationId: renamed(authorization.observationOperationId, maps.operationIds),
+    operationId: renamed(authorization.operationId, maps.operationIds),
+    owner: IntegratorCandidateCleanupOwner.make({
+      sessionId: renameIntegratorSession(authorization.owner.sessionId, maps)
+    }),
+    writerQuiescent: preserveCassetteValue(authorization.writerQuiescent)
+  })
+
+const renameWorktreeCleanupObservation = (
+  observation: WorktreeCleanupObservation,
+  maps: IdentityRenamingMaps
+): WorktreeCleanupObservation =>
+  Match.valueTags(observation, {
+    Present: (value) =>
+      completeFields<typeof value>({
+        _tag: "Present",
+        attemptId: renamed(value.attemptId, maps.attemptIds),
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        headSha: preserveCassetteValue(value.headSha),
+        locator: renamed(value.locator, maps.worktreeLocators),
+        revision: preserveCassetteValue(value.revision),
+        writerQuiescent: preserveCassetteValue(value.writerQuiescent)
+      }),
+    Absent: (value) =>
+      completeFields<typeof value>({
+        _tag: "Absent",
+        locator: renamed(value.locator, maps.worktreeLocators),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    Foreign: (value) =>
+      completeFields<typeof value>({
+        _tag: "Foreign",
+        locator: renamed(value.locator, maps.worktreeLocators),
+        observedBranch: renamed(value.observedBranch, maps.taskBranchRefs),
+        observedHead: preserveCassetteValue(value.observedHead),
+        reason: preserveCassetteValue(value.reason),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    Unregistered: (value) =>
+      completeFields<typeof value>({
+        _tag: "Unregistered",
+        locator: renamed(value.locator, maps.worktreeLocators),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    Unreadable: (value) =>
+      completeFields<typeof value>({
+        _tag: "Unreadable",
+        detail: preserveCassetteValue(value.detail),
+        locator: renamed(value.locator, maps.worktreeLocators)
+      })
+  })
+
+const renameWorktreeCleanupMutationResult = (
+  result: WorktreeCleanupMutationResult,
+  maps: IdentityRenamingMaps
+): WorktreeCleanupMutationResult =>
+  Match.valueTags(result, {
+    Removed: (value) =>
+      completeFields<typeof value>({
+        _tag: "Removed",
+        locator: renamed(value.locator, maps.worktreeLocators),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    AlreadyAbsent: (value) =>
+      completeFields<typeof value>({
+        _tag: "AlreadyAbsent",
+        locator: renamed(value.locator, maps.worktreeLocators),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    DefinitelyNotApplied: (value) =>
+      completeFields<typeof value>({
+        _tag: "DefinitelyNotApplied",
+        detail: preserveCassetteValue(value.detail),
+        locator: renamed(value.locator, maps.worktreeLocators)
+      }),
+    Unknown: (value) =>
+      completeFields<typeof value>({
+        _tag: "Unknown",
+        detail: preserveCassetteValue(value.detail),
+        locator: renamed(value.locator, maps.worktreeLocators)
+      })
+  })
+
+type WorktreeCleanupSettledResult = Extract<
+  WorktreeCleanupMutationResult,
+  { readonly _tag: "Removed" | "AlreadyAbsent" }
+>
+
+const renameWorktreeCleanupSettledResult = (
+  result: WorktreeCleanupSettledResult,
+  maps: IdentityRenamingMaps
+): WorktreeCleanupSettledResult =>
+  Match.valueTags(result, {
+    Removed: (value) =>
+      completeFields<typeof value>({
+        _tag: "Removed",
+        locator: renamed(value.locator, maps.worktreeLocators),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    AlreadyAbsent: (value) =>
+      completeFields<typeof value>({
+        _tag: "AlreadyAbsent",
+        locator: renamed(value.locator, maps.worktreeLocators),
+        revision: preserveCassetteValue(value.revision)
+      })
+  })
+
+const renameBranchCleanupObservation = (
+  observation: BranchCleanupObservation,
+  maps: IdentityRenamingMaps
+): BranchCleanupObservation =>
+  Match.valueTags(observation, {
+    Present: (value) =>
+      completeFields<typeof value>({
+        _tag: "Present",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        headSha: preserveCassetteValue(value.headSha),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    Absent: (value) =>
+      completeFields<typeof value>({
+        _tag: "Absent",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    Foreign: (value) =>
+      completeFields<typeof value>({
+        _tag: "Foreign",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        observedHead: preserveCassetteValue(value.observedHead),
+        observedWorktree: renamed(value.observedWorktree, maps.worktreeLocators),
+        reason: preserveCassetteValue(value.reason),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    Unreadable: (value) =>
+      completeFields<typeof value>({
+        _tag: "Unreadable",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        detail: preserveCassetteValue(value.detail)
+      })
+  })
+
+const renameBranchCleanupMutationResult = (
+  result: BranchCleanupMutationResult,
+  maps: IdentityRenamingMaps
+): BranchCleanupMutationResult =>
+  Match.valueTags(result, {
+    Removed: (value) =>
+      completeFields<typeof value>({
+        _tag: "Removed",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    AlreadyAbsent: (value) =>
+      completeFields<typeof value>({
+        _tag: "AlreadyAbsent",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    DefinitelyNotApplied: (value) =>
+      completeFields<typeof value>({
+        _tag: "DefinitelyNotApplied",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        detail: preserveCassetteValue(value.detail)
+      }),
+    Unknown: (value) =>
+      completeFields<typeof value>({
+        _tag: "Unknown",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        detail: preserveCassetteValue(value.detail)
+      })
+  })
+
+type BranchCleanupSettledResult = Extract<BranchCleanupMutationResult, { readonly _tag: "Removed" | "AlreadyAbsent" }>
+
+const renameBranchCleanupSettledResult = (
+  result: BranchCleanupSettledResult,
+  maps: IdentityRenamingMaps
+): BranchCleanupSettledResult =>
+  Match.valueTags(result, {
+    Removed: (value) =>
+      completeFields<typeof value>({
+        _tag: "Removed",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    AlreadyAbsent: (value) =>
+      completeFields<typeof value>({
+        _tag: "AlreadyAbsent",
+        branch: renamed(value.branch, maps.taskBranchRefs),
+        revision: preserveCassetteValue(value.revision)
+      })
+  })
+
+const renameIntegratorCandidateCleanupObservation = (
+  observation: IntegratorCandidateCleanupObservation,
+  maps: IdentityRenamingMaps
+): IntegratorCandidateCleanupObservation =>
+  Match.valueTags(observation, {
+    Present: (value) =>
+      completeFields<typeof value>({
+        _tag: "Present",
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        revision: preserveCassetteValue(value.revision),
+        sessionId: renameIntegratorSession(value.sessionId, maps),
+        writerQuiescent: preserveCassetteValue(value.writerQuiescent)
+      }),
+    Absent: (value) =>
+      completeFields<typeof value>({
+        _tag: "Absent",
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    Foreign: (value) =>
+      completeFields<typeof value>({
+        _tag: "Foreign",
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        observedSessionId: renameIntegratorSession(value.observedSessionId, maps),
+        reason: preserveCassetteValue(value.reason),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    Unreadable: (value) =>
+      completeFields<typeof value>({
+        _tag: "Unreadable",
+        detail: preserveCassetteValue(value.detail),
+        locator: renameIntegratorCandidateResource(value.locator, maps)
+      })
+  })
+
+const renameIntegratorCandidateCleanupMutationResult = (
+  result: IntegratorCandidateCleanupMutationResult,
+  maps: IdentityRenamingMaps
+): IntegratorCandidateCleanupMutationResult =>
+  Match.valueTags(result, {
+    Removed: (value) =>
+      completeFields<typeof value>({
+        _tag: "Removed",
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    AlreadyAbsent: (value) =>
+      completeFields<typeof value>({
+        _tag: "AlreadyAbsent",
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    DefinitelyNotApplied: (value) =>
+      completeFields<typeof value>({
+        _tag: "DefinitelyNotApplied",
+        detail: preserveCassetteValue(value.detail),
+        locator: renameIntegratorCandidateResource(value.locator, maps)
+      }),
+    Unknown: (value) =>
+      completeFields<typeof value>({
+        _tag: "Unknown",
+        detail: preserveCassetteValue(value.detail),
+        locator: renameIntegratorCandidateResource(value.locator, maps)
+      })
+  })
+
+type IntegratorCandidateCleanupSettledResult = Extract<
+  IntegratorCandidateCleanupMutationResult,
+  { readonly _tag: "Removed" | "AlreadyAbsent" }
+>
+
+const renameIntegratorCandidateCleanupSettledResult = (
+  result: IntegratorCandidateCleanupSettledResult,
+  maps: IdentityRenamingMaps
+): IntegratorCandidateCleanupSettledResult =>
+  Match.valueTags(result, {
+    Removed: (value) =>
+      completeFields<typeof value>({
+        _tag: "Removed",
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        revision: preserveCassetteValue(value.revision)
+      }),
+    AlreadyAbsent: (value) =>
+      completeFields<typeof value>({
+        _tag: "AlreadyAbsent",
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        revision: preserveCassetteValue(value.revision)
+      })
+  })
+
+type RecordedCleanupEntry = Extract<
+  RecordedCassetteEntryType,
+  {
+    readonly _tag:
+      | "WorktreeCleanupAuthorized"
+      | "WorktreeCleanupObservationIntended"
+      | "WorktreeCleanupObserved"
+      | "WorktreeCleanupMutationIntended"
+      | "WorktreeCleanupMutationResultRecorded"
+      | "WorktreeCleanupContradicted"
+      | "WorktreeCleanupSettled"
+      | "BranchCleanupAuthorized"
+      | "BranchCleanupObservationIntended"
+      | "BranchCleanupObserved"
+      | "BranchCleanupMutationIntended"
+      | "BranchCleanupMutationResultRecorded"
+      | "BranchCleanupContradicted"
+      | "BranchCleanupSettled"
+      | "IntegratorCandidateCleanupAuthorized"
+      | "IntegratorCandidateCleanupObservationIntended"
+      | "IntegratorCandidateCleanupObserved"
+      | "IntegratorCandidateCleanupMutationIntended"
+      | "IntegratorCandidateCleanupMutationResultRecorded"
+      | "IntegratorCandidateCleanupContradicted"
+      | "IntegratorCandidateCleanupSettled"
+  }
+>
+
+const renameCleanupEntry = (entry: RecordedCleanupEntry, maps: IdentityRenamingMaps): RecordedCleanupEntry =>
+  Match.valueTags(entry, {
+    WorktreeCleanupAuthorized: (value) =>
+      completeFields<typeof value>({
+        _tag: "WorktreeCleanupAuthorized",
+        authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification)
+      }),
+    WorktreeCleanupObservationIntended: (value) =>
+      completeFields<typeof value>({
+        _tag: "WorktreeCleanupObservationIntended",
+        authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
+    WorktreeCleanupObserved: (value) =>
+      completeFields<typeof value>({
+        _tag: "WorktreeCleanupObserved",
+        authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
+        observation: renameWorktreeCleanupObservation(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
+    WorktreeCleanupMutationIntended: (value) =>
+      completeFields<typeof value>({
+        _tag: "WorktreeCleanupMutationIntended",
+        attempt: preserveCassetteValue(value.attempt),
+        authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds)
+      }),
+    WorktreeCleanupMutationResultRecorded: (value) =>
+      completeFields<typeof value>({
+        _tag: "WorktreeCleanupMutationResultRecorded",
+        attempt: preserveCassetteValue(value.attempt),
+        authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        result: renameWorktreeCleanupMutationResult(value.result, maps)
+      }),
+    WorktreeCleanupContradicted: (value) =>
+      completeFields<typeof value>({
+        _tag: "WorktreeCleanupContradicted",
+        authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
+        detail: preserveCassetteValue(value.detail),
+        observation: renameWorktreeCleanupObservation(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds)
+      }),
+    WorktreeCleanupSettled: (value) =>
+      completeFields<typeof value>({
+        _tag: "WorktreeCleanupSettled",
+        authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        result: renameWorktreeCleanupSettledResult(value.result, maps)
+      }),
+    BranchCleanupAuthorized: (value) =>
+      completeFields<typeof value>({
+        _tag: "BranchCleanupAuthorized",
+        authorization: renameBranchCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification)
+      }),
+    BranchCleanupObservationIntended: (value) =>
+      completeFields<typeof value>({
+        _tag: "BranchCleanupObservationIntended",
+        authorization: renameBranchCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
+    BranchCleanupObserved: (value) =>
+      completeFields<typeof value>({
+        _tag: "BranchCleanupObserved",
+        authorization: renameBranchCleanupAuthorization(value.authorization, maps),
+        observation: renameBranchCleanupObservation(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
+    BranchCleanupMutationIntended: (value) =>
+      completeFields<typeof value>({
+        _tag: "BranchCleanupMutationIntended",
+        attempt: preserveCassetteValue(value.attempt),
+        authorization: renameBranchCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds)
+      }),
+    BranchCleanupMutationResultRecorded: (value) =>
+      completeFields<typeof value>({
+        _tag: "BranchCleanupMutationResultRecorded",
+        attempt: preserveCassetteValue(value.attempt),
+        authorization: renameBranchCleanupAuthorization(value.authorization, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        result: renameBranchCleanupMutationResult(value.result, maps)
+      }),
+    BranchCleanupContradicted: (value) =>
+      completeFields<typeof value>({
+        _tag: "BranchCleanupContradicted",
+        authorization: renameBranchCleanupAuthorization(value.authorization, maps),
+        detail: preserveCassetteValue(value.detail),
+        observation: renameBranchCleanupObservation(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds)
+      }),
+    BranchCleanupSettled: (value) =>
+      completeFields<typeof value>({
+        _tag: "BranchCleanupSettled",
+        authorization: renameBranchCleanupAuthorization(value.authorization, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        result: renameBranchCleanupSettledResult(value.result, maps)
+      }),
+    IntegratorCandidateCleanupAuthorized: (value) =>
+      completeFields<typeof value>({
+        _tag: "IntegratorCandidateCleanupAuthorized",
+        authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification)
+      }),
+    IntegratorCandidateCleanupObservationIntended: (value) =>
+      completeFields<typeof value>({
+        _tag: "IntegratorCandidateCleanupObservationIntended",
+        authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
+    IntegratorCandidateCleanupObserved: (value) =>
+      completeFields<typeof value>({
+        _tag: "IntegratorCandidateCleanupObserved",
+        authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
+        observation: renameIntegratorCandidateCleanupObservation(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
+    IntegratorCandidateCleanupMutationIntended: (value) =>
+      completeFields<typeof value>({
+        _tag: "IntegratorCandidateCleanupMutationIntended",
+        attempt: preserveCassetteValue(value.attempt),
+        authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
+        initiatedBy: preserveCassetteValue(value.initiatedBy),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds)
+      }),
+    IntegratorCandidateCleanupMutationResultRecorded: (value) =>
+      completeFields<typeof value>({
+        _tag: "IntegratorCandidateCleanupMutationResultRecorded",
+        attempt: preserveCassetteValue(value.attempt),
+        authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        result: renameIntegratorCandidateCleanupMutationResult(value.result, maps)
+      }),
+    IntegratorCandidateCleanupContradicted: (value) =>
+      completeFields<typeof value>({
+        _tag: "IntegratorCandidateCleanupContradicted",
+        authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
+        detail: preserveCassetteValue(value.detail),
+        observation: renameIntegratorCandidateCleanupObservation(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds)
+      }),
+    IntegratorCandidateCleanupSettled: (value) =>
+      completeFields<typeof value>({
+        _tag: "IntegratorCandidateCleanupSettled",
+        authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        result: renameIntegratorCandidateCleanupSettledResult(value.result, maps)
+      })
+  })
+
 const renameRecordedCassetteEntry = (
   entry: RecordedCassetteEntryType,
   maps: IdentityRenamingMaps
@@ -813,6 +1426,27 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           requestId: renameIntegrationQuarantineDirectionRequestId(entry.requestId, maps)
         }),
+      WorktreeCleanupAuthorized: (entry) => renameCleanupEntry(entry, maps),
+      WorktreeCleanupObservationIntended: (entry) => renameCleanupEntry(entry, maps),
+      WorktreeCleanupObserved: (entry) => renameCleanupEntry(entry, maps),
+      WorktreeCleanupMutationIntended: (entry) => renameCleanupEntry(entry, maps),
+      WorktreeCleanupMutationResultRecorded: (entry) => renameCleanupEntry(entry, maps),
+      WorktreeCleanupContradicted: (entry) => renameCleanupEntry(entry, maps),
+      WorktreeCleanupSettled: (entry) => renameCleanupEntry(entry, maps),
+      BranchCleanupAuthorized: (entry) => renameCleanupEntry(entry, maps),
+      BranchCleanupObservationIntended: (entry) => renameCleanupEntry(entry, maps),
+      BranchCleanupObserved: (entry) => renameCleanupEntry(entry, maps),
+      BranchCleanupMutationIntended: (entry) => renameCleanupEntry(entry, maps),
+      BranchCleanupMutationResultRecorded: (entry) => renameCleanupEntry(entry, maps),
+      BranchCleanupContradicted: (entry) => renameCleanupEntry(entry, maps),
+      BranchCleanupSettled: (entry) => renameCleanupEntry(entry, maps),
+      IntegratorCandidateCleanupAuthorized: (entry) => renameCleanupEntry(entry, maps),
+      IntegratorCandidateCleanupObservationIntended: (entry) => renameCleanupEntry(entry, maps),
+      IntegratorCandidateCleanupObserved: (entry) => renameCleanupEntry(entry, maps),
+      IntegratorCandidateCleanupMutationIntended: (entry) => renameCleanupEntry(entry, maps),
+      IntegratorCandidateCleanupMutationResultRecorded: (entry) => renameCleanupEntry(entry, maps),
+      IntegratorCandidateCleanupContradicted: (entry) => renameCleanupEntry(entry, maps),
+      IntegratorCandidateCleanupSettled: (entry) => renameCleanupEntry(entry, maps),
       TargetPromotionIntended: (entry) =>
         completeFields<typeof entry>({
           _tag: "TargetPromotionIntended",

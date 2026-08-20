@@ -41,6 +41,9 @@ import {
   AttemptRestartAuthorityReadFailedEvent,
   PlannedAttemptReplacedEvent
 } from "../protocols/attempt-choice/replacement-events.js"
+import { WorktreeCleanupJournalEvent } from "../protocols/disposition-cleanup/worktree.js"
+import { BranchCleanupJournalEvent } from "../protocols/disposition-cleanup/branch.js"
+import { IntegratorCandidateCleanupJournalEvent } from "../protocols/disposition-cleanup/integrator-candidate.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -54,7 +57,10 @@ const ResponsibilityJournalEvent = Schema.Union([
   IntegratorJournalEvent,
   TargetPromotionJournalEvent,
   IntegrationFinalityJournalEvent,
-  IntegrationQuarantineJournalEvent
+  IntegrationQuarantineJournalEvent,
+  WorktreeCleanupJournalEvent,
+  BranchCleanupJournalEvent,
+  IntegratorCandidateCleanupJournalEvent
 ])
 
 /**

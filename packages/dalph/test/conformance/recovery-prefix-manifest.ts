@@ -21,6 +21,9 @@ const recoveryPrefixBoundaryIds = [
   "tracker-completion-finality",
   "control-direction",
   "attempt-choice",
+  "planned-attempt-worktree-cleanup",
+  "planned-attempt-branch-cleanup",
+  "integrator-candidate-cleanup",
   "run-establishment",
   "application-exit"
 ] as const
@@ -311,6 +314,57 @@ const sourceManifest = {
       endpoints: { P0: "the record before AttemptChoiceApplied", P6: "AttemptChoiceApplied" },
       notApplicableReason: (cut) => noEndpointReasonFor("Attempt-choice application", cut),
       qualification: metadataReasonFor("Attempt-choice application")
+    }),
+    boundary({
+      id: "planned-attempt-worktree-cleanup",
+      family: "Planned-attempt worktree cleanup",
+      description: "Exact superseded/terminal worktree cleanup with fresh Git reconciliation.",
+      evidence: currentEvidence.worktreeCleanup,
+      endpoints: {
+        P0: "the record before WorktreeCleanupAuthorized",
+        P1: "WorktreeCleanupAuthorized",
+        P2: "WorktreeCleanupMutationIntended",
+        P3: "WorktreeCleanupMutationResultRecorded",
+        P4: "WorktreeCleanupObservationIntended for reconciliation",
+        P5: "WorktreeCleanupObserved for reconciliation",
+        P6: "WorktreeCleanupSettled or WorktreeCleanupContradicted"
+      },
+      notApplicableReason: (cut) => noEndpointReasonFor("Planned-attempt worktree cleanup", cut),
+      qualification: metadataReasonFor("Planned-attempt worktree cleanup")
+    }),
+    boundary({
+      id: "planned-attempt-branch-cleanup",
+      family: "Planned-attempt branch cleanup",
+      description: "Exact branch cleanup gated by settled worktree removal.",
+      evidence: currentEvidence.branchCleanup,
+      endpoints: {
+        P0: "the record before BranchCleanupAuthorized",
+        P1: "BranchCleanupAuthorized",
+        P2: "BranchCleanupMutationIntended",
+        P3: "BranchCleanupMutationResultRecorded",
+        P4: "BranchCleanupObservationIntended for reconciliation",
+        P5: "BranchCleanupObserved for reconciliation",
+        P6: "BranchCleanupSettled or BranchCleanupContradicted"
+      },
+      notApplicableReason: (cut) => noEndpointReasonFor("Planned-attempt branch cleanup", cut),
+      qualification: metadataReasonFor("Planned-attempt branch cleanup")
+    }),
+    boundary({
+      id: "integrator-candidate-cleanup",
+      family: "Integrator predecessor-candidate cleanup",
+      description: "Exact FullRerun predecessor-candidate cleanup with session ownership reconciliation.",
+      evidence: currentEvidence.integratorCandidateCleanup,
+      endpoints: {
+        P0: "the record before IntegratorCandidateCleanupAuthorized",
+        P1: "IntegratorCandidateCleanupAuthorized",
+        P2: "IntegratorCandidateCleanupMutationIntended",
+        P3: "IntegratorCandidateCleanupMutationResultRecorded",
+        P4: "IntegratorCandidateCleanupObservationIntended for reconciliation",
+        P5: "IntegratorCandidateCleanupObserved for reconciliation",
+        P6: "IntegratorCandidateCleanupSettled or IntegratorCandidateCleanupContradicted"
+      },
+      notApplicableReason: (cut) => noEndpointReasonFor("Integrator predecessor-candidate cleanup", cut),
+      qualification: metadataReasonFor("Integrator predecessor-candidate cleanup")
     }),
     boundary({
       id: "run-establishment",

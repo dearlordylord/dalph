@@ -160,6 +160,10 @@ export {
   TestGitTargetLineage
 } from "./authorities/git/target-lineage.js"
 export { nodeGitIntegratorCandidateLayer } from "./authorities/git/integrator-candidate.js"
+export * from "./workflow/protocols/disposition-cleanup/disposition.js"
+export * from "./workflow/protocols/disposition-cleanup/worktree.js"
+export * from "./workflow/protocols/disposition-cleanup/branch.js"
+export * from "./workflow/protocols/disposition-cleanup/integrator-candidate.js"
 export { nodeGitTargetPromotionLayer } from "./authorities/git/target-promotion.js"
 export * from "./workflow/protocols/integrator/protocol.js"
 export {

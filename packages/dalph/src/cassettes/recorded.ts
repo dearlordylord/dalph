@@ -53,12 +53,15 @@ import {
   TaskClaimAcquisitionRejectedEvent,
   taskTrackerReadIntent,
   taskTrackerFactsObservedEvent,
-  type WorkflowJournalEvent,
+  WorkflowJournalEvent,
   WorkflowActor,
   workflowJournalEventVersion,
   reduceWorkflowJournalHistory,
   StoppedAttemptClaimNoReleaseObservedEvent,
-  TaskClaimReacquisitionDirectedEvent
+  TaskClaimReacquisitionDirectedEvent,
+  type BranchCleanupJournalEvent,
+  type IntegratorCandidateCleanupJournalEvent,
+  type WorktreeCleanupJournalEvent
 } from "@dalph/orchestrator"
 import {
   type CassetteIdentityRenaming,
@@ -790,8 +793,77 @@ const recordIntegrationQuarantineEntry = (event: IntegrationQuarantineEvent): Re
     })
   })
 
+type CleanupJournalEvent =
+  | BranchCleanupJournalEvent
+  | IntegratorCandidateCleanupJournalEvent
+  | WorktreeCleanupJournalEvent
+
+type RecordedCleanupEntry = Extract<RecordedCassetteEntry, { readonly _tag: CleanupJournalEvent["_tag"] }>
+
+const cleanupEventTags = {
+  BranchCleanupAuthorized: true,
+  BranchCleanupContradicted: true,
+  BranchCleanupMutationIntended: true,
+  BranchCleanupMutationResultRecorded: true,
+  BranchCleanupObservationIntended: true,
+  BranchCleanupObserved: true,
+  BranchCleanupSettled: true,
+  IntegratorCandidateCleanupAuthorized: true,
+  IntegratorCandidateCleanupContradicted: true,
+  IntegratorCandidateCleanupMutationIntended: true,
+  IntegratorCandidateCleanupMutationResultRecorded: true,
+  IntegratorCandidateCleanupObservationIntended: true,
+  IntegratorCandidateCleanupObserved: true,
+  IntegratorCandidateCleanupSettled: true,
+  WorktreeCleanupAuthorized: true,
+  WorktreeCleanupContradicted: true,
+  WorktreeCleanupMutationIntended: true,
+  WorktreeCleanupMutationResultRecorded: true,
+  WorktreeCleanupObservationIntended: true,
+  WorktreeCleanupObserved: true,
+  WorktreeCleanupSettled: true
+} satisfies Record<CleanupJournalEvent["_tag"], true>
+
+const isCleanupEvent = (event: WorkflowJournalEvent): event is CleanupJournalEvent =>
+  Object.hasOwn(cleanupEventTags, event._tag)
+
+const isRecordedCleanupEntry = (entry: RecordedCassetteEntry): entry is RecordedCleanupEntry =>
+  Object.hasOwn(cleanupEventTags, entry._tag)
+
+const withoutEventVersion = (event: CleanupJournalEvent): RecordedCleanupEntry => {
+  const { version: _version, ...entry } = event
+  return entry
+}
+
+/** Every cleanup event is recorded with its complete family-specific payload. */
+const recordCleanupEntry = (event: CleanupJournalEvent): RecordedCleanupEntry =>
+  Match.valueTags(event, {
+    WorktreeCleanupAuthorized: withoutEventVersion,
+    WorktreeCleanupObservationIntended: withoutEventVersion,
+    WorktreeCleanupObserved: withoutEventVersion,
+    WorktreeCleanupMutationIntended: withoutEventVersion,
+    WorktreeCleanupMutationResultRecorded: withoutEventVersion,
+    WorktreeCleanupContradicted: withoutEventVersion,
+    WorktreeCleanupSettled: withoutEventVersion,
+    BranchCleanupAuthorized: withoutEventVersion,
+    BranchCleanupObservationIntended: withoutEventVersion,
+    BranchCleanupObserved: withoutEventVersion,
+    BranchCleanupMutationIntended: withoutEventVersion,
+    BranchCleanupMutationResultRecorded: withoutEventVersion,
+    BranchCleanupContradicted: withoutEventVersion,
+    BranchCleanupSettled: withoutEventVersion,
+    IntegratorCandidateCleanupAuthorized: withoutEventVersion,
+    IntegratorCandidateCleanupObservationIntended: withoutEventVersion,
+    IntegratorCandidateCleanupObserved: withoutEventVersion,
+    IntegratorCandidateCleanupMutationIntended: withoutEventVersion,
+    IntegratorCandidateCleanupMutationResultRecorded: withoutEventVersion,
+    IntegratorCandidateCleanupContradicted: withoutEventVersion,
+    IntegratorCandidateCleanupSettled: withoutEventVersion
+  })
+
 const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
   Match.value(event).pipe(
+    Match.when(isCleanupEvent, recordCleanupEntry),
     Match.when(isOuterIntegratorEvent, recordOuterIntegratorEntry),
     Match.when(isIntegrationQuarantineEvent, recordIntegrationQuarantineEntry),
     Match.when(isJournalRunEntry, recordedRunEntryFor),
@@ -1292,6 +1364,10 @@ const isRecordedAttemptRestartAuthorityReadFailedEntry = (
 ): entry is Extract<RecordedCassetteEntry, { readonly _tag: "AttemptRestartAuthorityReadFailed" }> =>
   entry._tag === "AttemptRestartAuthorityReadFailed"
 
+/** Rehydrates the exact family-specific cleanup event after recorded projection. */
+const eventForCleanupEntry = (entry: RecordedCleanupEntry): WorkflowJournalEvent =>
+  Schema.decodeUnknownSync(WorkflowJournalEvent)({ ...entry, version: workflowJournalEventVersion })
+
 const eventForOtherRecordedEntry = (
   entry: Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>,
   entries: ReadonlyArray<RecordedCassetteEntry>,
@@ -1299,6 +1375,7 @@ const eventForOtherRecordedEntry = (
   runId: RecordedCassetteType["runId"]
 ): WorkflowJournalEvent =>
   Match.value(entry).pipe(
+    Match.when(isRecordedCleanupEntry, eventForCleanupEntry),
     Match.when(isRecordedRunEntry, eventForRunEntry),
     Match.when(isRecordedOperatorDirectionEntry, (value) => eventForRecordedOperatorDirectionEntry(value, runId)),
     Match.when(isRecordedAttemptStopEntry, eventForRecordedAttemptStopEntry),
@@ -1454,6 +1531,40 @@ const lyricForIntegrationQuarantineEntry = (entry: RecordedIntegrationQuarantine
       `Dalph quarantined Integrator session ${value.correlation.sessionId} on ${value.basis._tag} evidence.`
   })
 
+const lyricForCleanupEntry = (entry: RecordedCleanupEntry): string =>
+  Match.valueTags(entry, {
+    WorktreeCleanupAuthorized: () => "Dalph authorized exact worktree cleanup.",
+    WorktreeCleanupObservationIntended: () => "Dalph intended a fresh worktree cleanup observation.",
+    WorktreeCleanupObserved: (value) =>
+      `Git reported ${value.observation._tag} for the exact worktree cleanup subject.`,
+    WorktreeCleanupMutationIntended: (value) => `Dalph intended worktree removal attempt ${value.attempt}.`,
+    WorktreeCleanupMutationResultRecorded: (value) =>
+      `Git recorded ${value.result._tag} for worktree removal attempt ${value.attempt}.`,
+    WorktreeCleanupContradicted: () =>
+      "Fresh Git facts contradicted worktree cleanup authority; the worktree was preserved.",
+    WorktreeCleanupSettled: () => "The exact worktree cleanup responsibility settled.",
+    BranchCleanupAuthorized: () => "Dalph authorized exact branch cleanup after worktree settlement.",
+    BranchCleanupObservationIntended: () => "Dalph intended a fresh branch cleanup observation.",
+    BranchCleanupObserved: (value) => `Git reported ${value.observation._tag} for the exact branch cleanup subject.`,
+    BranchCleanupMutationIntended: (value) => `Dalph intended branch removal attempt ${value.attempt}.`,
+    BranchCleanupMutationResultRecorded: (value) =>
+      `Git recorded ${value.result._tag} for branch removal attempt ${value.attempt}.`,
+    BranchCleanupContradicted: () => "Fresh Git facts contradicted branch cleanup authority; the branch was preserved.",
+    BranchCleanupSettled: () => "The exact branch cleanup responsibility settled.",
+    IntegratorCandidateCleanupAuthorized: () => "Dalph authorized exact predecessor-candidate cleanup.",
+    IntegratorCandidateCleanupObservationIntended: () =>
+      "Dalph intended a fresh predecessor-candidate ownership observation.",
+    IntegratorCandidateCleanupObserved: (value) =>
+      `The provider reported ${value.observation._tag} for the predecessor candidate.`,
+    IntegratorCandidateCleanupMutationIntended: (value) =>
+      `Dalph intended predecessor-candidate removal attempt ${value.attempt}.`,
+    IntegratorCandidateCleanupMutationResultRecorded: (value) =>
+      `The provider recorded ${value.result._tag} for predecessor-candidate removal attempt ${value.attempt}.`,
+    IntegratorCandidateCleanupContradicted: () =>
+      "Fresh candidate ownership facts contradicted cleanup authority; the candidate was preserved.",
+    IntegratorCandidateCleanupSettled: () => "The exact predecessor-candidate cleanup responsibility settled."
+  })
+
 const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): string =>
   Match.valueTags(entry, {
     TargetPromotionIntended: (value) =>
@@ -1545,6 +1656,7 @@ const lyricForTaskBoundaryEntry = (
     | RecordedIntegrationFinalityEntry
     | RecordedOuterIntegratorEntry
     | RecordedIntegrationQuarantineEntry
+    | RecordedCleanupEntry
     | { readonly _tag: "PlannedAttemptContinuationAuthorized" }
     | { readonly _tag: "AttemptChoiceApplied" | "ControlDirectionApplied" | "TaskClaimReacquisitionDirected" }
   >
@@ -1590,6 +1702,7 @@ type RecordedOtherEntry = Exclude<RecordedCassetteEntry, RecordedContinuationAut
 type RecordedPresentationResidualEntry = Exclude<
   RecordedOtherEntry,
   | RecordedAttemptStopEntry
+  | RecordedCleanupEntry
   | RecordedIntegrationPreparationEntry
   | RecordedOperatorDirectionEntry
   | RecordedOuterIntegratorEntry
@@ -1605,6 +1718,7 @@ const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidua
 }
 
 const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
+  if (isRecordedCleanupEntry(entry)) return lyricForCleanupEntry(entry)
   if (isRecordedOperatorDirectionEntry(entry)) return lyricForRecordedOperatorDirectionEntry(entry)
   if (isRecordedAttemptStopEntry(entry)) return lyricForRecordedAttemptStopEntry(entry)
   if (isRecordedOuterIntegratorEntry(entry)) return lyricForOuterIntegratorEntry(entry)

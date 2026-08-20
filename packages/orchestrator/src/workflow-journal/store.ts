@@ -9,6 +9,9 @@ import {
   WorkflowJournalEvent as WorkflowJournalEventSchema
 } from "../workflow/registry/event.js"
 import type { InitialControlPolicy } from "../control/policy.js"
+import { InRunJournal } from "./in-run-journal.js"
+export { InRunJournal } from "./in-run-journal.js"
+export type { InRunJournalService } from "./in-run-journal.js"
 
 /** One schema-decodable durable envelope around a workflow event. */
 export const JournalRecord = Schema.Struct({
@@ -179,18 +182,6 @@ export interface JournalStoreService {
 }
 
 export class JournalStore extends Context.Service<JournalStore, JournalStoreService>()("@dalph/JournalStore") {}
-
-/** Fixed-process access to ordinary Run history; it cannot begin, recover, scan, or terminate a Run. */
-export interface InRunJournalService {
-  readonly append: (
-    runId: RunId,
-    key: JournalRecordKey,
-    event: AppendableWorkflowJournalEvent
-  ) => Effect.Effect<JournalRecord, JournalAppendError>
-  readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalReadError>
-}
-
-export class InRunJournal extends Context.Service<InRunJournal, InRunJournalService>()("@dalph/InRunJournal") {}
 
 /** Bootstrap and post-runtime Run lifecycle access; ordinary workflow services never receive it. */
 export interface RunLifecycleJournalService {

@@ -41,6 +41,12 @@ in-memory runtime state and a deterministic test clock.
 Authored runs additionally receive browser cryptography and a fresh production
 Run identity; protocol fixtures retain their declared identities.
 
+Issue #69 contributes the `disposition-cleanup:*` entries. Their chronologies
+name exact worktree, branch, and Integrator predecessor-candidate subjects;
+recorded event tags remain family-specific. Boundary behavior is qualified by
+the orchestrator focused protocol/cassette tests and the memory/SQLite
+recovery-prefix lane. The Lab does not invent a generic cleanup stage.
+
 An authored cassette controls tracker, claim, Git, executor, historical
 integration, trace, and journal boundary results. Direct non-integration
 cassettes control application drains, process-end decisions, the Codex app

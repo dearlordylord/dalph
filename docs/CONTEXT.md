@@ -941,6 +941,32 @@ Full rerun does not re-enqueue it behind later work for the same target. The
 quarantined predecessor remains available for later authorized cleanup.
 _Avoid_: Retry, new integration responsibility, task re-execution, cleanup
 
+**Cleanup authorization subject**:
+The immutable, family-specific permission to dispose one exact durable resource.
+It names the terminal disposition occurrence, locator, owner, last authority
+observation and operation, provider evidence revision, cleanup operation
+identity, and causal predecessors proving writers stopped or transferred. A
+cleanup authorization is not reusable after its locator, owner, disposition,
+revision, or writer fact changes.
+_Avoid_: Generic cleanup stage, reusable delete approval, current quarantine,
+resource discovery, inferred process age
+
+**Worktree cleanup settlement**:
+The terminal fact that one exact superseded or terminal planned-attempt
+worktree is absent or was removed after fresh matching Git facts. It is the
+precondition for authorizing deletion of that attempt's exact branch; it never
+authorizes another worktree, branch, candidate, journal, or evidence resource.
+_Avoid_: Branch deletion, attempt replacement, worktree reconciliation,
+filesystem absence without a disposition
+
+**Integrator predecessor-candidate cleanup settlement**:
+The terminal fact that one quarantined FullRerun predecessor candidate resource
+is absent or removed after fresh matching session, locator, revision, and
+writer-quiescence facts. The successor candidate and predecessor history remain
+outside this subject.
+_Avoid_: Integration quarantine, successor-session creation, candidate
+qualification, evidence deletion
+
 **Non-convergent target promotion**:
 The durable preservation disposition after three exact target-promotion
 attempts remain unresolved and the final Git reconciliation does not establish

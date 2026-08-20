@@ -77,7 +77,18 @@ import {
   TargetPromotionGitReadObservation,
   PlannedAttemptContinuationWitness,
   PlannedAttemptReplacementWitness,
-  AttemptRestartAuthorityReadFailure
+  AttemptRestartAuthorityReadFailure,
+  BranchCleanupAuthorization,
+  BranchCleanupMutationResult,
+  BranchCleanupObservation,
+  CleanupMutationOrdinal,
+  CleanupObservationOrdinal,
+  IntegratorCandidateCleanupAuthorization,
+  IntegratorCandidateCleanupMutationResult,
+  IntegratorCandidateCleanupObservation,
+  WorktreeCleanupAuthorization,
+  WorktreeCleanupMutationResult,
+  WorktreeCleanupObservation
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -92,6 +103,150 @@ const nonActionOccurrence = { occurrenceClassification: Schema.Literal("NonActio
  * not belong to this boundary.
  */
 export const RecordedCassetteEntry = Schema.TaggedUnion({
+  /** Worktree cleanup preserves the exact owner, locator, disposition, and fresh Git evidence. */
+  WorktreeCleanupAuthorized: {
+    authorization: WorktreeCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
+  },
+  WorktreeCleanupObservationIntended: {
+    authorization: WorktreeCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
+  WorktreeCleanupObserved: {
+    authorization: WorktreeCleanupAuthorization,
+    observation: WorktreeCleanupObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
+  WorktreeCleanupMutationIntended: {
+    attempt: CleanupMutationOrdinal,
+    authorization: WorktreeCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    operationId: OperationId
+  },
+  WorktreeCleanupMutationResultRecorded: {
+    attempt: CleanupMutationOrdinal,
+    authorization: WorktreeCleanupAuthorization,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    result: WorktreeCleanupMutationResult
+  },
+  WorktreeCleanupContradicted: {
+    authorization: WorktreeCleanupAuthorization,
+    detail: Schema.String,
+    observation: WorktreeCleanupObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId
+  },
+  WorktreeCleanupSettled: {
+    authorization: WorktreeCleanupAuthorization,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    result: Schema.Union([
+      WorktreeCleanupMutationResult.cases.Removed,
+      WorktreeCleanupMutationResult.cases.AlreadyAbsent
+    ])
+  },
+  /** Branch cleanup is a separate family and only follows a recorded worktree settlement. */
+  BranchCleanupAuthorized: {
+    authorization: BranchCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
+  },
+  BranchCleanupObservationIntended: {
+    authorization: BranchCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
+  BranchCleanupObserved: {
+    authorization: BranchCleanupAuthorization,
+    observation: BranchCleanupObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
+  BranchCleanupMutationIntended: {
+    attempt: CleanupMutationOrdinal,
+    authorization: BranchCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    operationId: OperationId
+  },
+  BranchCleanupMutationResultRecorded: {
+    attempt: CleanupMutationOrdinal,
+    authorization: BranchCleanupAuthorization,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    result: BranchCleanupMutationResult
+  },
+  BranchCleanupContradicted: {
+    authorization: BranchCleanupAuthorization,
+    detail: Schema.String,
+    observation: BranchCleanupObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId
+  },
+  BranchCleanupSettled: {
+    authorization: BranchCleanupAuthorization,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    result: Schema.Union([BranchCleanupMutationResult.cases.Removed, BranchCleanupMutationResult.cases.AlreadyAbsent])
+  },
+  /** Candidate cleanup retains predecessor session ownership and never widens to a successor. */
+  IntegratorCandidateCleanupAuthorized: {
+    authorization: IntegratorCandidateCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
+  },
+  IntegratorCandidateCleanupObservationIntended: {
+    authorization: IntegratorCandidateCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
+  IntegratorCandidateCleanupObserved: {
+    authorization: IntegratorCandidateCleanupAuthorization,
+    observation: IntegratorCandidateCleanupObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
+  IntegratorCandidateCleanupMutationIntended: {
+    attempt: CleanupMutationOrdinal,
+    authorization: IntegratorCandidateCleanupAuthorization,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    operationId: OperationId
+  },
+  IntegratorCandidateCleanupMutationResultRecorded: {
+    attempt: CleanupMutationOrdinal,
+    authorization: IntegratorCandidateCleanupAuthorization,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    result: IntegratorCandidateCleanupMutationResult
+  },
+  IntegratorCandidateCleanupContradicted: {
+    authorization: IntegratorCandidateCleanupAuthorization,
+    detail: Schema.String,
+    observation: IntegratorCandidateCleanupObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId
+  },
+  IntegratorCandidateCleanupSettled: {
+    authorization: IntegratorCandidateCleanupAuthorization,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    result: Schema.Union([
+      IntegratorCandidateCleanupMutationResult.cases.Removed,
+      IntegratorCandidateCleanupMutationResult.cases.AlreadyAbsent
+    ])
+  },
   AttemptChoiceApplied: {
     choice: AttemptChoice,
     initiatedBy: WorkflowActor.cases.Operator,

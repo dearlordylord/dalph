@@ -159,6 +159,15 @@ authority observations and are not persisted as substitutes for those facts.
 Cleanup for every owned resource is disposition-typed, exact, recoverable, and
 fail-closed.
 
+Issue #69 materializes three separate cleanup authority modules: planned-attempt
+worktree disposal, planned branch disposal gated by settled worktree removal,
+and quarantined Integrator predecessor-candidate disposal. Each module has its
+own authorization, fresh observation, mutation intent/result, contradiction,
+and settlement events. No generic cleanup stage or reusable delete approval is
+shared across them. The existing subject-scoped Quint models cannot faithfully
+cover these distinct authority families; focused/property, cassette, and
+memory/SQLite prefix evidence is therefore the executable coverage.
+
 ## Durability and Reconstruction
 
 Dalph persists workflow history, not a serialized coordinator. On every Run

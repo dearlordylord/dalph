@@ -6,6 +6,7 @@ import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../../../p
 import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette-domain.ts"
 import { maintainedApplicationExitProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette-domain.ts"
 import { maintainedCodexPlannedAttemptExecutorCassetteCatalog } from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette-domain.ts"
+import { dispositionCleanupAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/disposition-cleanup-cassette.ts"
 import { deliveryProposalOrderTaskId } from "@dalph/orchestrator"
 import { parseHTML } from "linkedom"
 import {
@@ -58,6 +59,7 @@ const expectedCatalogSize = Object.keys(maintainedAuthoredCassetteCatalog).lengt
   + Object.keys(maintainedIntegrationFinalityProtocolCassetteCatalog).length
   + Object.keys(maintainedApplicationExitProtocolCassetteCatalog).length
   + Object.keys(maintainedCodexPlannedAttemptExecutorCassetteCatalog).length
+  + Object.keys(dispositionCleanupAuthoredCassetteCatalog).length
 
 let everyResult = await runEveryMaintainedCassette()
 let mismatchedResult: Awaited<ReturnType<typeof runAuthoredCassetteInput>> | undefined

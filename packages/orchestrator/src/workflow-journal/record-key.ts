@@ -33,10 +33,118 @@ import {
   type IntegrationQuarantineDirectionSubject,
   integrationQuarantineBasisKey
 } from "../workflow/protocols/integration-quarantine/events.js"
+import type {
+  CleanupMutationOrdinal,
+  CleanupObservationOrdinal
+} from "../workflow/protocols/disposition-cleanup/disposition.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
 export const workflowRunTerminatedRecordKey = JournalRecordKey.make("run:terminated")
+
+const dispositionCleanupRecordKeyPrefix = (operationId: OperationId): string => `disposition-cleanup:${operationId}`
+
+/** Stable key for one exact worktree cleanup authorization. */
+export const worktreeCleanupAuthorizedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:authorized`)
+
+/** Stable key for one fresh worktree cleanup read intent. */
+export const worktreeCleanupObservationIntendedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:observation:${ordinal}:intent`)
+
+/** Stable key for one fresh worktree cleanup observation. */
+export const worktreeCleanupObservedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:observation:${ordinal}`)
+
+/** Stable key for one numbered worktree remove request. */
+export const worktreeCleanupMutationIntendedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupMutationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:mutation:${ordinal}:intent`)
+
+/** Stable key for one numbered worktree remove result. */
+export const worktreeCleanupMutationResultRecordedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupMutationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:mutation:${ordinal}:result`)
+
+/** Stable key for an exact worktree cleanup contradiction. */
+export const worktreeCleanupContradictedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:contradicted`)
+
+/** Stable key for the terminal worktree cleanup settlement. */
+export const worktreeCleanupSettledRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:settled`)
+
+/** Stable keys for exact planned-branch cleanup facts. */
+export const branchCleanupAuthorizedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:authorized`)
+export const branchCleanupObservationIntendedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:observation:${ordinal}:intent`)
+export const branchCleanupObservedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:observation:${ordinal}`)
+export const branchCleanupMutationIntendedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupMutationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:mutation:${ordinal}:intent`)
+export const branchCleanupMutationResultRecordedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupMutationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:mutation:${ordinal}:result`)
+export const branchCleanupContradictedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:contradicted`)
+export const branchCleanupSettledRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:settled`)
+
+/** Stable keys for exact Integrator-candidate cleanup facts. */
+export const integratorCandidateCleanupAuthorizedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:authorized`)
+export const integratorCandidateCleanupObservationIntendedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:observation:${ordinal}:intent`
+  )
+export const integratorCandidateCleanupObservedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:observation:${ordinal}`)
+export const integratorCandidateCleanupMutationIntendedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupMutationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:mutation:${ordinal}:intent`
+  )
+export const integratorCandidateCleanupMutationResultRecordedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupMutationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:mutation:${ordinal}:result`
+  )
+export const integratorCandidateCleanupContradictedRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:contradicted`)
+export const integratorCandidateCleanupSettledRecordKey = (operationId: OperationId): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:settled`)
 
 export const controlDirectionAppliedRecordKey = (ordinal: ControlDirectionApplicationOrdinal): JournalRecordKey =>
   JournalRecordKey.make(`control-direction:${ordinal}:applied`)

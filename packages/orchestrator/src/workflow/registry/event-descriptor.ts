@@ -65,7 +65,28 @@ import {
   integrationQuarantinedRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
-  integratorSuccessorSessionFixedRecordKey
+  integratorSuccessorSessionFixedRecordKey,
+  worktreeCleanupAuthorizedRecordKey,
+  worktreeCleanupObservationIntendedRecordKey,
+  worktreeCleanupObservedRecordKey,
+  worktreeCleanupMutationIntendedRecordKey,
+  worktreeCleanupMutationResultRecordedRecordKey,
+  worktreeCleanupContradictedRecordKey,
+  worktreeCleanupSettledRecordKey,
+  branchCleanupAuthorizedRecordKey,
+  branchCleanupObservationIntendedRecordKey,
+  branchCleanupObservedRecordKey,
+  branchCleanupMutationIntendedRecordKey,
+  branchCleanupMutationResultRecordedRecordKey,
+  branchCleanupContradictedRecordKey,
+  branchCleanupSettledRecordKey,
+  integratorCandidateCleanupAuthorizedRecordKey,
+  integratorCandidateCleanupObservationIntendedRecordKey,
+  integratorCandidateCleanupObservedRecordKey,
+  integratorCandidateCleanupMutationIntendedRecordKey,
+  integratorCandidateCleanupMutationResultRecordedRecordKey,
+  integratorCandidateCleanupContradictedRecordKey,
+  integratorCandidateCleanupSettledRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { WorkflowJournalEvent } from "./event.js"
 import { integrationQuarantineDirectionSubject } from "../protocols/integration-quarantine/events.js"
@@ -371,6 +392,96 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     IntegratorRunCandidateGitObserved: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorRunCandidateGitObservedRecordKey(event.run, event.candidateText)
+    }),
+    WorktreeCleanupAuthorized: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: worktreeCleanupAuthorizedRecordKey(event.authorization.operationId)
+    }),
+    WorktreeCleanupObservationIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: worktreeCleanupObservationIntendedRecordKey(event.authorization.operationId, event.ordinal)
+    }),
+    WorktreeCleanupObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: worktreeCleanupObservedRecordKey(event.authorization.operationId, event.ordinal)
+    }),
+    WorktreeCleanupMutationIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: worktreeCleanupMutationIntendedRecordKey(event.authorization.operationId, event.attempt)
+    }),
+    WorktreeCleanupMutationResultRecorded: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: worktreeCleanupMutationResultRecordedRecordKey(event.authorization.operationId, event.attempt)
+    }),
+    WorktreeCleanupContradicted: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: worktreeCleanupContradictedRecordKey(event.authorization.operationId)
+    }),
+    WorktreeCleanupSettled: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: worktreeCleanupSettledRecordKey(event.authorization.operationId)
+    }),
+    BranchCleanupAuthorized: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: branchCleanupAuthorizedRecordKey(event.authorization.operationId)
+    }),
+    BranchCleanupObservationIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: branchCleanupObservationIntendedRecordKey(event.authorization.operationId, event.ordinal)
+    }),
+    BranchCleanupObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: branchCleanupObservedRecordKey(event.authorization.operationId, event.ordinal)
+    }),
+    BranchCleanupMutationIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: branchCleanupMutationIntendedRecordKey(event.authorization.operationId, event.attempt)
+    }),
+    BranchCleanupMutationResultRecorded: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: branchCleanupMutationResultRecordedRecordKey(event.authorization.operationId, event.attempt)
+    }),
+    BranchCleanupContradicted: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: branchCleanupContradictedRecordKey(event.authorization.operationId)
+    }),
+    BranchCleanupSettled: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: branchCleanupSettledRecordKey(event.authorization.operationId)
+    }),
+    IntegratorCandidateCleanupAuthorized: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateCleanupAuthorizedRecordKey(event.authorization.operationId)
+    }),
+    IntegratorCandidateCleanupObservationIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateCleanupObservationIntendedRecordKey(
+        event.authorization.operationId,
+        event.ordinal
+      )
+    }),
+    IntegratorCandidateCleanupObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateCleanupObservedRecordKey(event.authorization.operationId, event.ordinal)
+    }),
+    IntegratorCandidateCleanupMutationIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateCleanupMutationIntendedRecordKey(event.authorization.operationId, event.attempt)
+    }),
+    IntegratorCandidateCleanupMutationResultRecorded: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateCleanupMutationResultRecordedRecordKey(
+        event.authorization.operationId,
+        event.attempt
+      )
+    }),
+    IntegratorCandidateCleanupContradicted: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateCleanupContradictedRecordKey(event.authorization.operationId)
+    }),
+    IntegratorCandidateCleanupSettled: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateCleanupSettledRecordKey(event.authorization.operationId)
     }),
     TargetPromotionIntended: (event) => ({
       _tag: "GenericEventDescriptor",

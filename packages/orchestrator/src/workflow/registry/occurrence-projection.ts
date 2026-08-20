@@ -581,7 +581,28 @@ const nonProjectedJournalEventKinds = {
   TaskWorktreeReady: true,
   TaskWorktreeReconciliationIntended: true,
   WorkflowRunBegan: true,
-  WorkflowRunTerminated: true
+  WorkflowRunTerminated: true,
+  WorktreeCleanupAuthorized: true,
+  WorktreeCleanupObservationIntended: true,
+  WorktreeCleanupObserved: true,
+  WorktreeCleanupMutationIntended: true,
+  WorktreeCleanupMutationResultRecorded: true,
+  WorktreeCleanupContradicted: true,
+  WorktreeCleanupSettled: true,
+  BranchCleanupAuthorized: true,
+  BranchCleanupObservationIntended: true,
+  BranchCleanupObserved: true,
+  BranchCleanupMutationIntended: true,
+  BranchCleanupMutationResultRecorded: true,
+  BranchCleanupContradicted: true,
+  BranchCleanupSettled: true,
+  IntegratorCandidateCleanupAuthorized: true,
+  IntegratorCandidateCleanupObservationIntended: true,
+  IntegratorCandidateCleanupObserved: true,
+  IntegratorCandidateCleanupMutationIntended: true,
+  IntegratorCandidateCleanupMutationResultRecorded: true,
+  IntegratorCandidateCleanupContradicted: true,
+  IntegratorCandidateCleanupSettled: true
 } satisfies Record<NonProjectedJournalEvent["_tag"], true>
 
 const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOccurrence> => {

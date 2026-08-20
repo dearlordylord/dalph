@@ -2,6 +2,7 @@ import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Effect, FileSystem, Layer, Path, Schema } from "effect"
 import {
   JournalDatabaseLocator,
+  InRunJournal,
   JournalRecord,
   JournalStore,
   WorkflowOccurrenceProjection,
@@ -21,10 +22,16 @@ export interface RecoveryPrefix {
   readonly records: readonly [JournalRecord, ...Array<JournalRecord>]
 }
 
+export type RecoveryPrefixResume = (context: {
+  readonly inRunJournal: InRunJournal["Service"]
+  readonly journal: JournalStore["Service"]
+}) => Effect.Effect<unknown, unknown>
+
 interface RecoveryStoreReplay {
   readonly decodedRecords: ReadonlyArray<JournalRecord>
   readonly historyTag: "ValidWorkflowJournalHistory" | "InvalidWorkflowJournalHistory"
   readonly projection: Schema.Schema.Type<typeof WorkflowOccurrenceProjection>
+  readonly resumption?: unknown
 }
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
@@ -63,10 +70,15 @@ const appendRetainedPrefix = Effect.fn("RecoveryStoreLanes.appendRetainedPrefix"
 
 const inspectJournal = Effect.fn("RecoveryStoreLanes.inspectJournal")(function* (
   prefix: RecoveryPrefix["records"],
-  journal: JournalStore["Service"]
+  journal: JournalStore["Service"],
+  resume?: RecoveryPrefixResume
 ) {
   yield* appendRetainedPrefix(journal, prefix)
-  return yield* inspectExisting(prefix, journal)
+  const replay = yield* inspectExisting(prefix, journal)
+  if (resume === undefined) return replay
+  const inRunJournal = InRunJournal.of({ append: journal.append, read: journal.read })
+  const resumption = yield* resume({ inRunJournal, journal })
+  return { ...replay, resumption }
 })
 
 const inspectExisting = Effect.fn("RecoveryStoreLanes.inspectExisting")(function* (
@@ -80,16 +92,34 @@ const inspectExisting = Effect.fn("RecoveryStoreLanes.inspectExisting")(function
   return { decodedRecords, historyTag: history._tag, projection }
 })
 
-const replayMemory = Effect.fn("RecoveryStoreLanes.replayMemory")(function* (prefix: RecoveryPrefix["records"]) {
+const inspectExistingWithResume = Effect.fn("RecoveryStoreLanes.inspectExistingWithResume")(function* (
+  prefix: RecoveryPrefix["records"],
+  journal: JournalStore["Service"],
+  resume?: RecoveryPrefixResume
+) {
+  const replay = yield* inspectExisting(prefix, journal)
+  if (resume === undefined) return replay
+  const inRunJournal = InRunJournal.of({ append: journal.append, read: journal.read })
+  const resumption = yield* resume({ inRunJournal, journal })
+  return { ...replay, resumption }
+})
+
+const replayMemory = Effect.fn("RecoveryStoreLanes.replayMemory")(function* (
+  prefix: RecoveryPrefix["records"],
+  resume?: RecoveryPrefixResume
+) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const journal = yield* JournalStore
-      return yield* inspectJournal(prefix, journal)
+      return yield* inspectJournal(prefix, journal, resume)
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 })
 
-const replaySqlite = Effect.fn("RecoveryStoreLanes.replaySqlite")(function* (prefix: RecoveryPrefix["records"]) {
+const replaySqlite = Effect.fn("RecoveryStoreLanes.replaySqlite")(function* (
+  prefix: RecoveryPrefix["records"],
+  resume?: RecoveryPrefixResume
+) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -107,7 +137,7 @@ const replaySqlite = Effect.fn("RecoveryStoreLanes.replaySqlite")(function* (pre
       return yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          return yield* inspectExisting(prefix, journal)
+          return yield* inspectExistingWithResume(prefix, journal, resume)
         }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
       )
     }).pipe(Effect.provide(nodePathAndFileSystemLayer))
@@ -117,8 +147,10 @@ const replaySqlite = Effect.fn("RecoveryStoreLanes.replaySqlite")(function* (pre
 /** Replays one retained prefix through exactly one fresh physical store lane. */
 export const replayRecoveryPrefix = (
   prefix: RecoveryPrefix,
-  lane: RecoveryStoreLane
-): Effect.Effect<RecoveryStoreReplay, unknown> => (lane === "memory" ? replayMemory : replaySqlite)(prefix.records)
+  lane: RecoveryStoreLane,
+  resume?: RecoveryPrefixResume
+): Effect.Effect<RecoveryStoreReplay, unknown> =>
+  (lane === "memory" ? replayMemory : replaySqlite)(prefix.records, resume)
 
 /** Returns a lane-qualified diagnostic when decoded history or semantic projection diverges. */
 export const recoveryPrefixMismatch = (

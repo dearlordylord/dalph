@@ -146,7 +146,15 @@ of work in progress is unstated.
 **D17 Cleanup is disposition-typed, exact, recoverable, and fail-closed.**
 Cleanup names what it disposes of and why. Nothing is repaired, abandoned, or
 cleaned automatically on an unproven fact.
-→ `—` no model has a disposable resource, so there is nothing to clean up.
+→ `—` no existing subject-scoped model can represent issue #69's three
+authority families without erasing their exact locators and owner/revision
+facts. `taskFactReconciliation` covers P1/P2 and tracker-claim release;
+`gitReconciliation` has no locator/intention/delete protocol;
+`acceptedResultIntegration` has candidate resources but no disposal;
+`integrationFinality` deletes tracker claims only; and `applicationExit`
+requires `durableCleanupCalls == 0`. Issue #69 is covered by focused property
+tests, maintained authored/recorded cassettes, and memory/SQLite P0-P6 replay;
+those are positive evidence, not Quint coverage.
 
 D37 resolves a retained execution without stating what becomes of its worktree,
 and no invariant here makes disposal obligatory. A Run may therefore terminate

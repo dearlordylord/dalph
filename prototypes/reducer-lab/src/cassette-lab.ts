@@ -37,6 +37,10 @@ import {
   maintainedCodexPlannedAttemptExecutorCassetteCatalog
 } from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette-domain.ts"
 import {
+  dispositionCleanupAuthoredCassetteCatalog,
+  runDispositionCleanupCassette
+} from "../../../packages/dalph/src/cassettes/disposition-cleanup-cassette.ts"
+import {
   runCodexPlannedAttemptExecutorCassette
 } from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette.ts"
 
@@ -49,6 +53,8 @@ type ApplicationExitCassetteKey =
   `application-exit:${keyof typeof maintainedApplicationExitProtocolCassetteCatalog & string}`
 type CodexExecutorCassetteKey =
   `codex-executor:${keyof typeof maintainedCodexPlannedAttemptExecutorCassetteCatalog & string}`
+type DispositionCleanupCassetteKey =
+  `disposition-cleanup:${keyof typeof dispositionCleanupAuthoredCassetteCatalog & string}`
 
 export type MaintainedCassetteKey =
   | AuthoredCassetteKey
@@ -56,6 +62,7 @@ export type MaintainedCassetteKey =
   | TargetPromotionCassetteKey
   | ApplicationExitCassetteKey
   | CodexExecutorCassetteKey
+  | DispositionCleanupCassetteKey
 
 export type CassetteCategory =
   | "ApplicationExit"
@@ -63,6 +70,7 @@ export type CassetteCategory =
   | "CodexExecutor"
   | "IntegrationFinality"
   | "TargetPromotion"
+  | "DispositionCleanup"
 
 interface CassetteCategoryMetadata {
   readonly controlledBoundaries: string
@@ -101,6 +109,12 @@ const cassetteCategoryMetadata = {
     itemName: "steps",
     label: "Target promotion protocol",
     runnerName: "runTargetPromotionProtocolCassette"
+  },
+  DispositionCleanup: {
+    controlledBoundaries: "exact worktree, branch, and Integrator predecessor cleanup boundaries",
+    itemName: "steps",
+    label: "Disposition cleanup protocols",
+    runnerName: "runWorktreeCleanup / runBranchCleanup / runIntegratorCandidateCleanup"
   }
 } as const satisfies Record<CassetteCategory, CassetteCategoryMetadata>
 
@@ -363,12 +377,37 @@ const codexExecutorDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Ob
   storyName: cassette.name
 }))
 
+const dispositionCleanupDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.entries(
+  dispositionCleanupAuthoredCassetteCatalog
+).map(([key, cassette]) => ({
+  catalogKey: `disposition-cleanup:${key}` as DispositionCleanupCassetteKey,
+  category: "DispositionCleanup",
+  execute: async () => {
+    const exit = await Effect.runPromiseExit(runDispositionCleanupCassette(cassette))
+    return Exit.map(exit, (run) => ({
+      activationOrdinals: [],
+      deliveryFrames: null,
+      observationMoments: null,
+      evidence: run,
+      journalRecords: run.records,
+      runId: run.records[0]?.runId ?? null
+    }))
+  },
+  input: cassette,
+  surface: { _tag: "DirectProtocolSurface" },
+  story: cassette.story.map((text) => ({ _tag: "CleanupScenarioStep", text })),
+  storyItemLandmarks: cassette.story.map(() => null),
+  storyItemSummaries: cassette.story,
+  storyName: cassette.name
+}))
+
 const descriptors = [
   ...authoredDescriptors,
   ...applicationExitDescriptors,
   ...codexExecutorDescriptors,
   ...targetPromotionDescriptors,
-  ...integrationFinalityDescriptors
+  ...integrationFinalityDescriptors,
+  ...dispositionCleanupDescriptors
 ] as const
 
 const descriptorByKey = new Map(descriptors.map((descriptor) => [descriptor.catalogKey, descriptor]))

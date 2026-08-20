@@ -6522,6 +6522,27 @@ it.effect(
         IntegrationProviderRunActivityAbsent: true,
         IntegrationQuarantineDirectionApplied: true,
         IntegrationQuarantined: true,
+        WorktreeCleanupAuthorized: true,
+        WorktreeCleanupObservationIntended: true,
+        WorktreeCleanupObserved: true,
+        WorktreeCleanupMutationIntended: true,
+        WorktreeCleanupMutationResultRecorded: true,
+        WorktreeCleanupContradicted: true,
+        WorktreeCleanupSettled: true,
+        BranchCleanupAuthorized: true,
+        BranchCleanupObservationIntended: true,
+        BranchCleanupObserved: true,
+        BranchCleanupMutationIntended: true,
+        BranchCleanupMutationResultRecorded: true,
+        BranchCleanupContradicted: true,
+        BranchCleanupSettled: true,
+        IntegratorCandidateCleanupAuthorized: true,
+        IntegratorCandidateCleanupObservationIntended: true,
+        IntegratorCandidateCleanupObserved: true,
+        IntegratorCandidateCleanupMutationIntended: true,
+        IntegratorCandidateCleanupMutationResultRecorded: true,
+        IntegratorCandidateCleanupContradicted: true,
+        IntegratorCandidateCleanupSettled: true,
         CompletionTaskIntended: true,
         CompletionTaskAttemptIntended: true,
         CompletionTaskAcknowledged: true,
@@ -6881,6 +6902,9 @@ it.effect(
               !tag.startsWith("CompletionTask") &&
               !tag.startsWith("CompletionClaim") &&
               !tag.startsWith("PostPromotionBlocker") &&
+              !tag.startsWith("WorktreeCleanup") &&
+              !tag.startsWith("BranchCleanup") &&
+              !tag.startsWith("IntegratorCandidateCleanup") &&
               tag !== "IntegrationFinalitySettled"
           )
         )

@@ -125,6 +125,45 @@ export const currentRecoveryPrefixEvidence = {
       "lets the first journaled valid choice win a concurrent Continue and Stop race"
     )
   ],
+  worktreeCleanup: [
+    event("WorktreeCleanupAuthorized"),
+    event("WorktreeCleanupObservationIntended"),
+    event("WorktreeCleanupObserved"),
+    event("WorktreeCleanupMutationIntended"),
+    event("WorktreeCleanupMutationResultRecorded"),
+    event("WorktreeCleanupContradicted"),
+    event("WorktreeCleanupSettled"),
+    focused(
+      "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts",
+      "reconciles an applied response loss with a fresh absence and never duplicates remove"
+    )
+  ],
+  branchCleanup: [
+    event("BranchCleanupAuthorized"),
+    event("BranchCleanupObservationIntended"),
+    event("BranchCleanupObserved"),
+    event("BranchCleanupMutationIntended"),
+    event("BranchCleanupMutationResultRecorded"),
+    event("BranchCleanupContradicted"),
+    event("BranchCleanupSettled"),
+    focused(
+      "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts",
+      "deletes a planned branch only after the exact worktree settlement"
+    )
+  ],
+  integratorCandidateCleanup: [
+    event("IntegratorCandidateCleanupAuthorized"),
+    event("IntegratorCandidateCleanupObservationIntended"),
+    event("IntegratorCandidateCleanupObserved"),
+    event("IntegratorCandidateCleanupMutationIntended"),
+    event("IntegratorCandidateCleanupMutationResultRecorded"),
+    event("IntegratorCandidateCleanupContradicted"),
+    event("IntegratorCandidateCleanupSettled"),
+    focused(
+      "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts",
+      "removes only a quarantined predecessor candidate"
+    )
+  ],
   runEstablishment: [
     event("WorkflowRunBegan"),
     event("WorkflowRunTerminated"),
