@@ -62,6 +62,14 @@ export const runActivationObligations = Object.freeze({
     "finalityReadRequiresQuiescence",
     "terminationRequiresLaterSettledObservation",
     "terminationRequiresNoRetainedResponsibilityOrPosition",
+    "terminalDispositionMatchesAcceptedFacts",
+    "completedRequiresAllCurrentTasksSuccessful",
+    "blockedRequiresFreshConclusiveTrackerFacts",
+    "cancelledRequiresAppliedAndSettledDirection",
+    "terminationRequiresExactFreshGraphEvidence",
+    "cancellationAppliedAtMostOnce",
+    "cancellationClosesForwardAdmission",
+    "cancellationRedeliveryDoesNotAppend",
     "trackerCallsRequireEstablishedHistory",
     "processLossPreservesDurableHistory",
     "modelIsFiniteAndBounded"
@@ -85,9 +93,63 @@ export const runActivationObligations = Object.freeze({
     "invalidChronologyBlockedReached",
     "multipleUnfinishedBlockedReached",
     "terminatedHistoryBlockedReached",
+    "exactGraphEvidenceReached",
+    "blockedGraphReadReached",
+    "cancellationAppliedReached",
+    "cancellationRedeliveredReached",
+    "completedDispositionReached",
+    "blockedDispositionReached",
+    "cancelledDispositionReached",
     "independentAdmissionReached",
     "contractedRetainedPositionReached",
     "otherRetainedAttemptSettledReached"
+  ])
+})
+
+export const runCancellationObligations = Object.freeze({
+  invariants: Object.freeze([
+    "exactRunAndOperatorDirection",
+    "cancellationAppliedAtMostOnce",
+    "cancellationClosesForwardAdmission",
+    "cancellationPreservesWorkInProgress",
+    "executorStopIntentPrecedesSafeReport",
+    "executorPositionRetainedUntilSafeReport",
+    "claimReleaseFollowsSafeExecutor",
+    "claimReleaseIsExactAndBounded",
+    "integrationSettlementNeverRollsBackPromotion",
+    "integrationResourceSettlesOnce",
+    "ambiguousExecutorRetainsResponsibility",
+    "ambiguousIntegrationRetainsResponsibility",
+    "restartReusesAppliedCancellation",
+    "restartRequiresFreshClassificationGraph",
+    "handoffRequiresSettledResponsibilities",
+    "handoffRequiresFreshGraph",
+    "temporaryWaitDoesNotClassifyCancellation",
+    "applicationExitCutoffRejectsCancellation",
+    "terminalHistoryCannotReopen",
+    "modelIsFiniteAndBounded"
+  ]),
+  witnesses: Object.freeze([
+    "idleCancellationAppliedReached",
+    "cancellationRedeliveryReached",
+    "runningExecutorCancellationReached",
+    "executorStopIntentReached",
+    "executorSafeReportReached",
+    "claimReleaseIntentReached",
+    "claimReleasedReached",
+    "integrationOwnedCancellationReached",
+    "promotionAcceptedReached",
+    "integrationSettledReached",
+    "executorAmbiguityReached",
+    "integrationAmbiguityReached",
+    "processLossBeforeSettlementReached",
+    "restartedCancellationReached",
+    "freshClassificationGraphReached",
+    "cancellationHandoffReached",
+    "temporaryWaitReached",
+    "applicationExitWinsReached",
+    "foreignCancellationRejectedReached",
+    "terminalHistoryRejectedReached"
   ])
 })
 

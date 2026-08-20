@@ -272,6 +272,74 @@ module runActivationNegativeTest {
     },
   }
 
+  // Forbidden: a graph read whose run/target/revision/coverage does not match
+  // the requested activation cannot support a terminal append.
+  action terminateWithMismatchedGraphEvidence: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: { ...state.trackerFinality, evidence: MismatchedGraphReadEvidence },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: MismatchedGraphReadEvidence,
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: cancellation is not a terminal disposition until its durable
+  // direction is present and the fresh classification is otherwise settled.
+  action appendCancelledWithoutAppliedDirection: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.postQuiescenceReads == 1,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    not(state.durable.cancellationApplied),
+    state' = {
+      ...state,
+      durable: { ...state.durable, terminationDisposition: Cancelled },
+      process: { ...state.process, phase: ActivationReturned, terminalDisposition: Cancelled },
+      trace: { ...state.trace, terminationAppends: state.trace.terminationAppends + 1 },
+    },
+  }
+
+  // Forbidden: the cancellation direction cannot be hidden while claiming a
+  // fresh tracker blockage; the three terminal predicates must remain disjoint.
+  action appendBlockedAfterCancellation: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.postQuiescenceReads == 1,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state.durable.cancellationApplied,
+    state' = {
+      ...state,
+      durable: { ...state.durable, terminationDisposition: Blocked },
+      process: { ...state.process, phase: ActivationReturned, terminalDisposition: Blocked },
+      trace: { ...state.trace, terminationAppends: state.trace.terminationAppends + 1 },
+    },
+  }
+
+  action admitAfterCancellation: bool = all {
+    state.process.phase == ActivatingRun,
+    state.durable.cancellationApplied,
+    state' = {
+      ...state,
+      process: { ...state.process, independentTaskAdmitted: true },
+    },
+  }
+
   action activateInvalidHistory: bool = all {
     match state.durable.history { | InvalidHistory(_) => true | _ => false },
     state' = {
@@ -419,5 +487,35 @@ module runActivationNegativeTest {
   run crashChangingDurableHistoryIsDetectedTest = {
     init.then(establishAbsentHistory).then(crashAndChangeDurableHistory)
       .expect(not(processLossPreservesDurableHistory))
+  }
+
+  run mismatchedGraphEvidenceIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithMismatchedGraphEvidence)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run cancelledWithoutAppliedDirectionIsDetectedTest = {
+    init.then(selectCancelledRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(readPostQuiescenceTrackerGraph)
+      .then(appendCancelledWithoutAppliedDirection)
+      .expect(not(cancelledRequiresAppliedAndSettledDirection))
+  }
+
+  run blockedAfterCancellationIsDetectedTest = {
+    init.then(selectCancelledRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(applyCancellation).then(reachQuiescence)
+      .then(readPostQuiescenceTrackerGraph).then(appendBlockedAfterCancellation)
+      .expect(not(blockedRequiresFreshConclusiveTrackerFacts))
+  }
+
+  run forwardAdmissionAfterCancellationIsDetectedTest = {
+    init.then(establishAbsentHistory).then(activateEstablishedRun)
+      .then(readInitialTrackerGraph).then(applyCancellation)
+      .then(admitAfterCancellation)
+      .expect(not(cancellationClosesForwardAdmission))
   }
 }

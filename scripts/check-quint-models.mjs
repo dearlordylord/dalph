@@ -5,6 +5,7 @@ import {
   acceptedResultIntegrationObligations,
   acceptedResultIntegrationQuarantineProofObligations,
   plannedAttemptExecutorObligations,
+  runCancellationObligations,
   runActivationObligations,
   taskFactReconciliationObligations
 } from "./quint-model-obligations.mjs"
@@ -454,6 +455,52 @@ await run("Run activation exhaustive model", [
   "tlc",
   "--invariants",
   ...runActivationInvariants,
+  "--verbosity",
+  "1"
+])
+
+const runCancellationInvariants = runCancellationObligations.invariants
+const runCancellationWitnesses = runCancellationObligations.witnesses
+
+await run("Run cancellation model typecheck", ["typecheck", "specs/runCancellation.qnt"])
+await run("Run cancellation deterministic tests", [
+  "test",
+  "specs/runCancellation_test.qnt",
+  "--main",
+  "runCancellationTest"
+])
+await run("Run cancellation negative mutation profile", [
+  "test",
+  "specs/runCancellation_negative_test.qnt",
+  "--main",
+  "runCancellationNegativeTest"
+])
+await run("Run cancellation sampled model", [
+  "run",
+  "specs/runCancellation.qnt",
+  "--invariants",
+  ...runCancellationInvariants,
+  "--witnesses",
+  ...runCancellationWitnesses,
+  "--max-steps",
+  "45",
+  "--max-samples",
+  "10000",
+  "--seed",
+  "102",
+  "--verbosity",
+  "1"
+])
+// TLC enumerates this finite cancellation boundary without a depth token;
+// every counter is explicitly bounded in the model so an accidental new
+// retry cycle changes the complete state graph rather than being truncated.
+await run("Run cancellation exhaustive model", [
+  "verify",
+  "specs/runCancellation.qnt",
+  "--backend",
+  "tlc",
+  "--invariants",
+  ...runCancellationInvariants,
   "--verbosity",
   "1"
 ])

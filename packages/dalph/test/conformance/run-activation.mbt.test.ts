@@ -35,9 +35,10 @@ import {
   TaskAttemptPlannedEvent,
   TaskWorkCapacity,
   TaskWorkCapacityChangedEvent,
-  WorkflowResponsibilityState,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
+import { makeCompleteTaskTrackerFactsObserved, taskTrackerFactsObservedEvent } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
 import { CoordinatorOwnership } from "../../../orchestrator/src/authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import type { TrackerTarget } from "../../../orchestrator/src/authorities/task-tracker/target.js"
@@ -47,7 +48,13 @@ import {
   DeliveryProposalId,
   trackerGraphReadProposalOf
 } from "../../../orchestrator/src/coordination/delivery/delivery-proposal.js"
-import { deriveRunFinalityDecision } from "../../../orchestrator/src/coordination/frontier/run-finality.js"
+import {
+  deriveRunFinalityDecision,
+  makeRunFinalityEvidence,
+  RunFinalityReadShape,
+  type RunFinalityEvidence
+} from "../../../orchestrator/src/coordination/frontier/run-finality.js"
+import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { deliveryRuntime } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-adapter.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
 import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
@@ -65,9 +72,12 @@ import {
 } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import {
   attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  runCancellationAppliedRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import {
   type JournalStoreService,
@@ -76,7 +86,10 @@ import {
 } from "../../../orchestrator/src/workflow-journal/store.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
 import { deterministicOperationIdAllocatorLayer } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/plan.js"
-import { makeTaskAttemptPlanOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTrackerGraphObservationOperation
+} from "../../../orchestrator/src/workflow/registry/operation.js"
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
 import { attemptChoiceControlLayer } from "../../../orchestrator/src/workflow/protocols/attempt-choice/control.js"
 import { controlDirectionApplicationLayer } from "../../../orchestrator/src/workflow/protocols/control-direction-application/protocol.js"
@@ -85,6 +98,7 @@ import { taskWorkCapacityControlLayer } from "../../../orchestrator/src/control/
 import { PlannedAttemptProtocolController } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { continuePlannedAttemptExecutorWork } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { RunFinalityDecision } from "../../../orchestrator/src/coordination/frontier/frontier.js"
+import { RunCancellationAppliedEvent } from "../../../orchestrator/src/workflow/protocols/run-cancellation/events.js"
 
 const HistoryVariant = Schema.Struct({
   tag: Schema.Literals([
@@ -143,12 +157,25 @@ const PositionVariant = Schema.Union([
     value: Schema.Struct({ attemptId: AttemptIdVariant, runId: RunIdVariant })
   })
 ])
+const TerminalDisposition = Schema.Struct({
+  tag: Schema.Literals(["NoTerminal", "Completed", "Blocked", "Cancelled"]),
+  value: Schema.Unknown
+})
+const GraphOutcome = Schema.Struct({
+  tag: Schema.Literals(["GraphAllSucceeded", "GraphBlocked", "GraphUnsettled"]),
+  value: Schema.Unknown
+})
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
-    durable: Schema.Struct({ history: HistoryVariant, independentTaskSettled: Schema.Boolean }),
+    durable: Schema.Struct({
+      history: HistoryVariant,
+      independentTaskSettled: Schema.Boolean,
+      cancellationApplied: Schema.Boolean,
+      terminationDisposition: TerminalDisposition
+    }),
     requestedRunId: RunIdVariant,
     requestedTarget: TargetVariant,
-    trackerFinality: Schema.Struct({ targetSettled: Schema.Boolean }),
+    trackerFinality: Schema.Struct({ targetSettled: Schema.Boolean, graphOutcome: GraphOutcome }),
     process: Schema.Struct({
       establishedRun: EstablishedRunVariant,
       entryFailure: EntryFailureVariant,
@@ -160,11 +187,14 @@ const SpecProjection = Schema.Struct({
       initialTrackerObserved: Schema.Boolean,
       phase: PhaseVariant,
       postQuiescenceReads: ITFBigInt,
-      quiescent: Schema.Boolean
+      quiescent: Schema.Boolean,
+      terminalDisposition: TerminalDisposition
     }),
     trace: Schema.Struct({
       activationsStarted: ITFBigInt,
       beginningAppends: ITFBigInt,
+      cancellationAppends: ITFBigInt,
+      cancellationRedeliveries: ITFBigInt,
       executorCalls: ITFBigInt,
       initialPolicyEvaluations: ITFBigInt,
       processLosses: ITFBigInt,
@@ -202,6 +232,42 @@ const attemptA = attemptFor(taskA, "A")
 const attemptB = attemptFor(taskB, "B")
 const attemptC = attemptFor(taskC, "C")
 
+const snapshotForGraphOutcome = (outcome: "GraphAllSucceeded" | "GraphBlocked" | "GraphUnsettled") => {
+  const tasks = outcome === "GraphBlocked"
+    ? [
+        { id: taskA, lifecycle: { _tag: "TerminalWithoutSuccess" as const }, parentTaskId: null, prerequisiteIds: [] },
+        { id: taskB, lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [taskA] }
+      ]
+    : [{
+        id: taskA,
+        lifecycle: { _tag: outcome === "GraphAllSucceeded" ? "CompletedSuccessfully" as const : "Open" as const },
+        parentTaskId: null,
+        prerequisiteIds: []
+      }]
+  const projected = projectTrackerSnapshot({ revision: `run-activation-${outcome}`, tasks })
+  if (projected._tag !== "Valid") throw new Error(`invalid finality fixture graph: ${JSON.stringify(projected.issues)}`)
+  return projected.snapshot
+}
+
+const finalityEvidenceFor = (
+  eventRunId: RunId,
+  eventTarget: TrackerTarget,
+  outcome: "GraphAllSucceeded" | "GraphBlocked" | "GraphUnsettled",
+  observedAt: JournalPosition
+): RunFinalityEvidence => {
+  const snapshot = snapshotForGraphOutcome(outcome)
+  const operationId = OperationId.make(`run-activation-fixture-finality-${observedAt}`)
+  return makeRunFinalityEvidence({
+    operationId,
+    observedAt,
+    readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: snapshot.taskIds() }),
+    rootPresent: true,
+    runId: eventRunId,
+    snapshot,
+    target: eventTarget
+  })
+}
+
 type HistoryTag =
   | "EmptyHistory"
   | "InvalidHistory"
@@ -223,14 +289,18 @@ type EntryFailureTag =
   | "OtherUnfinishedRunFailure"
   | "TargetMismatchFailure"
   | "TerminatedRunFailure"
+type TerminalDispositionTag = "NoTerminal" | "Completed" | "Blocked" | "Cancelled"
+type GraphOutcomeTag = "GraphAllSucceeded" | "GraphBlocked" | "GraphUnsettled"
 type ActivationCommandTag =
   | "ActivateEstablishedRun"
+  | "ApplyCancellation"
   | "AdmitIndependentTask"
   | "ReadInitialTrackerGraph"
   | "ReadPostQuiescenceTrackerGraph"
   | "ReachQuiescence"
   | "ReconcileAmbiguousExecutorCommand"
   | "ReturnIncomplete"
+  | "RedeliverCancellation"
   | "SettleIndependentTask"
   | "SettleOtherRetainedAttempt"
   | "SettleRetainedAttempt"
@@ -247,6 +317,9 @@ let runActivationMbtScope: Scope.Scope | undefined
 interface DriverProjection {
   readonly activationsStarted: number
   readonly beginningAppends: number
+  readonly cancellationAppends: number
+  readonly cancellationRedeliveries: number
+  readonly cancellationApplied: boolean
   readonly establishmentSource: Source
   readonly entryFailure: EntryFailureTag
   readonly establishedCapacity: CapacityTag | "NoEstablishedCapacity"
@@ -269,12 +342,16 @@ interface DriverProjection {
   readonly requestedRunId: RunTag
   readonly requestedTarget: TargetTag
   readonly terminationAppends: number
+  readonly terminationDisposition: TerminalDispositionTag
+  readonly terminalDisposition: TerminalDispositionTag
+  readonly graphOutcome: GraphOutcomeTag
   readonly trackerCalls: number
   readonly trackerSettled: boolean
 }
 
 const runActivationActions = {
   activateEstablishedRun: {},
+  applyCancellation: {},
   admitIndependentTask: {},
   crash: {},
   establishAbsentHistory: {},
@@ -289,6 +366,7 @@ const runActivationActions = {
   rejectMultipleUnfinishedHistories: {},
   rejectTerminatedHistory: {},
   returnIncomplete: {},
+  redeliverCancellation: {},
   selectContractedExactExistingHistory: {},
   selectDuplicateBeginningHistory: {},
   selectExactExistingHistory: {},
@@ -299,6 +377,8 @@ const runActivationActions = {
   selectMultipleUnfinishedHistories: {},
   selectOtherUnfinishedRun: {},
   selectTerminatedHistory: {},
+  selectBlockedRunGraph: {},
+  selectCancelledRunGraph: {},
   settleIndependentTask: {},
   settleOtherRetainedAttempt: {},
   settleRetainedAttempt: {},
@@ -337,6 +417,13 @@ const makeRunActivationDriverImplementation = () => {
   let executorCalls = 0
   let processLosses = 0
   let trackerSettled = false
+  let graphOutcome: GraphOutcomeTag = "GraphAllSucceeded"
+  let cancellationApplied = false
+  let cancellationAppends = 0
+  let cancellationRedeliveries = 0
+  let terminalDisposition: TerminalDispositionTag = "NoTerminal"
+  let terminationDisposition: TerminalDispositionTag = "NoTerminal"
+  let finalityEvidence: RunFinalityEvidence | undefined
   let latestCapacity = 1
   let ambiguousExecutorProjectionAvailable = false
   let executorCommandCalls = 0
@@ -396,35 +483,6 @@ const makeRunActivationDriverImplementation = () => {
     )
   }
 
-  const appendTerminalReport = (plannedAttempt: PlannedTaskAttempt): void => {
-    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-    append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: commandOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
-    append(
-      runId,
-      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal,
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({
-          correlation: { attemptId: plannedAttempt.attemptId, runId },
-          result: { _tag: "Completed" }
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
-  }
-
   const appendUnsettledStartIntent = (plannedAttempt: PlannedTaskAttempt): void => {
     const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
     append(
@@ -455,9 +513,14 @@ const makeRunActivationDriverImplementation = () => {
           ...(otherRecords.length === 0 ? [] : [{ records: otherRecords, runId: otherRunId }])
         ]
       }),
-    terminateRun: (eventRunId) =>
+    terminateRun: (eventRunId, disposition, evidence) =>
       Effect.sync(() => {
-        const decision = decideWorkflowRunTermination(eventRunId === runId ? records : otherRecords, eventRunId)
+        const decision = decideWorkflowRunTermination(
+          eventRunId === runId ? records : otherRecords,
+          eventRunId,
+          disposition,
+          evidence
+        )
         if (decision._tag !== "LifecycleTransitionAccepted") throw decision.failure
         if (eventRunId === runId) records = [...records, decision.record]
         else otherRecords = [...otherRecords, decision.record]
@@ -563,6 +626,8 @@ const makeRunActivationDriverImplementation = () => {
     initialPolicyEvaluated = false
     initialTrackerObserved = false
     independentTaskAdmitted = false
+    terminalDisposition = "NoTerminal"
+    finalityEvidence = undefined
     quiescent = false
     postQuiescenceReads = 0
   }
@@ -679,6 +744,58 @@ const makeRunActivationDriverImplementation = () => {
             ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
             yield* Deferred.succeed(ready, undefined)
 
+            const appendResponsibilityThroughJournal = (plannedAttempt: PlannedTaskAttempt) =>
+              Effect.gen(function* () {
+                const operation = makeTaskAttemptPlanOperation({
+                  operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
+                  plannedAttempt,
+                  predecessorOperationIds: []
+                })
+                yield* journal.append(
+                  runId,
+                  attemptPlanRecordKey(plannedAttempt.attemptId),
+                  TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion })
+                )
+                yield* journal.append(
+                  runId,
+                  plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+                  PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+                    plannedAttempt,
+                    version: workflowJournalEventVersion
+                  })
+                )
+              })
+
+            const appendTerminalReportThroughJournal = (plannedAttempt: PlannedTaskAttempt) =>
+              Effect.gen(function* () {
+                const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+                yield* journal.append(
+                  runId,
+                  plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+                  PlannedAttemptExecutorCommandIntendedEvent.make({
+                    command: "StartOrContinue",
+                    initiatedBy: { _tag: "DalphCoordinator" },
+                    occurrenceClassification: "InitiatedAction",
+                    ordinal: commandOrdinal,
+                    plannedAttempt,
+                    version: workflowJournalEventVersion
+                  })
+                )
+                const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+                yield* journal.append(
+                  runId,
+                  plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
+                  PlannedAttemptExecutorWorkReportedEvent.make({
+                    ordinal,
+                    report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                      correlation: { attemptId: plannedAttempt.attemptId, runId },
+                      result: { _tag: "Completed" }
+                    }),
+                    version: workflowJournalEventVersion
+                  })
+                )
+              })
+
             // oxlint-disable-next-line typescript/no-unnecessary-condition -- a final command returns the proof.
             while (true) {
               const command = yield* Queue.take(commands)
@@ -710,6 +827,26 @@ const makeRunActivationDriverImplementation = () => {
                     return undefined
                   })
                 ),
+                Match.when("ApplyCancellation", () =>
+                  Effect.gen(function* () {
+                    if (cancellationApplied || cancellationAppends !== 0) {
+                      return yield* Effect.die("duplicate Run cancellation crossed the idempotent journal boundary")
+                    }
+                    yield* journal.append(
+                      runId,
+                      runCancellationAppliedRecordKey,
+                      RunCancellationAppliedEvent.make({
+                        initiatedBy: { _tag: "Operator" },
+                        occurrenceClassification: "InitiatedAction",
+                        version: workflowJournalEventVersion
+                      })
+                    )
+                    cancellationApplied = true
+                    cancellationAppends += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
                 Match.when("ReadInitialTrackerGraph", () =>
                   Effect.gen(function* () {
                     initialTrackerObserved = true
@@ -732,7 +869,7 @@ const makeRunActivationDriverImplementation = () => {
                 Match.when("SettleRetainedAttempt", () =>
                   Effect.gen(function* () {
                     yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptA.attemptId, runId })
-                    appendTerminalReport(attemptA)
+                    yield* appendTerminalReportThroughJournal(attemptA)
                     heldPosition = "NoTaskPosition"
                     executorCalls += 1
                     if (otherHeldPositions > 0) {
@@ -748,7 +885,7 @@ const makeRunActivationDriverImplementation = () => {
                 Match.when("SettleOtherRetainedAttempt", () =>
                   Effect.gen(function* () {
                     yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptB.attemptId, runId })
-                    appendTerminalReport(attemptB)
+                    yield* appendTerminalReportThroughJournal(attemptB)
                     otherHeldPositions -= 1
                     executorCalls += 1
                     yield* Deferred.succeed(command.acknowledged, undefined)
@@ -762,7 +899,7 @@ const makeRunActivationDriverImplementation = () => {
                       return yield* Effect.die("independent task must fit released capacity")
                     }
                     yield* activeController.bindPlannedAttemptPosition(taskC, { attemptId: attemptC.attemptId, runId })
-                    appendResponsibility(attemptC)
+                    yield* appendResponsibilityThroughJournal(attemptC)
                     heldPosition = "AttemptC"
                     independentTaskAdmitted = true
                     executorCalls += 1
@@ -773,7 +910,7 @@ const makeRunActivationDriverImplementation = () => {
                 Match.when("SettleIndependentTask", () =>
                   Effect.gen(function* () {
                     yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptC.attemptId, runId })
-                    appendTerminalReport(attemptC)
+                    yield* appendTerminalReportThroughJournal(attemptC)
                     heldPosition = "NoTaskPosition"
                     independentTaskAdmitted = false
                     independentTaskSettled = true
@@ -803,6 +940,31 @@ const makeRunActivationDriverImplementation = () => {
                     }
                     postQuiescenceReads = 1
                     trackerCalls += 1
+                    const operation = makeTrackerGraphObservationOperation(
+                      OperationId.make(`run-activation-finality-${trackerCalls}`),
+                      target,
+                      [],
+                      snapshotForGraphOutcome(graphOutcome).taskIds()
+                    )
+                    yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+                    const snapshot = snapshotForGraphOutcome(graphOutcome)
+                    const observation = yield* journal.append(
+                      runId,
+                      outcomeRecordKey(operation.operationId),
+                      taskTrackerFactsObservedEvent(
+                        operation.operationId,
+                        makeCompleteTaskTrackerFactsObserved(operation, snapshot)
+                      )
+                    )
+                    finalityEvidence = makeRunFinalityEvidence({
+                      operationId: operation.operationId,
+                      observedAt: observation.position,
+                      readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: snapshot.taskIds() }),
+                      rootPresent: true,
+                      runId,
+                      snapshot,
+                      target
+                    })
                     yield* Deferred.succeed(command.acknowledged, undefined)
                     return undefined
                   })
@@ -817,11 +979,44 @@ const makeRunActivationDriverImplementation = () => {
                     }
                   })
                 ),
+                Match.when("RedeliverCancellation", () =>
+                  Effect.gen(function* () {
+                    if (!cancellationApplied || cancellationAppends !== 1 || cancellationRedeliveries !== 0) {
+                      return yield* Effect.die("Run cancellation redelivery lacked one durable applied event")
+                    }
+                    if (records.filter(({ event }) => event._tag === "RunCancellationApplied").length !== 1) {
+                      return yield* Effect.die("Run cancellation redelivery changed durable history")
+                    }
+                    cancellationRedeliveries += 1
+                    yield* Deferred.succeed(command.acknowledged, undefined)
+                    return undefined
+                  })
+                ),
                 Match.when("TerminateRun", () =>
                   Effect.gen(function* () {
+                    const evidence = finalityEvidence
+                    if (evidence === undefined) return yield* Effect.die("terminal classification lacked graph evidence")
+                    const current = reduceWorkflowJournalHistory(runId, records)
+                    if (current._tag !== "ValidWorkflowJournalHistory") {
+                      return yield* Effect.die("terminal classification saw invalid Run history")
+                    }
+                    const terminalExplanations = records.flatMap(({ event }) => {
+                      if (event._tag !== "PlannedAttemptExecutorWorkReported" || event.report._tag !== "Terminal") {
+                        return []
+                      }
+                      const responsibility = current.runState.responsibility.entries.find(
+                        (entry) =>
+                          entry._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+                          entry.plannedAttempt.attemptId === event.report.correlation.attemptId
+                      )
+                      return responsibility === undefined ||
+                          responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility"
+                        ? []
+                        : [{ _tag: "PlannedAttemptExecutorWorkTerminal" as const, report: event.report, taskId: responsibility.plannedAttempt.taskId }]
+                    })
                     const decision = deriveRunFinalityDecision(
-                      { explanations: [], transitions: [] },
-                      WorkflowResponsibilityState.make({ entries: [] }),
+                      { explanations: terminalExplanations, transitions: [] },
+                      current.runState.responsibility,
                       trackerSettled
                     )
                     if (decision._tag !== "RunMayTerminate") {
@@ -829,9 +1024,21 @@ const makeRunActivationDriverImplementation = () => {
                         `production finality rejected settled model Run: ${JSON.stringify(decision)}`
                       )
                     }
+                    const disposition: TerminalDispositionTag = evidence.graphOutcome === "AllTasksSucceeded"
+                      ? "Completed"
+                      : cancellationApplied
+                        ? "Cancelled"
+                        : evidence.graphOutcome === "Blocked"
+                          ? "Blocked"
+                          : "NoTerminal"
+                    if (disposition === "NoTerminal") {
+                      return yield* Effect.die("unsettled graph cannot be terminally classified")
+                    }
+                    terminalDisposition = disposition
+                    terminationDisposition = disposition
                     phase = "ActivationReturned"
                     yield* Deferred.succeed(command.acknowledged, undefined)
-                    return { acceptedAt: records.at(-1)?.position ?? null, decision }
+                    return { acceptedAt: records.at(-1)?.position ?? null, decision, disposition, evidence }
                   })
                 ),
                 Match.exhaustive
@@ -877,6 +1084,13 @@ const makeRunActivationDriverImplementation = () => {
         executorCalls = 0
         processLosses = 0
         trackerSettled = false
+        graphOutcome = "GraphAllSucceeded"
+        cancellationApplied = false
+        cancellationAppends = 0
+        cancellationRedeliveries = 0
+        terminalDisposition = "NoTerminal"
+        terminationDisposition = "NoTerminal"
+        finalityEvidence = undefined
         latestCapacity = 1
         ambiguousExecutorProjectionAvailable = false
         executorCommandCalls = 0
@@ -958,10 +1172,29 @@ const makeRunActivationDriverImplementation = () => {
         records = []
         begin(runId, target, earlierPolicy)
         appendCapacityChange()
-        const decision = decideWorkflowRunTermination(records, runId)
+        const evidence = finalityEvidenceFor(runId, target, "GraphAllSucceeded", JournalPosition.make(records.length))
+        const decision = decideWorkflowRunTermination(records, runId, "Completed", evidence)
         if (decision._tag !== "LifecycleTransitionAccepted") throw decision.failure
         records = [...records, decision.record]
         history = "TerminatedHistory"
+      }),
+    selectBlockedRunGraph: () =>
+      Effect.sync(() => {
+        records = []
+        begin(runId, target, initialPolicy)
+        history = "OneUnfinishedHistory"
+        latestCapacity = 2
+        graphOutcome = "GraphBlocked"
+        trackerSettled = true
+      }),
+    selectCancelledRunGraph: () =>
+      Effect.sync(() => {
+        records = []
+        begin(runId, target, initialPolicy)
+        history = "OneUnfinishedHistory"
+        latestCapacity = 2
+        graphOutcome = "GraphBlocked"
+        trackerSettled = true
       }),
     establishAbsentHistory: () =>
       Effect.gen(function* () {
@@ -1115,6 +1348,7 @@ const makeRunActivationDriverImplementation = () => {
         Effect.asVoid
       ),
     activateEstablishedRun: () => sendActivationCommand("ActivateEstablishedRun"),
+    applyCancellation: () => sendActivationCommand("ApplyCancellation"),
     readInitialTrackerGraph: () => sendActivationCommand("ReadInitialTrackerGraph"),
     reconcileAmbiguousExecutorCommand: () => sendActivationCommand("ReconcileAmbiguousExecutorCommand"),
     settleRetainedAttempt: () => sendActivationCommand("SettleRetainedAttempt"),
@@ -1149,6 +1383,7 @@ const makeRunActivationDriverImplementation = () => {
         awaitActivation = undefined
         interruptActivation = undefined
       }).pipe(Effect.orDie),
+    redeliverCancellation: () => sendActivationCommand("RedeliverCancellation"),
     terminateRun: () =>
       Effect.gen(function* () {
         yield* sendActivationCommand("TerminateRun")
@@ -1196,6 +1431,9 @@ const makeRunActivationDriverImplementation = () => {
       Effect.succeed({
         activationsStarted,
         beginningAppends,
+        cancellationAppends,
+        cancellationRedeliveries,
+        cancellationApplied,
         establishedCapacity,
         establishedInitialCapacity,
         establishedRunId,
@@ -1218,6 +1456,9 @@ const makeRunActivationDriverImplementation = () => {
         requestedRunId: requestedRunId === otherRunId ? "R2" : "R1",
         requestedTarget: "Target1",
         terminationAppends,
+        terminationDisposition,
+        terminalDisposition,
+        graphOutcome,
         trackerCalls,
         trackerSettled
       } satisfies DriverProjection)
@@ -1324,6 +1565,9 @@ quintIt(
             ({ state }): DriverProjection => ({
               activationsStarted: Number(state.trace.activationsStarted),
               beginningAppends: Number(state.trace.beginningAppends),
+              cancellationAppends: Number(state.trace.cancellationAppends),
+              cancellationRedeliveries: Number(state.trace.cancellationRedeliveries),
+              cancellationApplied: state.durable.cancellationApplied,
               establishedCapacity:
                 state.process.establishedRun.tag === "ExactEstablishedRun"
                   ? state.process.establishedRun.value.latestPolicy.taskCapacity.tag
@@ -1362,7 +1606,10 @@ quintIt(
               requestedTarget: state.requestedTarget.tag,
               terminationAppends: Number(state.trace.terminationAppends),
               trackerCalls: Number(state.trace.trackerCalls),
-              trackerSettled: state.trackerFinality.targetSettled
+              trackerSettled: state.trackerFinality.targetSettled,
+              terminationDisposition: state.durable.terminationDisposition.tag,
+              terminalDisposition: state.process.terminalDisposition.tag,
+              graphOutcome: state.trackerFinality.graphOutcome.tag
             })
           ),
           Effect.orDie
@@ -1370,6 +1617,9 @@ quintIt(
       (spec, implementation) =>
         spec.activationsStarted === implementation.activationsStarted &&
         spec.beginningAppends === implementation.beginningAppends &&
+        spec.cancellationAppends === implementation.cancellationAppends &&
+        spec.cancellationRedeliveries === implementation.cancellationRedeliveries &&
+        spec.cancellationApplied === implementation.cancellationApplied &&
         spec.establishedCapacity === implementation.establishedCapacity &&
         spec.establishedInitialCapacity === implementation.establishedInitialCapacity &&
         spec.establishedRunId === implementation.establishedRunId &&
@@ -1392,6 +1642,9 @@ quintIt(
         spec.requestedRunId === implementation.requestedRunId &&
         spec.requestedTarget === implementation.requestedTarget &&
         spec.terminationAppends === implementation.terminationAppends &&
+        spec.terminationDisposition === implementation.terminationDisposition &&
+        spec.terminalDisposition === implementation.terminalDisposition &&
+        spec.graphOutcome === implementation.graphOutcome &&
         spec.trackerCalls === implementation.trackerCalls &&
         spec.trackerSettled === implementation.trackerSettled
     )

@@ -134,6 +134,7 @@ module runActivationTest {
       .then(reachQuiescence)
       .then(readPostQuiescenceTrackerGraph)
       .then(returnIncomplete)
+      .then(trackerFactsBecomeSettled)
       .then(invokeSameEntryAgain)
       .then(establishExistingHistory)
       .then(activateEstablishedRun)
@@ -273,6 +274,94 @@ module runActivationTest {
         terminationRequiresLaterSettledObservation,
         terminationRequiresNoRetainedResponsibilityOrPosition,
         terminatedRunIsFinal,
+      })
+  }
+
+  run completedWinsOverLateCancellationTest = {
+    init
+      .then(establishAbsentHistory)
+      .then(activateEstablishedRun)
+      .then(readInitialTrackerGraph)
+      .then(applyCancellation)
+      .then(redeliverCancellation)
+      .then(trackerFactsBecomeSettled)
+      .then(reachQuiescence)
+      .then(readPostQuiescenceTrackerGraph)
+      .then(terminateRun)
+      .expect(and {
+        completedDispositionReached,
+        state.process.terminalDisposition == Completed,
+        state.durable.terminationDisposition == Completed,
+        state.trace.cancellationAppends == 1,
+        state.trace.cancellationRedeliveries == 1,
+        terminalDispositionMatchesAcceptedFacts,
+        completedRequiresAllCurrentTasksSuccessful,
+        cancellationRedeliveryDoesNotAppend,
+      })
+  }
+
+  run blockedRunRequiresFreshConclusiveGraphTest = {
+    init
+      .then(selectBlockedRunGraph)
+      .then(establishExistingHistory)
+      .then(activateEstablishedRun)
+      .then(readInitialTrackerGraph)
+      .then(reachQuiescence)
+      .then(readPostQuiescenceTrackerGraph)
+      .then(terminateRun)
+      .expect(and {
+        blockedGraphReadReached,
+        blockedDispositionReached,
+        state.process.terminalDisposition == Blocked,
+        state.durable.terminationDisposition == Blocked,
+        exactGraphEvidenceReached,
+        blockedRequiresFreshConclusiveTrackerFacts,
+        terminationRequiresExactFreshGraphEvidence,
+      })
+  }
+
+  run cancellationSettlesBeforeCancelledClassificationTest = {
+    init
+      .then(selectCancelledRunGraph)
+      .then(establishExistingHistory)
+      .then(activateEstablishedRun)
+      .then(readInitialTrackerGraph)
+      .then(applyCancellation)
+      .then(reachQuiescence)
+      .then(readPostQuiescenceTrackerGraph)
+      .then(terminateRun)
+      .expect(and {
+        cancellationAppliedReached,
+        cancelledDispositionReached,
+        state.process.terminalDisposition == Cancelled,
+        state.durable.terminationDisposition == Cancelled,
+        cancelledRequiresAppliedAndSettledDirection,
+        terminationRequiresNoRetainedResponsibilityOrPosition,
+      })
+  }
+
+  run restartedActivationNeedsNewFreshEvidenceTest = {
+    init
+      .then(establishAbsentHistory)
+      .then(activateEstablishedRun)
+      .then(readInitialTrackerGraph)
+      .then(reachQuiescence)
+      .then(readPostQuiescenceTrackerGraph)
+      .then(returnIncomplete)
+      .then(trackerFactsBecomeSettled)
+      .then(invokeSameEntryAgain)
+      .then(establishExistingHistory)
+      .then(activateEstablishedRun)
+      .then(readInitialTrackerGraph)
+      .then(reachQuiescence)
+      .then(readPostQuiescenceTrackerGraph)
+      .then(terminateRun)
+      .expect(and {
+        state.trace.processLosses == 0,
+        state.trace.activationsStarted == 2,
+        state.trace.trackerCalls == 4,
+        state.process.terminalDisposition == Completed,
+        terminationRequiresExactFreshGraphEvidence,
       })
   }
 }
