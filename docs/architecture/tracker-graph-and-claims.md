@@ -1,20 +1,35 @@
 # Tracker Graph and Claims
 
-This page owns tracker-specific architecture: target closure, normalized graph
-observations, coverage and freshness, mutation results, GitHub consistency
-limits, named reads, and claim records.
+This page owns tracker-specific architecture: the Run task graph, normalized
+graph observations, coverage and freshness, mutation results, GitHub
+consistency limits, named reads, and claim records.
 
-## Target closure
+## Run root task and Run task graph
 
-A task-tracker target selects a grouping root or query. Its closure contains
-the selected grouping descendants plus every transitive prerequisite required
-to evaluate them. Grouping descendants of a prerequisite-only task remain
-outside the closure unless the target selects them independently.
+A Run begins with one Run root task. A complete graph read starts from that
+task and produces the current Run task graph. The graph contains the root's
+grouping descendants plus every transitive prerequisite required to evaluate
+or complete them. The root is immutable Run input; later accepted reads can
+change the graph's tasks, lifecycle facts, grouping edges, and prerequisite
+edges.
 
 For example, if selected root `R` groups child `C`, `C` is blocked by `B`, and
-prerequisite-only `B` groups `B1`, the closure contains `R`, `C`, and `B` but
-not `B1`. The dependency edge requires Dalph to observe `B`; grouping alone
-does not make `B1` part of this Run.
+supporting prerequisite `B` groups `B1`, the Run task graph contains `R`, `C`,
+and `B` but not `B1`. The dependency edge makes `B` ordinary Run work.
+Grouping alone does not make `B1` part of this Run. If `B1` is also an explicit
+prerequisite of `B`, that prerequisite edge adds it to the graph.
+
+Selecting `C` as the root does not add parent `R` or `C`'s siblings. Selecting
+`B` as the root does add `B`'s grouping descendants. The construction is rooted
+and directional; choosing an arbitrary graph member does not select a connected
+component.
+
+The provider-neutral graph value can represent zero tasks. A successful read
+for a root-task contract cannot: it must contain the exact root or return a
+typed failure. A future Run input that can validly select zero tasks requires a
+separately accepted boundary contract. If such a contract produces a complete
+empty Run task graph, the graph has no incomplete task; Run termination must
+still account for every workflow responsibility.
 
 ## Normalized observations
 
@@ -68,7 +83,7 @@ and [issue 145](https://github.com/dearlordylord/dalph/issues/145).
 
 The adapter exposes a closed set of read shapes earned by workflow use, such as
 one task, one task's complete blocker relation, one task-work specification, or
-one complete target closure. Dalph does not expose a speculative field bag or
+one complete Run task graph. Dalph does not expose a speculative field bag or
 general graph-query language.
 
 Immediately before attempt planning, a focused task-work specification read

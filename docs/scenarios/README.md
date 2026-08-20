@@ -70,6 +70,7 @@ today.
 
 | File | Issue |
 |---|---|
+| `issue-102-terminate-settled-run.md` | 102 |
 | `issue-54-resize-task-admission.md` | 54 |
 | `issue-55-localize-task-conflicts.md` | 55 |
 | `issue-56-queue-accepted-integration.md` | 56 |

@@ -339,14 +339,14 @@ fresh read from a configured task tracker.
 _Avoid_: Tracker fixture, tracker state file, GitHub Issues API fixture
 
 **Run**:
-One durable Dalph coordination instance for one task-tracker target. Its
+One durable Dalph coordination instance for one Run root task. Its
 history begins with one Run-beginning fact, may receive several bounded
 activations, and closes with at most one Run-termination fact.
 _Avoid_: Process, task, historical harness run
 
 **Workflow Run beginning**:
 The first durable workflow-journal fact for one Run. It associates a freshly
-allocated Run identity with one exact task-tracker target and its initial
+allocated Run identity with one exact Run root task and its initial
 control policy. The Journal rejects a second beginning for that identity even
 though application-level Run establishment is idempotent.
 _Avoid_: UUID allocation, process start, restoration start
@@ -367,9 +367,23 @@ reconfirmation before returning or recording termination.
 _Avoid_: Process lifetime, recovery activation, continuous coordinator loop
 
 **Workflow Run termination**:
-The final durable workflow-journal fact for one normally completed Run. It
-closes that Run's history; a crash leaves the Run unterminated.
+The final durable workflow-journal fact for one globally settled Run. In V1 it
+classifies the result as `Completed`, `Blocked`, or `Cancelled` from one fresh
+complete Run task graph and the absence of unsettled workflow responsibilities.
+It closes that Run's history; a crash leaves the Run unterminated. `Failed`
+requires a separately accepted conclusive Run-failure protocol and is not a V1
+disposition.
 _Avoid_: Executor terminal report, process exit, safe suspension
+
+**Run cancellation**:
+The Operator's durable direction to stop admitting forward work for one exact
+Run and settle or durably relinquish all of its existing workflow
+responsibilities. It begins with `RunCancellationApplied`; the request alone is
+not the terminal result. V1 has no withdrawal command. After fresh
+classification, all-success is `Completed`; otherwise settled cancellation is
+`Cancelled`.
+_Avoid_: Attempt Stop, Run Pause, application Exit, executor suspension,
+`WorkflowRunTerminated(Cancelled)`
 
 **Workflow-journal history**:
 The ordered, decoded Dalph workflow-journal records for one exact `RunId`.
@@ -398,25 +412,35 @@ boundary, or terminal attempt for every task represented by one reduced
 workflow-journal history. Dalph does not persist this projection.
 _Avoid_: Recovery stage, runnable frontier, persisted recovery state
 
-**Task-tracker target**:
-The grouping root or query that tells a task-tracker adapter where to begin
-collecting tasks for one run. It selects the starting membership; prerequisite
-edges may add tasks through the task-tracker target closure.
-_Avoid_: Run, task, task-tracker target closure, repository
+**Run root task**:
+The one task chosen when a Run begins. Each complete Run task graph read starts
+from this task. The task tracker uses its native task locator at the boundary;
+that locator is not a second task identity or a general query. A future Run
+input that selects tasks without one root requires a separately accepted model.
+_Avoid_: Task-tracker target, task query, Run task graph, arbitrary graph member
 
-**Task-tracker target closure**:
-The tasks selected by a task-tracker target's grouping descendants together with
-every transitive prerequisite needed to evaluate them. Grouping descendants of
-a prerequisite-only task are outside the closure unless the target selects
-them independently.
-_Avoid_: Tracker target closure, scope, complete native graph
+**Run task graph**:
+The complete normalized graph produced by one accepted task-tracker read for a
+Run root task. It contains the root task, every grouping descendant reached
+downward from it, and every transitive supporting prerequisite. A task reached
+only as a supporting prerequisite contributes its own prerequisites, but not
+its grouping descendants. A later accepted read can produce a changed Run task
+graph; the graph is not immutable Run input or persisted derived frontier state.
+_Avoid_: Task-tracker target closure, initial closure, Run root task, delivery frontier
+
+**Supporting prerequisite**:
+A task that enters a Run task graph through a prerequisite edge rather than as
+the Run root task or one of its grouping descendants. It is ordinary Run work
+and contributes its transitive prerequisites. Its grouping descendants remain
+outside the Run task graph unless a prerequisite edge also reaches them.
+_Avoid_: Prerequisite-only task, observation-only blocker, grouping descendant
 
 **Task-membership constraint**:
 The task-local stop derived when a later complete task-tracker observation no
-longer includes a task for which Dalph still has an exact workflow
-responsibility. Dalph preserves that responsibility for a later activation,
-reconciliation, or disposition; the membership edit does not prove cleanup,
-claim release, successful handoff, or a whole-run conflict.
+longer includes in the Run task graph a task for which Dalph still has an exact
+workflow responsibility. Dalph preserves that responsibility for a later
+activation, reconciliation, or disposition; the membership edit does not prove
+cleanup, claim release, successful handoff, or a whole-run conflict.
 _Avoid_: Removed task, automatic cleanup, whole-run membership conflict
 
 **Task tracker**:
@@ -606,7 +630,7 @@ _Avoid_: Hidden adapter retry, fixed provider retry policy, workflow mode
 
 **Task-graph read shape**:
 A named, usage-earned adapter request defining the exact task subjects and fact
-families to read, such as one task's complete blockers or one target closure.
+families to read, such as one task's complete blockers or one Run task graph.
 Its matching result gives successful empty collections precise meaning without
 creating a general-purpose tracker query language.
 _Avoid_: Arbitrary field bag, provider query, speculative graph API
@@ -670,7 +694,7 @@ _Avoid_: Task claimed, claimed task eligibility observed
 **Task claim acquired**:
 A fresh task-tracker claim observation proves that the exact intended owner and
 token currently own the task. It does not prove that the task remains open or
-inside the run's current task-tracker target closure.
+inside the Run's current Run task graph.
 _Avoid_: Claim request acknowledged, claimed task eligibility observed
 
 **Explicit task-claim reacquisition authority**:
