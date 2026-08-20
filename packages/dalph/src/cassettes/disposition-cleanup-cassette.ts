@@ -46,12 +46,15 @@ import {
   WorktreeCleanupMutationResult,
   WorktreeCleanupObservation,
   WorktreeCleanupOwner,
+  appendCandidateProvenance,
+  appendReplacementProvenance,
   branchCleanupTestLayer,
   integratorCandidateCleanupTestLayer,
   memoryJournalTestLayer,
   runBranchCleanup,
   runIntegratorCandidateCleanup,
   runWorktreeCleanup,
+  replacementPredecessorsFor,
   TestBranchCleanupBoundary,
   TestIntegratorCandidateCleanupBoundary,
   TestWorktreeCleanupBoundary,
@@ -215,11 +218,15 @@ export type DispositionCleanupCassetteRun = typeof DispositionCleanupCassetteRun
 const issue69RunId = RunId.make("issue-69-maintained-cassette-run")
 const issue69ShaLength = 40
 const issue69EvidenceDigestLength = 64
-const issue69DispositionPosition = 2
+const issue69DispositionPosition = 3
+const issue69CandidateDispositionPosition = 9
 const issue69AuthorityObservationPosition = 3
-const issue69DirectionPosition = issue69AuthorityObservationPosition
-const issue69SuccessorObservationPosition = 4
-const issue69CandidateObservationPosition = 5
+const issue69DirectionPosition = 10
+const issue69CandidateObservationPosition = 14
+const issue69QueuedAtPosition = 2
+const issue69StartedAtPosition = 6
+const issue69TargetLineagePosition = 4
+const issue69SuccessorTargetLineagePosition = 12
 const issue69SecondEvidenceRevision = 2
 const issue69BaseSha = GitCommitSha.make("1".repeat(issue69ShaLength))
 const issue69Attempt = PlannedTaskAttempt.make({
@@ -236,6 +243,7 @@ const issue69Successor = PlannedTaskAttempt.make({
   ...issue69Attempt,
   attemptId: AttemptId.make("issue-69-maintained-p2"),
   branch: TaskBranchRef.make("refs/heads/task/issue-69-maintained-p2"),
+  taskRevision: TaskRevision.make("issue-69-maintained-revision:successor"),
   worktree: WorktreeLocator.make("/tmp/issue-69-maintained-p2")
 })
 const issue69PlannedDisposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
@@ -244,7 +252,7 @@ const issue69PlannedDisposition = PlannedAttemptCleanupDisposition.cases.Superse
   successorAttempt: issue69Successor
 })
 const issue69WorktreeAuthorization = WorktreeCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-maintained-restart")],
+  causalPredecessors: replacementPredecessorsFor(issue69Attempt),
   disposition: issue69PlannedDisposition,
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: issue69BaseSha,
@@ -256,7 +264,7 @@ const issue69WorktreeAuthorization = WorktreeCleanupAuthorization.make({
   writerQuiescent: true
 })
 const issue69BranchAuthorization = BranchCleanupAuthorization.make({
-  causalPredecessors: [issue69WorktreeAuthorization.operationId],
+  causalPredecessors: [issue69WorktreeAuthorization.operationId, ...replacementPredecessorsFor(issue69Attempt)],
   disposition: issue69PlannedDisposition,
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: issue69BaseSha,
@@ -285,22 +293,22 @@ const issue69Predecessor = IntegratorSessionCorrelation.make({
   expectedTargetHead: issue69BaseSha,
   integrationTarget: issue69IntegrationTarget,
   plannedAttempt: issue69Attempt,
-  queuedAt: JournalPosition.make(1),
+  queuedAt: JournalPosition.make(issue69QueuedAtPosition),
   sessionId: IntegratorSessionId.make("session:issue-69-maintained-p1"),
-  startedAt: JournalPosition.make(1),
-  targetLineageObservedAt: JournalPosition.make(1)
+  startedAt: JournalPosition.make(issue69StartedAtPosition),
+  targetLineageObservedAt: JournalPosition.make(issue69TargetLineagePosition)
 })
 const issue69SuccessorSession = IntegratorSessionCorrelation.make({
   ...issue69Predecessor,
   candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-maintained-p2"),
   sessionId: IntegratorSessionId.make("session:issue-69-maintained-p2"),
-  targetLineageObservedAt: JournalPosition.make(issue69SuccessorObservationPosition)
+  targetLineageObservedAt: JournalPosition.make(issue69SuccessorTargetLineagePosition)
 })
 const issue69CandidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   causalPredecessors: [OperationId.make("issue-69-maintained-full-rerun")],
   disposition: IntegratorCandidateCleanupDisposition.make({
     directionAppliedAt: JournalPosition.make(issue69DirectionPosition),
-    dispositionAt: JournalPosition.make(issue69DispositionPosition),
+    dispositionAt: JournalPosition.make(issue69CandidateDispositionPosition),
     predecessor: issue69Predecessor,
     successor: issue69SuccessorSession
   }),
@@ -422,6 +430,12 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
       FixtureTarget.make("issue-69-maintained-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    if (
+      cassette.scenario === "SupersededWorktreeAndBranch" ||
+      cassette.scenario === "ChangedGitFactsPreserveResources"
+    ) {
+      yield* appendReplacementProvenance(issue69Attempt, issue69Successor)
+    }
     let terminalResult: string
     if (cassette.scenario === "SupersededWorktreeAndBranch") {
       const worktree = yield* runWorktreeCleanup(issue69WorktreeAuthorization)
@@ -435,6 +449,7 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
       if (worktree._tag !== "Preserved") return yield* Effect.die("changed-facts cassette did not preserve W1")
       terminalResult = "Preserved with a typed contradiction"
     } else if (cassette.scenario === "FullRerunPredecessorCandidate") {
+      yield* appendCandidateProvenance(issue69Predecessor, issue69SuccessorSession, "issue-69-maintained-full-rerun")
       const candidate = yield* runIntegratorCandidateCleanup(issue69CandidateAuthorization)
       if (candidate._tag !== "Settled") return yield* Effect.die("FullRerun cassette did not settle predecessor C1")
       terminalResult = "C1 settled; S1 history and C2 preserved"

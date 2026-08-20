@@ -17,9 +17,10 @@ import {
   WorktreeCleanupEvidenceRevision,
   WorktreeCleanupOwner
 } from "./disposition.js"
+import { replacementPredecessorsFor } from "./provenance-fixtures.js"
 
-const dispositionPosition = 2
-const authorizationObservationPosition = 3
+const dispositionPosition = 3
+const authorizationObservationPosition = 4
 
 export const runId = RunId.make("issue-69-worktree-run")
 export const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
@@ -37,6 +38,7 @@ export const successor = PlannedTaskAttempt.make({
   ...attempt,
   attemptId: AttemptId.make("issue-69-p2"),
   branch: TaskBranchRef.make("refs/heads/task/issue-69-p2"),
+  taskRevision: TaskRevision.make("revision:2"),
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 export const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
@@ -45,7 +47,7 @@ export const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.mak
   successorAttempt: successor
 })
 export const authorization = WorktreeCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-restart")],
+  causalPredecessors: replacementPredecessorsFor(attempt),
   disposition,
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,

@@ -5,6 +5,7 @@ import {
   AcceptedResult,
   EvidenceDigest,
   EvidenceReference,
+  GitCommitSha,
   IntegrationTarget,
   IntegrationTargetRef,
   GitRepositoryLocator
@@ -35,6 +36,7 @@ import {
   TestIntegratorCandidateCleanupBoundary
 } from "./integrator-candidate.js"
 import { attempt, baseSha, runId } from "./fixtures.js"
+import { appendCandidateProvenance } from "./provenance-fixtures.js"
 
 const acceptedResult = AcceptedResult.make({
   commit: baseSha,
@@ -50,20 +52,20 @@ const predecessor = IntegratorSessionCorrelation.make({
   expectedTargetHead: baseSha,
   integrationTarget: target,
   plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(1),
+  queuedAt: JournalPosition.make(2),
   sessionId: IntegratorSessionId.make("session:issue-69-p1"),
-  startedAt: JournalPosition.make(1),
-  targetLineageObservedAt: JournalPosition.make(1)
+  startedAt: JournalPosition.make(6),
+  targetLineageObservedAt: JournalPosition.make(4)
 })
 const successor = IntegratorSessionCorrelation.make({
   ...predecessor,
   candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-p2"),
   sessionId: IntegratorSessionId.make("session:issue-69-p2"),
-  targetLineageObservedAt: JournalPosition.make(4)
+  targetLineageObservedAt: JournalPosition.make(12)
 })
 const disposition = IntegratorCandidateCleanupDisposition.make({
-  directionAppliedAt: JournalPosition.make(3),
-  dispositionAt: JournalPosition.make(2),
+  directionAppliedAt: JournalPosition.make(10),
+  dispositionAt: JournalPosition.make(9),
   predecessor,
   successor
 })
@@ -72,7 +74,7 @@ const authorization = IntegratorCandidateCleanupAuthorization.make({
   disposition,
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: predecessor.candidateResource,
-  observationAt: JournalPosition.make(5),
+  observationAt: JournalPosition.make(14),
   observationOperationId: OperationId.make("issue-69-candidate-read"),
   operationId: OperationId.make("issue-69-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: predecessor.sessionId }),
@@ -94,6 +96,7 @@ it.effect("removes only a quarantined predecessor candidate", () =>
       FixtureTarget.make("issue-69-candidate-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
     expect(result._tag).toBe("Settled")
@@ -129,6 +132,7 @@ it.effect("preserves a live predecessor candidate writer", () =>
       FixtureTarget.make("issue-69-candidate-live"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
     expect(result._tag).toBe("Preserved")
@@ -150,6 +154,24 @@ it.effect("preserves a live predecessor candidate writer", () =>
   )
 )
 
+it.effect("preserves a candidate authorization with missing FullRerun provenance without reading", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-candidate-missing-provenance"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const result = yield* runIntegratorCandidateCleanup(authorization)
+    const boundary = yield* TestIntegratorCandidateCleanupBoundary
+    expect(result._tag).toBe("Preserved")
+    expect(yield* boundary.calls()).toEqual([])
+  }).pipe(
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
 it.effect("reconciles a lost predecessor-candidate response after restart without duplicate removal", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
@@ -158,6 +180,7 @@ it.effect("reconciles a lost predecessor-candidate response after restart withou
       FixtureTarget.make("issue-69-candidate-restart"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
     const first = yield* runIntegratorCandidateCleanup(authorization)
     const second = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
@@ -186,3 +209,17 @@ it.effect("reconciles a lost predecessor-candidate response after restart withou
     Effect.provide(memoryJournalTestLayer)
   )
 )
+
+it("rejects a FullRerun successor that changes responsibility facts", () => {
+  expect(() =>
+    IntegratorCandidateCleanupDisposition.make({
+      directionAppliedAt: JournalPosition.make(10),
+      dispositionAt: JournalPosition.make(9),
+      predecessor,
+      successor: {
+        ...successor,
+        acceptedResult: AcceptedResult.make({ ...acceptedResult, commit: GitCommitSha.make("2".repeat(40)) })
+      }
+    })
+  ).toThrow()
+})

@@ -58,13 +58,14 @@ import {
   runWorktreeCleanup,
   worktreeCleanupTestLayer
 } from "@dalph/orchestrator"
+import { appendCandidateProvenance, appendReplacementProvenance, replacementPredecessorsFor } from "@dalph/orchestrator"
 import {
   expectedRecoveryPrefix,
   prefixThrough,
   recoveryPrefixMismatch,
   replayRecoveryPrefix
 } from "./recovery-store-lanes.js"
-import type { RecoveryPrefixResume } from "./recovery-store-lanes.js"
+import type { RecoveryPrefix, RecoveryPrefixResume } from "./recovery-store-lanes.js"
 import { recoveryPrefixCutLabels, type RecoveryPrefixCutLabel } from "./recovery-prefix-contract.js"
 
 const runId = RunId.make("issue-69-recovery-prefix-run")
@@ -83,12 +84,13 @@ const successor = PlannedTaskAttempt.make({
   ...attempt,
   attemptId: AttemptId.make("issue-69-recovery-p2"),
   branch: TaskBranchRef.make("refs/heads/task/issue-69-recovery-p2"),
+  taskRevision: TaskRevision.make("revision:2"),
   worktree: WorktreeLocator.make("/tmp/issue-69-recovery-p2")
 })
 const authorization = WorktreeCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-recovery-restart")],
+  causalPredecessors: replacementPredecessorsFor(attempt),
   disposition: PlannedAttemptCleanupDisposition.cases.Superseded.make({
-    dispositionAt: JournalPosition.make(2),
+    dispositionAt: JournalPosition.make(3),
     plannedAttempt: attempt,
     successorAttempt: successor
   }),
@@ -115,7 +117,7 @@ const absent = WorktreeCleanupObservation.cases.Absent.make({
 })
 
 const branchAuthorization = BranchCleanupAuthorization.make({
-  causalPredecessors: [authorization.operationId],
+  causalPredecessors: [authorization.operationId, ...replacementPredecessorsFor(attempt)],
   disposition: authorization.disposition,
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
@@ -152,28 +154,28 @@ const candidatePredecessor = IntegratorSessionCorrelation.make({
   expectedTargetHead: baseSha,
   integrationTarget: candidateTarget,
   plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(1),
+  queuedAt: JournalPosition.make(2),
   sessionId: IntegratorSessionId.make("session:issue-69-recovery-p1"),
-  startedAt: JournalPosition.make(1),
-  targetLineageObservedAt: JournalPosition.make(1)
+  startedAt: JournalPosition.make(6),
+  targetLineageObservedAt: JournalPosition.make(4)
 })
 const candidateSuccessor = IntegratorSessionCorrelation.make({
   ...candidatePredecessor,
   candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-recovery-p2"),
   sessionId: IntegratorSessionId.make("session:issue-69-recovery-p2"),
-  targetLineageObservedAt: JournalPosition.make(4)
+  targetLineageObservedAt: JournalPosition.make(12)
 })
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   causalPredecessors: [OperationId.make("issue-69-recovery-full-rerun")],
   disposition: IntegratorCandidateCleanupDisposition.make({
-    directionAppliedAt: JournalPosition.make(3),
-    dispositionAt: JournalPosition.make(2),
+    directionAppliedAt: JournalPosition.make(10),
+    dispositionAt: JournalPosition.make(9),
     predecessor: candidatePredecessor,
     successor: candidateSuccessor
   }),
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
-  observationAt: JournalPosition.make(5),
+  observationAt: JournalPosition.make(14),
   observationOperationId: OperationId.make("issue-69-recovery-candidate-read"),
   operationId: OperationId.make("issue-69-recovery-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
@@ -198,6 +200,7 @@ const maintainedSource = Effect.scoped(
       FixtureTarget.make("issue-69-recovery-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendReplacementProvenance(attempt, successor)
     yield* runWorktreeCleanup(authorization)
     yield* runWorktreeCleanup(authorization)
     return yield* journal.read(runId)
@@ -220,10 +223,74 @@ const maintainedSource = Effect.scoped(
 
 interface CleanupResumeEvidence {
   readonly finalTag: string
+  readonly familyTags: ReadonlyArray<string>
+  readonly absenceCauses: ReadonlyArray<string>
   readonly mutationCalls: number
   readonly mutationIntentCount: number
+  readonly mutationAttempts: ReadonlyArray<number>
   readonly observationCalls: number
+  readonly observationIntentKeys: ReadonlyArray<string>
   readonly settlementCount: number
+}
+
+const cleanupResumeEvidence = (
+  records: ReadonlyArray<JournalRecord>,
+  family: "Worktree" | "Branch" | "IntegratorCandidate"
+) => {
+  const familyRecords = records.filter(({ event }) => event._tag.startsWith(`${family}Cleanup`))
+  return {
+    familyTags: familyRecords.map(({ event }) => event._tag),
+    absenceCauses: familyRecords.flatMap(({ event }) =>
+      "cause" in event && typeof event.cause === "string" ? [event.cause] : []
+    ),
+    mutationAttempts: familyRecords.flatMap(({ event }) =>
+      event._tag.endsWith("MutationIntended") && "attempt" in event && typeof event.attempt === "number"
+        ? [event.attempt]
+        : []
+    ),
+    observationIntentKeys: familyRecords.flatMap(({ event }) =>
+      "ordinal" in event &&
+      "operationId" in event &&
+      event._tag.endsWith("ObservationIntended") &&
+      typeof event.ordinal === "number"
+        ? [`${event.ordinal}:${event.operationId}`]
+        : []
+    )
+  }
+}
+
+const expectedFamilyTagsAfterResume = (
+  prefix: RecoveryPrefix,
+  family: "Worktree" | "Branch" | "IntegratorCandidate"
+): ReadonlyArray<string> => {
+  const familyPrefix = `${family}Cleanup`
+  const retained = prefix.records
+    .filter(({ event }) => event._tag.startsWith(familyPrefix))
+    .map(({ event }) => event._tag)
+  const tag = (suffix: string) => `${familyPrefix}${suffix}`
+  if (prefix.cut === "P0" || prefix.cut === "P1") {
+    return [
+      tag("Authorized"),
+      tag("ObservationIntended"),
+      tag("Observed"),
+      tag("MutationIntended"),
+      tag("MutationResultRecorded"),
+      tag("ObservationIntended"),
+      tag("Observed"),
+      tag("AbsenceConfirmed"),
+      tag("Settled")
+    ]
+  }
+  if (prefix.cut === "P2" || prefix.cut === "P3") {
+    return [...retained, tag("ObservationIntended"), tag("Observed"), tag("AbsenceConfirmed"), tag("Settled")]
+  }
+  if (prefix.cut === "P4") {
+    return [...retained, tag("Observed"), tag("AbsenceConfirmed"), tag("Settled")]
+  }
+  if (prefix.cut === "P5") {
+    return [...retained, tag("ObservationIntended"), tag("Observed"), tag("AbsenceConfirmed"), tag("Settled")]
+  }
+  return [...retained, tag("ObservationIntended"), tag("Observed")]
 }
 
 const resumeCleanupAfter =
@@ -251,6 +318,7 @@ const resumeCleanupAfter =
       const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
       return {
         finalTag: final._tag,
+        ...cleanupResumeEvidence(records, "Worktree"),
         mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
         mutationIntentCount: records.filter(({ event }) => event._tag === "WorktreeCleanupMutationIntended").length,
         observationCalls: calls.filter(({ _tag }) => _tag === "Observe").length,
@@ -265,8 +333,8 @@ const endpointForCut = (
 ) => {
   if (cut === "P0")
     return {
-      position: records.findIndex(({ event }) => event._tag === "WorkflowRunBegan"),
-      endpoint: "WorkflowRunBegan before WorktreeCleanupAuthorized"
+      position: records.findIndex(({ event }) => event._tag === "WorktreeCleanupAuthorized") - 1,
+      endpoint: "record immediately before WorktreeCleanupAuthorized"
     }
   if (cut === "P1")
     return {
@@ -329,6 +397,24 @@ it.effect("reopens every cleanup P0-P6 prefix through memory and SQLite", () =>
         expect(evidence, `${prefix.cut}/${lane} must resume production cleanup`).toBeDefined()
         if (evidence === undefined) continue
         expect(evidence.finalTag, `${prefix.cut}/${lane} final outcome`).toBe("Settled")
+        expect(evidence.familyTags, `${prefix.cut}/${lane} exact worktree event order`).toEqual(
+          expectedFamilyTagsAfterResume(prefix, "Worktree")
+        )
+        expect(evidence.absenceCauses, `${prefix.cut}/${lane} absence cause`).toEqual([
+          "MutationResponseReconciliation"
+        ])
+        expect(evidence.mutationAttempts, `${prefix.cut}/${lane} mutation ordinals`).toEqual([1])
+        expect(evidence.observationIntentKeys, `${prefix.cut}/${lane} observation identities`).toHaveLength(
+          prefix.cut === "P5" || prefix.cut === "P6" ? 3 : 2
+        )
+        expect(new Set(evidence.observationIntentKeys).size, `${prefix.cut}/${lane} duplicate observation intent`).toBe(
+          evidence.observationIntentKeys.length
+        )
+        if (prefix.cut === "P4") {
+          expect(evidence.observationIntentKeys, `${prefix.cut}/${lane} reuses unmatched observation intent`).toEqual(
+            cleanupResumeEvidence(prefix.records, "Worktree").observationIntentKeys
+          )
+        }
         expect(evidence.mutationIntentCount, `${prefix.cut}/${lane} mutation intents`).toBe(1)
         expect(evidence.settlementCount, `${prefix.cut}/${lane} settlements`).toBe(1)
         expect(evidence.observationCalls, `${prefix.cut}/${lane} fresh reads`).toBe(
@@ -350,6 +436,7 @@ const branchMaintainedSource = Effect.scoped(
       FixtureTarget.make("issue-69-branch-recovery-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendReplacementProvenance(attempt, successor)
     const worktree = yield* runWorktreeCleanup(authorization)
     if (worktree._tag !== "Settled") return yield* Effect.die("branch recovery source could not settle its worktree")
     yield* runBranchCleanup(branchAuthorization)
@@ -391,6 +478,7 @@ const candidateMaintainedSource = Effect.scoped(
       FixtureTarget.make("issue-69-candidate-recovery-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendCandidateProvenance(candidatePredecessor, candidateSuccessor, "issue-69-recovery-full-rerun")
     yield* runIntegratorCandidateCleanup(candidateAuthorization)
     yield* runIntegratorCandidateCleanup(candidateAuthorization)
     return yield* journal.read(runId)
@@ -435,6 +523,7 @@ const resumeBranchCleanupAfter =
       const calls = yield* (yield* TestBranchCleanupBoundary).calls()
       return {
         finalTag: final._tag,
+        ...cleanupResumeEvidence(records, "Branch"),
         mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
         mutationIntentCount: records.filter(
           ({ event }) =>
@@ -475,6 +564,7 @@ const resumeCandidateCleanupAfter =
       const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
       return {
         finalTag: final._tag,
+        ...cleanupResumeEvidence(records, "IntegratorCandidate"),
         mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
         mutationIntentCount: records.filter(
           ({ event }) =>
@@ -555,6 +645,7 @@ const endpointForFamily = (
 }
 
 const assertCleanupRecoveryFamily = (
+  family: "Branch" | "IntegratorCandidate",
   records: ReadonlyArray<JournalRecord>,
   endpoint: (
     records: ReadonlyArray<{ readonly event: { readonly _tag: string; readonly [key: string]: unknown } }>,
@@ -578,6 +669,24 @@ const assertCleanupRecoveryFamily = (
         expect(evidence, `${prefix.cut}/${lane} must resume production cleanup`).toBeDefined()
         if (evidence === undefined) continue
         expect(evidence.finalTag, `${prefix.cut}/${lane} final outcome`).toBe("Settled")
+        expect(evidence.familyTags, `${prefix.cut}/${lane} exact ${family} event order`).toEqual(
+          expectedFamilyTagsAfterResume(prefix, family)
+        )
+        expect(evidence.absenceCauses, `${prefix.cut}/${lane} absence cause`).toEqual([
+          "MutationResponseReconciliation"
+        ])
+        expect(evidence.mutationAttempts, `${prefix.cut}/${lane} mutation ordinals`).toEqual([1])
+        expect(evidence.observationIntentKeys, `${prefix.cut}/${lane} observation identities`).toHaveLength(
+          prefix.cut === "P5" || prefix.cut === "P6" ? 3 : 2
+        )
+        expect(new Set(evidence.observationIntentKeys).size, `${prefix.cut}/${lane} duplicate observation intent`).toBe(
+          evidence.observationIntentKeys.length
+        )
+        if (prefix.cut === "P4") {
+          expect(evidence.observationIntentKeys, `${prefix.cut}/${lane} reuses unmatched observation intent`).toEqual(
+            cleanupResumeEvidence(prefix.records, family).observationIntentKeys
+          )
+        }
         expect(evidence.mutationIntentCount, `${prefix.cut}/${lane} mutation intents`).toBe(1)
         expect(evidence.settlementCount, `${prefix.cut}/${lane} settlements`).toBe(1)
         expect(evidence.observationCalls, `${prefix.cut}/${lane} fresh reads`).toBe(
@@ -594,6 +703,7 @@ it.effect("reopens branch and predecessor-candidate cleanup P0-P6 prefixes throu
   Effect.gen(function* () {
     const branchRecords = yield* branchMaintainedSource
     yield* assertCleanupRecoveryFamily(
+      "Branch",
       branchRecords,
       (records, cut) =>
         endpointForFamily(
@@ -613,6 +723,7 @@ it.effect("reopens branch and predecessor-candidate cleanup P0-P6 prefixes throu
     )
     const candidateRecords = yield* candidateMaintainedSource
     yield* assertCleanupRecoveryFamily(
+      "IntegratorCandidate",
       candidateRecords,
       (records, cut) =>
         endpointForFamily(
@@ -626,7 +737,7 @@ it.effect("reopens branch and predecessor-candidate cleanup P0-P6 prefixes throu
             observed: "IntegratorCandidateCleanupObserved",
             settled: "IntegratorCandidateCleanupSettled"
           },
-          false
+          true
         ),
       resumeCandidateCleanupAfter
     )

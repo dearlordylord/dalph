@@ -33,6 +33,7 @@ import {
   WorktreeCleanupMutationResult,
   WorktreeCleanupObservation
 } from "./worktree.js"
+import { appendReplacementProvenance, replacementPredecessorsFor } from "./provenance-fixtures.js"
 
 const runId = RunId.make("issue-69-worktree-run")
 const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
@@ -50,15 +51,16 @@ const successor = PlannedTaskAttempt.make({
   ...attempt,
   attemptId: AttemptId.make("issue-69-p2"),
   branch: TaskBranchRef.make("refs/heads/task/issue-69-p2"),
+  taskRevision: TaskRevision.make("revision:2"),
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
-  dispositionAt: JournalPosition.make(2),
+  dispositionAt: JournalPosition.make(3),
   plannedAttempt: attempt,
   successorAttempt: successor
 })
 const authorization = WorktreeCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-restart")],
+  causalPredecessors: replacementPredecessorsFor(attempt),
   disposition,
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
@@ -81,6 +83,7 @@ const setup = (
       FixtureTarget.make("issue-69-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendReplacementProvenance(attempt, successor)
     const result = yield* runWorktreeCleanup(authorization)
     const calls = yield* TestWorktreeCleanupBoundary
     return { calls: yield* calls.calls(), result }
@@ -129,6 +132,7 @@ it.effect("does not call a boundary when a replayed operation has different auth
       FixtureTarget.make("issue-69-authorization-replay"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendReplacementProvenance(attempt, successor)
     const first = yield* runWorktreeCleanup(authorization)
     const replayedAuthorization = WorktreeCleanupAuthorization.make({
       ...authorization,
@@ -164,6 +168,7 @@ it.effect("records initial absence as reconciliation, never as a mutation result
       FixtureTarget.make("issue-69-initial-absence"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendReplacementProvenance(attempt, successor)
     const result = yield* runWorktreeCleanup(authorization)
     const records = yield* journal.read(runId)
     expect(result._tag).toBe("Settled")
@@ -182,6 +187,21 @@ it.effect("records initial absence as reconciliation, never as a mutation result
     ),
     Effect.provide(memoryJournalTestLayer)
   )
+)
+
+it.effect("preserves a caller-made disposition when durable terminal provenance is missing", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-missing-provenance"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const result = yield* runWorktreeCleanup(authorization)
+    const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
+    expect(result._tag).toBe("Preserved")
+    expect(calls).toEqual([])
+  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("preserves an invalid successful mutation response instead of settling", () =>
@@ -207,7 +227,7 @@ it.effect("preserves an invalid successful mutation response instead of settling
 it("rejects a superseded disposition that reuses predecessor identity", () => {
   expect(() =>
     PlannedAttemptCleanupDisposition.cases.Superseded.make({
-      dispositionAt: JournalPosition.make(2),
+      dispositionAt: JournalPosition.make(3),
       plannedAttempt: attempt,
       successorAttempt: attempt
     })
@@ -241,6 +261,7 @@ it.effect("reconciles an applied response loss with a fresh absence and never du
       FixtureTarget.make("issue-69-target-loss"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendReplacementProvenance(attempt, successor)
     const first = yield* runWorktreeCleanup(authorization).pipe(
       Effect.provide(
         worktreeCleanupTestLayer({
@@ -307,6 +328,7 @@ it.effect("stops after the three-request cleanup bound", () =>
       FixtureTarget.make("issue-69-target-bound"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    yield* appendReplacementProvenance(attempt, successor)
     const first = yield* runWorktreeCleanup(authorization)
     const second = yield* runWorktreeCleanup(authorization)
     const third = yield* runWorktreeCleanup(authorization)

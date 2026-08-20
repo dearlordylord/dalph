@@ -22,9 +22,10 @@ import {
   CleanupObservationOrdinal,
   WorktreeCleanupAuthorization,
   WorktreeCleanupEvidenceRevision,
-  cleanupMutationRequestLimit
+  cleanupMutationRequestLimit,
+  worktreeCleanupAuthorizationEquals
 } from "./disposition.js"
-import { worktreeCleanupAuthorizationEquals } from "./disposition.js"
+import { validateWorktreeCleanupHistory, validateWorktreeCleanupProvenance } from "./provenance.js"
 
 /** Fresh Git evidence for the exact planned worktree named by one authorization. */
 export const WorktreeCleanupObservation = Schema.TaggedUnion({
@@ -297,6 +298,28 @@ const nextObservationOrdinal = (
 ): CleanupObservationOrdinal =>
   CleanupObservationOrdinal.make(recordsFor(records, "WorktreeCleanupObservationIntended", operationId).length + 1)
 
+const unmatchedObservationIntent = (
+  records: ReadonlyArray<JournalRecord>,
+  authorization: WorktreeCleanupAuthorization
+) =>
+  records.find((record) => {
+    if (
+      record.event._tag !== "WorktreeCleanupObservationIntended" ||
+      !worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
+    ) {
+      return false
+    }
+    const intended = record.event
+    return !records.some((observed) => {
+      if (observed.event._tag !== "WorktreeCleanupObserved") return false
+      return (
+        observed.event.authorization.operationId === authorization.operationId &&
+        observed.event.operationId === intended.operationId &&
+        observed.event.ordinal === intended.ordinal
+      )
+    })
+  })
+
 const existingAuthorization = (records: ReadonlyArray<JournalRecord>, operationId: OperationId) =>
   records.find(
     (record): record is JournalRecord & { readonly event: WorktreeCleanupAuthorizedEvent } =>
@@ -328,8 +351,15 @@ const observeFresh = Effect.fn("WorktreeCleanup.observeFresh")(function* (
 ) {
   const boundary = yield* WorktreeCleanupBoundary
   const runId = authorization.disposition.plannedAttempt.runId
-  const ordinal = nextObservationOrdinal(records, authorization.operationId)
-  const operationId = OperationId.make(`${authorization.operationId}:observe:${ordinal}`)
+  const unmatched = unmatchedObservationIntent(records, authorization)
+  const ordinal =
+    unmatched?.event._tag === "WorktreeCleanupObservationIntended"
+      ? unmatched.event.ordinal
+      : nextObservationOrdinal(records, authorization.operationId)
+  const operationId =
+    unmatched?.event._tag === "WorktreeCleanupObservationIntended"
+      ? unmatched.event.operationId
+      : OperationId.make(`${authorization.operationId}:observe:${ordinal}`)
   const key = worktreeCleanupObservationIntendedRecordKey(authorization.operationId, ordinal)
   if (!records.some((record) => record.key === key)) {
     yield* appendEvent(
@@ -391,13 +421,18 @@ const settleFromAbsence = Effect.fn("WorktreeCleanup.settleFromAbsence")(functio
   observation: WorktreeCleanupObservation,
   operationId: OperationId,
   ordinal: CleanupObservationOrdinal,
-  cause: "InitialAbsence" | "MutationResponseReconciliation",
   result: Extract<WorktreeCleanupMutationResult, { readonly _tag: "AlreadyAbsent" | "Removed" }>,
   records: ReadonlyArray<JournalRecord>
 ) {
   if (observation._tag !== "Absent")
     return yield* Effect.die("worktree absence settlement requires an Absent observation")
   const runId = authorization.disposition.plannedAttempt.runId
+  const mutationExists = records.some(
+    (record) =>
+      record.event._tag === "WorktreeCleanupMutationIntended" &&
+      worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
+  )
+  const derivedCause = mutationExists ? "MutationResponseReconciliation" : "InitialAbsence"
   const absenceKey = worktreeCleanupAbsenceConfirmedRecordKey(authorization.operationId, ordinal)
   if (!records.some((record) => record.key === absenceKey)) {
     yield* appendEvent(
@@ -405,7 +440,7 @@ const settleFromAbsence = Effect.fn("WorktreeCleanup.settleFromAbsence")(functio
       absenceKey,
       WorktreeCleanupAbsenceConfirmedEvent.make({
         authorization,
-        cause,
+        cause: derivedCause,
         observation,
         occurrenceClassification: "NonActionOccurrence",
         operationId,
@@ -442,6 +477,15 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
   const journal = yield* InRunJournal
   const runId = authorization.disposition.plannedAttempt.runId
   let records = yield* journal.read(runId)
+
+  const provenance = validateWorktreeCleanupProvenance(records, authorization)
+  if (provenance._tag === "Invalid") {
+    return WorktreeCleanupOutcome.cases.Preserved.make({ authorization, reason: provenance.detail })
+  }
+  const history = validateWorktreeCleanupHistory(records, authorization)
+  if (history._tag === "Invalid") {
+    return WorktreeCleanupOutcome.cases.Preserved.make({ authorization, reason: history.detail })
+  }
 
   const journalAuthorization = existingAuthorization(records, authorization.operationId)
   if (
@@ -499,7 +543,6 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
       observed,
       firstObservation.operationId,
       firstObservation.ordinal,
-      "InitialAbsence",
       alreadyAbsent,
       records
     )
@@ -583,7 +626,6 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
         postMutationObservation.observed,
         postMutationObservation.operationId,
         postMutationObservation.ordinal,
-        "MutationResponseReconciliation",
         result,
         records
       )

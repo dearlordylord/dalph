@@ -10,8 +10,19 @@ import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memor
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { WorktreeCleanupSettledEvent } from "./worktree.js"
-import { BranchCleanupAuthorization, BranchCleanupEvidenceRevision, BranchCleanupOwner } from "./disposition.js"
+import {
+  WorktreeCleanupAbsenceConfirmedEvent,
+  WorktreeCleanupObservation,
+  WorktreeCleanupObservationIntendedEvent,
+  WorktreeCleanupObservedEvent,
+  WorktreeCleanupSettledEvent
+} from "./worktree.js"
+import {
+  BranchCleanupAuthorization,
+  BranchCleanupEvidenceRevision,
+  BranchCleanupOwner,
+  CleanupObservationOrdinal
+} from "./disposition.js"
 import {
   BranchCleanupMutationResult,
   BranchCleanupObservation,
@@ -19,11 +30,18 @@ import {
   runBranchCleanup,
   TestBranchCleanupBoundary
 } from "./branch.js"
-import { worktreeCleanupSettledRecordKey } from "../../../workflow-journal/record-key.js"
-import { authorization, attempt, disposition, runId, baseSha } from "./fixtures.js"
+import {
+  worktreeCleanupAbsenceConfirmedRecordKey,
+  worktreeCleanupObservationIntendedRecordKey,
+  worktreeCleanupObservedRecordKey,
+  worktreeCleanupSettledRecordKey
+} from "../../../workflow-journal/record-key.js"
+import { authorization, attempt, disposition, runId, baseSha, successor } from "./fixtures.js"
+import { appendReplacementProvenance } from "./provenance-fixtures.js"
+import { replacementPredecessorsFor } from "./provenance-fixtures.js"
 
 const branchAuthorization = BranchCleanupAuthorization.make({
-  causalPredecessors: [authorization.operationId],
+  causalPredecessors: [authorization.operationId, ...replacementPredecessorsFor(attempt)],
   disposition,
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
@@ -42,6 +60,49 @@ const begin = Effect.fn("Issue69BranchTest.begin")(function* () {
     runId,
     FixtureTarget.make("issue-69-branch-target"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  )
+  yield* appendReplacementProvenance(attempt, successor)
+  const observation = WorktreeCleanupObservation.cases.Absent.make({
+    locator: authorization.locator,
+    revision: authorization.evidenceRevision
+  })
+  const ordinal = CleanupObservationOrdinal.make(1)
+  yield* journal.append(
+    runId,
+    worktreeCleanupObservationIntendedRecordKey(authorization.operationId, ordinal),
+    WorktreeCleanupObservationIntendedEvent.make({
+      authorization,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operationId: authorization.observationOperationId,
+      ordinal,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    runId,
+    worktreeCleanupObservedRecordKey(authorization.operationId, ordinal),
+    WorktreeCleanupObservedEvent.make({
+      authorization,
+      observation,
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: authorization.observationOperationId,
+      ordinal,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    runId,
+    worktreeCleanupAbsenceConfirmedRecordKey(authorization.operationId, ordinal),
+    WorktreeCleanupAbsenceConfirmedEvent.make({
+      authorization,
+      cause: "InitialAbsence",
+      observation,
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: authorization.observationOperationId,
+      ordinal,
+      version: workflowJournalEventVersion
+    })
   )
   yield* journal.append(
     runId,

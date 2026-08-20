@@ -163,7 +163,9 @@ export const IntegratorSessionFixedEvent = Schema.TaggedStruct("IntegratorSessio
 export const firstFullRerunSuccessorGeneration = 2
 export const IntegratorSuccessorGeneration = Schema.Literal(firstFullRerunSuccessorGeneration)
 
-const successorResponsibilityMatches = (
+/** FullRerun successors retain every responsibility fact; only session/resource
+ * identities and the fresh lineage observation move forward. */
+export const integratorSuccessorResponsibilityMatches = (
   predecessor: IntegratorSessionCorrelation,
   successor: IntegratorSessionCorrelation
 ): boolean =>
@@ -174,13 +176,13 @@ const successorResponsibilityMatches = (
   predecessor.queuedAt === successor.queuedAt &&
   predecessor.startedAt === successor.startedAt
 
-const successorIdentitiesAreDistinct = (
+export const integratorSuccessorIdentitiesAreDistinct = (
   predecessor: IntegratorSessionCorrelation,
   successor: IntegratorSessionCorrelation
 ): boolean =>
   predecessor.sessionId !== successor.sessionId && predecessor.candidateResource !== successor.candidateResource
 
-const successorChronologyIsValid = (event: {
+export const integratorSuccessorChronologyIsValid = (event: {
   readonly predecessor: IntegratorSessionCorrelation
   readonly quarantineAt: JournalPosition
   readonly directionAppliedAt: JournalPosition
@@ -196,10 +198,10 @@ const successorSessionFixedEventIssue = (event: {
   readonly directionAppliedAt: JournalPosition
   readonly successor: IntegratorSessionCorrelation
 }): string | undefined => {
-  const sameResponsibility = successorResponsibilityMatches(event.predecessor, event.successor)
-  return successorIdentitiesAreDistinct(event.predecessor, event.successor) &&
+  const sameResponsibility = integratorSuccessorResponsibilityMatches(event.predecessor, event.successor)
+  return integratorSuccessorIdentitiesAreDistinct(event.predecessor, event.successor) &&
     sameResponsibility &&
-    successorChronologyIsValid(event)
+    integratorSuccessorChronologyIsValid(event)
     ? undefined
     : "FullRerun successor must preserve responsibility, use distinct identities, and follow Q < D < fresh L"
 }

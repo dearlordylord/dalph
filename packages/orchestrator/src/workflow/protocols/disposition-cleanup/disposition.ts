@@ -6,7 +6,10 @@ import { AttemptChoiceRequestId } from "../attempt-choice/events.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
-  IntegratorSessionId
+  IntegratorSessionId,
+  integratorSuccessorChronologyIsValid,
+  integratorSuccessorIdentitiesAreDistinct,
+  integratorSuccessorResponsibilityMatches
 } from "../integrator/events.js"
 
 /**
@@ -54,13 +57,18 @@ export const IntegratorCandidateCleanupDisposition = Schema.TaggedStruct("Supers
   predecessor: IntegratorSessionCorrelation,
   successor: IntegratorSessionCorrelation
 }).check(
-  Schema.makeFilter((disposition) =>
-    disposition.predecessor.sessionId !== disposition.successor.sessionId &&
-    disposition.predecessor.candidateResource !== disposition.successor.candidateResource &&
-    disposition.dispositionAt < disposition.directionAppliedAt
-      ? undefined
-      : "candidate cleanup requires one distinct predecessor and successor after quarantine"
-  )
+  Schema.makeFilter((disposition) => {
+    const valid =
+      integratorSuccessorIdentitiesAreDistinct(disposition.predecessor, disposition.successor) &&
+      integratorSuccessorResponsibilityMatches(disposition.predecessor, disposition.successor) &&
+      integratorSuccessorChronologyIsValid({
+        predecessor: disposition.predecessor,
+        quarantineAt: disposition.dispositionAt,
+        directionAppliedAt: disposition.directionAppliedAt,
+        successor: disposition.successor
+      })
+    return valid ? undefined : "candidate cleanup requires the exact FullRerun successor responsibility and chronology"
+  })
 )
 export type IntegratorCandidateCleanupDisposition = typeof IntegratorCandidateCleanupDisposition.Type
 

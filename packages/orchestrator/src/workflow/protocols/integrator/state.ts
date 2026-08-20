@@ -262,6 +262,24 @@ const activeSuccessorFor = (
   return validateActiveSuccessorRecord(records, record, record.event, predecessor)
 }
 
+/**
+ * Validates the durable S1 -> S2 relation before a consumer treats the
+ * predecessor as transferred.  Cleanup uses this instead of accepting a
+ * caller-supplied pair of distinct session identifiers.
+ */
+export const validateIntegratorSuccessorSessionFixed = (
+  records: ReadonlyArray<JournalRecord>,
+  predecessor: IntegratorSessionCorrelation,
+  expectedSuccessor: IntegratorSessionCorrelation
+): { readonly _tag: "Valid" } | { readonly _tag: "Invalid"; readonly detail: string } => {
+  const active = activeSuccessorFor(records, predecessor)
+  if (active._tag === "Invalid") return active
+  if (active._tag === "Absent") return { _tag: "Invalid", detail: "FullRerun successor evidence is missing" }
+  return integratorCorrelationsEqual(active.successor, expectedSuccessor)
+    ? { _tag: "Valid" }
+    : { _tag: "Invalid", detail: "FullRerun successor evidence names a foreign successor" }
+}
+
 const fixedSessionFor = (
   records: ReadonlyArray<JournalRecord>,
   facts: IntegratorResponsibilityFacts
