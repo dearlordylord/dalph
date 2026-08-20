@@ -29,13 +29,14 @@ import {
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { completedRunFinalityFixture } from "../../../test/run-finality.js"
 
 const safeSegment = fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/)
 
 const generatedValidHistory = (segments: ReadonlyArray<string>, terminated = false) => {
   const runId = RunId.make(`incremental-${segments.join("-")}`)
   const target = FixtureTarget.make(`run-target-${segments.join("-")}`)
-  const records = [
+  const workflowRecords = [
     {
       event: WorkflowRunBeganEvent.make({
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
@@ -75,20 +76,29 @@ const generatedValidHistory = (segments: ReadonlyArray<string>, terminated = fal
           key: intentRecordKey(claim.acquisition.operationId)
         }
       ]
-    }),
-    ...(terminated
-      ? [
-          {
-            event: WorkflowRunTerminatedEvent.make({
-              disposition: "Completed",
-              occurrenceClassification: "NonActionOccurrence",
-              version: workflowJournalEventVersion
-            }),
-            key: workflowRunTerminatedRecordKey
-          }
-        ]
-      : [])
+    })
   ]
+  const terminal = completedRunFinalityFixture({
+    observedAt: JournalPosition.make(workflowRecords.length + 2),
+    runId,
+    target
+  })
+  const records = terminated
+    ? [
+        ...workflowRecords,
+        { event: terminal.intent, key: intentRecordKey(terminal.operation.operationId) },
+        { event: terminal.observation, key: outcomeRecordKey(terminal.operation.operationId) },
+        {
+          event: WorkflowRunTerminatedEvent.make({
+            disposition: "Completed",
+            evidence: terminal.evidence,
+            occurrenceClassification: "NonActionOccurrence",
+            version: workflowJournalEventVersion
+          }),
+          key: workflowRunTerminatedRecordKey
+        }
+      ]
+    : workflowRecords
   return {
     records: records.map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId })),
     runId

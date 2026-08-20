@@ -3,6 +3,7 @@ import {
   PlannedAttemptExecutorReport,
   type AttemptId,
   type PlannedAttemptExecutorCorrelation,
+  type RunId,
   type TaskId,
   type TaskRevision
 } from "@dalph/contracts"
@@ -27,7 +28,11 @@ import type {
   TaskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
-import { RunFinalityDecision, type RunFinalityDecision as RunFinalityDecisionType } from "../frontier/run-finality.js"
+import {
+  runGraphFactsOutcome,
+  RunFinalityDecision,
+  type RunFinalityDecision as RunFinalityDecisionType
+} from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
@@ -39,7 +44,6 @@ import type {
   DeliveryProposalOwner,
   TrackerGraphActionProposal
 } from "./delivery-proposal.js"
-
 export type {
   DeliveryActionProposal,
   DeliveryAdmissionRequirements,
@@ -485,6 +489,9 @@ export interface DeliveryRuntimeSnapshot {
   readonly settlements: DeliverySettlements
   readonly ticketDeliveries: TicketDeliveries
   readonly trackerGraph: TrackerGraphState
+  readonly runId?: RunId
+  /** Durable cancellation direction, when the reconstructed journal contains one. */
+  readonly cancellationApplied?: boolean
 }
 
 /** Exact process-local admission facts reconstructed below the descriptive relation. */
@@ -514,6 +521,9 @@ export interface DeliveryRuntimeFacts {
   readonly pauseCoverage: PauseCoverageFacts
   readonly quiescence: DeliveryQuiescenceDisposition
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
+  /** Optional while lower relation fixtures intentionally model pre-cancellation history. */
+  readonly cancellationApplied?: boolean
+  readonly runId?: RunId
 }
 
 /** Current descriptive inputs published together for one delivery revision. */
@@ -549,24 +559,41 @@ export interface DeliveryRuntimeEvaluation {
   readonly proposedActions: DeliveryProposalFrontier
   readonly quiescence: DeliveryQuiescenceDisposition
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
+  readonly cancellationApplied?: boolean
 }
 
-const trackerTargetIsSettled = (graph: TrackerGraphState): boolean =>
-  graph._tag === "GraphEstablished" &&
-  graph.observation.snapshot.toWire().tasks.every(({ lifecycle }) => lifecycle._tag === "CompletedSuccessfully")
+const trackerGraphOutcome = (graph: TrackerGraphState): "AllTasksSucceeded" | "Blocked" | "Unsettled" => {
+  if (graph._tag !== "GraphEstablished") return "Unsettled"
+  return runGraphFactsOutcome(graph.observation.snapshot).graphOutcome
+}
 
-const standingIsUnsettled = (standing: TicketDeliveryStanding): boolean => {
+const standingIsUnsettled = (standing: TicketDeliveryStanding, cancellationApplied: boolean): boolean => {
+  if (cancellationApplied && standing._tag === "ProposedDelivery") return false
   if (standing._tag === "IntegrationFinalitySettled") return false
   if (standing._tag === "ResponsibilitySituation") {
     return ![
       "FinalOutcome",
+      "CancelledAttemptSettled",
       "PlannedAttemptExecutorWorkTerminal",
       "Relinquished",
       "Settled",
+      "StoppedAttemptSettled",
       "TaskExternalSuccessSettled"
     ].includes(standing.facts.disposition._tag)
   }
   return true
+}
+
+const deliveryHasUnsettledResponsibilities = (current: DeliveryRuntimeSnapshot): boolean =>
+  current.ticketDeliveries.deliveries.some(
+    ({ obligations, standings }) =>
+      (current.cancellationApplied !== true && obligations.length > 0) ||
+      standings.some((standing) => standingIsUnsettled(standing, current.cancellationApplied === true))
+  )
+
+const deliveryGraphMayTerminate = (current: DeliveryRuntimeSnapshot): boolean => {
+  const graphOutcome = trackerGraphOutcome(current.trackerGraph)
+  return graphOutcome === "AllTasksSucceeded" || graphOutcome === "Blocked" || current.cancellationApplied === true
 }
 
 /** Derives finality from the relation's own lifecycle facts, never from a second runnable-frontier projection. */
@@ -584,14 +611,12 @@ export const deliveryFinalityOf = (
   if (proposedActions.proposals.length > 0) {
     return RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
   }
-  if (
-    proposedActions.isolatedIssues.length > 0 ||
-    current.ticketDeliveries.deliveries.some(
-      ({ obligations, standings }) => obligations.length > 0 || standings.some(standingIsUnsettled)
-    )
-  )
+  if (proposedActions.isolatedIssues.length > 0) {
     return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-  return trackerTargetIsSettled(current.trackerGraph)
+  }
+  if (deliveryHasUnsettledResponsibilities(current))
+    return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+  return deliveryGraphMayTerminate(current)
     ? RunFinalityDecision.RunMayTerminate()
     : RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
 }

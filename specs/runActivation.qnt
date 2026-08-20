@@ -1142,6 +1142,14 @@ module runActivation {
 
   action applyCancellation: bool = all {
     state.process.phase == ActivatingRun,
+    // Active-attempt cancellation settlement belongs to runCancellation. This
+    // activation composition admits the durable direction only after its
+    // abstract responsibility projection is already settled.
+    state.trackerFinality.responsibilitiesSettled,
+    state.process.heldPosition == NoTaskPosition,
+    state.process.otherHeldPosition == NoTaskPosition,
+    unfinishedFacts(state.durable.history).retainedAttempt == NoRetainedAttempt,
+    unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt,
     not(state.durable.cancellationApplied),
     state.trace.cancellationAppends == 0,
     state.trace.terminationAppends == 0,

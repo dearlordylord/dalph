@@ -3903,47 +3903,70 @@ const shouldInsertPrerequisiteReleaseReads = (
   item.operation._tag === "AcquireTaskClaim" &&
   item.operation.taskId === "B"
 
-const isDeliveryFinalityReleasedGraphRead = (item: DeliveryFinalityStoryItem): boolean =>
+const isDeliveryFinalityReleasedGraphRead = (
+  item: DeliveryFinalityStoryItem
+): item is Extract<DeliveryFinalityStoryItem, { readonly _tag: "TrackerGraphReadReturned" }> =>
   item._tag === "TrackerGraphReadReturned" && String(item.graph.revision) === "delivery-story-G6"
+
+const deliveryFinalityBlockedStoryItem = (item: DeliveryFinalityStoryItem): ReadonlyArray<unknown> =>
+  item._tag === "ExpectedBehavior"
+    ? [
+        {
+          ...item,
+          orchestration:
+            item.orchestration?.filter(
+              (evidence) =>
+                (!("taskId" in evidence) || evidence.taskId !== "B") &&
+                (!("attemptId" in evidence) || evidence.attemptId !== "attempt:B:0")
+            ) ?? null,
+          taskWork: {
+            absences: item.taskWork.absences,
+            results: item.taskWork.results.filter((result) => result.taskId !== "B")
+          }
+        }
+      ]
+    : []
+
+const deliveryFinalityCurrentGraphRead = (
+  item: Extract<DeliveryFinalityStoryItem, { readonly _tag: "TrackerGraphReadReturned" }>,
+  laterGraphCount: number
+): ReadonlyArray<unknown> => [
+  {
+    ...item,
+    graph:
+      laterGraphCount <= prerequisiteBlockingGraphReadCount
+        ? deliveryFinalityAdditionalPrerequisiteGraph
+        : deliveryFinalityAdditionalPrerequisiteSatisfiedGraph
+  }
+]
 
 const deliveryFinalityCurrentGraphStory = (() => {
   let laterGraphCount = 0
   let releaseReadsInserted = false
+  let runBlocked = false
   return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (runBlocked) return deliveryFinalityBlockedStoryItem(item)
+    if (item._tag === "CoordinatorActivationReturned" && laterGraphCount > 0) {
+      runBlocked = true
+      return [{ ...item, decision: { _tag: "RunMayTerminate" as const } }]
+    }
     if (shouldInsertPrerequisiteReleaseReads(item, laterGraphCount, releaseReadsInserted)) {
       releaseReadsInserted = true
-      return [
-        {
-          _tag: "CoordinatorActivationReturned" as const,
-          decision: { _tag: "RunMustRemainActive" as const, reason: "TrackerTargetUnsettled" as const }
-        },
-        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" } },
-        { _tag: "TrackerGraphReadReturned" as const, graph: deliveryFinalityAdditionalPrerequisiteSatisfiedGraph },
-        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" } },
-        { _tag: "TrackerGraphReadReturned" as const, graph: deliveryFinalityAdditionalPrerequisiteSatisfiedGraph },
-        item
-      ]
+      runBlocked = true
+      return [{ _tag: "CoordinatorActivationReturned" as const, decision: { _tag: "RunMayTerminate" as const } }]
     }
     if (!isDeliveryFinalityReleasedGraphRead(item)) return [item]
     laterGraphCount += 1
-    return [
-      {
-        ...item,
-        graph:
-          laterGraphCount <= prerequisiteBlockingGraphReadCount
-            ? deliveryFinalityAdditionalPrerequisiteGraph
-            : deliveryFinalityAdditionalPrerequisiteSatisfiedGraph
-      }
-    ]
+    return deliveryFinalityCurrentGraphRead(item, laterGraphCount)
   })
 })()
 
-/** B remains excluded while current graph G7 reports unfinished D, then proceeds only after G8 completes D. */
+/** Fresh G7 proves D failed and B depends on D, so the Run blocks before any later tracker edit. */
 export const currentCompletionGraphAuthorityAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...deliveryFinalitySpineAuthoredCassette,
-  name: "The later complete graph gives the current reason B may proceed",
+  name: "The fresh complete graph blocks before a later edit can release B",
   story: deliveryFinalityCurrentGraphStory
 })
 

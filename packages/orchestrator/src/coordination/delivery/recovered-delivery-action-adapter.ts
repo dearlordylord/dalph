@@ -27,6 +27,7 @@ type AcceptedObservationTransition = Extract<
       | "ObservePlannedAttemptContinuationClaim"
       | "ObserveResponsibleTaskClaim"
       | "ObserveStoppedAttemptClaim"
+      | "ObserveCancelledAttemptClaim"
       | "ObservePlannedAttemptContinuationGraph"
       | "ObservePlannedAttemptContinuationSpecification"
       | "ObservePlannedAttemptContinuationTargetLineage"
@@ -49,7 +50,13 @@ const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredOb
     NewRecoveredWorkflowAction,
     Extract<
       NewRecoveredWorkflowAction,
-      { readonly _tag: "TaskClaimReacquisition" | "ReleaseExternallyCompletedTaskClaim" | "ReleaseStoppedAttemptClaim" }
+      {
+        readonly _tag:
+          | "TaskClaimReacquisition"
+          | "ReleaseExternallyCompletedTaskClaim"
+          | "ReleaseStoppedAttemptClaim"
+          | "ReleaseCancelledAttemptClaim"
+      }
     >
   >,
   operationId: OperationId,
@@ -125,6 +132,8 @@ const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObse
       interpreter.readTaskClaim(operation, lease.recordIntent(operation.operationId), interruptibleBoundaryOf(lease)),
     ObserveStoppedAttemptClaim: ({ operation }) =>
       interpreter.readTaskClaim(operation, lease.recordIntent(operation.operationId), interruptibleBoundaryOf(lease)),
+    ObserveCancelledAttemptClaim: ({ operation }) =>
+      interpreter.readTaskClaim(operation, lease.recordIntent(operation.operationId), interruptibleBoundaryOf(lease)),
     ObservePlannedAttemptContinuationGraph: ({ operation }) =>
       interpreter.readTrackerGraph(
         operation,
@@ -148,8 +157,11 @@ const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObse
   })
 })
 
-const executeStoppedClaimReleaseRetry = Effect.fn("DeliveryAction.executeStoppedClaimReleaseRetry")(function* (
-  transition: Extract<AcceptedWorkflowTransition, { readonly _tag: "RetryStoppedAttemptClaimRelease" }>,
+const executeClaimReleaseRetry = Effect.fn("DeliveryAction.executeClaimReleaseRetry")(function* (
+  transition: Extract<
+    AcceptedWorkflowTransition,
+    { readonly _tag: "RetryStoppedAttemptClaimRelease" | "RetryCancelledAttemptClaimRelease" }
+  >,
   lease: BoundaryExecutionLease
 ) {
   const interpreter = yield* WorkflowInterpreter
@@ -185,7 +197,11 @@ export const executeNewRecoveredAction = Effect.fn("DeliveryAction.executeNewRec
     })
     return
   }
-  if (action._tag === "ReleaseExternallyCompletedTaskClaim" || action._tag === "ReleaseStoppedAttemptClaim") {
+  if (
+    action._tag === "ReleaseExternallyCompletedTaskClaim" ||
+    action._tag === "ReleaseStoppedAttemptClaim" ||
+    action._tag === "ReleaseCancelledAttemptClaim"
+  ) {
     const interpreter = yield* WorkflowInterpreter
     const trace = yield* WorkflowTrace
     const operation = makeTaskClaimReleaseOperation({
@@ -211,10 +227,12 @@ export const executeAcceptedWorkflowAction = Effect.fn("DeliveryAction.executeAc
     ReconcileTaskClaim: (transition) => executeAcceptedRecovery(runId, transition, lease),
     ReconcileTaskClaimRelease: (transition) => executeAcceptedRecovery(runId, transition, lease),
     ReconcileTaskWorktree: (transition) => executeAcceptedRecovery(runId, transition, lease),
-    RetryStoppedAttemptClaimRelease: (transition) => executeStoppedClaimReleaseRetry(transition, lease),
+    RetryStoppedAttemptClaimRelease: (transition) => executeClaimReleaseRetry(transition, lease),
+    RetryCancelledAttemptClaimRelease: (transition) => executeClaimReleaseRetry(transition, lease),
     ObservePlannedAttemptContinuationClaim: (transition) => executeAcceptedObservation(transition, lease),
     ObserveResponsibleTaskClaim: (transition) => executeAcceptedObservation(transition, lease),
     ObserveStoppedAttemptClaim: (transition) => executeAcceptedObservation(transition, lease),
+    ObserveCancelledAttemptClaim: (transition) => executeAcceptedObservation(transition, lease),
     ObservePlannedAttemptContinuationGraph: (transition) => executeAcceptedObservation(transition, lease),
     ObservePlannedAttemptContinuationSpecification: (transition) => executeAcceptedObservation(transition, lease),
     ObservePlannedAttemptContinuationTargetLineage: (transition) => executeAcceptedObservation(transition, lease),

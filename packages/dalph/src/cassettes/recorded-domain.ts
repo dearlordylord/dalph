@@ -77,7 +77,8 @@ import {
   TargetPromotionGitReadObservation,
   PlannedAttemptContinuationWitness,
   PlannedAttemptReplacementWitness,
-  AttemptRestartAuthorityReadFailure
+  AttemptRestartAuthorityReadFailure,
+  RunFinalityEvidence
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -132,6 +133,21 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     observationOperationId: OperationId,
     requestId: AttemptChoiceRequestId,
     subject: AttemptChoiceSubject
+  },
+  CancelledAttemptImplementationResponsibilityRelinquished: {
+    authorizedClaim: ActiveTaskClaim,
+    cancellationAppliedAt: JournalPosition,
+    ...initiatedByCoordinator,
+    plannedAttempt: PlannedTaskAttempt,
+    proof: AttemptQuiescenceProof
+  },
+  CancelledAttemptClaimNoReleaseObserved: {
+    cancellationAppliedAt: JournalPosition,
+    expectedClaim: ActiveTaskClaim,
+    ...nonActionOccurrence,
+    observation: TaskClaimObservation,
+    observationOperationId: OperationId,
+    plannedAttempt: PlannedTaskAttempt
   },
   ControlDirectionApplied: {
     direction: ControlDirection,
@@ -414,7 +430,15 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     revision: RunPolicyRevision
   },
   WorkflowRunBegan: { ...initiatedByCoordinator, initialControlPolicy: InitialControlPolicy, target: TrackerTarget },
-  WorkflowRunTerminated: { ...nonActionOccurrence, disposition: Schema.Literal("Completed") }
+  WorkflowRunTerminated: {
+    ...nonActionOccurrence,
+    disposition: Schema.Literals(["Completed", "Blocked", "Cancelled"]),
+    evidence: RunFinalityEvidence
+  },
+  RunCancellationApplied: {
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
+  }
 })
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 

@@ -94,6 +94,7 @@ const protocolEvidenceFor = (
     Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
   >
 ): ReadonlyArray<ProtocolEvidence> => {
+  if (event._tag === "RunCancellationApplied") return [{ _tag: "RunCancellationApplied" }]
   if (event._tag === "AttemptChoiceApplied") {
     return [
       {

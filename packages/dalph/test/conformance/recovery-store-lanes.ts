@@ -54,7 +54,7 @@ const appendRetainedPrefix = Effect.fn("RecoveryStoreLanes.appendRetainedPrefix"
       return yield* Effect.die("recovery prefix cannot contain a second WorkflowRunBegan record")
     }
     if (record.event._tag === "WorkflowRunTerminated") {
-      yield* journal.terminateRun(runId)
+      yield* journal.terminateRun(runId, record.event.disposition, record.event.evidence)
     } else {
       yield* journal.append(runId, record.key, record.event)
     }

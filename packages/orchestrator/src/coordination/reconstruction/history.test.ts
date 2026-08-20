@@ -24,6 +24,8 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   taskWorkCapacityPolicyRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey
 } from "../../workflow-journal/record-key.js"
@@ -53,9 +55,51 @@ import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { completedRunFinalityFixture } from "../../../test/run-finality.js"
 
 const runId = RunId.make("duplicate-attempt-run")
 const taskId = TaskId.make("A")
+
+const completedHistory = (target: ReturnType<typeof FixtureTarget.make>): ReadonlyArray<JournalRecord> => {
+  const fixture = completedRunFinalityFixture({ runId, target })
+  return [
+    {
+      event: WorkflowRunBeganEvent.make({
+        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        target,
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunBeganRecordKey,
+      position: JournalPosition.make(1),
+      runId
+    },
+    {
+      event: fixture.intent,
+      key: intentRecordKey(fixture.operation.operationId),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: fixture.observation,
+      key: outcomeRecordKey(fixture.operation.operationId),
+      position: JournalPosition.make(3),
+      runId
+    },
+    {
+      event: WorkflowRunTerminatedEvent.make({
+        disposition: "Completed",
+        evidence: fixture.evidence,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunTerminatedRecordKey,
+      position: JournalPosition.make(4),
+      runId
+    }
+  ]
+}
 
 it("folds nonconsecutive task-work capacity revisions into history issues", () => {
   const target = FixtureTarget.make("policy-history-target")
@@ -92,29 +136,8 @@ it("folds nonconsecutive task-work capacity revisions into history issues", () =
 it("rejects workflow records after Run termination", () => {
   const target = FixtureTarget.make("terminated-history-target")
   const records: ReadonlyArray<JournalRecord> = [
-    {
-      event: WorkflowRunBeganEvent.make({
-        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        target,
-        version: workflowJournalEventVersion
-      }),
-      key: workflowRunBeganRecordKey,
-      position: JournalPosition.make(1),
-      runId
-    },
-    {
-      event: WorkflowRunTerminatedEvent.make({
-        disposition: "Completed",
-        occurrenceClassification: "NonActionOccurrence",
-        version: workflowJournalEventVersion
-      }),
-      key: workflowRunTerminatedRecordKey,
-      position: JournalPosition.make(2),
-      runId
-    },
-    ...planAndStart(attempt("after-termination"), 3)
+    ...completedHistory(target),
+    ...planAndStart(attempt("after-termination"), 5)
   ]
 
   const reduction = reduceWorkflowJournalHistory(runId, records)
@@ -125,7 +148,7 @@ it("rejects workflow records after Run termination", () => {
     expect.objectContaining({
       _tag: "WorkflowJournalHistorySemanticIssue",
       detail: "WorkflowRunTerminated must be the final record",
-      position: 2,
+      position: 4,
       runId
     })
   )
@@ -133,34 +156,11 @@ it("rejects workflow records after Run termination", () => {
 
 it("reports the same terminating-record issue when an accepted terminated prefix is advanced", () => {
   const target = FixtureTarget.make("incremental-terminated-history-target")
-  const terminated: ReadonlyArray<JournalRecord> = [
-    {
-      event: WorkflowRunBeganEvent.make({
-        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        target,
-        version: workflowJournalEventVersion
-      }),
-      key: workflowRunBeganRecordKey,
-      position: JournalPosition.make(1),
-      runId
-    },
-    {
-      event: WorkflowRunTerminatedEvent.make({
-        disposition: "Completed",
-        occurrenceClassification: "NonActionOccurrence",
-        version: workflowJournalEventVersion
-      }),
-      key: workflowRunTerminatedRecordKey,
-      position: JournalPosition.make(2),
-      runId
-    }
-  ]
+  const terminated = completedHistory(target)
   const prior = reduceWorkflowJournalHistory(runId, terminated)
   expect(prior._tag).toBe("ValidWorkflowJournalHistory")
   if (prior._tag !== "ValidWorkflowJournalHistory") return
-  const successor = planAndStart(attempt("incremental-after-termination"), 3)[0]
+  const successor = planAndStart(attempt("incremental-after-termination"), 5)[0]
   expect(successor).toBeDefined()
   if (successor === undefined) return
 
@@ -170,10 +170,12 @@ it("reports the same terminating-record issue when an accepted terminated prefix
 })
 
 it("rejects Run termination without a prior beginning", () => {
+  const fixture = completedRunFinalityFixture({ runId, target: FixtureTarget.make("missing-beginning") })
   const reduction = reduceWorkflowJournalHistory(runId, [
     {
       event: WorkflowRunTerminatedEvent.make({
         disposition: "Completed",
+        evidence: fixture.evidence,
         occurrenceClassification: "NonActionOccurrence",
         version: workflowJournalEventVersion
       }),

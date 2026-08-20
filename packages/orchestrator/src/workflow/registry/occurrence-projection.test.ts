@@ -1,5 +1,6 @@
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
+import { completedRunFinalityFixture } from "../../../test/run-finality.js"
 import { it } from "@effect/vitest"
 import {
   plannedAttemptExecutorCorrelation,
@@ -938,9 +939,15 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         position: JournalPosition.make(1),
         runId
       }
+      const terminalFixture = completedRunFinalityFixture({
+        observedAt: JournalPosition.make(prefix.length + 1),
+        runId,
+        target
+      })
       const terminated: JournalRecord = {
         event: WorkflowRunTerminatedEvent.make({
           disposition: "Completed",
+          evidence: terminalFixture.evidence,
           occurrenceClassification: "NonActionOccurrence",
           version: workflowJournalEventVersion
         }),

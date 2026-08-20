@@ -56,6 +56,7 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
         return Effect.succeed(finality)
       },
       operatorControl: {
+        applyRunCancellation: () => Effect.die("unused"),
         applyIntegrationQuarantineDirection: () => Effect.die("unused"),
         applyAttemptChoice: () => Effect.die("unused"),
         applyControlDirection: () => Effect.die("unused"),
@@ -82,8 +83,18 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
 
 it.effect("lets the public controlled workflow terminate from its settled current graph", () =>
   Effect.gen(function* () {
-    const projected = projectTrackerSnapshot({ revision: "controlled-settled", tasks: [] })
-    if (projected._tag === "Invalid") return yield* Effect.die("the empty controlled graph must be valid")
+    const projected = projectTrackerSnapshot({
+      revision: "controlled-settled",
+      tasks: [
+        {
+          id: TaskId.make("controlled-settled-root"),
+          lifecycle: { _tag: "CompletedSuccessfully" },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
+      ]
+    })
+    if (projected._tag === "Invalid") return yield* Effect.die("the controlled root graph must be valid")
     const target = FixtureTarget.make("controlled-settled-target")
     const operationOrdinal = yield* Ref.make(0)
     const finality = yield* runControlledWorkflow(target, policy, RunId.make("controlled-settled-run")).pipe(

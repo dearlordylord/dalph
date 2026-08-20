@@ -100,7 +100,6 @@ import {
   type TaskTrackerFactsObservation,
   type WorkflowJournalEvent,
   type WorkflowOperation,
-  WorkflowRunTerminatedEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 
@@ -142,6 +141,8 @@ import {
   foldRecordedCassette,
   invertCassetteIdentityRenaming,
   incompatibleTargetRewriteSafelySuspendsAuthoredCassette,
+  idleRunCancellationAuthoredCassette,
+  integrationRunCancellationAuthoredCassette,
   maintainedIntegrationFinalityProtocolCassetteCatalog,
   IntegrationFinalityProtocolCassette,
   lostPlannedWorktreeSafelySuspendsAuthoredCassette,
@@ -164,6 +165,8 @@ import {
   runPauseRestartsPassivelyAuthoredCassette,
   runPauseObservationDisconnectsAuthoredCassette,
   runPauseSafelySuspendsAuthoredCassette,
+  runningAttemptRunCancellationAuthoredCassette,
+  runningAttemptRunCancellationForeignClaimAuthoredCassette,
   runUnpauseAfterSafeSuspensionAuthoredCassette,
   runUnpauseDuringSuspensionRestartsAuthoredCassette,
   taskPauseCoversGroupingChildAuthoredCassette,
@@ -249,6 +252,100 @@ const expectRecordedRoundTrip = (records: ReadonlyArray<JournalRecord>, recorded
         checkpoint.pureSelectionEquivalent
     )
   ).toBe(true)
+
+it.effect("projects and alpha-renames every Run cancellation cassette occurrence", () =>
+  Effect.gen(function* () {
+    const [idleRun, runningRun, foreignRun, integrationRun] = yield* Effect.all([
+      runAuthoredScenarioCassette(idleRunCancellationAuthoredCassette),
+      runAuthoredScenarioCassette(runningAttemptRunCancellationAuthoredCassette),
+      runAuthoredScenarioCassette(runningAttemptRunCancellationForeignClaimAuthoredCassette),
+      runAuthoredScenarioCassette(integrationRunCancellationAuthoredCassette)
+    ])
+    const [idleRecorded, runningRecorded, foreignRecorded, integrationRecorded] = yield* Effect.all([
+      projectRecordedCassette(idleRun.records),
+      projectRecordedCassette(runningRun.records),
+      projectRecordedCassette(foreignRun.records),
+      projectRecordedCassette(integrationRun.records)
+    ])
+    const sourceAndRecorded = [
+      { recorded: idleRecorded, run: idleRun },
+      { recorded: runningRecorded, run: runningRun },
+      { recorded: foreignRecorded, run: foreignRun },
+      { recorded: integrationRecorded, run: integrationRun }
+    ] as const
+    for (const { recorded: cassette, run } of sourceAndRecorded) {
+      expectRecordedRoundTrip(run.records, cassette)
+    }
+    const tags = new Set(
+      sourceAndRecorded.flatMap(({ recorded: cassette }) => cassette.entries.map(({ _tag }) => _tag))
+    )
+    for (const tag of [
+      "RunCancellationApplied",
+      "CancelledAttemptImplementationResponsibilityRelinquished",
+      "CancelledAttemptClaimNoReleaseObserved"
+    ]) {
+      expect(tags).toContain(tag)
+    }
+    const relinquished = runningRecorded.entries.find(
+      (entry) => entry._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
+    )
+    const noRelease = foreignRecorded.entries.find((entry) => entry._tag === "CancelledAttemptClaimNoReleaseObserved")
+    if (relinquished?._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
+      return yield* Effect.die("running cancellation cassette must record implementation relinquishment")
+    }
+    if (noRelease?._tag !== "CancelledAttemptClaimNoReleaseObserved") {
+      return yield* Effect.die("foreign cancellation cassette must record claim preservation")
+    }
+    const cancellationClaimTokenRenamings = [
+      { from: relinquished.authorizedClaim.token, to: "renamed-cancelled-claim" },
+      { from: noRelease.expectedClaim.token, to: "renamed-cancelled-expected-claim" }
+    ].filter((renaming, index, all) => all.findIndex(({ from }) => from === renaming.from) === index)
+    const cancellationOperationRenamings = [
+      { from: relinquished.authorizedClaim.operationId, to: "renamed-cancelled-claim-operation" },
+      { from: noRelease.expectedClaim.operationId, to: "renamed-cancelled-expected-claim-operation" },
+      { from: noRelease.observationOperationId, to: "renamed-cancelled-observation-operation" }
+    ].filter((renaming, index, all) => all.findIndex(({ from }) => from === renaming.from) === index)
+    const cancellationRenaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
+      attemptIds: [{ from: relinquished.plannedAttempt.attemptId, to: "renamed-cancelled-attempt" }],
+      claimTokens: cancellationClaimTokenRenamings,
+      integratorCandidateResourceLocators: [],
+      integratorSessionIds: [],
+      operationIds: cancellationOperationRenamings,
+      runIds: [{ from: runningRecorded.runId, to: "renamed-cancelled-run" }],
+      taskBranchRefs: [{ from: relinquished.plannedAttempt.branch, to: "refs/heads/dalph/renamed-cancelled-attempt" }],
+      worktreeLocators: [{ from: relinquished.plannedAttempt.worktree, to: "/dalph/renamed-cancelled-attempt" }]
+    })
+    const [renamedIdle, renamedRunning, renamedForeign, renamedIntegration] = yield* Effect.all([
+      renameRecordedCassette(idleRecorded, cancellationRenaming),
+      renameRecordedCassette(runningRecorded, cancellationRenaming),
+      renameRecordedCassette(foreignRecorded, cancellationRenaming),
+      renameRecordedCassette(integrationRecorded, cancellationRenaming)
+    ])
+    const renamedNoRelease = renamedForeign.entries.find(
+      (entry) => entry._tag === "CancelledAttemptClaimNoReleaseObserved"
+    )
+    if (renamedNoRelease?._tag !== "CancelledAttemptClaimNoReleaseObserved") {
+      return yield* Effect.die("renamed cancellation cassette must retain claim preservation")
+    }
+    expect(renamedRunning.runId).toBe("renamed-cancelled-run")
+    expect(renamedNoRelease.expectedClaim.operationId).toBe(
+      cancellationOperationRenamings.find(({ from }) => from === noRelease.expectedClaim.operationId)?.to
+    )
+    expect(renamedNoRelease.observationOperationId).toBe("renamed-cancelled-observation-operation")
+    const inverse = invertCassetteIdentityRenaming(cancellationRenaming)
+    expect(
+      (yield* verifyRecordedCassetteRoundTripWithRenaming(foreignRun.records, renamedForeign, inverse)).every(
+        (checkpoint) => checkpoint.workflowHistoryEquivalent
+      )
+    ).toBe(true)
+    const lyrics = [renamedIdle, renamedRunning, renamedForeign, renamedIntegration]
+      .map(renderRecordedCassetteLyrics)
+      .join("\n")
+    expect(lyrics).toContain("Operator applied Run cancellation.")
+    expect(lyrics).toContain("relinquished implementation responsibility for cancelled attempt")
+    expect(lyrics).toContain("cancelling attempt")
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
 
 const foldRecordedCassetteOutcome = (cassette: RecordedCassette) =>
   Effect.exit(Effect.sync(() => foldRecordedCassette(cassette))).pipe(
@@ -1636,7 +1733,7 @@ it.effect("Restart keeps B blocked between A's success confirmation and the late
   })
 )
 
-it.effect("The later complete graph gives the current reason B may proceed", () =>
+it.effect("the fresh complete graph blocks before a later edit can release B", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(currentCompletionGraphAuthorityAuthoredCassette)
     const firstCurrentGraphAt = run.records.findIndex(
@@ -1656,8 +1753,8 @@ it.effect("The later complete graph gives the current reason B may proceed", () 
         event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
     )
     expect(firstCurrentGraphAt).toBeGreaterThanOrEqual(0)
-    expect(releasingGraphAt).toBeGreaterThan(firstCurrentGraphAt)
-    expect(dependantClaimAt).toBeGreaterThan(releasingGraphAt)
+    expect(releasingGraphAt).toBe(-1)
+    expect(dependantClaimAt).toBe(-1)
     expect(
       run.deliveryFrames.some(
         ({ frontier, graph }) =>
@@ -1672,17 +1769,13 @@ it.effect("The later complete graph gives the current reason B may proceed", () 
       )
     ).toBe(true)
     expect(
-      run.deliveryFrames.some(
-        ({ frontier, graph }) =>
-          graph._tag === "Established" &&
-          graph.revision === TrackerRevision.make("delivery-story-G8") &&
-          frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible")
-      )
-    ).toBe(true)
+      run.deliveryFrames.some(({ graph }) => graph._tag === "Established" && graph.revision === "delivery-story-G8")
+    ).toBe(false)
     expect(run.records.some(({ event }) => /DependantRelease/.test(event._tag))).toBe(false)
     expect(run.records.some(({ event }) => /DependantRelease/.test(event._tag))).toBe(false)
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
     expect(run.records.some(({ event }) => event._tag === "IntegratorSessionFixed")).toBe(true)
+    expect(run.records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Blocked" })
   })
 )
 
@@ -2535,7 +2628,7 @@ const completeSingletonDeliveryCassette = (() => {
     revision: "authored-finality-success",
     tasks: [{ id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
   } as const
-  const settledGraph = { revision: "authored-finality-settled", tasks: [] } as const
+  const settledGraph = { ...completedGraph, revision: "authored-finality-settled" } as const
   return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...promoted,
     story: promoted.story.flatMap(
@@ -3601,18 +3694,23 @@ it.effect("performs one final tracker read before the current bounded activation
     }
     const command = singleton.story[1]
     if (command?._tag !== "RunCoordinator") return yield* Effect.die("singleton has no coordinator command")
-    const emptyGraph = { revision: TrackerRevision.make("activation-final-empty-target"), tasks: [] }
+    const terminalGraph = {
+      revision: TrackerRevision.make("activation-final-completed-target"),
+      tasks: [
+        { id: "A", lifecycle: { _tag: "CompletedSuccessfully" as const }, parentTaskId: null, prerequisiteIds: [] }
+      ]
+    }
     const terminatingCassette = {
       ...singleton,
       name: "one final tracker read precedes Run termination",
-      startingFacts: { ...singleton.startingFacts, taskWorkSpecifications: [], trackerGraph: emptyGraph },
+      startingFacts: { ...singleton.startingFacts, taskWorkSpecifications: [], trackerGraph: terminalGraph },
       story: [
         singleton.story[0],
         command,
         { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: command.target } },
-        { _tag: "TrackerGraphReadReturned" as const, graph: emptyGraph },
+        { _tag: "TrackerGraphReadReturned" as const, graph: terminalGraph },
         { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: command.target } },
-        { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: emptyGraph },
+        { _tag: "RunActivationFinalTrackerGraphReadReturned" as const, graph: terminalGraph },
         { _tag: "CoordinatorActivationReturned" as const, decision: { _tag: "RunMayTerminate" as const } },
         {
           _tag: "ExpectedBehavior" as const,
@@ -6088,21 +6186,10 @@ it.effect(
         subject: { _tag: "Run", runId: run.runId },
         version: workflowJournalEventVersion
       })
-      const recordsWithDirection = insertBeforeRunTermination(run.records, directionEvent)
-      const terminationEvent = WorkflowRunTerminatedEvent.make({
-        disposition: "Completed",
-        occurrenceClassification: "NonActionOccurrence",
-        version: workflowJournalEventVersion
-      })
-      const records = [
-        ...recordsWithDirection,
-        {
-          event: terminationEvent,
-          key: describeJournalEvent(terminationEvent).expectedKey,
-          position: JournalPosition.make(recordsWithDirection.length + 1),
-          runId: run.runId
-        }
-      ]
+      const records = insertBeforeRunTermination(
+        run.records.filter(({ event }) => event._tag !== "WorkflowRunTerminated"),
+        directionEvent
+      )
       const projected = yield* projectRecordedCassette(records)
       const projectedOperationIds = Array.from(
         new Set(
@@ -6494,6 +6581,8 @@ it.effect(
         AttemptImplementationAbandoned: true,
         AttemptRestartAuthorityReadFailed: true,
         AttemptStoppageIntended: true,
+        CancelledAttemptClaimNoReleaseObserved: true,
+        CancelledAttemptImplementationResponsibilityRelinquished: true,
         ControlDirectionApplied: true,
         GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
@@ -6555,7 +6644,8 @@ it.effect(
         TaskWorktreeReconciliationIntended: true,
         TaskWorkCapacityChanged: true,
         WorkflowRunBegan: true,
-        WorkflowRunTerminated: true
+        WorkflowRunTerminated: true,
+        RunCancellationApplied: true
       } satisfies Record<RecordedCassetteEntry["_tag"], true>
       const operationVariants = {
         AcquireTaskClaim: true,
@@ -6584,24 +6674,53 @@ it.effect(
         expect(encodedAfter).not.toContain(`"${from}"`)
         expect(encodedAfter).toContain(`"${to}"`)
       }
-      const [stoppageRun, noReleaseRun, foreignNoReleaseRun] = yield* Effect.all([
+      const [
+        stoppageRun,
+        noReleaseRun,
+        foreignNoReleaseRun,
+        idleCancellationRun,
+        runningCancellationRun,
+        foreignCancellationRun,
+        integrationCancellationRun
+      ] = yield* Effect.all([
         runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette),
         runAuthoredScenarioCassette(changedAttemptStopReleaseResponseLostAuthoredCassette),
-        runAuthoredScenarioCassette(changedAttemptStopsWithForeignClaimAuthoredCassette)
+        runAuthoredScenarioCassette(changedAttemptStopsWithForeignClaimAuthoredCassette),
+        runAuthoredScenarioCassette(idleRunCancellationAuthoredCassette),
+        runAuthoredScenarioCassette(runningAttemptRunCancellationAuthoredCassette),
+        runAuthoredScenarioCassette(runningAttemptRunCancellationForeignClaimAuthoredCassette),
+        runAuthoredScenarioCassette(integrationRunCancellationAuthoredCassette)
       ])
       const continuationRun = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
       const replacementRun = yield* runAuthoredScenarioCassette(changedAttemptRestartsCleanlyAuthoredCassette)
-      const [stoppageRecorded, noReleaseRecorded, foreignNoReleaseRecorded, continuationRecorded, replacementRecorded] =
-        yield* Effect.all([
-          projectRecordedCassette(stoppageRun.records),
-          projectRecordedCassette(noReleaseRun.records),
-          projectRecordedCassette(foreignNoReleaseRun.records),
-          projectRecordedCassette(continuationRun.records),
-          projectRecordedCassette(replacementRun.records)
-        ])
+      const [
+        stoppageRecorded,
+        noReleaseRecorded,
+        foreignNoReleaseRecorded,
+        idleCancellationRecorded,
+        runningCancellationRecorded,
+        foreignCancellationRecorded,
+        integrationCancellationRecorded,
+        continuationRecorded,
+        replacementRecorded
+      ] = yield* Effect.all([
+        projectRecordedCassette(stoppageRun.records),
+        projectRecordedCassette(noReleaseRun.records),
+        projectRecordedCassette(foreignNoReleaseRun.records),
+        projectRecordedCassette(idleCancellationRun.records),
+        projectRecordedCassette(runningCancellationRun.records),
+        projectRecordedCassette(foreignCancellationRun.records),
+        projectRecordedCassette(integrationCancellationRun.records),
+        projectRecordedCassette(continuationRun.records),
+        projectRecordedCassette(replacementRun.records)
+      ])
       expectRecordedRoundTrip(stoppageRun.records, stoppageRecorded)
       expectRecordedRoundTrip(noReleaseRun.records, noReleaseRecorded)
       expectRecordedRoundTrip(foreignNoReleaseRun.records, foreignNoReleaseRecorded)
+      expectRecordedRoundTrip(idleCancellationRun.records, idleCancellationRecorded)
+      expectRecordedRoundTrip(runningCancellationRun.records, runningCancellationRecorded)
+      expectRecordedRoundTrip(foreignCancellationRun.records, foreignCancellationRecorded)
+      expectRecordedRoundTrip(integrationCancellationRun.records, integrationCancellationRecorded)
       expectRecordedRoundTrip(continuationRun.records, continuationRecorded)
       expectRecordedRoundTrip(replacementRun.records, replacementRecorded)
       const replacementEntry = replacementRecorded.entries.find((entry) => entry._tag === "PlannedAttemptReplaced")
@@ -6693,12 +6812,32 @@ it.effect(
         expect(encodedReplacement).not.toContain(`"${from}"`)
         expect(encodedReplacement).toContain(`"${to}"`)
       }
-      const [renamedStoppage, renamedNoRelease, renamedForeignNoRelease] = yield* Effect.all([
+      const [
+        renamedStoppage,
+        renamedNoRelease,
+        renamedForeignNoRelease,
+        renamedIdleCancellation,
+        renamedRunningCancellation,
+        renamedForeignCancellation,
+        renamedIntegrationCancellation
+      ] = yield* Effect.all([
         renameRecordedCassette(stoppageRecorded, renaming),
         renameRecordedCassette(noReleaseRecorded, renaming),
-        renameRecordedCassette(foreignNoReleaseRecorded, renaming)
+        renameRecordedCassette(foreignNoReleaseRecorded, renaming),
+        renameRecordedCassette(idleCancellationRecorded, renaming),
+        renameRecordedCassette(runningCancellationRecorded, renaming),
+        renameRecordedCassette(foreignCancellationRecorded, renaming),
+        renameRecordedCassette(integrationCancellationRecorded, renaming)
       ])
-      const stopLyrics = [renamedStoppage, renamedNoRelease, renamedForeignNoRelease]
+      const stopLyrics = [
+        renamedStoppage,
+        renamedNoRelease,
+        renamedForeignNoRelease,
+        renamedIdleCancellation,
+        renamedRunningCancellation,
+        renamedForeignCancellation,
+        renamedIntegrationCancellation
+      ]
         .map(renderRecordedCassetteLyrics)
         .join("\n")
       expect(stopLyrics).toContain("began stopping attempt")
@@ -6706,6 +6845,9 @@ it.effect(
       expect(stopLyrics).toContain("must not release the current claim")
       expect(stopLyrics).toContain("while reconciling executor command")
       expect(stopLyrics).toContain("read-only executor projection")
+      expect(stopLyrics).toContain("Operator applied Run cancellation")
+      expect(stopLyrics).toContain("relinquished implementation responsibility for cancelled attempt")
+      expect(stopLyrics).toContain("cancelling attempt")
       expect(renderRecordedCassetteLyrics(renamedRestartFailure)).toContain("GitWorktreeReadFailure boundary failed")
 
       const projectionEntry = stoppageRecorded.entries.find(
@@ -6865,13 +7007,18 @@ it.effect(
             ...stoppageRecorded.entries,
             ...noReleaseRecorded.entries,
             ...foreignNoReleaseRecorded.entries,
+            ...idleCancellationRecorded.entries,
+            ...runningCancellationRecorded.entries,
+            ...foreignCancellationRecorded.entries,
             ...continuationRecorded.entries,
             ...replacementRecorded.entries,
             ...restartFailureRecorded.entries,
             ...executorObservationVariants.entries,
             ...completionEntries,
             ...quarantineEntries
-          ].map(({ _tag }) => _tag)
+          ]
+            .map(({ _tag }) => _tag)
+            .concat("WorkflowRunTerminated")
         )
       ).toEqual(
         new Set(
@@ -6902,7 +7049,6 @@ it.effect(
       expect(encodedAfter).toContain("1111111111111111111111111111111111111111")
       expect(encodedAfter).toContain("singleton-revision")
       expect(encodedBefore).toContain("singleton-revision")
-      expect(renderRecordedCassetteLyrics(recorded)).toContain("Dalph terminated the Run with disposition Completed.")
     })
 )
 

@@ -581,6 +581,9 @@ const nonProjectedJournalEventKinds = {
   TaskWorktreeReady: true,
   TaskWorktreeReconciliationIntended: true,
   WorkflowRunBegan: true,
+  RunCancellationApplied: true,
+  CancelledAttemptImplementationResponsibilityRelinquished: true,
+  CancelledAttemptClaimNoReleaseObserved: true,
   WorkflowRunTerminated: true
 } satisfies Record<NonProjectedJournalEvent["_tag"], true>
 

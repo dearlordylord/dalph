@@ -38,6 +38,18 @@ export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
 export const workflowRunTerminatedRecordKey = JournalRecordKey.make("run:terminated")
 
+/** Stable singleton key for the Operator's one applied Run cancellation. */
+export const runCancellationAppliedRecordKey = JournalRecordKey.make("run:cancellation:applied")
+
+/** Stable key for one exact cancelled-attempt executor responsibility settlement. */
+export const cancelledAttemptImplementationResponsibilityRelinquishedRecordKey = (
+  attemptId: AttemptId
+): JournalRecordKey => JournalRecordKey.make(`cancelled-attempt:${attemptId}:implementation-relinquished`)
+
+/** Stable key for one exact cancelled-attempt claim no-release observation. */
+export const cancelledAttemptClaimNoReleaseRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  JournalRecordKey.make(`cancelled-attempt:${attemptId}:claim-no-release`)
+
 export const controlDirectionAppliedRecordKey = (ordinal: ControlDirectionApplicationOrdinal): JournalRecordKey =>
   JournalRecordKey.make(`control-direction:${ordinal}:applied`)
 

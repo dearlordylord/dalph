@@ -54,6 +54,12 @@ const recoveredObservationActionOf = (transition: ObservationTransition): NewRec
       plannedAttempt: transition.subject.plannedAttempt,
       taskId: transition.subject.plannedAttempt.taskId
     }),
+    ObserveCancelledAttemptClaim: (transition): NewRecoveredWorkflowAction => ({
+      _tag: "ReadTaskClaim",
+      operation: withoutOperationId(transition.operation),
+      plannedAttempt: transition.plannedAttempt,
+      taskId: transition.plannedAttempt.taskId
+    }),
     ObservePlannedAttemptContinuationSpecification: (transition): NewRecoveredWorkflowAction => ({
       _tag: "ReadTaskWorkSpecification",
       operation: withoutOperationId(transition.operation),
@@ -107,6 +113,19 @@ export const newRecoveredActionOf = (
       },
       plannedAttempt: transition.subject.plannedAttempt,
       requestId: transition.requestId
+    }
+  }
+  if (transition._tag === "ReleaseCancelledAttemptClaim") {
+    const { operationId: _operationId, ...release } = transition.operation.release
+    return {
+      _tag: "ReleaseCancelledAttemptClaim",
+      operation: {
+        _tag: "ReleaseTaskClaim",
+        authority: transition.operation.authority,
+        predecessorOperationIds: transition.operation.predecessorOperationIds,
+        release
+      },
+      plannedAttempt: transition.plannedAttempt
     }
   }
   return isObservationTransition(transition) ? recoveredObservationActionOf(transition) : undefined

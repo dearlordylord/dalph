@@ -813,6 +813,7 @@ const proposalActionLabels = {
     "Authorize current tracker and Git facts, then tell the executor to continue the exact planned attempt",
   FixIntegratorSuccessorSession: "Fix the one FullRerun successor after the operator direction and fresh Git lineage",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
+  ObserveCancelledAttemptClaim: "Check the tracker claim after cancelling the exact attempt",
   ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",
   ObservePlannedAttemptContinuationClaim: "Check the tracker claim before continuing the planned attempt",
   ObservePlannedAttemptContinuationExecutor: "Check the executor before continuing the planned attempt",
@@ -841,13 +842,17 @@ const proposalActionLabels = {
   RecordProviderRunFailureIntegrationQuarantine: "Recover quarantine after exact provider-owned activity absence",
   RecordRetryConclusiveIntegrationQuarantine: "Record the exact conclusive Retry run result as quarantined",
   RecordStoppedAttemptClaimNoRelease: "Record that the stopped attempt has no exact claim to release",
+  RecordCancelledAttemptClaimNoRelease: "Record that the cancelled attempt has no exact claim to release",
   RecordTaskAttemptPlan: "Record the exact planned task attempt in Dalph's journal",
   ReleaseExternallyCompletedTaskClaim: "Ask the tracker to release the externally completed task's claim",
   ReleaseStartedIntegrationTarget: "Release the held integration-target position",
   ReleaseStoppedAttemptClaim: "Ask the tracker to release the stopped attempt's exact claim",
+  ReleaseCancelledAttemptClaim: "Ask the tracker to release the cancelled attempt's exact claim",
   ObservePromotedCandidateAncestryAfterBlockerClear: "Recheck Git ancestry after a promoted task's blocker clears",
   ReplacePromotedTaskClaim: "Ask the tracker to replace the promoted task claim with its completion claim",
   RetryStoppedAttemptClaimRelease: "Retry the exact stopped-attempt claim release",
+  RetryCancelledAttemptClaimRelease: "Retry the exact cancelled-attempt claim release",
+  RelinquishCancelledAttemptImplementation: "Relinquish the cancelled attempt's implementation responsibility",
   RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",
   RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
   StartPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
@@ -1151,6 +1156,45 @@ const attemptChoiceFailureReason = (
 }
 
 type AttemptChoiceControlResult = Result.Result<AttemptChoiceApplicationResult, unknown>
+
+type AuthoredInFlightControlDirectionItem =
+  | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type
+  | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellationWhileExecutorRequestInFlight.Type
+  | typeof AuthoredCassetteStoryItem.cases.OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting.Type
+
+type AuthoredInFlightControlDirection = Exclude<
+  AuthoredInFlightControlDirectionItem,
+  typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellationWhileExecutorRequestInFlight.Type
+>
+
+const isRunCancellationDuringInFlight = (
+  item: AuthoredInFlightControlDirectionItem
+): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellationWhileExecutorRequestInFlight.Type =>
+  item._tag === "OperatorAppliesRunCancellationWhileExecutorRequestInFlight"
+
+const requestedInFlightControlDirection = (item: AuthoredInFlightControlDirection): "Unpause" | "Pause" =>
+  item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting" ? "Unpause" : item.direction
+
+const inFlightControlSubjectFor = (item: AuthoredInFlightControlDirection, runId: RunId) =>
+  item.subject._tag === "Run"
+    ? { _tag: "Run" as const, runId }
+    : { _tag: "Task" as const, runId, taskId: item.subject.taskId }
+
+const expectedInFlightControlFailureReason = (
+  item: AuthoredInFlightControlDirection
+): "IncompleteSnapshot" | "OutsideCurrentTargetClosure" | undefined =>
+  item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" && item.outcome._tag === "Rejected"
+    ? item.outcome.reason
+    : undefined
+
+const expectedInFlightPauseResults = (
+  item: AuthoredInFlightControlDirection
+): ReadonlyArray<AuthoredPauseObservationResult> =>
+  item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting"
+    ? [...item.queued, { _tag: "PauseNoLongerApplied" as const }]
+    : item.outcome._tag === "AppliedAndPauseObservationEnds"
+      ? [item.outcome.result]
+      : []
 
 const attemptChoiceDirectionFor = (
   item: AuthoredAttemptChoiceItem
@@ -1612,6 +1656,12 @@ const runAuthoredScenarioCassetteWith = (request: {
         /* v8 ignore next -- @preserve The controlled driver starts only after installing the bootstrap operator control. */
         () => Effect.die("operator control is not installed")
       )
+      const activeRunCancellation = yield* Ref.make<
+        JournaledRunBootstrap["Service"]["operatorControl"]["applyRunCancellation"]
+      >(
+        /* v8 ignore next -- @preserve The controlled executor starts only after installing the bootstrap cancellation control. */
+        () => Effect.die("run cancellation control is not installed")
+      )
       const activePauseObservationResults = yield* Ref.make<
         Option.Option<Queue.Dequeue<AuthoredPauseObservationResult>>
       >(Option.none())
@@ -1663,21 +1713,21 @@ const runAuthoredScenarioCassetteWith = (request: {
         const direction = yield* cursor.consumeInFlightExecutorControlDirection(plannedAttempt.attemptId)
         if (Option.isNone(direction)) return
         const item = direction.value
-        const requestedDirection =
-          item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting"
-            ? "Unpause"
-            : item.direction
+        if (isRunCancellationDuringInFlight(item)) {
+          const cancellation = yield* (yield* Ref.get(activeRunCancellation))({ runId }).pipe(Effect.orDie)
+          if (cancellation._tag !== "RunCancellationApplied" && cancellation._tag !== "RunCancellationAlreadyApplied") {
+            return yield* Effect.die(`authored in-flight cancellation returned unexpected result ${cancellation._tag}`)
+          }
+          return
+        }
+        const controlItem = item
+        const requestedDirection = requestedInFlightControlDirection(controlItem)
         const application = (yield* Ref.get(activeOperatorControl))({
           direction: requestedDirection,
-          subject:
-            item.subject._tag === "Run" ? { _tag: "Run", runId } : { _tag: "Task", runId, taskId: item.subject.taskId }
+          subject: inFlightControlSubjectFor(controlItem, runId)
         })
         /* v8 ignore start -- @preserve The closed in-flight control schema covers rejection and terminal-observation variants; maintained #63 chronology exercises the exact queued-Waiting Unpause case. */
-        const expectedFailureReason =
-          item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" &&
-          item.outcome._tag === "Rejected"
-            ? item.outcome.reason
-            : undefined
+        const expectedFailureReason = expectedInFlightControlFailureReason(controlItem)
         yield* application.pipe(
           Effect.matchEffect({
             onFailure: (failure) =>
@@ -1690,13 +1740,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 : Effect.die(`authored in-flight control expected ${expectedFailureReason}, received success`)
           })
         )
-        const expectedResults =
-          item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting"
-            ? [...item.queued, { _tag: "PauseNoLongerApplied" as const }]
-            : item.outcome._tag === "AppliedAndPauseObservationEnds"
-              ? [item.outcome.result]
-              : []
-        yield* verifyExpectedPauseResults(expectedResults)
+        yield* verifyExpectedPauseResults(expectedInFlightPauseResults(controlItem))
         /* v8 ignore stop -- @preserve */
       })
 
@@ -1957,6 +2001,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           Effect.gen(function* () {
             const bootstrap = yield* JournaledRunBootstrap
             yield* Ref.set(activeOperatorControl, bootstrap.operatorControl.applyControlDirection)
+            yield* Ref.set(activeRunCancellation, bootstrap.operatorControl.applyRunCancellation)
             const requireActivePauseObservation = Effect.fn("AuthoredCassette.requireActivePauseObservation")(
               function* (
                 subject: (typeof AuthoredCassetteStoryItem.cases.OperatorStartsPauseObservation.Type)["subject"]
@@ -2230,6 +2275,16 @@ const runAuthoredScenarioCassetteWith = (request: {
                   yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
                 }
               }).pipe(Effect.ensuring(releaseOperatorGraphReadGate), Effect.orDie)
+            const driveRunCancellation = Effect.gen(function* () {
+              const authored = yield* cursor.consumeRunCancellation
+              /* v8 ignore next -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current cancellation tag. */
+              if (Option.isNone(authored)) return
+              /* v8 ignore stop -- @preserve */
+              const result = yield* bootstrap.operatorControl.applyRunCancellation({ runId })
+              if (result._tag !== "RunCancellationApplied" && result._tag !== "RunCancellationAlreadyApplied") {
+                return yield* Effect.die(`authored cancellation returned unexpected result ${result._tag}`)
+              }
+            }).pipe(Effect.orDie)
             const drivePauseObservationStart = Effect.gen(function* () {
               const authored = yield* cursor.consumePauseObservationStart
               /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current observation-start tag, and closure rejects overlapping starts. */
@@ -2433,6 +2488,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 readonly _tag:
                   | "OperatorAppliesControlDirection"
                   | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+                  | "OperatorAppliesRunCancellation"
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
                   | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
                   | "CassetteReleasesHeldPlannedAttemptSuspension"
@@ -2456,6 +2512,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             const directlyDrivenTags: ReadonlySet<AuthoredCassetteStoryItem["_tag"]> = new Set([
               "OperatorAppliesControlDirection",
               "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+              "OperatorAppliesRunCancellation",
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
               "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
               "CassetteReleasesHeldPlannedAttemptSuspension",
@@ -2482,6 +2539,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               Match.valueTags(item, {
                 OperatorAppliesControlDirection: (item) => driveControlDirection(item),
                 OperatorAppliesControlDirectionBeforeDeliveryActionAdmission: (item) => driveControlDirection(item),
+                OperatorAppliesRunCancellation: () => driveRunCancellation,
                 CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: () =>
                   drivePlannedSuspensionExecutorBoundaryHold,
                 CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: () =>

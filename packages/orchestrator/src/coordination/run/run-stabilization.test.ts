@@ -169,6 +169,12 @@ const freshGraphReadProposal = (trackerGraph: Extract<TrackerGraphState, { reado
 const signalOf = (state: SubscriptionRef.SubscriptionRef<DeliveryRuntimeEvaluation>) =>
   currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
 
+const withRunFacts = (current: DeliveryRuntimeEvaluation, cancellationApplied: boolean): DeliveryRuntimeEvaluation => ({
+  ...current,
+  cancellationApplied,
+  current: { ...current.current, cancellationApplied, runId }
+})
+
 const runtimeResourcesFor = Effect.fn("RunStabilizationTest.runtimeResourcesFor")(function* (
   lifecycle: ApplicationExitLifecycleService
 ) {
@@ -533,6 +539,128 @@ it.effect("does not request G2 while the Run is paused", () =>
       expect(proof).toEqual({
         acceptedAt: g1.observation.recordedAt,
         decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      })
+    })
+  )
+)
+
+it.effect("classifies an applied cancellation only after a fresh non-success graph read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const notAllSucceeded = snapshot("cancelled-G2", [
+        { id: TaskId.make("root"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+      ])
+      const g1 = graph("cancelled-G1", 1, notAllSucceeded)
+      const state = yield* SubscriptionRef.make(withRunFacts(evaluation(base, g1), true))
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) => {
+          const g2 = graph(operation.operationId, 4, notAllSucceeded)
+          return SubscriptionRef.set(state, withRunFacts(evaluation(base, g2), true)).pipe(Effect.as(notAllSucceeded))
+        }
+      })
+
+      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+        Effect.provide(support),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("cancelled fixture has no executable action") })
+        ),
+        Effect.provide(interpreter)
+      )
+
+      expect(proof).toMatchObject({
+        decision: { _tag: "RunMayTerminate" },
+        disposition: "Cancelled",
+        evidence: { graphOutcome: "Unsettled", runId, target }
+      })
+    })
+  )
+)
+
+it.effect("keeps Completed precedence when every task succeeded after cancellation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const succeeded = snapshot("cancelled-but-completed-G2", [
+        {
+          id: TaskId.make("root"),
+          lifecycle: { _tag: "CompletedSuccessfully" },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
+      ])
+      const g1 = graph("cancelled-but-completed-G1", 1, succeeded)
+      const state = yield* SubscriptionRef.make(withRunFacts(evaluation(base, g1), true))
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) => {
+          const g2 = graph(operation.operationId, 4, succeeded)
+          return SubscriptionRef.set(state, withRunFacts(evaluation(base, g2), true)).pipe(Effect.as(succeeded))
+        }
+      })
+
+      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+        Effect.provide(support),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("completed fixture has no executable action") })
+        ),
+        Effect.provide(interpreter)
+      )
+
+      expect(proof).toMatchObject({
+        decision: { _tag: "RunMayTerminate" },
+        disposition: "Completed",
+        evidence: { graphOutcome: "AllTasksSucceeded", runId, target }
+      })
+    })
+  )
+)
+
+it.effect("classifies conclusive tracker dependency impossibility as Blocked", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const blocked = snapshot("blocked-G2", [
+        {
+          id: TaskId.make("failed"),
+          lifecycle: { _tag: "TerminalWithoutSuccess" },
+          parentTaskId: null,
+          prerequisiteIds: []
+        },
+        {
+          id: TaskId.make("dependent"),
+          lifecycle: { _tag: "Open" },
+          parentTaskId: null,
+          prerequisiteIds: [TaskId.make("failed")]
+        }
+      ])
+      const g1 = graph("blocked-G1", 1, blocked)
+      const state = yield* SubscriptionRef.make(withRunFacts(evaluation(base, g1), false))
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) => {
+          const g2 = graph(operation.operationId, 4, blocked)
+          return SubscriptionRef.set(state, withRunFacts(evaluation(base, g2), false)).pipe(Effect.as(blocked))
+        }
+      })
+
+      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+        Effect.provide(support),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("blocked fixture has no executable action") })
+        ),
+        Effect.provide(interpreter)
+      )
+
+      expect(proof).toMatchObject({
+        decision: { _tag: "RunMayTerminate" },
+        disposition: "Blocked",
+        evidence: {
+          blockedTaskIds: [TaskId.make("dependent"), TaskId.make("failed")],
+          graphOutcome: "Blocked",
+          terminalTaskIds: [TaskId.make("failed")]
+        }
       })
     })
   )

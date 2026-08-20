@@ -1,21 +1,64 @@
 import { Effect, Option, Stream } from "effect"
-import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { DeliveryRuntimeInput, DeliveryRuntimeQuiescence } from "../delivery/run-delivery-runtime.js"
 import { runDeliveryRuntimePhase } from "../delivery/run-delivery-runtime.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import type { DeliveryRuntimeEvaluation } from "../delivery/relations.js"
 import { attachCurrentSignal, deliveryFinalityOf } from "../delivery/relations.js"
-import type { RunFinalityProof } from "../frontier/run-finality.js"
+import {
+  makeRunFinalityEvidence,
+  RunFinalityReadShape,
+  runTerminationDispositionOf,
+  type RunFinalityProof
+} from "../frontier/run-finality.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
+import { InRunJournal } from "../../workflow-journal/store.js"
 
-const proofOf = (quiescence: DeliveryRuntimeQuiescence): RunFinalityProof => ({
-  acceptedAt: quiescence.acceptedAt,
-  decision: deliveryFinalityOf(quiescence.current, quiescence.proposedActions, quiescence.disposition)
-})
+const proofOf = (
+  target: TrackerTarget,
+  quiescence: DeliveryRuntimeQuiescence,
+  readShape: RunFinalityReadShape
+): RunFinalityProof => {
+  const decision = deliveryFinalityOf(quiescence.current, quiescence.proposedActions, quiescence.disposition)
+  if (decision._tag === "RunMustRemainActive") return { acceptedAt: quiescence.acceptedAt, decision }
+  if (quiescence._tag === "PassiveRuntimeQuiescence") {
+    return {
+      acceptedAt: quiescence.acceptedAt,
+      decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+    }
+  }
+  const acceptedAt = quiescence.acceptedAt
+  const graph = quiescence.current.trackerGraph
+  const runId = quiescence.current.runId
+  if (
+    runId === undefined ||
+    graph.observation.snapshot.taskIds().length === 0 ||
+    !graph.observation.snapshot.toWire().tasks.some(({ parentTaskId }) => parentTaskId === null)
+  ) {
+    return { acceptedAt, decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }) }
+  }
+  const evidence = makeRunFinalityEvidence({
+    operationId: graph.observation.operationId,
+    observedAt: graph.observation.recordedAt,
+    readShape,
+    rootPresent: true,
+    runId,
+    snapshot: graph.observation.snapshot,
+    target
+  })
+  const disposition = runTerminationDispositionOf(
+    evidence.graphOutcome,
+    quiescence.current.cancellationApplied === true
+  )
+  if (disposition === undefined) {
+    return { acceptedAt, decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }) }
+  }
+  return { acceptedAt, decision, disposition, evidence }
+}
 
 const acceptsObservation = (
   operationId: ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"],
@@ -58,15 +101,32 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations)
-      if (firstQuiescence._tag === "PassiveRuntimeQuiescence") return proofOf(firstQuiescence)
+      const defaultReadShape = RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [] })
+      if (firstQuiescence._tag === "PassiveRuntimeQuiescence") {
+        return proofOf(target, firstQuiescence, defaultReadShape)
+      }
 
       const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
       const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
-      if (Option.isNone(owner)) return proofOf(firstQuiescence)
+      if (Option.isNone(owner)) return proofOf(target, firstQuiescence, defaultReadShape)
 
       const allocator = yield* OperationIdAllocator
       const operationId = yield* allocator.allocate()
-      const predecessorOperationIds = [firstQuiescence.current.trackerGraph.observation.operationId]
+      const currentGraphOperationId = firstQuiescence.current.trackerGraph.observation.operationId
+      const runId = firstQuiescence.current.runId
+      const journal = yield* Effect.serviceOption(InRunJournal)
+      const predecessorOperationIds =
+        runId === undefined || Option.isNone(journal)
+          ? [currentGraphOperationId]
+          : (yield* journal.value.read(runId))
+              .flatMap(({ event }) =>
+                event._tag === "TaskTrackerReadIntentRecorded" &&
+                event.operation._tag === "ReadTrackerGraph" &&
+                taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(target)
+                  ? [event.operation.operationId]
+                  : []
+              )
+              .filter((candidate, index, all) => all.indexOf(candidate) === index)
       const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
       const accepted = yield* executeTrackerGraphRead(operation).pipe(
         Effect.andThen(
@@ -84,7 +144,11 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
           decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
       }
-      return proofOf(yield* runDeliveryRuntimePhase(evaluations))
+      return proofOf(
+        target,
+        yield* runDeliveryRuntimePhase(evaluations),
+        RunFinalityReadShape.make(operation.readShape)
+      )
     })
   ).pipe(
     Effect.ensuring(Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll))

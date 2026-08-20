@@ -7,6 +7,7 @@ import {
   TaskId as TaskIdSchema
 } from "@dalph/contracts"
 import { OperationId } from "../identity.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TrackerTarget as TrackerTargetSchema } from "../../authorities/task-tracker/target.js"
 import { TaskClaimAcquisition, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacquisition/events.js"
@@ -98,6 +99,12 @@ const AcquireTaskClaimOperation = Schema.TaggedStruct("AcquireTaskClaim", {
 
 /** Durable provenance distinguishing ordinary cleanup from one exact stopped-attempt claim disposition. */
 export const TaskClaimReleaseAuthority = Schema.TaggedUnion({
+  /** Durable provenance for one exact Run-cancellation claim disposition. */
+  CancelledAttemptClaimReleaseAuthority: {
+    cancellationAppliedAt: JournalPosition,
+    implementationRelinquishedAt: JournalPosition,
+    observationOperationId: OperationId
+  },
   StoppedAttemptClaimReleaseAuthority: { observationOperationId: OperationId, requestId: AttemptChoiceRequestId },
   WorkflowClaimReleaseAuthority: {}
 })
@@ -126,6 +133,15 @@ const ReleaseTaskClaimOperation = Schema.TaggedStruct("ReleaseTaskClaim", {
     ) {
       return {
         issue: "a stopped-attempt claim release must causally name its exact focused claim observation",
+        path: ["predecessorOperationIds"]
+      }
+    }
+    if (
+      operation.authority._tag === "CancelledAttemptClaimReleaseAuthority" &&
+      !operation.predecessorOperationIds.includes(operation.authority.observationOperationId)
+    ) {
+      return {
+        issue: "a cancelled-attempt claim release must causally name its exact focused claim observation",
         path: ["predecessorOperationIds"]
       }
     }
@@ -202,6 +218,11 @@ type TaskClaimReleaseOperationWithAuthority<Authority extends TaskClaimReleaseAu
 /** Release operation causally owned by one exact applied Stop request and claim observation. */
 export type StoppedAttemptTaskClaimReleaseOperation = TaskClaimReleaseOperationWithAuthority<
   typeof TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.Type
+>
+
+/** Release operation owned by one exact Run-cancellation settlement. */
+export type CancelledAttemptTaskClaimReleaseOperation = TaskClaimReleaseOperationWithAuthority<
+  typeof TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.Type
 >
 
 /** Release operation owned by ordinary workflow cleanup rather than an applied Stop request. */

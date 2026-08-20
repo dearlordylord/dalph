@@ -91,6 +91,13 @@ export const ReconstructedPauseState = Schema.Struct({
 })
 export type ReconstructedPauseState = typeof ReconstructedPauseState.Type
 
+/** Durable Operator direction that closes new forward-work admission. */
+export const ReconstructedRunCancellationState = Schema.TaggedUnion({
+  RunCancellationNotApplied: {},
+  RunCancellationApplied: { appliedAt: JournalPosition }
+})
+export type ReconstructedRunCancellationState = typeof ReconstructedRunCancellationState.Type
+
 export const reconstructedTaskIsPaused = (
   pause: ReconstructedPauseState,
   taskId: TaskId,
@@ -113,6 +120,8 @@ export interface ReconstructedRunState {
   readonly controlPolicy: Option.Option<RunControlPolicy>
   readonly graphKnowledge: BestAvailableDurableGraphKnowledge
   readonly pause: ReconstructedPauseState
+  /** Optional for isolated legacy test fixtures; production reduction always supplies this fact. */
+  readonly cancellation?: ReconstructedRunCancellationState
   readonly responsibility: WorkflowResponsibilityState
   readonly runId: RunId
   readonly workflowHistory: ReconstructedWorkflowHistory

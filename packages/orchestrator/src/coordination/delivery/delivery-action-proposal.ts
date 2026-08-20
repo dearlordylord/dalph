@@ -10,6 +10,7 @@ import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type {
+  CancelledAttemptTaskClaimReleaseOperation,
   StoppedAttemptTaskClaimReleaseOperation,
   WorkflowOperation,
   WorkflowTaskClaimReleaseOperation
@@ -172,6 +173,11 @@ export type NewRecoveredWorkflowAction =
         RunnableFrontierTransition,
         { readonly _tag: "ReleaseStoppedAttemptClaim" }
       >["requestId"]
+    }
+  | {
+      readonly _tag: "ReleaseCancelledAttemptClaim"
+      readonly operation: NewReleaseOperation<CancelledAttemptTaskClaimReleaseOperation>
+      readonly plannedAttempt: PlannedTaskAttempt
     }
   | {
       readonly _tag: "TaskClaimReacquisition"

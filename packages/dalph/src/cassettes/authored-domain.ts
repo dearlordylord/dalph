@@ -781,6 +781,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
     }),
     subject: Schema.TaggedUnion({ Run: {}, Task: { taskId: TaskId } })
   },
+  /** Harness timing: Alice applies whole-Run cancellation after the exact executor command intent crossed its boundary. */
+  OperatorAppliesRunCancellationWhileExecutorRequestInFlight: { duringAttemptId: AttemptId },
   /** Alice withdraws Pause during this exact request after observing one already-queued Waiting view. */
   OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting: {
     duringAttemptId: AttemptId,
@@ -818,6 +820,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
     requestNonce: Schema.NonEmptyString,
     taskId: TaskId
   },
+  /** Alice applies whole-Run cancellation through the durable Run control boundary. */
+  OperatorAppliesRunCancellation: {},
   /** Alice applies Stop for one immutable attempt and observes its current durable phase. */
   OperatorStopsAttempt: {
     attemptId: AttemptId,
@@ -867,6 +871,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "OperatorAppliesControlDirection",
     "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
     "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+    "OperatorAppliesRunCancellationWhileExecutorRequestInFlight",
     "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting",
     "OperatorStartsPauseObservation",
     "OperatorSubscribesToPauseObservation",
@@ -876,6 +881,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "OperatorDirectsTaskClaimReacquisition",
     "OperatorRacesContinueAndStop",
     "OperatorRestartsAttempt",
+    "OperatorAppliesRunCancellation",
     "OperatorStopsAttempt",
     "RunCoordinator",
     "SetTaskExecutionCapacity"

@@ -7,7 +7,12 @@ import { GithubIssueTarget } from "./github/target.js"
 export const TrackerTarget = Schema.Union([FixtureTarget, GithubIssueTarget])
 export type TrackerTarget = typeof TrackerTarget.Type
 
-export const exactTaskIdSetKey = (taskIds: ReadonlyArray<TaskId>): string => JSON.stringify([...taskIds].sort())
+/** Canonical set identity for task IDs; ordering and duplicate-free schema facts are ignored. */
+export const exactTaskIdSetKey = (taskIds: ReadonlyArray<TaskId>): string =>
+  [...taskIds]
+    .sort()
+    .map((taskId) => `${taskId.length}:${taskId}`)
+    .join("|")
 
 export const factFamilyCoverageMatchesExplicitTaskIds = (
   factFamilies: ReadonlyArray<{ readonly coverage: { readonly explicitlyCoveredTaskIds: ReadonlyArray<TaskId> } }>,
@@ -18,8 +23,16 @@ export const factFamilyCoverageMatchesExplicitTaskIds = (
       exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) === exactTaskIdSetKey(explicitlyCoveredTaskIds)
   )
 
-export const taskTrackerTargetKey = (target: TrackerTarget): string =>
-  JSON.stringify(Schema.encodeUnknownSync(TrackerTarget)(target))
+/** Canonical tracker-target identity used for domain equality and map keys. */
+export const taskTrackerTargetKey = (target: TrackerTarget): string => {
+  if (typeof target === "string") return `FixtureTarget:${target.length}:${target}`
+  return [
+    "GithubIssue",
+    `${target.owner.length}:${target.owner}`,
+    `${target.repository.length}:${target.repository}`,
+    String(target.issueNumber)
+  ].join("|")
+}
 
 export const factFamiliesCoverTarget = (
   factFamilies: ReadonlyArray<{ readonly coverage: { readonly target: TrackerTarget } }>,

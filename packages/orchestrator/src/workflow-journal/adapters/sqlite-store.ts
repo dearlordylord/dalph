@@ -1,4 +1,5 @@
 /* eslint-disable functional/immutable-data -- Scan accumulation is private adapter scratch and never becomes journal authority. */
+/* eslint-disable max-lines -- SQLite transaction, decoding, and failure classification stay in one adapter boundary. */
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import * as SqliteMigrator from "@effect/sql-sqlite-node/SqliteMigrator"
 import { Cause, Config, Effect, Layer, Match, Result, Schema } from "effect"
@@ -31,11 +32,13 @@ import {
   WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated,
   WorkflowRunIdentityAlreadyUsed,
-  WorkflowRunNotBegan
+  WorkflowRunNotBegan,
+  WorkflowRunTerminationEvidenceInvalid
 } from "../store.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord, JournalStoreError } from "../store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
+import type { RunFinalityEvidence, RunTerminationDisposition } from "../../coordination/frontier/run-finality.js"
 
 const PersistedJournalRow = Schema.Struct({
   event_kind: JournalEventKind,
@@ -129,7 +132,7 @@ function classifyJournalMethodFailure(
 function classifyJournalMethodFailure(
   operation: "JournalStore.terminateRun",
   cause: unknown
-): JournalStoreError | WorkflowRunAlreadyTerminated | WorkflowRunNotBegan
+): JournalStoreError | WorkflowRunAlreadyTerminated | WorkflowRunNotBegan | WorkflowRunTerminationEvidenceInvalid
 function classifyJournalMethodFailure(operation: JournalStorageUnavailable["operation"], cause: unknown) {
   return Match.value(cause).pipe(
     Match.whenOr(
@@ -138,6 +141,7 @@ function classifyJournalMethodFailure(operation: JournalStorageUnavailable["oper
       Match.instanceOf(WorkflowRunAlreadyTerminated),
       Match.instanceOf(WorkflowRunIdentityAlreadyUsed),
       Match.instanceOf(WorkflowRunNotBegan),
+      Match.instanceOf(WorkflowRunTerminationEvidenceInvalid),
       Match.instanceOf(JournalDataCorruption),
       Match.instanceOf(JournalSchemaIncompatible),
       Match.instanceOf(JournalStorageAccessDenied),
@@ -424,10 +428,14 @@ export const sqliteJournalStoreLayer = (config: SqliteJournalStoreConfig) =>
           return { issues, runs: [...recordsByRun].map(([runId, records]) => ({ records, runId })) }
         })
 
-        const terminateRun = Effect.fn("JournalStore.Sqlite.terminateRun")(function* (runId: RunId) {
+        const terminateRun = Effect.fn("JournalStore.Sqlite.terminateRun")(function* (
+          runId: RunId,
+          disposition: RunTerminationDisposition,
+          evidence: RunFinalityEvidence
+        ) {
           return yield* Effect.gen(function* () {
             const records = yield* loadRunRecords(runId, "JournalStore.terminateRun")
-            const decision = decideWorkflowRunTermination(records, runId)
+            const decision = decideWorkflowRunTermination(records, runId, disposition, evidence)
             if (decision._tag === "LifecycleTransitionRejected") {
               return yield* decision.failure
             }

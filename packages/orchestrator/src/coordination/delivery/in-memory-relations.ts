@@ -267,7 +267,18 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
               ({ current, proposedActions }): DeliveryRuntimeEvaluation => ({
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
-                current,
+                current:
+                  facts.cancellationApplied === undefined
+                    ? facts.runId === undefined
+                      ? current
+                      : { ...current, runId: facts.runId }
+                    : {
+                        ...current,
+                        cancellationApplied: facts.cancellationApplied,
+                        ...(facts.runId === undefined ? {} : { runId: facts.runId })
+                      },
+                ...(facts.cancellationApplied === undefined ? {} : { cancellationApplied: facts.cancellationApplied }),
+                ...(facts.runId === undefined ? {} : { runId: facts.runId }),
                 pauseCoverage: facts.pauseCoverage,
                 proposedActions,
                 quiescence: facts.quiescence,

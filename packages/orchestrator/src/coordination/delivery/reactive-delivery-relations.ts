@@ -169,6 +169,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: journal.position,
+          runId,
           pauseCoverage: pauseCoverageFactsOf(journal),
           quiescence: runIsPaused
             ? { _tag: "QuiescencePassive", reason: "RunPaused" }
@@ -179,7 +180,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
               correlation: { attemptId, runId },
               taskId
             }))
-          }
+          },
+          cancellationApplied: journal.reconstructed.cancellation?._tag === "RunCancellationApplied"
         },
         trackerGraphProposals
       },

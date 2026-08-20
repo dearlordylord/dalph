@@ -498,6 +498,7 @@ const makeRunActivationDriverImplementation = () => {
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
+    appendUnsettledStartIntent(plannedAttempt)
   }
 
   const appendUnsettledStartIntent = (plannedAttempt: PlannedTaskAttempt): void => {
@@ -783,10 +784,6 @@ const makeRunActivationDriverImplementation = () => {
                     version: workflowJournalEventVersion
                   })
                 )
-              })
-
-            const appendTerminalReportThroughJournal = (plannedAttempt: PlannedTaskAttempt) =>
-              Effect.gen(function* () {
                 const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
                 yield* journal.append(
                   runId,
@@ -800,6 +797,10 @@ const makeRunActivationDriverImplementation = () => {
                     version: workflowJournalEventVersion
                   })
                 )
+              })
+
+            const appendTerminalReportThroughJournal = (plannedAttempt: PlannedTaskAttempt) =>
+              Effect.gen(function* () {
                 const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
                 yield* journal.append(
                   runId,
@@ -1069,7 +1070,7 @@ const makeRunActivationDriverImplementation = () => {
                     terminationDisposition = disposition
                     phase = "ActivationReturned"
                     yield* Deferred.succeed(command.acknowledged, undefined)
-                    return { acceptedAt: records.at(-1)?.position ?? null, decision, disposition, evidence }
+                    return { acceptedAt: evidence.observedAt, decision, disposition, evidence }
                   })
                 ),
                 Match.exhaustive
@@ -1132,7 +1133,6 @@ const makeRunActivationDriverImplementation = () => {
     selectAmbiguousExecutorHistory: () =>
       Effect.sync(() => {
         selectExisting(true)
-        appendUnsettledStartIntent(attemptA)
         ambiguousExecutorProjectionAvailable = true
       }),
     selectContractedExactExistingHistory: () => Effect.sync(() => selectExisting(true, true)),

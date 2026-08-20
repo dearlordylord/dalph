@@ -143,7 +143,7 @@ it.effect(
           if (record.event._tag === "WorkflowRunBegan") {
             yield* journal.beginRun(record.runId, record.event.target, record.event.initialControlPolicy)
           } else if (record.event._tag === "WorkflowRunTerminated") {
-            yield* journal.terminateRun(record.runId)
+            yield* journal.terminateRun(record.runId, record.event.disposition, record.event.evidence)
           } else {
             yield* journal.append(record.runId, record.key, record.event)
           }

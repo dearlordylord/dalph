@@ -90,6 +90,7 @@ import {
 import { isRecordedIntegrationEntry, renameRecordedIntegrationEntry } from "./recorded-integration-renaming.js"
 import {
   preserveRecordedRunBeginning,
+  preserveRecordedRunCancellation,
   preserveRecordedRunPolicyChange,
   preserveRecordedRunTermination
 } from "./recorded-policy-renaming.js"
@@ -1140,6 +1141,26 @@ const renameRecordedCassetteEntry = (
             plannedAttempt: renamePlannedAttempt(observationEntry.subject.plannedAttempt, maps)
           })
         }),
+      CancelledAttemptImplementationResponsibilityRelinquished: (relinquishedEntry) =>
+        completeFields<typeof relinquishedEntry>({
+          _tag: "CancelledAttemptImplementationResponsibilityRelinquished",
+          authorizedClaim: renameActiveTaskClaim(relinquishedEntry.authorizedClaim, maps),
+          cancellationAppliedAt: preserveCassetteValue(relinquishedEntry.cancellationAppliedAt),
+          initiatedBy: preserveCassetteValue(relinquishedEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(relinquishedEntry.occurrenceClassification),
+          plannedAttempt: renamePlannedAttempt(relinquishedEntry.plannedAttempt, maps),
+          proof: preserveCassetteValue(relinquishedEntry.proof)
+        }),
+      CancelledAttemptClaimNoReleaseObserved: (observationEntry) =>
+        completeFields<typeof observationEntry>({
+          _tag: "CancelledAttemptClaimNoReleaseObserved",
+          cancellationAppliedAt: preserveCassetteValue(observationEntry.cancellationAppliedAt),
+          expectedClaim: renameActiveTaskClaim(observationEntry.expectedClaim, maps),
+          observation: renameTaskClaimObservation(observationEntry.observation, maps),
+          observationOperationId: renamed(observationEntry.observationOperationId, maps.operationIds),
+          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+          plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps)
+        }),
       ControlDirectionApplied: (directionEntry) =>
         completeFields<typeof directionEntry>({
           _tag: "ControlDirectionApplied",
@@ -1314,7 +1335,8 @@ const renameRecordedCassetteEntry = (
           })
         }),
       WorkflowRunBegan: preserveRecordedRunBeginning,
-      WorkflowRunTerminated: preserveRecordedRunTermination
+      WorkflowRunTerminated: preserveRecordedRunTermination,
+      RunCancellationApplied: preserveRecordedRunCancellation
     }),
     Match.exhaustive
   )

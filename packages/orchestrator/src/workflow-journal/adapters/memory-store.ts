@@ -10,6 +10,7 @@ import {
   unpublishedInRunJournalTestLayer,
   type WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated,
+  type WorkflowRunTerminationEvidenceInvalid,
   type WorkflowRunIdentityAlreadyUsed,
   type WorkflowRunNotBegan
 } from "../store.js"
@@ -21,6 +22,7 @@ import {
   readRecoverableRunBeginning
 } from "../run-lifecycle.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
+import type { RunFinalityEvidence, RunTerminationDisposition } from "../../coordination/frontier/run-finality.js"
 
 interface MemoryJournalState {
   readonly recordsByRun: ReadonlyMap<RunId, ReadonlyArray<JournalRecord>>
@@ -108,15 +110,22 @@ const memoryRawJournalStoreLayer = Layer.effect(
       return { issues: [], runs: [...recordsByRun].map(([runId, records]) => ({ records, runId })) }
     })
 
-    const terminateRun = Effect.fn("JournalStore.Memory.terminateRun")(function* (runId: RunId) {
+    const terminateRun = Effect.fn("JournalStore.Memory.terminateRun")(function* (
+      runId: RunId,
+      disposition: RunTerminationDisposition,
+      evidence: RunFinalityEvidence
+    ) {
       const update = (
         current: MemoryJournalState
       ): readonly [
-        Effect.Effect<JournalRecord, WorkflowRunAlreadyTerminated | WorkflowRunNotBegan>,
+        Effect.Effect<
+          JournalRecord,
+          WorkflowRunAlreadyTerminated | WorkflowRunNotBegan | WorkflowRunTerminationEvidenceInvalid
+        >,
         MemoryJournalState
       ] => {
         const records = current.recordsByRun.get(runId) ?? []
-        const decision = decideWorkflowRunTermination(records, runId)
+        const decision = decideWorkflowRunTermination(records, runId, disposition, evidence)
         if (decision._tag === "LifecycleTransitionRejected") {
           return [Effect.fail(decision.failure), current]
         }

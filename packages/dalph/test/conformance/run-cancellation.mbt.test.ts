@@ -3,8 +3,22 @@
 import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
-import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope } from "effect"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  WorktreeLocator,
+  plannedAttemptExecutorCorrelation,
+  makeTaskWorkSpecification
+} from "@dalph/contracts"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope, Stream } from "effect"
 import { expect } from "vitest"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
@@ -20,6 +34,8 @@ import {
   type JournalStoreService
 } from "../../../orchestrator/src/workflow-journal/store.js"
 import { CoordinatorOwnership } from "../../../orchestrator/src/authorities/coordinator-ownership/ownership.js"
+import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
+import { ActiveTaskClaim, UnclaimedTask } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import type { TrackerTarget } from "../../../orchestrator/src/authorities/task-tracker/target.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
@@ -29,6 +45,27 @@ import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/ru
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
+import { RunnableFrontierTransition } from "../../../orchestrator/src/coordination/frontier/frontier.js"
+import { executePlannedAttemptTransition } from "../../../orchestrator/src/coordination/delivery/planned-attempt-delivery-action-adapter.js"
+import { executeNewRecoveredAction } from "../../../orchestrator/src/coordination/delivery/recovered-delivery-action-adapter.js"
+import {
+  type DeliveryActionProposal,
+  type IdentityFreeDeliveryProposal,
+  type NewRecoveredWorkflowAction
+} from "../../../orchestrator/src/coordination/delivery/delivery-action-proposal.js"
+import { deliveryProposalsOf } from "../../../orchestrator/src/coordination/delivery/delivery-proposal-derivation.js"
+import { newRecoveredActionOf } from "../../../orchestrator/src/coordination/delivery/delivery-proposal-route.js"
+import { type DeliveryActionExecutionLease } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
+import {
+  PlannedAttemptProtocolController,
+  plannedAttemptProtocolControllerLayer
+} from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import {
+  AuthoritativeTaskClaimObserved,
+  WorkflowInterpreter,
+  WorkflowTrace
+} from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
+import { AuthoritativeTaskClaimReleased } from "../../../orchestrator/src/workflow/protocols/task-claim-release/protocol.js"
 import {
   decideWorkflowRunBeginning,
   decideWorkflowRunTermination,
@@ -38,18 +75,36 @@ import { attemptChoiceControlLayer } from "../../../orchestrator/src/workflow/pr
 import { controlDirectionApplicationLayer } from "../../../orchestrator/src/workflow/protocols/control-direction-application/protocol.js"
 import { taskClaimReacquisitionControlLayer } from "../../../orchestrator/src/workflow/protocols/task-claim-reacquisition/control.js"
 import { taskWorkCapacityControlLayer } from "../../../orchestrator/src/control/task-work-capacity.js"
+import { deterministicTaskClaimAcquisitionPlannerLayer } from "../../../orchestrator/src/workflow/protocols/task-claim-acquisition/plan.js"
 import { deterministicOperationIdAllocatorLayer } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/plan.js"
-import { plannedAttemptProtocolControllerLayer } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { WorkflowInterpreter, WorkflowTrace } from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
-import { makeTrackerGraphObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
+  makeTaskClaimReleaseOperation,
+  makeTrackerGraphObservationOperation,
+  TaskClaimReleaseAuthority
+} from "../../../orchestrator/src/workflow/registry/operation.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  taskTrackerReadIntent
+} from "../../../orchestrator/src/workflow/registry/event.js"
+import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
+import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
 import {
   taskTrackerFactsObservedEvent,
   makeCompleteTaskTrackerFactsObserved
 } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
-import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
-import { intentRecordKey, outcomeRecordKey } from "../../../orchestrator/src/workflow-journal/record-key.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+} from "../../../orchestrator/src/workflow-journal/record-key.js"
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
 
 const RunIdVariant = Schema.Struct({ tag: Schema.Literals(["R1", "R2"]), value: Schema.Unknown })
@@ -209,17 +264,110 @@ interface DriverProjection {
   readonly state: { readonly durable: DurableProjection; readonly process: ProcessProjection }
 }
 
-type RuntimeCommand = {
-  readonly _tag: "PublishGraph"
-  readonly completed: Deferred.Deferred<"RunPaused" | "RunUnpaused">
-  readonly operationNumber: number
-}
+type SettlementPlannedTransition = Extract<
+  RunnableFrontierTransition,
+  {
+    readonly _tag:
+      | "SuspendPlannedAttemptExecutorWork"
+      | "ObservePlannedAttemptContinuationExecutor"
+      | "RelinquishCancelledAttemptImplementation"
+  }
+>
+
+type RuntimeCommand =
+  | {
+      readonly _tag: "PublishGraph"
+      readonly completed: Deferred.Deferred<"RunPaused" | "RunUnpaused">
+      readonly operationNumber: number
+    }
+  | { readonly _tag: "SeedRunningAttempt"; readonly completed: Deferred.Deferred<void> }
+  | {
+      readonly _tag: "ExecutePlannedSettlement"
+      readonly action: { readonly _tag: "IdentityFreeAction"; readonly proposal: IdentityFreeDeliveryProposal }
+      readonly completed: Deferred.Deferred<void>
+      readonly transition: SettlementPlannedTransition
+    }
+  | {
+      readonly _tag: "ExecuteRecoveredSettlement"
+      readonly action: NewRecoveredWorkflowAction
+      readonly completed: Deferred.Deferred<void>
+      readonly operationId: OperationId
+    }
 
 const runId = RunId.make("run-cancellation-R1")
 const target = FixtureTarget.make("run-cancellation-T1")
+const taskId = TaskId.make("run-cancellation-task")
+const taskSpecification = makeTaskWorkSpecification({
+  body: "Cancellation conformance work",
+  taskId,
+  title: "Cancellation conformance task"
+})
+const plannedAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("run-cancellation-attempt"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/run-cancellation-task"),
+  executor: TaskExecutorLocator.make("executor:run-cancellation-fake"),
+  runId,
+  taskId,
+  taskRevision: taskSpecification.fingerprint,
+  worktree: WorktreeLocator.make("/tmp/dalph-run-cancellation-task")
+})
+const activeClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("run-cancellation-claim-acquisition"),
+  owner: ClaimOwner.make("dalph-run-cancellation"),
+  taskId,
+  token: ClaimToken.make("run-cancellation-claim-token")
+})
+const claimAcquisitionOperation = makeTaskClaimAcquisitionOperation({
+  acquisition: {
+    operationId: activeClaim.operationId,
+    owner: activeClaim.owner,
+    taskId: activeClaim.taskId,
+    token: activeClaim.token
+  },
+  predecessorOperationIds: []
+})
+const planOperation = makeTaskAttemptPlanOperation({
+  operationId: OperationId.make("run-cancellation-attempt-plan"),
+  plannedAttempt,
+  predecessorOperationIds: [activeClaim.operationId]
+})
+const claimReadOperationId = OperationId.make("run-cancellation-claim-read")
+const claimReadOperation = makeTaskClaimObservationOperation(claimReadOperationId, target, taskId, [
+  activeClaim.operationId
+])
+const claimReleaseOperationId = OperationId.make("run-cancellation-claim-release")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 let runCancellationMbtScope: Scope.Scope | undefined
+
+const assertIdentityFreeProposal: (
+  proposal: DeliveryActionProposal,
+  transition: SettlementPlannedTransition
+) => asserts proposal is IdentityFreeDeliveryProposal = (proposal, transition) => {
+  if (proposal.actionIdentity._tag !== "NoWorkflowOperationIdentity") {
+    expect.fail(`missing identity-free cancellation proposal for ${transition._tag}`)
+  }
+}
+
+const identityFreeActionFor = (
+  transition: SettlementPlannedTransition
+): { readonly _tag: "IdentityFreeAction"; readonly proposal: IdentityFreeDeliveryProposal } => {
+  const derived = deliveryProposalsOf({
+    acceptedOperationIds: new Set(),
+    fresh: [],
+    integrationResponsibilities: [],
+    responsibilities: [
+      { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(1), plannedAttempt }
+    ],
+    runId,
+    transitions: [transition]
+  })
+  const proposal = [...derived.ticketDelivery, ...derived.deliverySettlement][0]
+  if (proposal === undefined) return expect.fail(`missing identity-free cancellation proposal for ${transition._tag}`)
+  assertIdentityFreeProposal(proposal, transition)
+  return { _tag: "IdentityFreeAction", proposal }
+}
 
 const projectionOf = (durable: DurableProjection, process: ProcessProjection): DriverProjection => ({
   state: { durable, process }
@@ -301,12 +449,37 @@ const makeRunCancellationActions = {
   admitForwardWork: {}
 } as const
 
-const runtimeLayer = (activeRunId: RunId) =>
+const settlementLeaseOf = (controller: PlannedAttemptProtocolController["Service"]): DeliveryActionExecutionLease => ({
+  acceptIntegrationTargetOwnership: Effect.void,
+  bindPlannedAttemptPosition: () => Effect.void,
+  forwardBoundary: {
+    _tag: "InterruptibleBoundary",
+    execution: { run: (_intent, call, recordResult) => call.pipe(Effect.flatMap(recordResult)) }
+  },
+  integrationTargets: {
+    acquire: () => Effect.void,
+    changes: Stream.empty,
+    publishAcceptedOwnership: () => Effect.void,
+    release: () => Effect.void,
+    releaseAll: Effect.void,
+    snapshot: Effect.succeed({ activeResponsibilityPositions: new Set(), heldResponsibilityPositions: new Set() }),
+    withPermit: (_responsibility, effect) => effect
+  },
+  recordIntent: () => Effect.void,
+  releasePlannedAttemptPosition: () => Effect.void,
+  withPlannedAttemptProtocol: (correlation, effect) => controller.withPermit(correlation, effect)
+})
+
+const runtimeLayer = (
+  activeRunId: RunId,
+  executor: PlannedAttemptExecutor["Service"],
+  interpreter: WorkflowInterpreter["Service"]
+) =>
   Layer.mergeAll(
     Layer.effect(InRunJournal, InRunJournal),
     attemptChoiceControlLayer,
     controlDirectionApplicationLayer,
-    Layer.mock(PlannedAttemptExecutor, {}),
+    Layer.succeed(PlannedAttemptExecutor, executor),
     Layer.mock(RunRecoveryProjection, {
       _tag: "AuthoritativeRunRecoveryProjection" as const,
       runId: activeRunId,
@@ -320,12 +493,7 @@ const runtimeLayer = (activeRunId: RunId) =>
     taskClaimReacquisitionControlLayer,
     deterministicOperationIdAllocatorLayer(`run-cancellation:${activeRunId}`),
     plannedAttemptProtocolControllerLayer,
-    journaledWorkflowInterpreterLayer(
-      activeRunId,
-      Layer.mock(WorkflowInterpreter, {
-        readTrackerGraph: () => Effect.die("the cancellation adapter publishes controlled graph facts through Journal")
-      })
-    ),
+    journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter)),
     Layer.mock(WorkflowTrace, { emit: () => Effect.void })
   )
 
@@ -398,6 +566,44 @@ const makeCancellationDriverImplementation = () => {
   let durable = makeInitialDurable()
   let process = makeInitialProcess()
   let effectivePause: "RunPaused" | "RunUnpaused" | undefined
+  let executorAuthority: "Running" | "SafelySuspended" = "Running"
+  let claimHeld = true
+
+  const executorReportFor = (correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>) =>
+    executorAuthority === "Running"
+      ? PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+      : PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+
+  const executorForSettlement = PlannedAttemptExecutor.of({
+    project: (correlation) =>
+      Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report: executorReportFor(correlation) })),
+    requestSuspension: (attempt) =>
+      Effect.succeed(
+        PlannedAttemptExecutorReport.cases.Running.make({ correlation: plannedAttemptExecutorCorrelation(attempt) })
+      ),
+    startOrContinue: () => Effect.die("cancellation conformance must not continue executor work")
+  })
+
+  const workflowInterpreterForSettlement = WorkflowInterpreter.of({
+    acquireTaskClaim: () => Effect.die("cancellation conformance must not acquire a successor claim"),
+    readTaskClaim: () =>
+      Effect.succeed(
+        claimHeld
+          ? AuthoritativeTaskClaimObserved.make({ observation: activeClaim })
+          : AuthoritativeTaskClaimObserved.make({ observation: UnclaimedTask.make({ taskId }) })
+      ),
+    readTaskWorktree: () => Effect.die("cancellation conformance does not read worktrees"),
+    readTargetLineage: () => Effect.die("cancellation conformance does not read target lineage"),
+    readTrackerGraph: () => Effect.die("the cancellation adapter publishes controlled graph facts through Journal"),
+    readTaskWorkSpecification: () => Effect.succeed(taskSpecification),
+    releaseTaskClaim: (operation) =>
+      Effect.sync(() => {
+        claimHeld = false
+        return AuthoritativeTaskClaimReleased.make({ release: operation.release })
+      }),
+    reconcileTaskWorktree: () => Effect.die("cancellation conformance does not reconcile worktrees"),
+    recordTaskAttemptPlan: () => Effect.die("cancellation conformance seeds the exact attempt plan")
+  })
 
   const productionBootstrap = Effect.gen(function* () {
     const scope = yield* Scope.make()
@@ -414,9 +620,11 @@ const makeCancellationDriverImplementation = () => {
       Effect.provideService(Scope.Scope, scope)
     )
     const context = yield* Layer.build(
-      journaledRunBootstrapLayer(runId, ({ runId: activeRunId }) => runtimeLayer(activeRunId), applicationExit).pipe(
-        Layer.provide(dependencies)
-      )
+      journaledRunBootstrapLayer(
+        runId,
+        ({ runId: activeRunId }) => runtimeLayer(activeRunId, executorForSettlement, workflowInterpreterForSettlement),
+        applicationExit
+      ).pipe(Layer.provide(dependencies))
     ).pipe(Effect.provideService(Scope.Scope, scope))
     return Context.get(context, JournaledRunBootstrap)
   })
@@ -436,47 +644,103 @@ const makeCancellationDriverImplementation = () => {
     runtimeCommands = commands
     const program = Effect.gen(function* () {
       const journal = yield* Journal
+      const protocolController = yield* PlannedAttemptProtocolController
+      const settlementLease = settlementLeaseOf(protocolController)
       yield* Deferred.succeed(ready, undefined)
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- the runtime remains leased until crash or init.
       while (true) {
         const command = yield* Queue.take(commands)
-        const operation = makeTrackerGraphObservationOperation(
-          OperationId.make(`run-cancellation-graph-${command.operationNumber}`),
-          target,
-          [],
-          [TaskId.make("run-cancellation-root")]
-        )
-        const snapshotResult = projectTrackerSnapshot({
-          revision: `run-cancellation-graph-${command.operationNumber}`,
-          tasks: [
-            {
-              id: TaskId.make("run-cancellation-root"),
-              lifecycle: { _tag: "Open" as const },
-              parentTaskId: null,
-              prerequisiteIds: []
-            }
-          ]
-        })
-        if (snapshotResult._tag !== "Valid") return yield* Effect.die("cancellation graph fixture was invalid")
-        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-        yield* journal.append(
-          runId,
-          outcomeRecordKey(operation.operationId),
-          taskTrackerFactsObservedEvent(
-            operation.operationId,
-            makeCompleteTaskTrackerFactsObserved(operation, snapshotResult.snapshot)
+        if (command._tag === "SeedRunningAttempt") {
+          yield* journal.append(
+            runId,
+            intentRecordKey(activeClaim.operationId),
+            TaskClaimAcquisitionIntendedEvent.make({
+              operation: claimAcquisitionOperation,
+              version: workflowJournalEventVersion
+            })
           )
-        )
-        const current = yield* journal.state.get
-        const frame = yield* journaledCurrentDeliveryFrameOf(current)
-        effectivePause = frame.pause.run._tag
-        yield* Deferred.succeed(command.completed, effectivePause)
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(activeClaim.operationId),
+            TaskClaimAcquiredEvent.make({ claim: activeClaim, version: workflowJournalEventVersion })
+          )
+          yield* journal.append(
+            runId,
+            attemptPlanRecordKey(plannedAttempt.attemptId),
+            TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+            PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          const seededState = yield* journal.state.get
+          if (seededState.position !== JournalPosition.make(records.length)) {
+            return yield* Effect.die(
+              `cancellation seed publication ended at ${seededState.position}, storage ended at ${records.length}`
+            )
+          }
+          yield* Deferred.succeed(command.completed, undefined)
+        } else if (command._tag === "PublishGraph") {
+          const operation = makeTrackerGraphObservationOperation(
+            OperationId.make(`run-cancellation-graph-${command.operationNumber}`),
+            target,
+            [],
+            [TaskId.make("run-cancellation-root")]
+          )
+          const snapshotResult = projectTrackerSnapshot({
+            revision: `run-cancellation-graph-${command.operationNumber}`,
+            tasks: [
+              {
+                id: TaskId.make("run-cancellation-root"),
+                lifecycle: { _tag: "Open" as const },
+                parentTaskId: null,
+                prerequisiteIds: []
+              }
+            ]
+          })
+          if (snapshotResult._tag !== "Valid") return yield* Effect.die("cancellation graph fixture was invalid")
+          yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(operation.operationId),
+            taskTrackerFactsObservedEvent(
+              operation.operationId,
+              makeCompleteTaskTrackerFactsObserved(operation, snapshotResult.snapshot)
+            )
+          )
+          const current = yield* journal.state.get
+          const frame = yield* journaledCurrentDeliveryFrameOf(current)
+          effectivePause = frame.pause.run._tag
+          yield* Deferred.succeed(command.completed, effectivePause)
+        } else if (command._tag === "ExecutePlannedSettlement") {
+          yield* executePlannedAttemptTransition(command.action, command.transition, settlementLease)
+          yield* Deferred.succeed(command.completed, undefined)
+        } else {
+          yield* executeNewRecoveredAction(command.action, command.operationId, settlementLease, runId)
+          yield* Deferred.succeed(command.completed, undefined)
+        }
       }
     })
     const scope = runCancellationMbtScope
     if (scope === undefined) return yield* Effect.die("cancellation MBT scope was not installed")
     const fiber = yield* Effect.forkScoped(
-      installed.activate(target, Effect.succeed(initialPolicy), AllocatedWorkflowRunId.make(runId), program)
+      installed.activate(
+        target,
+        Effect.succeed(initialPolicy),
+        AllocatedWorkflowRunId.make(runId),
+        program.pipe(
+          Effect.provide(
+            deterministicTaskClaimAcquisitionPlannerLayer({
+              owner: ClaimOwner.make("dalph-run-cancellation-planner"),
+              tokenPrefix: "run-cancellation"
+            })
+          )
+        )
+      )
     ).pipe(Effect.provideService(Scope.Scope, scope))
     runtimeFiber = fiber
     yield* Deferred.await(ready).pipe(Effect.orDie)
@@ -502,6 +766,105 @@ const makeCancellationDriverImplementation = () => {
         return yield* Effect.die("production delivery did not borrow cancellation's effective Run Pause")
       }
       effectivePause = pause
+    })
+
+  const awaitSettlementCommand = (completed: Deferred.Deferred<void>) => {
+    const fiber = runtimeFiber
+    return fiber === undefined
+      ? Deferred.await(completed)
+      : Effect.raceFirst(
+          Deferred.await(completed),
+          Fiber.join(fiber).pipe(
+            Effect.flatMap(() => Effect.die("cancellation runtime exited before settlement command completed"))
+          )
+        )
+  }
+
+  const executePlannedSettlement = (transition: SettlementPlannedTransition) =>
+    Effect.gen(function* () {
+      const commands = runtimeCommands
+      if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
+      const completed = yield* Deferred.make<void>()
+      yield* Queue.offer(commands, {
+        _tag: "ExecutePlannedSettlement",
+        action: identityFreeActionFor(transition),
+        completed,
+        transition
+      })
+      yield* awaitSettlementCommand(completed)
+    })
+
+  const executeRecoveredSettlement = (action: NewRecoveredWorkflowAction, operationId: OperationId) =>
+    Effect.gen(function* () {
+      const commands = runtimeCommands
+      if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
+      const completed = yield* Deferred.make<void>()
+      yield* Queue.offer(commands, { _tag: "ExecuteRecoveredSettlement", action, completed, operationId })
+      yield* awaitSettlementCommand(completed)
+    })
+
+  const seedRunningAttempt = Effect.gen(function* () {
+    const commands = runtimeCommands
+    if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
+    const completed = yield* Deferred.make<void>()
+    yield* Queue.offer(commands, { _tag: "SeedRunningAttempt", completed })
+    yield* awaitSettlementCommand(completed)
+  })
+
+  const relinquishCancelledAttempt = Effect.gen(function* () {
+    const safeObservation = records.findLast(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorStateObserved" &&
+        event.observation._tag === "ExactExecutorReport" &&
+        event.observation.report._tag === "SafelySuspended" &&
+        event.plannedAttempt.attemptId === plannedAttempt.attemptId
+    )
+    if (safeObservation === undefined || safeObservation.event._tag !== "PlannedAttemptExecutorStateObserved") {
+      return yield* Effect.die("cancelled-attempt relinquishment requires the exact safe executor projection")
+    }
+    yield* executePlannedSettlement(
+      RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+        plannedAttempt,
+        proof: { _tag: "StateProjection", observationOrdinal: safeObservation.event.ordinal }
+      })
+    )
+    if (
+      !records.some(
+        ({ event }) =>
+          event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+          event.plannedAttempt.attemptId === plannedAttempt.attemptId
+      )
+    ) {
+      return yield* Effect.die("production cancellation adapter did not persist responsibility relinquishment")
+    }
+  })
+
+  const cancelledClaimReleaseTransition = () =>
+    Effect.gen(function* () {
+      const cancellation = records.findLast(({ event }) => event._tag === "RunCancellationApplied")
+      const relinquishment = records.findLast(
+        ({ event }) =>
+          event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+          event.plannedAttempt.attemptId === plannedAttempt.attemptId
+      )
+      if (
+        cancellation === undefined ||
+        relinquishment === undefined ||
+        cancellation.event._tag !== "RunCancellationApplied" ||
+        relinquishment.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished"
+      ) {
+        return yield* Effect.die("cancellation claim release requires durable cancellation and relinquishment")
+      }
+      const operation = makeTaskClaimReleaseOperation({
+        authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+          cancellationAppliedAt: cancellation.position,
+          implementationRelinquishedAt: relinquishment.position,
+          observationOperationId: claimReadOperationId
+        }),
+        predecessorOperationIds: [activeClaim.operationId, claimReadOperationId],
+        release: { claim: activeClaim, operationId: claimReleaseOperationId }
+      })
+      return RunnableFrontierTransition.ReleaseCancelledAttemptClaim({ operation, plannedAttempt })
     })
 
   const resetAfterProcessLoss = () => {
@@ -536,6 +899,8 @@ const makeCancellationDriverImplementation = () => {
         durable = makeInitialDurable()
         process = makeInitialProcess()
         effectivePause = undefined
+        executorAuthority = "Running"
+        claimHeld = true
         yield* startRuntime
       }),
     selectIdleRun: () =>
@@ -543,7 +908,8 @@ const makeCancellationDriverImplementation = () => {
         process = { ...process, executorPositionHeld: false, responsibilitiesSettled: true, graph: "NotAllSucceeded" }
       }),
     selectRunningExecutor: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        yield* seedRunningAttempt
         durable = { ...durable, executor: "Running", claim: "Held", integration: "NoIntegration" }
         process = { ...process, executorPositionHeld: true, responsibilitiesSettled: false }
       }),
@@ -592,21 +958,94 @@ const makeCancellationDriverImplementation = () => {
         durable = { ...durable, cancellationRedeliveries: durable.cancellationRedeliveries + 1 }
       }),
     recordExecutorStopIntent: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const transition = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+        yield* executePlannedSettlement(transition)
+        if (
+          !records.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" &&
+              event.command === "Suspend" &&
+              event.plannedAttempt.attemptId === plannedAttempt.attemptId
+          ) ||
+          !records.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report._tag === "Running" &&
+              event.report.correlation.attemptId === plannedAttempt.attemptId
+          )
+        ) {
+          return yield* Effect.die("production suspension adapter did not persist the exact intent and report")
+        }
         durable = { ...durable, executor: "StopIntentRecorded", executorStopIntents: durable.executorStopIntents + 1 }
         process = { ...process, executorPositionHeld: true }
       }),
     reportExecutorSafe: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        executorAuthority = "SafelySuspended"
+        yield* executePlannedSettlement(
+          RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt })
+        )
+        if (
+          !records.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorStateObserved" &&
+              event.observation._tag === "ExactExecutorReport" &&
+              event.observation.report._tag === "SafelySuspended" &&
+              event.plannedAttempt.attemptId === plannedAttempt.attemptId
+          )
+        ) {
+          return yield* Effect.die("production executor observation adapter did not persist the safe report")
+        }
+        yield* relinquishCancelledAttempt
         durable = { ...durable, executor: "SafelySuspended", executorSafeReports: durable.executorSafeReports + 1 }
         process = { ...process, executorPositionHeld: false }
       }),
     recordClaimReleaseIntent: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const transition = RunnableFrontierTransition.ObserveCancelledAttemptClaim({
+          operation: claimReadOperation,
+          plannedAttempt
+        })
+        const action = newRecoveredActionOf(transition)
+        if (action === undefined) return yield* Effect.die("production claim observation route was not derived")
+        yield* executeRecoveredSettlement(action, claimReadOperationId)
+        if (
+          !records.some(
+            ({ event }) =>
+              event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === claimReadOperationId
+          ) ||
+          !records.some(
+            ({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.operationId === claimReadOperationId &&
+              event.observation._tag === "FocusedTaskClaimFacts" &&
+              event.observation.observation._tag === "ActiveTaskClaim" &&
+              event.observation.observation.operationId === activeClaim.operationId
+          )
+        ) {
+          return yield* Effect.die("production claim observation adapter did not persist the exact focused read")
+        }
         durable = { ...durable, claim: "ReleaseIntentRecorded", claimReleaseIntents: durable.claimReleaseIntents + 1 }
       }),
     observeAndReleaseClaim: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const transition = yield* cancelledClaimReleaseTransition()
+        const action = newRecoveredActionOf(transition)
+        if (action === undefined) return yield* Effect.die("production claim release route was not derived")
+        yield* executeRecoveredSettlement(action, claimReleaseOperationId)
+        if (
+          !records.some(
+            ({ event }) =>
+              event._tag === "TaskClaimReleaseIntended" &&
+              event.operation.release.operationId === claimReleaseOperationId
+          ) ||
+          !records.some(
+            ({ event }) => event._tag === "TaskClaimReleased" && event.release.operationId === claimReleaseOperationId
+          )
+        ) {
+          return yield* Effect.die("production claim release adapter did not persist intent and outcome")
+        }
         durable = {
           ...durable,
           claim: "Released",
@@ -676,12 +1115,48 @@ const makeCancellationDriverImplementation = () => {
         }
       }),
     reconcileExecutorAfterRestart: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        executorAuthority = "SafelySuspended"
+        yield* executePlannedSettlement(
+          RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt })
+        )
+        if (
+          records.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" &&
+              event.plannedAttempt.attemptId === plannedAttempt.attemptId
+          ).length !== 1 ||
+          !records.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorStateObserved" &&
+              event.observation._tag === "ExactExecutorReport" &&
+              event.observation.report._tag === "SafelySuspended"
+          )
+        ) {
+          return yield* Effect.die("restart executor reconciliation duplicated the command or lost safe evidence")
+        }
+        yield* relinquishCancelledAttempt
         durable = { ...durable, executor: "SafelySuspended", executorSafeReports: 1 }
         process = { ...process, executorPositionHeld: false }
       }),
     reconcileClaimAfterRestart: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const transition = yield* cancelledClaimReleaseTransition()
+        const action = newRecoveredActionOf(transition)
+        if (action === undefined) return yield* Effect.die("restart claim release route was not derived")
+        yield* executeRecoveredSettlement(action, claimReleaseOperationId)
+        if (
+          records.filter(
+            ({ event }) =>
+              event._tag === "TaskClaimReleaseIntended" &&
+              event.operation.release.operationId === claimReleaseOperationId
+          ).length !== 1 ||
+          records.filter(
+            ({ event }) => event._tag === "TaskClaimReleased" && event.release.operationId === claimReleaseOperationId
+          ).length !== 1
+        ) {
+          return yield* Effect.die("restart claim reconciliation duplicated or lost the exact release operation")
+        }
         durable = { ...durable, claim: "Released", claimReleaseObservations: 1, claimReleases: 1 }
       }),
     reconcileIntegrationAfterRestart: () =>
