@@ -699,7 +699,7 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
     "The primary graph must precede the explanatory delivery manual"
   )
   assert(
-    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
+    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Moment = one captured story, Delivery, or runtime observation · Jump = frontier, held positions, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
     "Visible playback help must distinguish adjacent moments, delivery landmarks, and live following"
   )
   const status = workbench.querySelector(".delivery-timeline-controls output")

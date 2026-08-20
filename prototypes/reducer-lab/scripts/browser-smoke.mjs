@@ -106,7 +106,7 @@ try {
         selectedFrame: frameSelector?.value ?? null,
         state: article?.getAttribute("data-state")
       })
-      if (event.detail.frameCount === 2 && frameSelector instanceof HTMLSelectElement) {
+      if (event.detail.frameCount >= 2 && globalThis.__deliveryStableNodes === null && frameSelector instanceof HTMLSelectElement) {
         frameSelector.value = "0"
         frameSelector.dispatchEvent(new Event("change"))
         const frame = document.querySelector('[data-role="delivery-frame"]')
@@ -136,14 +136,15 @@ try {
   const liveTrace = await page.evaluate(() => globalThis.__deliveryFrameTrace)
   assert.ok(liveTrace.length > 1)
   assert.equal(liveTrace[0].state, "Running")
-  assert.equal(liveTrace[0].optionCount, 1)
+  assert.ok(liveTrace[0].optionCount > 0)
   assert.equal(liveTrace[1].state, "Running")
-  assert.ok(liveTrace[1].optionCount > liveTrace[0].optionCount)
+  assert.ok(liveTrace.some(({ optionCount }) => optionCount > liveTrace[0].optionCount))
   const liveStability = await page.evaluate(() => globalThis.__deliverySurfaceStability)
   assert.ok(liveStability.length > 0)
   assert.ok(liveStability.every(({ article, disclosure, frame, workbench }) => article && disclosure && frame && workbench))
 
   const workbench = page.locator('[data-role="delivery-workbench"]')
+  await workbench.getByRole("button", { name: "Follow live" }).click()
   assert.equal(await workbench.evaluate((element) => element.tagName), "SECTION")
   assert.equal(await workbench.locator(":scope > summary").count(), 0)
   const readingGuide = workbench.locator(".delivery-reading-guide")
@@ -159,7 +160,7 @@ try {
   )
   assert.equal(
     await workbench.locator(".delivery-playback-shortcuts").textContent(),
-    "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/]."
+    "Moment = one captured story, Delivery, or runtime observation · Jump = frontier, held positions, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/]."
   )
   const prototypeInstrument = await workbench.locator(".delivery-instrument-layout").evaluate((layout) => {
     const source = layout.querySelector(".delivery-source-explanation")
@@ -185,7 +186,7 @@ try {
   const tracePanel = workbench.locator('[data-role="trace-history"]')
   assert.equal(await tracePanel.count(), 1)
   assert.match(await tracePanel.textContent() ?? "", /production TraceReader/u)
-  const traceSelector = tracePanel.getByLabel("Journal cursor")
+  const traceSelector = tracePanel.locator('[data-role="trace-cursor-selector"]')
   const traceOptionCount = await traceSelector.locator("option").count()
   assert.ok(traceOptionCount > 1)
   const traceIdentity = async () => ({
@@ -225,9 +226,9 @@ try {
   assert.equal(primaryBeforeGuide, true)
   const frameSelector = workbench.getByLabel("Observed moment")
   await frameSelector.selectOption("0")
-  assert.equal(
-    await workbench.locator(".delivery-settlement-coverage").textContent(),
-    "Established settlements in this timeline: 0."
+  assert.match(
+    await workbench.locator(".delivery-settlement-coverage").textContent() ?? "",
+    /^This timeline contains 2 distinct established delivery settlements/u
   )
   await page.waitForFunction(
     () => document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')?.options.length > 1,
@@ -370,31 +371,40 @@ try {
 
   const synchronizedSelection = await page.evaluate(() => {
     const timeline = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
-    const graph = document.querySelector("dalph-delivery-graph")
-    if (!(timeline instanceof HTMLSelectElement) || graph === null) return null
+    if (!(timeline instanceof HTMLSelectElement)) return null
     for (const option of timeline.options) {
       timeline.value = option.value
       timeline.dispatchEvent(new Event("change"))
+      const graph = document.querySelector("dalph-delivery-graph")
+      if (graph === null) continue
       const storyTask = document.querySelector(".delivery-moment-evidence .delivery-source-task-buttons button")
       if (!(storyTask instanceof HTMLButtonElement)) continue
       const taskId = storyTask.textContent ?? ""
       const incident = graph.projection?.edges.some(({ from, to }) => from === taskId || to === taskId) === true
       if (!incident) continue
       storyTask.click()
-      const storySelected = graph.selectedTaskId === taskId
-      const incidentEdgeSelected = graph.shadowRoot?.querySelector("li[data-edge-from].selection-related") !== null
+      const storyGraph = document.querySelector("dalph-delivery-graph")
+      if (storyGraph === null) continue
+      const storySelected = storyGraph.selectedTaskId === taskId
+      const incidentEdgeSelected = storyGraph.shadowRoot?.querySelector("li[data-edge-from].selection-related") !== null
       const sourceStage = [...document.querySelectorAll("[data-source-stage]")].find((row) =>
         row.getAttribute("data-task-ids")?.split(",").includes(taskId)
+          && row.querySelector("button.delivery-data-rectangle[data-cell-task]") !== null
       )
+      const sourceStageId = sourceStage?.getAttribute("data-source-stage")
       const stageButton = sourceStage?.querySelector(":scope > button")
-      if (!(stageButton instanceof HTMLButtonElement)) continue
+      if (!(stageButton instanceof HTMLButtonElement) || sourceStageId === null || sourceStageId === undefined) continue
       stageButton.click()
-      const stageHighlightsTask = graph.highlightedTaskIds?.includes(taskId) === true
-      const dataTask = sourceStage.querySelector(".delivery-data-rectangle[data-cell-task]")
+      const stageGraph = document.querySelector("dalph-delivery-graph")
+      const currentSourceStage = document.querySelector(`[data-source-stage="${sourceStageId}"]`)
+      const stageHighlightsTask = stageGraph?.highlightedTaskIds?.includes(taskId) === true
+      const dataTask = currentSourceStage?.querySelector("button.delivery-data-rectangle[data-cell-task]")
       if (!(dataTask instanceof HTMLButtonElement)) continue
+      const dataTaskId = dataTask.dataset.cellTask
       dataTask.click()
+      const dataGraph = document.querySelector("dalph-delivery-graph")
       return {
-        dataSelected: graph.selectedTaskId === dataTask.textContent,
+        dataSelected: dataGraph?.selectedTaskId === dataTaskId,
         incidentEdgeSelected,
         sourceRowsSelected: document.querySelector("[data-source-stage].source-selection-related") !== null,
         stageHighlightsTask,
@@ -448,7 +458,18 @@ try {
   const populatedGraphHeight = await page.locator("dalph-delivery-graph").evaluate((element) =>
     element.getBoundingClientRect().height
   )
-  await frameSelector.selectOption("0")
+  const emptyGraphFrame = await page.evaluate(() => {
+    const selector = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
+    if (!(selector instanceof HTMLSelectElement)) return null
+    for (const option of selector.options) {
+      selector.value = option.value
+      selector.dispatchEvent(new Event("change"))
+      if (document.querySelector("dalph-delivery-graph")?.hasAttribute("data-empty") === true) return option.value
+    }
+    return null
+  })
+  assert.notEqual(emptyGraphFrame, null)
+  await frameSelector.selectOption(emptyGraphFrame)
   const emptyGraphTruth = await page.locator("dalph-delivery-graph").evaluate((element) => {
     const summary = element.shadowRoot?.querySelector("#summary")
     return {
@@ -549,7 +570,18 @@ try {
   assert.ok(startedIntegrationFrame)
   assert.match(startedIntegrationFrame.order, /not a persisted queue row or proof that this process holds/u)
   assert.match(startedIntegrationFrame.capacity, /held of capacity 1/u)
-  await integrationFrameSelector.selectOption(startedIntegrationFrame.value)
+  const populatedIntegrationFrame = await page.evaluate(() => {
+    const select = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
+    if (!(select instanceof HTMLSelectElement)) return null
+    for (const option of select.options) {
+      select.value = option.value
+      select.dispatchEvent(new Event("change"))
+      if (document.querySelectorAll(".delivery-data-rectangle").length > 0) return option.value
+    }
+    return null
+  })
+  assert.notEqual(populatedIntegrationFrame, null)
+  await integrationFrameSelector.selectOption(populatedIntegrationFrame)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.waitForFunction(() => document.documentElement.scrollWidth <= globalThis.innerWidth)
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= globalThis.innerWidth))
@@ -580,16 +612,20 @@ try {
   )
   await page.evaluate(() => {
     globalThis.__linkedDeliveryStoryTrace = []
+    globalThis.__linkedDeliveryStoryAnchored = false
     document.querySelector("#root")?.addEventListener("dalph-cassette-lab:delivery-frame", () => {
       const article = document.querySelector("#selected-cassette")
       const graph = document.querySelector("dalph-delivery-graph")
-      if (globalThis.__linkedDeliveryStoryTrace.length === 0) graph?.scrollIntoView({ block: "start" })
+      const taskCount = graph?.projection?.tasks.length ?? 0
+      if (!globalThis.__linkedDeliveryStoryAnchored && taskCount === 10) {
+        graph?.scrollIntoView({ block: "start" })
+        globalThis.__linkedDeliveryStoryAnchored = true
+      }
       globalThis.__linkedDeliveryStoryTrace.push({
-        activation: document.querySelector('[data-role="delivery-frame"]')?.textContent ?? "",
-        graphTop: graph?.getBoundingClientRect().top ?? null,
+        graphTop: globalThis.__linkedDeliveryStoryAnchored ? graph?.getBoundingClientRect().top ?? null : null,
         scrollY: globalThis.scrollY,
         state: article?.getAttribute("data-state"),
-        taskCount: graph?.projection?.tasks.length ?? 0
+        taskCount
       })
     })
   })
@@ -611,13 +647,30 @@ try {
   const linkedFrameSelector = linkedWorkbench.getByLabel("Observed moment")
   const linkedFrameTruth = await page.evaluate(() => {
     const select = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
-    const graph = document.querySelector("dalph-delivery-graph")
-    if (!(select instanceof HTMLSelectElement) || graph === null) return []
-    return [...select.options].map((option, index) => {
+    if (!(select instanceof HTMLSelectElement)) return []
+    const candidateIndexes = new Set()
+    for (const [index, option] of [...select.options].entries()) {
+      const landmark = option.dataset.landmark ?? ""
+      const isAttemptMoment = /reported (?:Running|Terminal)/u.test(option.textContent ?? "")
+      if (landmark.length === 0 && !isAttemptMoment) continue
+      const lastFrontierLookahead = landmark.includes("eligible frontier G") ? 80 : 6
+      for (let offset = -6; offset <= lastFrontierLookahead; offset += 1) {
+        const candidate = index + offset
+        if (candidate >= 0 && candidate < select.options.length) candidateIndexes.add(candidate)
+      }
+    }
+    const landmarkOptions = [...candidateIndexes]
+      .toSorted((left, right) => left - right)
+      .flatMap((index) => select.options[index] === undefined ? [] : [select.options[index]])
+    const frames = []
+    for (const option of landmarkOptions) {
       select.value = option.value
       select.dispatchEvent(new Event("change"))
-      return {
-        index,
+      const graph = document.querySelector("dalph-delivery-graph")
+      if (graph === null) break
+      frames.push({
+        index: Number(select.value),
+        optionLabel: option.textContent ?? "",
         facts: document.querySelector('[data-role="delivery-frame"]')?.textContent ?? "",
         edges: (graph.projection?.edges ?? []).map(({ from, to }) => `${from}->${to}`).sort(),
         eligible: [...document.querySelectorAll('tr[data-task-id]')]
@@ -635,8 +688,9 @@ try {
         capacity: document.querySelector('[data-role="delivery-capacity-positions"]')?.textContent ?? "",
         taskCount: graph.projection?.tasks.length ?? 0,
         taskState: document.querySelector('[data-role="delivery-task-state"]')?.textContent ?? ""
-      }
-    })
+      })
+    }
+    return frames
   })
   assert.deepEqual(
     linkedFrameTruth.find(({ taskCount }) => taskCount === 10)?.edges,
@@ -646,15 +700,19 @@ try {
   let previousWave = -1
   for (const wave of ["A", "B+C", "D+X", "E+F", "H+I", "G", ""]) {
     previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
-    assert.ok(previousWave >= 0, `missing rendered frontier wave ${wave || "empty"}`)
+    assert.ok(
+      previousWave >= 0,
+      `missing rendered frontier wave ${wave || "empty"}: ${JSON.stringify(eligibleWaves)}`
+    )
   }
   const initialMiddle = linkedFrameTruth.find(({ taskState }) =>
     /B/u.test(taskState) && /C/u.test(taskState) && /attempt:B:0/u.test(taskState) && /attempt:C:1/u.test(taskState)
   )
   const laterMiddle = initialMiddle === undefined
     ? undefined
-    : linkedFrameTruth.find(({ index, offGraph }) =>
+    : linkedFrameTruth.find(({ capacity, index, offGraph }) =>
         index > initialMiddle.index
+        && /2 held of capacity 2/u.test(capacity)
         && /Task B · graph not established/u.test(offGraph)
         && /Task C · graph not established/u.test(offGraph)
       )

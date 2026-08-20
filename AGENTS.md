@@ -63,6 +63,9 @@
 - Use focused package tests while developing. Do not inherit target
   repositories' application-specific typecheck, model-checking, or MBT gates
   as Dalph implementation gates.
+- Before reporting a Playwright check as environment-blocked, try the browser
+  setup documented in `docs/DEVELOPMENT.md`; if privileges prevent setup,
+  report the exact unrun command and missing dependency.
 - Follow `docs/DEVELOPMENT.md` and `docs/CODE_REVIEW.md`. Run
   `pnpm check:all` before implementation handoff.
 - Run `pnpm check:quint` once after the final relevant changes and before

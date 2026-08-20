@@ -1622,6 +1622,15 @@ const renderTimeline = (
       : "WorkbenchShortcut"
     const message = deliveryPlaybackShortcutMessage(event.key, source)
     if (message === null) return
+    if (
+      message._tag === "PreviousLandmarkRequested" && previousLandmark.disabled
+      || message._tag === "NextLandmarkRequested" && nextLandmark.disabled
+      || message._tag === "PreviousFrameRequested" && previous.disabled
+      || message._tag === "NextFrameRequested" && next.disabled
+    ) {
+      event.preventDefault()
+      return
+    }
     dispatchPlayback(message)
     event.preventDefault()
   }
