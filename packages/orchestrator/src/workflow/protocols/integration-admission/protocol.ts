@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Admission reconstruction and its prefix indexes stay co-located for chronology auditability. */
 import { Context, Effect, Layer, Schema } from "effect"
 import {
   AcceptedResult,
@@ -19,6 +20,7 @@ import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./
 import { acceptedResultEquivalence, integrationResponsibilityEquivalence } from "./responsibility.js"
 import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
 import { EvidenceReference, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
+import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 
 /**
  * Exists only before the exact integration-start occurrence. It is derived
@@ -248,11 +250,74 @@ const unqueuedAcceptedResultsByPrefix = new WeakMap<
   ReadonlyArray<UnqueuedAcceptedResult>
 >()
 
+type ExecutorWorkReportedEvent = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "PlannedAttemptExecutorWorkReported" }
+>
+
+const incrementalUnqueuedAcceptedResultsForTerminal = (
+  records: ReadonlyArray<JournalRecord>,
+  prior: ReadonlyArray<UnqueuedAcceptedResult>,
+  appended: ExecutorWorkReportedEvent,
+  terminalAt: JournalPosition
+): ReadonlyArray<UnqueuedAcceptedResult> => {
+  if (appended.report._tag !== "Terminal" || appended.report.result._tag !== "Accepted") return prior
+  const queued = records.some(
+    ({ event }) =>
+      event._tag === "IntegrationResponsibilityBegan" &&
+      event.plannedAttempt.attemptId === appended.report.correlation.attemptId
+  )
+  if (queued) return prior
+  const plannedAttempt = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      event.plannedAttempt.attemptId === appended.report.correlation.attemptId
+  )?.event
+  if (
+    plannedAttempt?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+    restartChoiceCommittedBefore(records, plannedAttempt.plannedAttempt, terminalAt)
+  ) {
+    return prior
+  }
+  return [
+    ...prior,
+    UnqueuedAcceptedResult.make({
+      acceptedResult: appended.report.result.acceptedResult,
+      plannedAttempt: plannedAttempt.plannedAttempt,
+      terminalAt
+    })
+  ]
+}
+
+const incrementalUnqueuedAcceptedResultsFor = (
+  records: ReadonlyArray<JournalRecord>,
+  prior: ReadonlyArray<UnqueuedAcceptedResult>,
+  appendedRecord: JournalRecord
+): ReadonlyArray<UnqueuedAcceptedResult> => {
+  const appended = appendedRecord.event
+  if (appended._tag === "IntegrationResponsibilityBegan") {
+    return prior.filter(({ plannedAttempt }) => plannedAttempt.attemptId !== appended.plannedAttempt.attemptId)
+  }
+  if (appended._tag !== "PlannedAttemptExecutorWorkReported") return prior
+  return incrementalUnqueuedAcceptedResultsForTerminal(records, prior, appended, appendedRecord.position)
+}
+
 export const deriveUnqueuedAcceptedResults = (
   records: ReadonlyArray<JournalRecord>
 ): ReadonlyArray<UnqueuedAcceptedResult> => {
   const cached = unqueuedAcceptedResultsByPrefix.get(records)
   if (cached !== undefined) return cached
+
+  const predecessor = journalPrefixPredecessorOf(records)
+  if (predecessor !== undefined) {
+    const prior = unqueuedAcceptedResultsByPrefix.get(predecessor.prior)
+    if (prior !== undefined && predecessor.appended === records[records.length - 1]) {
+      const results = incrementalUnqueuedAcceptedResultsFor(records, prior, predecessor.appended)
+      unqueuedAcceptedResultsByPrefix.set(records, results)
+      return results
+    }
+  }
+
   const queuedAttemptIds = new Set(
     records.flatMap(({ event }) =>
       event._tag === "IntegrationResponsibilityBegan" ? [event.plannedAttempt.attemptId] : []
@@ -296,6 +361,72 @@ const integrationAdmissionByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, I
 export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>): IntegrationAdmission => {
   const cached = integrationAdmissionByPrefix.get(records)
   if (cached !== undefined) return cached
+
+  const predecessor = journalPrefixPredecessorOf(records)
+  if (predecessor !== undefined) {
+    const prior = integrationAdmissionByPrefix.get(predecessor.prior)
+    if (prior !== undefined && predecessor.appended === records[records.length - 1]) {
+      const appendedRecord = predecessor.appended
+      const appended = appendedRecord.event
+      const next = (() => {
+        if (appended._tag === "IntegrationResponsibilityBegan") {
+          const queued: JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type } = {
+            ...appendedRecord,
+            event: appended
+          }
+          if (settledFor(records, queued)) return prior
+          return {
+            responsibilities: [
+              ...prior.responsibilities,
+              QueuedIntegrationResponsibility.make({
+                acceptedResult: appended.acceptedResult,
+                integrationTarget: appended.integrationTarget,
+                plannedAttempt: appended.plannedAttempt,
+                preIntegrationCancellation: PreIntegrationCancellationCapability.make({
+                  attemptId: appended.plannedAttempt.attemptId,
+                  queuedAt: appendedRecord.position,
+                  runId: appendedRecord.runId
+                }),
+                queuedAt: appendedRecord.position
+              })
+            ]
+          }
+        }
+        if (appended._tag === "IntegrationStarted") {
+          return {
+            responsibilities: prior.responsibilities.map((responsibility) =>
+              responsibility._tag === "QueuedIntegrationResponsibility" &&
+              responsibility.queuedAt === appended.responsibilityBeganAt &&
+              integrationResponsibilityEquivalence(responsibility, appended)
+                ? StartedIntegrationResponsibility.make({
+                    acceptedResult: responsibility.acceptedResult,
+                    integrationTarget: responsibility.integrationTarget,
+                    plannedAttempt: responsibility.plannedAttempt,
+                    queuedAt: responsibility.queuedAt,
+                    startedAt: appendedRecord.position
+                  })
+                : responsibility
+            )
+          }
+        }
+        if (appended._tag === "IntegrationFinalitySettled") {
+          const settled = deriveIntegrationFinalityStateFor(records, appended.claim)
+          if (settled?._tag === "IntegrationFinalitySettled") {
+            return {
+              responsibilities: prior.responsibilities.filter(
+                (responsibility) =>
+                  !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, appended.claim.plannedAttempt)
+              )
+            }
+          }
+        }
+        return prior
+      })()
+      integrationAdmissionByPrefix.set(records, next)
+      return next
+    }
+  }
+
   const admission: IntegrationAdmission = {
     responsibilities: records
       .filter(

@@ -18,8 +18,25 @@ export const factFamilyCoverageMatchesExplicitTaskIds = (
       exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) === exactTaskIdSetKey(explicitlyCoveredTaskIds)
   )
 
-export const taskTrackerTargetKey = (target: TrackerTarget): string =>
-  JSON.stringify(Schema.encodeUnknownSync(TrackerTarget)(target))
+const taskTrackerObjectTargetKeysByIdentity = new WeakMap<object, string>()
+const taskTrackerPrimitiveTargetKeys = new Map<string, string>()
+
+/** Encoded target identity is immutable for one journal/recovery prefix. */
+export const taskTrackerTargetKey = (target: TrackerTarget): string => {
+  if (typeof target === "object") {
+    const cached = taskTrackerObjectTargetKeysByIdentity.get(target)
+    if (cached !== undefined) return cached
+    const key = JSON.stringify(Schema.encodeUnknownSync(TrackerTarget)(target))
+    taskTrackerObjectTargetKeysByIdentity.set(target, key)
+    return key
+  }
+  const cached = taskTrackerPrimitiveTargetKeys.get(target)
+  if (cached !== undefined) return cached
+  const key = JSON.stringify(Schema.encodeUnknownSync(TrackerTarget)(target))
+  // eslint-disable-next-line functional/immutable-data -- This process-local memo is intentionally populated lazily.
+  taskTrackerPrimitiveTargetKeys.set(target, key)
+  return key
+}
 
 export const factFamiliesCoverTarget = (
   factFamilies: ReadonlyArray<{ readonly coverage: { readonly target: TrackerTarget } }>,

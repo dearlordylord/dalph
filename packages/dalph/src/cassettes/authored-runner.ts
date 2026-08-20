@@ -47,8 +47,7 @@ import {
   type BoundedTicketRank,
   DeliveryRelationPublicationObserver,
   DeliveryRuntimeObservationObserver,
-  evaluateDeliveryRelationInputBundle,
-  evaluateDeliveryRuntimeInputBundle,
+  evaluateDeliveryRelationAndRuntimeInputBundle,
   type DeliveryConsequences,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
@@ -1063,10 +1062,7 @@ const authoredDeliveryFrameOf = (
 export const evaluateAuthoredDeliveryPublication = Effect.fn("AuthoredCassette.evaluateDeliveryPublication")(function* (
   publication: AuthoredDeliveryPublication
 ) {
-  const { consequences, runtime } = yield* Effect.all({
-    consequences: evaluateDeliveryRelationInputBundle(publication.bundle),
-    runtime: evaluateDeliveryRuntimeInputBundle(publication.bundle)
-  })
+  const { consequences, runtime } = yield* evaluateDeliveryRelationAndRuntimeInputBundle(publication.bundle)
   return authoredDeliveryFrameOf(publication, consequences, runtime)
 })
 

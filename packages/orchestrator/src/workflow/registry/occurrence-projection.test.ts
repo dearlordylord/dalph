@@ -252,6 +252,17 @@ it.effect("projects journaled integration actions through the complete occurrenc
   })
 )
 
+it.effect("reuses the successful projection for one unchanged immutable record array", () =>
+  Effect.gen(function* () {
+    const records = [record(1, taskTrackerReadIntent(operation))]
+    const first = yield* projectWorkflowOccurrences(records)
+    const second = yield* projectWorkflowOccurrences(records)
+
+    expect(second).toBe(first)
+    expect(second.occurrences).toBe(first.occurrences)
+  })
+)
+
 it.effect("projects an operator task-work capacity change as an applied policy occurrence", () =>
   Effect.gen(function* () {
     const projection = yield* projectWorkflowOccurrences([

@@ -157,68 +157,27 @@ const emptyIndexes = (): FoldIndexes => ({
   trackerReconfirmations: makeTaskTrackerReconfirmationIndex()
 })
 
-const copyMap = <K, V>(source: ReadonlyMap<K, V>): Map<K, V> => new Map(source)
-const copySet = <A>(source: ReadonlySet<A>): Set<A> => new Set(source)
-const copyNestedMap = <K, I, V>(source: ReadonlyMap<K, ReadonlyMap<I, V>>): Map<K, Map<I, V>> =>
-  new Map([...source].map(([key, values]) => [key, new Map(values)]))
-
-/** Copies the private mutable fold indexes so a rejected successor cannot poison its accepted prefix. */
-const copyIndexes = (source: FoldIndexes): FoldIndexes => ({
-  acceptedExecutorResults: copyMap(source.acceptedExecutorResults),
-  acceptedExecutorResultPositions: copyMap(source.acceptedExecutorResultPositions),
-  abandonedExecutorAttempts: copySet(source.abandonedExecutorAttempts),
-  attemptChoiceSubjects: copySet(source.attemptChoiceSubjects),
-  executorCommandOrdinals: copyMap(source.executorCommandOrdinals),
-  executorCommandCountsSinceSafeSuspension: copyMap(source.executorCommandCountsSinceSafeSuspension),
-  executorCommandProjectionOrdinals: copyMap(source.executorCommandProjectionOrdinals),
-  executorReportOrdinals: copyMap(source.executorReportOrdinals),
-  executorStateObservationOrdinals: copyMap(source.executorStateObservationOrdinals),
-  executorResponsibilitiesBegan: copyMap(source.executorResponsibilitiesBegan),
-  integrationResponsibilitiesBegan: copyMap(source.integrationResponsibilitiesBegan),
-  integrationStarted: copyMap(source.integrationStarted),
-  targetLineageReadIntents: copyMap(source.targetLineageReadIntents),
-  targetLineageObservations: copyMap(source.targetLineageObservations),
-  integratorSessionFixed: copyMap(source.integratorSessionFixed),
-  integratorSessionsByStartedAt: copyMap(source.integratorSessionsByStartedAt),
-  integratorSessionsBySessionId: copyMap(source.integratorSessionsBySessionId),
-  integratorSessionsByCandidateResource: copyMap(source.integratorSessionsByCandidateResource),
-  integratorSuccessorSessionFixed: copyMap(source.integratorSuccessorSessionFixed),
-  integratorSuccessorSessionsByPredecessor: copyMap(source.integratorSuccessorSessionsByPredecessor),
-  integratorRunStarted: copyMap(source.integratorRunStarted),
-  integratorRunResults: copyMap(source.integratorRunResults),
-  integratorRunCandidateGitReadIntents: copyMap(source.integratorRunCandidateGitReadIntents),
-  integratorRunCandidateGitObservations: copyMap(source.integratorRunCandidateGitObservations),
-  firstRestartChoiceAppliedAt: copyMap(source.firstRestartChoiceAppliedAt),
-  targetPromotionHistory: {
-    attempts: copyNestedMap(source.targetPromotionHistory.attempts),
-    intents: copyMap(source.targetPromotionHistory.intents),
-    terminals: copySet(source.targetPromotionHistory.terminals)
-  },
-  integrationFinalityHistory: {
-    deletionAttempts: copyNestedMap(source.integrationFinalityHistory.deletionAttempts),
-    deletionIntents: copyMap(source.integrationFinalityHistory.deletionIntents),
-    deletionTerminals: copySet(source.integrationFinalityHistory.deletionTerminals),
-    replacementAttempts: copyNestedMap(source.integrationFinalityHistory.replacementAttempts),
-    replacementIntents: copyMap(source.integrationFinalityHistory.replacementIntents),
-    replacementTerminals: copyMap(source.integrationFinalityHistory.replacementTerminals),
-    settlements: copySet(source.integrationFinalityHistory.settlements)
-  },
-  gitReadIntents: copyMap(source.gitReadIntents),
-  latestControlDirectionOrdinal: source.latestControlDirectionOrdinal,
-  latestRunPolicyRevision: source.latestRunPolicyRevision,
-  plans: copyMap(source.plans),
-  seenEventKindsByOperation: new Map(
-    [...source.seenEventKindsByOperation].map(([operationId, kinds]) => [operationId, copySet(kinds)])
-  ),
-  seenKeys: copySet(source.seenKeys),
-  seenOperationIds: copySet(source.seenOperationIds),
-  supersededExecutorAttempts: copySet(source.supersededExecutorAttempts),
-  terminalExecutorAttempts: copySet(source.terminalExecutorAttempts),
-  trackerReconfirmations: { completeFactsByOperation: copyMap(source.trackerReconfirmations.completeFactsByOperation) },
-  unsettledExecutorCommands: copyMap(source.unsettledExecutorCommands)
-})
-
 const acceptedFoldIndexes = new WeakMap<ValidWorkflowJournalHistory, FoldIndexes>()
+type WorkflowJournalHistoryReduction = ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory
+
+/**
+ * Process-local reduction results keyed by the exact immutable record-array
+ * object. A restart receives freshly decoded records and therefore cannot use
+ * this cache; durable journal records remain the only recovery authority.
+ */
+const reductionsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, Map<RunId, WorkflowJournalHistoryReduction>>()
+
+const cachedReductionFor = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): WorkflowJournalHistoryReduction | undefined => reductionsByPrefix.get(records)?.get(runId)
+
+const rememberReduction = (reduction: WorkflowJournalHistoryReduction): WorkflowJournalHistoryReduction => {
+  const byRun = reductionsByPrefix.get(reduction.records) ?? new Map<RunId, WorkflowJournalHistoryReduction>()
+  byRun.set(reduction.runId, reduction)
+  reductionsByPrefix.set(reduction.records, byRun)
+  return reduction
+}
 
 const validateRecordEnvelope = (
   record: JournalRecord,
@@ -2295,7 +2254,7 @@ const finishValidation = (
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
   validateRunLifecycle(runId, records, issues)
   if (issues.length > 0) {
-    return { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
+    return rememberReduction({ _tag: "InvalidWorkflowJournalHistory", issues, records, runId })
   }
   const valid: ValidWorkflowJournalHistory = {
     _tag: "ValidWorkflowJournalHistory",
@@ -2304,13 +2263,15 @@ const finishValidation = (
     runId
   }
   acceptedFoldIndexes.set(valid, indexes)
-  return valid
+  return rememberReduction(valid)
 }
 
 export const reduceWorkflowJournalHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
+  const cached = cachedReductionFor(runId, records)
+  if (cached !== undefined) return cached
   const issues = new Array<WorkflowJournalHistoryIssue>()
   const indexes = emptyIndexes()
   records.forEach((record, index) => validateRecord(record, index, runId, records, indexes, issues))
@@ -2328,7 +2289,15 @@ export const advanceWorkflowJournalHistory = (
   const records = [...prior.records, record]
   const cached = acceptedFoldIndexes.get(prior)
   if (cached === undefined) return reduceWorkflowJournalHistory(prior.runId, records)
-  const indexes = copyIndexes(cached)
+
+  /*
+   * The live journal advances one linear prefix at a time. Transfer the
+   * private mutable indexes to that successor instead of copying every map
+   * and set. A caller that branches from an older prefix is still correct: it
+   * falls back to complete replay because that prefix no longer owns indexes.
+   */
+  acceptedFoldIndexes.delete(prior)
+  const indexes = cached
   const issues = new Array<WorkflowJournalHistoryIssue>()
   validateRecord(record, prior.records.length, prior.runId, records, indexes, issues)
   const advanced = finishValidation(prior.runId, records, indexes, issues, () =>
@@ -2336,6 +2305,21 @@ export const advanceWorkflowJournalHistory = (
   )
   if (advanced._tag === "ValidWorkflowJournalHistory") {
     rememberValidatedJournalPrefixSuccessor(prior, advanced, record)
+    return advanced
+  }
+
+  /*
+   * Validation may have mutated the transferred indexes before discovering a
+   * malformed append. Rebuild the accepted prior prefix from its durable
+   * records, then attach those fresh indexes to the original result. This
+   * exceptional path is intentionally allowed to pay the complete replay
+   * cost; preserving the accepted prefix is the safety property.
+   */
+  const restored = reduceWorkflowJournalHistory(prior.runId, [...prior.records])
+  if (restored._tag === "ValidWorkflowJournalHistory") {
+    const restoredIndexes = acceptedFoldIndexes.get(restored)
+    if (restoredIndexes !== undefined) acceptedFoldIndexes.set(prior, restoredIndexes)
+    rememberReduction(prior)
   }
   return advanced
 }

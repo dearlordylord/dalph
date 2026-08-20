@@ -179,6 +179,67 @@ it("advances every generated valid prefix to the same state and frontier as comp
   )
 })
 
+it("reuses one validated result for repeated reads of the same immutable prefix", () => {
+  const { records, runId } = generatedValidHistory(["same-prefix"])
+  const first = reduceWorkflowJournalHistory(runId, records)
+  expect(first._tag).toBe("ValidWorkflowJournalHistory")
+  expect(reduceWorkflowJournalHistory(runId, records)).toBe(first)
+})
+
+it("keeps a prior prefix correct when a linear successor is rejected, then accepts a later successor", () => {
+  const { records, runId } = generatedValidHistory(["rejected-successor"])
+  const prior = reduceWorkflowJournalHistory(runId, records)
+  expect(prior._tag).toBe("ValidWorkflowJournalHistory")
+  if (prior._tag !== "ValidWorkflowJournalHistory") return
+
+  const nextOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("observation-rejected-successor-next"),
+    FixtureTarget.make("target-rejected-successor-next")
+  )
+  const validNext = {
+    event: taskTrackerReadIntent(nextOperation),
+    key: intentRecordKey(nextOperation.operationId),
+    position: JournalPosition.make(records.length + 1),
+    runId
+  }
+  const malformedNext = { ...validNext, position: JournalPosition.make(records.length) }
+  const rejected = advanceWorkflowJournalHistory(prior, malformedNext)
+  expect(rejected).toEqual(reduceWorkflowJournalHistory(runId, [...records, malformedNext]))
+  expect(rejected._tag).toBe("InvalidWorkflowJournalHistory")
+
+  const accepted = advanceWorkflowJournalHistory(prior, validNext)
+  expect(accepted).toEqual(reduceWorkflowJournalHistory(runId, [...records, validNext]))
+  expect(accepted._tag).toBe("ValidWorkflowJournalHistory")
+})
+
+it("falls back to complete replay when branching from a prefix after its linear successor advanced", () => {
+  const { records, runId } = generatedValidHistory(["branching-prefix"])
+  const prior = reduceWorkflowJournalHistory(runId, records)
+  expect(prior._tag).toBe("ValidWorkflowJournalHistory")
+  if (prior._tag !== "ValidWorkflowJournalHistory") return
+
+  const makeSuccessor = (suffix: string) => {
+    const operation = makeTrackerGraphObservationOperation(
+      OperationId.make(`observation-branching-prefix-${suffix}`),
+      FixtureTarget.make(`target-branching-prefix-${suffix}`)
+    )
+    return {
+      event: taskTrackerReadIntent(operation),
+      key: intentRecordKey(operation.operationId),
+      position: JournalPosition.make(records.length + 1),
+      runId
+    }
+  }
+  const firstSuccessor = makeSuccessor("first")
+  const secondSuccessor = makeSuccessor("second")
+  expect(advanceWorkflowJournalHistory(prior, firstSuccessor)).toEqual(
+    reduceWorkflowJournalHistory(runId, [...records, firstSuccessor])
+  )
+  expect(advanceWorkflowJournalHistory(prior, secondSuccessor)).toEqual(
+    reduceWorkflowJournalHistory(runId, [...records, secondSuccessor])
+  )
+})
+
 it("reuses a graph projection and safely replays an accepted prefix without process-local indexes", () => {
   const { records, runId } = generatedValidHistory(["fallback"])
   const prior = reduceWorkflowJournalHistory(runId, records)
@@ -239,6 +300,11 @@ it("rejects generated malformed successors with the same issues as complete repl
         const replay = reduceWorkflowJournalHistory(runId, [...records, malformed])
         expect(incremental).toEqual(replay)
         expect(incremental._tag).toBe("InvalidWorkflowJournalHistory")
+        if (mutation !== "afterTermination") {
+          const recovered = advanceWorkflowJournalHistory(prior, validNext)
+          expect(recovered).toEqual(reduceWorkflowJournalHistory(runId, [...records, validNext]))
+          expect(recovered._tag).toBe("ValidWorkflowJournalHistory")
+        }
       }
     ),
     { numRuns: 100 }
