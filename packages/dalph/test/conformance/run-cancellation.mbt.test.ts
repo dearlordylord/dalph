@@ -29,7 +29,11 @@ import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/ru
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
-import { decideWorkflowRunBeginning, decideWorkflowRunTermination, readRecoverableRunBeginning } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import {
+  decideWorkflowRunBeginning,
+  decideWorkflowRunTermination,
+  readRecoverableRunBeginning
+} from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { attemptChoiceControlLayer } from "../../../orchestrator/src/workflow/protocols/attempt-choice/control.js"
 import { controlDirectionApplicationLayer } from "../../../orchestrator/src/workflow/protocols/control-direction-application/protocol.js"
 import { taskClaimReacquisitionControlLayer } from "../../../orchestrator/src/workflow/protocols/task-claim-reacquisition/control.js"
@@ -40,7 +44,10 @@ import { WorkflowInterpreter, WorkflowTrace } from "../../../orchestrator/src/wo
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
 import { makeTrackerGraphObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
-import { taskTrackerFactsObservedEvent, makeCompleteTaskTrackerFactsObserved } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import {
+  taskTrackerFactsObservedEvent,
+  makeCompleteTaskTrackerFactsObserved
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
 import { intentRecordKey, outcomeRecordKey } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
@@ -49,7 +56,15 @@ const RunIdVariant = Schema.Struct({ tag: Schema.Literals(["R1", "R2"]), value: 
 const TargetVariant = Schema.Struct({ tag: Schema.Literals(["Target1", "Target2"]), value: Schema.Unknown })
 const ActorVariant = Schema.Struct({ tag: Schema.Literals(["Operator", "DalphCoordinator"]), value: Schema.Unknown })
 const PhaseVariant = Schema.Struct({
-  tag: Schema.Literals(["New", "Active", "Cancelling", "ReadyForClassification", "ProcessLost", "Rejected", "TerminalHistory"]),
+  tag: Schema.Literals([
+    "New",
+    "Active",
+    "Cancelling",
+    "ReadyForClassification",
+    "ProcessLost",
+    "Rejected",
+    "TerminalHistory"
+  ]),
   value: Schema.Unknown
 })
 const ExecutorVariant = Schema.Struct({
@@ -128,10 +143,24 @@ const SpecProjection = Schema.Struct({
 type RunTag = "R1" | "R2"
 type TargetTag = "Target1" | "Target2"
 type ActorTag = "Operator" | "DalphCoordinator"
-type PhaseTag = "New" | "Active" | "Cancelling" | "ReadyForClassification" | "ProcessLost" | "Rejected" | "TerminalHistory"
+type PhaseTag =
+  | "New"
+  | "Active"
+  | "Cancelling"
+  | "ReadyForClassification"
+  | "ProcessLost"
+  | "Rejected"
+  | "TerminalHistory"
 type ExecutorTag = "NoExecutor" | "Running" | "StopIntentRecorded" | "SafelySuspended" | "ExecutorUnreadable"
 type ClaimTag = "NoClaim" | "Held" | "ReleaseIntentRecorded" | "Released" | "ForeignClaim" | "ClaimUnreadable"
-type IntegrationTag = "NoIntegration" | "IntegrationOwned" | "PromotionIntentRecorded" | "PromotionAccepted" | "IntegrationSettled" | "IntegrationQuarantined" | "IntegrationUnreadable"
+type IntegrationTag =
+  | "NoIntegration"
+  | "IntegrationOwned"
+  | "PromotionIntentRecorded"
+  | "PromotionAccepted"
+  | "IntegrationSettled"
+  | "IntegrationQuarantined"
+  | "IntegrationUnreadable"
 type GraphTag = "NoGraph" | "AllSucceeded" | "NotAllSucceeded" | "TemporaryWait" | "GraphUnreadable"
 type TerminalTag = "NoTermination" | "Completed" | "Blocked" | "Cancelled"
 
@@ -300,7 +329,10 @@ const runtimeLayer = (activeRunId: RunId) =>
     Layer.mock(WorkflowTrace, { emit: () => Effect.void })
   )
 
-const makeStorage = (readRecords: () => ReadonlyArray<JournalRecord>, writeRecords: (records: ReadonlyArray<JournalRecord>) => void): JournalStoreService => {
+const makeStorage = (
+  readRecords: () => ReadonlyArray<JournalRecord>,
+  writeRecords: (records: ReadonlyArray<JournalRecord>) => void
+): JournalStoreService => {
   const append = (eventRunId: RunId, key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
     Effect.sync(() => {
       const records = readRecords()
@@ -319,7 +351,9 @@ const makeStorage = (readRecords: () => ReadonlyArray<JournalRecord>, writeRecor
   const beginRun = (eventRunId: RunId, eventTarget: TrackerTarget, policy: InitialControlPolicy) =>
     Effect.sync(() => {
       const decision = decideWorkflowRunBeginning(readRecords(), eventRunId, eventTarget, policy)
-      if (decision._tag !== "LifecycleTransitionAccepted") throw decision.failure
+      if (decision._tag !== "LifecycleTransitionAccepted") {
+        expect.fail(JSON.stringify(decision.failure))
+      }
       writeRecords([...readRecords(), decision.record])
       return decision.record
     })
@@ -327,10 +361,16 @@ const makeStorage = (readRecords: () => ReadonlyArray<JournalRecord>, writeRecor
   const readRunForRecovery = (eventRunId: RunId, eventTarget: TrackerTarget) =>
     readRecoverableRunBeginning(readRecords(), eventRunId, eventTarget)
 
-  const terminateRun = (eventRunId: RunId, disposition: Parameters<JournalStoreService["terminateRun"]>[1], evidence: Parameters<JournalStoreService["terminateRun"]>[2]) =>
+  const terminateRun = (
+    eventRunId: RunId,
+    disposition: Parameters<JournalStoreService["terminateRun"]>[1],
+    evidence: Parameters<JournalStoreService["terminateRun"]>[2]
+  ) =>
     Effect.sync(() => {
       const decision = decideWorkflowRunTermination(readRecords(), eventRunId, disposition, evidence)
-      if (decision._tag !== "LifecycleTransitionAccepted") throw decision.failure
+      if (decision._tag !== "LifecycleTransitionAccepted") {
+        expect.fail(JSON.stringify(decision.failure))
+      }
       writeRecords([...readRecords(), decision.record])
       return decision.record
     })
@@ -340,14 +380,18 @@ const makeStorage = (readRecords: () => ReadonlyArray<JournalRecord>, writeRecor
     beginRun,
     read: () => Effect.succeed(readRecords()),
     readRunForRecovery,
-    scan: () => Effect.succeed({ issues: [], runs: readRecords().length === 0 ? [] : [{ records: readRecords(), runId }] }),
+    scan: () =>
+      Effect.succeed({ issues: [], runs: readRecords().length === 0 ? [] : [{ records: readRecords(), runId }] }),
     terminateRun
   }
 }
 
 const makeCancellationDriverImplementation = () => {
   let records: ReadonlyArray<JournalRecord> = []
-  const storage = makeStorage(() => records, (next) => (records = next))
+  const storage = makeStorage(
+    () => records,
+    (next) => (records = next)
+  )
   let bootstrap: JournaledRunBootstrap["Service"] | undefined
   let runtimeFiber: Fiber.Fiber<unknown, unknown> | undefined
   let runtimeCommands: Queue.Queue<RuntimeCommand> | undefined
@@ -432,12 +476,7 @@ const makeCancellationDriverImplementation = () => {
     const scope = runCancellationMbtScope
     if (scope === undefined) return yield* Effect.die("cancellation MBT scope was not installed")
     const fiber = yield* Effect.forkScoped(
-      installed.activate(
-        target,
-        Effect.succeed(initialPolicy),
-        AllocatedWorkflowRunId.make(runId),
-        program
-      )
+      installed.activate(target, Effect.succeed(initialPolicy), AllocatedWorkflowRunId.make(runId), program)
     ).pipe(Effect.provideService(Scope.Scope, scope))
     runtimeFiber = fiber
     yield* Deferred.await(ready).pipe(Effect.orDie)
@@ -450,12 +489,15 @@ const makeCancellationDriverImplementation = () => {
       const completed = yield* Deferred.make<"RunPaused" | "RunUnpaused">()
       yield* Queue.offer(commands, { _tag: "PublishGraph", completed, operationNumber })
       const fiber = runtimeFiber
-      const pause = fiber === undefined
-        ? yield* Deferred.await(completed)
-        : yield* Effect.raceFirst(
-            Deferred.await(completed),
-            Fiber.join(fiber).pipe(Effect.flatMap(() => Effect.die("cancellation runtime exited before publishing graph facts")))
-          )
+      const pause =
+        fiber === undefined
+          ? yield* Deferred.await(completed)
+          : yield* Effect.raceFirst(
+              Deferred.await(completed),
+              Fiber.join(fiber).pipe(
+                Effect.flatMap(() => Effect.die("cancellation runtime exited before publishing graph facts"))
+              )
+            )
       if (durable.cancellationApplied && pause !== "RunPaused") {
         return yield* Effect.die("production delivery did not borrow cancellation's effective Run Pause")
       }
@@ -495,33 +537,41 @@ const makeCancellationDriverImplementation = () => {
         process = makeInitialProcess()
         effectivePause = undefined
         yield* startRuntime
-    }),
-    selectIdleRun: () => Effect.sync(() => {
-      process = { ...process, executorPositionHeld: false, responsibilitiesSettled: true, graph: "NotAllSucceeded" }
-    }),
-    selectRunningExecutor: () => Effect.sync(() => {
-      durable = { ...durable, executor: "Running", claim: "Held", integration: "NoIntegration" }
-      process = { ...process, executorPositionHeld: true, responsibilitiesSettled: false }
-    }),
-    selectIntegrationOwned: () => Effect.sync(() => {
-      durable = { ...durable, integration: "IntegrationOwned" }
-      process = { ...process, responsibilitiesSettled: false }
-    }),
+      }),
+    selectIdleRun: () =>
+      Effect.sync(() => {
+        process = { ...process, executorPositionHeld: false, responsibilitiesSettled: true, graph: "NotAllSucceeded" }
+      }),
+    selectRunningExecutor: () =>
+      Effect.sync(() => {
+        durable = { ...durable, executor: "Running", claim: "Held", integration: "NoIntegration" }
+        process = { ...process, executorPositionHeld: true, responsibilitiesSettled: false }
+      }),
+    selectIntegrationOwned: () =>
+      Effect.sync(() => {
+        durable = { ...durable, integration: "IntegrationOwned" }
+        process = { ...process, responsibilitiesSettled: false }
+      }),
     selectTemporaryWait: () => Effect.sync(() => (process = { ...process, graph: "TemporaryWait" })),
     selectApplicationExitCutoff: () => Effect.sync(() => (process = { ...process, exitCutoff: true })),
     selectForeignRunRequest: () => Effect.sync(() => (process = { ...process, requestedRunId: "R2" })),
-    selectTerminalHistory: () => Effect.sync(() => {
-      durable = { ...durable, terminalHistory: "Cancelled" }
-      process = { ...process, phase: "TerminalHistory", admissionOpen: false }
-    }),
+    selectTerminalHistory: () =>
+      Effect.sync(() => {
+        durable = { ...durable, terminalHistory: "Cancelled" }
+        process = { ...process, phase: "TerminalHistory", admissionOpen: false }
+      }),
     applyCancellation: () =>
       Effect.gen(function* () {
         const installed = bootstrap
         if (installed === undefined) return yield* Effect.die("cancellation bootstrap was not installed")
         const result = yield* installed.operatorControl.applyRunCancellation({ runId })
-        if (result._tag !== "RunCancellationApplied") return yield* Effect.die(`unexpected production cancellation result ${result._tag}`)
+        if (result._tag !== "RunCancellationApplied")
+          return yield* Effect.die(`unexpected production cancellation result ${result._tag}`)
         const current = yield* Effect.succeed(reduceWorkflowJournalHistory(runId, records))
-        if (current._tag !== "ValidWorkflowJournalHistory" || current.runState.cancellation?._tag !== "RunCancellationApplied") {
+        if (
+          current._tag !== "ValidWorkflowJournalHistory" ||
+          current.runState.cancellation?._tag !== "RunCancellationApplied"
+        ) {
           return yield* Effect.die("production cancellation append did not reconstruct")
         }
         if (records.filter(({ event }) => event._tag === "RunCancellationApplied").length !== 1) {
@@ -541,29 +591,49 @@ const makeCancellationDriverImplementation = () => {
         }
         durable = { ...durable, cancellationRedeliveries: durable.cancellationRedeliveries + 1 }
       }),
-    recordExecutorStopIntent: () => Effect.sync(() => {
-      durable = { ...durable, executor: "StopIntentRecorded", executorStopIntents: durable.executorStopIntents + 1 }
-      process = { ...process, executorPositionHeld: true }
-    }),
-    reportExecutorSafe: () => Effect.sync(() => {
-      durable = { ...durable, executor: "SafelySuspended", executorSafeReports: durable.executorSafeReports + 1 }
-      process = { ...process, executorPositionHeld: false }
-    }),
-    recordClaimReleaseIntent: () => Effect.sync(() => {
-      durable = { ...durable, claim: "ReleaseIntentRecorded", claimReleaseIntents: durable.claimReleaseIntents + 1 }
-    }),
-    observeAndReleaseClaim: () => Effect.sync(() => {
-      durable = { ...durable, claim: "Released", claimReleaseObservations: durable.claimReleaseObservations + 1, claimReleases: durable.claimReleases + 1 }
-    }),
-    recordIntegrationIntent: () => Effect.sync(() => {
-      durable = { ...durable, integration: "PromotionIntentRecorded", integrationIntents: durable.integrationIntents + 1 }
-    }),
-    observePromotedIntegration: () => Effect.sync(() => {
-      durable = { ...durable, integration: "PromotionAccepted", promotionAccepted: true }
-    }),
-    settlePromotedIntegration: () => Effect.sync(() => {
-      durable = { ...durable, integration: "IntegrationSettled", integrationSettlements: durable.integrationSettlements + 1 }
-    }),
+    recordExecutorStopIntent: () =>
+      Effect.sync(() => {
+        durable = { ...durable, executor: "StopIntentRecorded", executorStopIntents: durable.executorStopIntents + 1 }
+        process = { ...process, executorPositionHeld: true }
+      }),
+    reportExecutorSafe: () =>
+      Effect.sync(() => {
+        durable = { ...durable, executor: "SafelySuspended", executorSafeReports: durable.executorSafeReports + 1 }
+        process = { ...process, executorPositionHeld: false }
+      }),
+    recordClaimReleaseIntent: () =>
+      Effect.sync(() => {
+        durable = { ...durable, claim: "ReleaseIntentRecorded", claimReleaseIntents: durable.claimReleaseIntents + 1 }
+      }),
+    observeAndReleaseClaim: () =>
+      Effect.sync(() => {
+        durable = {
+          ...durable,
+          claim: "Released",
+          claimReleaseObservations: durable.claimReleaseObservations + 1,
+          claimReleases: durable.claimReleases + 1
+        }
+      }),
+    recordIntegrationIntent: () =>
+      Effect.sync(() => {
+        durable = {
+          ...durable,
+          integration: "PromotionIntentRecorded",
+          integrationIntents: durable.integrationIntents + 1
+        }
+      }),
+    observePromotedIntegration: () =>
+      Effect.sync(() => {
+        durable = { ...durable, integration: "PromotionAccepted", promotionAccepted: true }
+      }),
+    settlePromotedIntegration: () =>
+      Effect.sync(() => {
+        durable = {
+          ...durable,
+          integration: "IntegrationSettled",
+          integrationSettlements: durable.integrationSettlements + 1
+        }
+      }),
     readFreshClassificationGraph: () =>
       Effect.gen(function* () {
         const number = durable.classificationReads + 1
@@ -590,44 +660,62 @@ const makeCancellationDriverImplementation = () => {
     restartCancellation: () =>
       Effect.gen(function* () {
         const reconstructed = reduceWorkflowJournalHistory(runId, records)
-        if (reconstructed._tag !== "ValidWorkflowJournalHistory" || reconstructed.runState.cancellation?._tag !== "RunCancellationApplied") {
+        if (
+          reconstructed._tag !== "ValidWorkflowJournalHistory" ||
+          reconstructed.runState.cancellation?._tag !== "RunCancellationApplied"
+        ) {
           return yield* Effect.die("restart did not reconstruct the applied cancellation")
         }
         yield* startRuntime
-        process = { ...process, phase: "Cancelling", admissionOpen: false, freshAfterRestart: true, graph: "NotAllSucceeded" }
+        process = {
+          ...process,
+          phase: "Cancelling",
+          admissionOpen: false,
+          freshAfterRestart: true,
+          graph: "NotAllSucceeded"
+        }
       }),
-    reconcileExecutorAfterRestart: () => Effect.sync(() => {
-      durable = { ...durable, executor: "SafelySuspended", executorSafeReports: 1 }
-      process = { ...process, executorPositionHeld: false }
-    }),
-    reconcileClaimAfterRestart: () => Effect.sync(() => {
-      durable = { ...durable, claim: "Released", claimReleaseObservations: 1, claimReleases: 1 }
-    }),
-    reconcileIntegrationAfterRestart: () => Effect.sync(() => {
-      durable = { ...durable, integration: "PromotionAccepted", promotionAccepted: true }
-    }),
+    reconcileExecutorAfterRestart: () =>
+      Effect.sync(() => {
+        durable = { ...durable, executor: "SafelySuspended", executorSafeReports: 1 }
+        process = { ...process, executorPositionHeld: false }
+      }),
+    reconcileClaimAfterRestart: () =>
+      Effect.sync(() => {
+        durable = { ...durable, claim: "Released", claimReleaseObservations: 1, claimReleases: 1 }
+      }),
+    reconcileIntegrationAfterRestart: () =>
+      Effect.sync(() => {
+        durable = { ...durable, integration: "PromotionAccepted", promotionAccepted: true }
+      }),
     settleAfterIdleCancellation: () => Effect.sync(() => (process = { ...process, responsibilitiesSettled: true })),
-    markExecutorUnreadable: () => Effect.sync(() => {
-      durable = { ...durable, executor: "ExecutorUnreadable" }
-      process = { ...process, executorPositionHeld: true, responsibilitiesSettled: false }
-    }),
-    markIntegrationUnreadable: () => Effect.sync(() => {
-      durable = { ...durable, integration: "IntegrationUnreadable" }
-      process = { ...process, responsibilitiesSettled: false }
-    }),
-    rejectCancellationAtExit: () => Effect.sync(() => {
-      process = { ...process, phase: "Rejected", cancellationRejected: true }
-    }),
-    rejectForeignCancellation: () => Effect.sync(() => {
-      process = { ...process, phase: "Rejected", cancellationRejected: true }
-    }),
+    markExecutorUnreadable: () =>
+      Effect.sync(() => {
+        durable = { ...durable, executor: "ExecutorUnreadable" }
+        process = { ...process, executorPositionHeld: true, responsibilitiesSettled: false }
+      }),
+    markIntegrationUnreadable: () =>
+      Effect.sync(() => {
+        durable = { ...durable, integration: "IntegrationUnreadable" }
+        process = { ...process, responsibilitiesSettled: false }
+      }),
+    rejectCancellationAtExit: () =>
+      Effect.sync(() => {
+        process = { ...process, phase: "Rejected", cancellationRejected: true }
+      }),
+    rejectForeignCancellation: () =>
+      Effect.sync(() => {
+        process = { ...process, phase: "Rejected", cancellationRejected: true }
+      }),
     rejectTerminalHistory: () => Effect.sync(() => (process = { ...process, phase: "TerminalHistory" })),
-    admitForwardWork: () => Effect.sync(() => (process = { ...process, forwardAdmissions: process.forwardAdmissions + 1 })),
+    admitForwardWork: () =>
+      Effect.sync(() => (process = { ...process, forwardAdmissions: process.forwardAdmissions + 1 })),
     getProductionEvidence: () => {
       const reconstructed = reduceWorkflowJournalHistory(runId, records)
       return Effect.succeed({
         eventTags: records.map(({ event }) => event._tag),
-        cancellation: reconstructed._tag === "ValidWorkflowJournalHistory" ? reconstructed.runState.cancellation?._tag : "Invalid",
+        cancellation:
+          reconstructed._tag === "ValidWorkflowJournalHistory" ? reconstructed.runState.cancellation?._tag : "Invalid",
         effectivePause
       })
     },
@@ -639,7 +727,9 @@ const makeCancellationDriverImplementation = () => {
 
 const runCancellationDriver = defineDriver(makeRunCancellationActions, makeCancellationDriverImplementation)
 
-const withCancellationDriver = <A, E>(use: (driver: ReturnType<typeof makeCancellationDriverImplementation>) => Effect.Effect<A, E>) =>
+const withCancellationDriver = <A, E>(
+  use: (driver: ReturnType<typeof makeCancellationDriverImplementation>) => Effect.Effect<A, E>
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const scope = yield* Effect.scope
@@ -657,49 +747,52 @@ const withCancellationDriver = <A, E>(use: (driver: ReturnType<typeof makeCancel
 const stateCheckProjection = stateCheck(
   (raw) =>
     Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
-      Effect.map(({ state }): DriverProjection => ({
-        state: {
-          durable: {
-            runId: state.durable.runId.tag,
-            target: state.durable.target.tag,
-            cancellationApplied: state.durable.cancellationApplied,
-            cancellationAppends: Number(state.durable.cancellationAppends),
-            cancellationRedeliveries: Number(state.durable.cancellationRedeliveries),
-            cancellationActor: state.durable.cancellationActor.tag,
-            executor: state.durable.executor.tag,
-            claim: state.durable.claim.tag,
-            integration: state.durable.integration.tag,
-            worktreePreserved: state.durable.worktreePreserved,
-            logsPreserved: state.durable.logsPreserved,
-            evidencePreserved: state.durable.evidencePreserved,
-            executorStopIntents: Number(state.durable.executorStopIntents),
-            executorSafeReports: Number(state.durable.executorSafeReports),
-            claimReleaseIntents: Number(state.durable.claimReleaseIntents),
-            claimReleaseObservations: Number(state.durable.claimReleaseObservations),
-            claimReleases: Number(state.durable.claimReleases),
-            integrationIntents: Number(state.durable.integrationIntents),
-            integrationSettlements: Number(state.durable.integrationSettlements),
-            promotionAccepted: state.durable.promotionAccepted,
-            terminalHistory: state.durable.terminalHistory.tag,
-            processLosses: Number(state.durable.processLosses),
-            classificationReads: Number(state.durable.classificationReads)
-          },
-          process: {
-            phase: state.process.phase.tag,
-            requestedRunId: state.process.requestedRunId.tag,
-            requestedTarget: state.process.requestedTarget.tag,
-            admissionOpen: state.process.admissionOpen,
-            exitCutoff: state.process.exitCutoff,
-            executorPositionHeld: state.process.executorPositionHeld,
-            responsibilitiesSettled: state.process.responsibilitiesSettled,
-            graphRead: state.process.graphRead,
-            graph: state.process.graph.tag,
-            forwardAdmissions: Number(state.process.forwardAdmissions),
-            freshAfterRestart: state.process.freshAfterRestart,
-            cancellationRejected: state.process.cancellationRejected
+      Effect.map(
+        ({ state }): DriverProjection => ({
+          state: {
+            durable: {
+              runId: state.durable.runId.tag,
+              target: state.durable.target.tag,
+              cancellationApplied: state.durable.cancellationApplied,
+              cancellationAppends: Number(state.durable.cancellationAppends),
+              cancellationRedeliveries: Number(state.durable.cancellationRedeliveries),
+              cancellationActor: state.durable.cancellationActor.tag,
+              executor: state.durable.executor.tag,
+              claim: state.durable.claim.tag,
+              integration: state.durable.integration.tag,
+              worktreePreserved: state.durable.worktreePreserved,
+              logsPreserved: state.durable.logsPreserved,
+              evidencePreserved: state.durable.evidencePreserved,
+              executorStopIntents: Number(state.durable.executorStopIntents),
+              executorSafeReports: Number(state.durable.executorSafeReports),
+              claimReleaseIntents: Number(state.durable.claimReleaseIntents),
+              claimReleaseObservations: Number(state.durable.claimReleaseObservations),
+              claimReleases: Number(state.durable.claimReleases),
+              integrationIntents: Number(state.durable.integrationIntents),
+              integrationSettlements: Number(state.durable.integrationSettlements),
+              promotionAccepted: state.durable.promotionAccepted,
+              terminalHistory: state.durable.terminalHistory.tag,
+              processLosses: Number(state.durable.processLosses),
+              classificationReads: Number(state.durable.classificationReads)
+            },
+            process: {
+              phase: state.process.phase.tag,
+              requestedRunId: state.process.requestedRunId.tag,
+              requestedTarget: state.process.requestedTarget.tag,
+              admissionOpen: state.process.admissionOpen,
+              exitCutoff: state.process.exitCutoff,
+              executorPositionHeld: state.process.executorPositionHeld,
+              responsibilitiesSettled: state.process.responsibilitiesSettled,
+              graphRead: state.process.graphRead,
+              graph: state.process.graph.tag,
+              forwardAdmissions: Number(state.process.forwardAdmissions),
+              freshAfterRestart: state.process.freshAfterRestart,
+              cancellationRejected: state.process.cancellationRejected
+            }
           }
-        }
-      }))),
+        })
+      )
+    ),
   (spec, implementation) => JSON.stringify(spec) === JSON.stringify(implementation)
 )
 

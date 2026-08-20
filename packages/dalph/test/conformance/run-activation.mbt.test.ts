@@ -37,7 +37,10 @@ import {
   TaskWorkCapacityChangedEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
-import { makeCompleteTaskTrackerFactsObserved, taskTrackerFactsObservedEvent } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
 import { CoordinatorOwnership } from "../../../orchestrator/src/authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
@@ -233,19 +236,31 @@ const attemptB = attemptFor(taskB, "B")
 const attemptC = attemptFor(taskC, "C")
 
 const snapshotForGraphOutcome = (outcome: "GraphAllSucceeded" | "GraphBlocked" | "GraphUnsettled") => {
-  const tasks = outcome === "GraphBlocked"
-    ? [
-        { id: taskA, lifecycle: { _tag: "TerminalWithoutSuccess" as const }, parentTaskId: null, prerequisiteIds: [] },
-        { id: taskB, lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [taskA] }
-      ]
-    : [{
-        id: taskA,
-        lifecycle: { _tag: outcome === "GraphAllSucceeded" ? "CompletedSuccessfully" as const : "Open" as const },
-        parentTaskId: null,
-        prerequisiteIds: []
-      }]
+  const tasks =
+    outcome === "GraphBlocked"
+      ? [
+          {
+            id: taskA,
+            lifecycle: { _tag: "TerminalWithoutSuccess" as const },
+            parentTaskId: null,
+            prerequisiteIds: []
+          },
+          { id: taskB, lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [taskA] }
+        ]
+      : [
+          {
+            id: taskA,
+            lifecycle: {
+              _tag: outcome === "GraphAllSucceeded" ? ("CompletedSuccessfully" as const) : ("Open" as const)
+            },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }
+        ]
   const projected = projectTrackerSnapshot({ revision: `run-activation-${outcome}`, tasks })
-  if (projected._tag !== "Valid") throw new Error(`invalid finality fixture graph: ${JSON.stringify(projected.issues)}`)
+  if (projected._tag !== "Valid") {
+    expect.fail(`invalid finality fixture graph: ${JSON.stringify(projected.issues)}`)
+  }
   return projected.snapshot
 }
 
@@ -445,7 +460,9 @@ const makeRunActivationDriverImplementation = () => {
   const begin = (eventRunId: RunId, eventTarget: TrackerTarget, policy: InitialControlPolicy): JournalRecord => {
     const selected = eventRunId === runId ? records : otherRecords
     const decision = decideWorkflowRunBeginning(selected, eventRunId, eventTarget, policy)
-    if (decision._tag !== "LifecycleTransitionAccepted") throw new Error("Run activation fixture failed to begin")
+    if (decision._tag !== "LifecycleTransitionAccepted") {
+      expect.fail("Run activation fixture failed to begin")
+    }
     if (eventRunId === runId) records = [...records, decision.record]
     else otherRecords = [...otherRecords, decision.record]
     return decision.record
@@ -521,7 +538,9 @@ const makeRunActivationDriverImplementation = () => {
           disposition,
           evidence
         )
-        if (decision._tag !== "LifecycleTransitionAccepted") throw decision.failure
+        if (decision._tag !== "LifecycleTransitionAccepted") {
+          expect.fail(JSON.stringify(decision.failure))
+        }
         if (eventRunId === runId) records = [...records, decision.record]
         else otherRecords = [...otherRecords, decision.record]
         return decision.record
@@ -946,7 +965,11 @@ const makeRunActivationDriverImplementation = () => {
                       [],
                       snapshotForGraphOutcome(graphOutcome).taskIds()
                     )
-                    yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+                    yield* journal.append(
+                      runId,
+                      intentRecordKey(operation.operationId),
+                      taskTrackerReadIntent(operation)
+                    )
                     const snapshot = snapshotForGraphOutcome(graphOutcome)
                     const observation = yield* journal.append(
                       runId,
@@ -995,7 +1018,8 @@ const makeRunActivationDriverImplementation = () => {
                 Match.when("TerminateRun", () =>
                   Effect.gen(function* () {
                     const evidence = finalityEvidence
-                    if (evidence === undefined) return yield* Effect.die("terminal classification lacked graph evidence")
+                    if (evidence === undefined)
+                      return yield* Effect.die("terminal classification lacked graph evidence")
                     const current = reduceWorkflowJournalHistory(runId, records)
                     if (current._tag !== "ValidWorkflowJournalHistory") {
                       return yield* Effect.die("terminal classification saw invalid Run history")
@@ -1010,9 +1034,15 @@ const makeRunActivationDriverImplementation = () => {
                           entry.plannedAttempt.attemptId === event.report.correlation.attemptId
                       )
                       return responsibility === undefined ||
-                          responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility"
+                        responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility"
                         ? []
-                        : [{ _tag: "PlannedAttemptExecutorWorkTerminal" as const, report: event.report, taskId: responsibility.plannedAttempt.taskId }]
+                        : [
+                            {
+                              _tag: "PlannedAttemptExecutorWorkTerminal" as const,
+                              report: event.report,
+                              taskId: responsibility.plannedAttempt.taskId
+                            }
+                          ]
                     })
                     const decision = deriveRunFinalityDecision(
                       { explanations: terminalExplanations, transitions: [] },
@@ -1024,13 +1054,14 @@ const makeRunActivationDriverImplementation = () => {
                         `production finality rejected settled model Run: ${JSON.stringify(decision)}`
                       )
                     }
-                    const disposition: TerminalDispositionTag = evidence.graphOutcome === "AllTasksSucceeded"
-                      ? "Completed"
-                      : cancellationApplied
-                        ? "Cancelled"
-                        : evidence.graphOutcome === "Blocked"
-                          ? "Blocked"
-                          : "NoTerminal"
+                    const disposition: TerminalDispositionTag =
+                      evidence.graphOutcome === "AllTasksSucceeded"
+                        ? "Completed"
+                        : cancellationApplied
+                          ? "Cancelled"
+                          : evidence.graphOutcome === "Blocked"
+                            ? "Blocked"
+                            : "NoTerminal"
                     if (disposition === "NoTerminal") {
                       return yield* Effect.die("unsettled graph cannot be terminally classified")
                     }
@@ -1125,7 +1156,9 @@ const makeRunActivationDriverImplementation = () => {
       Effect.sync(() => {
         records = []
         const began = decideWorkflowRunBeginning([], runId, target, initialPolicy)
-        if (began._tag !== "LifecycleTransitionAccepted") throw began.failure
+        if (began._tag !== "LifecycleTransitionAccepted") {
+          expect.fail(JSON.stringify(began.failure))
+        }
         records = [
           {
             event: capacityChangeEvent(1),
@@ -1174,7 +1207,9 @@ const makeRunActivationDriverImplementation = () => {
         appendCapacityChange()
         const evidence = finalityEvidenceFor(runId, target, "GraphAllSucceeded", JournalPosition.make(records.length))
         const decision = decideWorkflowRunTermination(records, runId, "Completed", evidence)
-        if (decision._tag !== "LifecycleTransitionAccepted") throw decision.failure
+        if (decision._tag !== "LifecycleTransitionAccepted") {
+          expect.fail(JSON.stringify(decision.failure))
+        }
         records = [...records, decision.record]
         history = "TerminatedHistory"
       }),
@@ -1218,11 +1253,11 @@ const makeRunActivationDriverImplementation = () => {
         yield* Effect.sync(() => {
           const reduced = reduceWorkflowJournalHistory(runId, records)
           if (reduced._tag !== "ValidWorkflowJournalHistory") {
-            throw new Error(`existing Run did not reduce: ${JSON.stringify(reduced.issues)}`)
+            expect.fail(`existing Run did not reduce: ${JSON.stringify(reduced.issues)}`)
           }
           const policy = Option.getOrThrow(reduced.runState.controlPolicy)
           if (policy.taskExecutionCapacity !== latestCapacity) {
-            throw new Error("activation did not reconstruct latest capacity")
+            expect.fail("activation did not reconstruct latest capacity")
           }
           phase = "EstablishingRun"
           establishmentSource = "ExistingHistoryReduced"
