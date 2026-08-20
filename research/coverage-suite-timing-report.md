@@ -41,8 +41,9 @@ repository.
 ### Environment
 
 - Date: 2026-08-20 (America/Montreal)
-- Repository revision: `e87c370c6` (implementation commit), based on
-  `8415e1b81e08759d8f925af329c1a0b397b97efe`
+- Final measured code revision: `8794bb528`, based on
+  `8415e1b81e08759d8f925af329c1a0b397b97efe`; the cleaner initial
+  implementation sample is retained for `e87c370c6`.
 - Node: `v24.18.0`
 - pnpm: `10.29.3`
 - Host: Linux `7.0.14-orbstack-00380-ga7e0a2dc9535`, `aarch64`
@@ -58,7 +59,7 @@ pnpm exec vitest run \
   --maxWorkers=1 \
   --no-file-parallelism \
   --reporter=json \
-  --outputFile=.scratch/issue-221-final-combined-warm.json
+  --outputFile=.scratch/issue-221-final-head-warm.json
 ```
 
 Two tests passed in each invocation. The shell's outer process intervals and
@@ -68,15 +69,20 @@ Vitest's per-assertion intervals were:
 |---|---:|---:|---:|---|
 | Base revision warm-up | 24.17 s | 19.041 s | 0.001 s | 2 passed |
 | Base revision reported warm sample | 29.68 s | 24.725 s | 0.002 s | 2 passed |
-| Implementation warm-up | 5.753 s | 3.285 s | 0.985 ms | 2 passed |
-| Implementation reported warm sample | 5.842 s | 3.240 s | 0.614 ms | 2 passed |
+| Initial implementation warm-up (`e87c370c6`) | 5.753 s | 3.285 s | 0.985 ms | 2 passed |
+| Initial implementation reported warm sample (`e87c370c6`) | 5.842 s | 3.240 s | 0.614 ms | 2 passed |
+| Final code warm-up (`8794bb528`) | 6.910 s | 3.623 s | 0.872 ms | 2 passed |
+| Final code reported warm sample (`8794bb528`) | 6.999 s | 4.164 s | 0.767 ms | 2 passed |
 
 The second assertion reads the same `Effect.cached` Run result, so its small
 duration is not a second execution of the coordinator. The first assertion is
-the capstone's actual production-shaped chronology. The implementation sample
-is 7.6 times faster than the same host's reported base-revision assertion, but
-3.240 seconds remains above the approximately one-second aspiration. The
-aspiration is therefore not claimed as met. The chronology, records, and two
+the capstone's actual production-shaped chronology. The cleaner initial
+implementation sample is 7.6 times faster than the same host's reported
+base-revision assertion. The exact-final-code sample is 5.9 times faster, but
+overlapped an unrelated Quint/TLC verification on the shared host; both are
+characterization evidence rather than service-level claims. Even the cleaner
+3.240-second sample remains above the approximately one-second aspiration, so
+the aspiration is not claimed as met. The chronology, records, and two
 assertions are unchanged; the improvement comes from reusing exact immutable
 journal prefixes, incrementally maintaining accepted indexes, indexing trace
 and occurrence relationships once, and avoiding a duplicate delivery
@@ -169,3 +175,17 @@ Neither command turns the benchmark aspiration into an elapsed-time assertion.
 The final handoff should record the exact revision, command, environment, test
 counts, and measured intervals, then map the results back to the scenario rows
 at the top of this report.
+
+## Final verification outcome
+
+At code revision `8794bb528`, `pnpm check:all` passed after executing all
+repository stages. Its aggregate coverage stage reported 193 passing files,
+one skipped file, 1,796 passing tests, two skipped tests, and 100% coverage of
+898 changed production lines. The same gate also passed all 16 Quint-connected
+model-based tests, all 79 maintained Reducer Lab cassettes, the production
+coverage policy, and the Git-history secret scan.
+
+The required final `pnpm check:quint` run passed in 339.35 seconds against the
+360-second regression budget. Positive deterministic, sampled, temporal, and
+exhaustive checks passed, and the planned negative temporal mutation produced
+its expected counterexample rather than silently passing.
