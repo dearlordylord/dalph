@@ -180,8 +180,8 @@ export class BranchCleanupBoundary extends Context.Service<BranchCleanupBoundary
 ) {}
 
 export const BranchCleanupBoundaryCall = Schema.TaggedUnion({
-  Observe: { operationId: OperationId, ordinal: CleanupObservationOrdinal },
-  Remove: { operationId: OperationId, ordinal: CleanupMutationOrdinal }
+  Observe: { branch: TaskBranchRef, operationId: OperationId, ordinal: CleanupObservationOrdinal },
+  Remove: { branch: TaskBranchRef, operationId: OperationId, ordinal: CleanupMutationOrdinal }
 })
 export type BranchCleanupBoundaryCall = typeof BranchCleanupBoundaryCall.Type
 
@@ -211,7 +211,11 @@ export const branchCleanupTestLayer = (input: {
             )
             yield* Ref.update(calls, (values) => [
               ...values,
-              BranchCleanupBoundaryCall.cases.Observe.make({ operationId: authorization.operationId, ordinal })
+              BranchCleanupBoundaryCall.cases.Observe.make({
+                branch: authorization.locator,
+                operationId: authorization.operationId,
+                ordinal
+              })
             ])
             return (
               current[0] ??
@@ -225,7 +229,11 @@ export const branchCleanupTestLayer = (input: {
           Effect.gen(function* () {
             yield* Ref.update(calls, (values) => [
               ...values,
-              BranchCleanupBoundaryCall.cases.Remove.make({ operationId: authorization.operationId, ordinal: attempt })
+              BranchCleanupBoundaryCall.cases.Remove.make({
+                branch: authorization.locator,
+                operationId: authorization.operationId,
+                ordinal: attempt
+              })
             ])
             const current = yield* Ref.getAndUpdate(mutations, (values) =>
               values.length > 1 ? values.slice(1) : values

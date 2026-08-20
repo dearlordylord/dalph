@@ -165,6 +165,7 @@ export * from "./workflow/protocols/disposition-cleanup/worktree.js"
 export * from "./workflow/protocols/disposition-cleanup/branch.js"
 export * from "./workflow/protocols/disposition-cleanup/integrator-candidate.js"
 export * from "./workflow/protocols/disposition-cleanup/provenance.js"
+export * from "./workflow/protocols/disposition-cleanup/loop.js"
 export {
   appendCandidateProvenance,
   appendCurrentQuarantineProvenance,

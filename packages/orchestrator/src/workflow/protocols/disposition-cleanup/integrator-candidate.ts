@@ -218,8 +218,18 @@ export class IntegratorCandidateCleanupBoundary extends Context.Service<
 >()("@dalph/IntegratorCandidateCleanupBoundary") {}
 
 export const IntegratorCandidateCleanupBoundaryCall = Schema.TaggedUnion({
-  Observe: { operationId: OperationId, ordinal: CleanupObservationOrdinal },
-  Remove: { operationId: OperationId, ordinal: CleanupMutationOrdinal }
+  Observe: {
+    locator: IntegratorCandidateResourceLocator,
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal,
+    sessionId: IntegratorSessionId
+  },
+  Remove: {
+    locator: IntegratorCandidateResourceLocator,
+    operationId: OperationId,
+    ordinal: CleanupMutationOrdinal,
+    sessionId: IntegratorSessionId
+  }
 })
 export type IntegratorCandidateCleanupBoundaryCall = typeof IntegratorCandidateCleanupBoundaryCall.Type
 
@@ -250,8 +260,10 @@ export const integratorCandidateCleanupTestLayer = (input: {
             yield* Ref.update(calls, (values) => [
               ...values,
               IntegratorCandidateCleanupBoundaryCall.cases.Observe.make({
+                locator: authorization.locator,
                 operationId: authorization.operationId,
-                ordinal
+                ordinal,
+                sessionId: authorization.owner.sessionId
               })
             ])
             return (
@@ -267,8 +279,10 @@ export const integratorCandidateCleanupTestLayer = (input: {
             yield* Ref.update(calls, (values) => [
               ...values,
               IntegratorCandidateCleanupBoundaryCall.cases.Remove.make({
+                locator: authorization.locator,
                 operationId: authorization.operationId,
-                ordinal: attempt
+                ordinal: attempt,
+                sessionId: authorization.owner.sessionId
               })
             ])
             const current = yield* Ref.getAndUpdate(mutations, (values) =>

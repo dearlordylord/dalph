@@ -1,10 +1,22 @@
+import { Schema } from "effect"
 import {
   evidenceReferenceEquals,
   plannedTaskAttemptEquivalence,
-  type AcceptedResult,
-  type IntegrationTarget,
-  type PlannedTaskAttempt
+  AcceptedResult,
+  IntegrationTarget,
+  PlannedTaskAttempt
 } from "@dalph/contracts"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
+
+/** Exact accepted-result responsibility after the Integrator boundary began. */
+export const StartedIntegrationResponsibility = Schema.TaggedStruct("StartedIntegrationResponsibility", {
+  acceptedResult: AcceptedResult,
+  integrationTarget: IntegrationTarget,
+  plannedAttempt: PlannedTaskAttempt,
+  queuedAt: JournalPosition,
+  startedAt: JournalPosition
+})
+export type StartedIntegrationResponsibility = typeof StartedIntegrationResponsibility.Type
 
 /** The exact immutable facts that identify one accepted-result integration responsibility. */
 export interface IntegrationResponsibilityFacts {

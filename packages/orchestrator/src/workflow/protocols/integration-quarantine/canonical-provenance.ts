@@ -6,7 +6,8 @@ import {
   integrationQuarantinedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
-  integratorSuccessorSessionFixedRecordKey
+  integratorSuccessorSessionFixedRecordKey,
+  intentRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { IntegrationQuarantineDirectionFingerprint, IntegrationQuarantinedEvent } from "./events.js"
@@ -73,12 +74,26 @@ const exactResponsibilityHistory = (records: ReadonlyArray<JournalRecord>, run: 
 
 const exactTargetLineage = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation): boolean => {
   const lineage = records.find((record) => record.position === run.session.targetLineageObservedAt)
+  const lineageEvent = lineage?.event
+  if (lineage === undefined || lineageEvent?._tag !== "TargetLineageObserved") return false
+  const intents = records.filter(
+    (record) =>
+      record.event._tag === "GitReadIntentRecorded" &&
+      record.runId === runIdFor(run) &&
+      record.key === intentRecordKey(lineageEvent.operationId) &&
+      record.position < lineage.position &&
+      record.event.operation._tag === "ReadTargetLineage" &&
+      record.event.operation.operationId === lineageEvent.operationId &&
+      plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, run.session.plannedAttempt) &&
+      record.event.operation.integrationTarget.repository === run.session.integrationTarget.repository &&
+      record.event.operation.integrationTarget.ref === run.session.integrationTarget.ref
+  )
   return (
-    lineage?.event._tag === "TargetLineageObserved" &&
-    plannedTaskAttemptEquivalence(lineage.event.plannedAttempt, run.session.plannedAttempt) &&
-    lineage.event.observation.plannedBaseSha === run.session.plannedAttempt.baseSha &&
-    lineage.event.observation.targetHeadSha === run.session.expectedTargetHead &&
-    lineage.event.observation.plannedBaseIsAncestorOfTargetHead
+    intents.length === 1 &&
+    plannedTaskAttemptEquivalence(lineageEvent.plannedAttempt, run.session.plannedAttempt) &&
+    lineageEvent.observation.plannedBaseSha === run.session.plannedAttempt.baseSha &&
+    lineageEvent.observation.targetHeadSha === run.session.expectedTargetHead &&
+    lineageEvent.observation.plannedBaseIsAncestorOfTargetHead
   )
 }
 

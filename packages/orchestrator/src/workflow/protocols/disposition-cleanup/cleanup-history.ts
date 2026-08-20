@@ -80,8 +80,11 @@ interface CleanupHistoryDescriptorStrategies<Authorization> {
     event: Event
   ) => { readonly identityMatches: boolean; readonly recordKey: JournalRecord["key"] } | undefined
   readonly settled: (
-    event: Event
-  ) => { readonly identityMatches: boolean; readonly recordKey: JournalRecord["key"] } | undefined
+    event: Event,
+    context: { readonly absence: JournalRecord; readonly mutationResult: JournalRecord | undefined }
+  ) =>
+    | { readonly identityMatches: boolean; readonly resultMatches: boolean; readonly recordKey: JournalRecord["key"] }
+    | undefined
   readonly isPresentObservation: (event: Event) => boolean
   readonly isAbsentObservation: (event: Event) => boolean
 }
@@ -97,6 +100,7 @@ interface CleanupHistoryState {
   readonly observations: ReadonlyMap<string, JournalRecord>
   readonly mutations: ReadonlyMap<string, JournalRecord>
   readonly mutationResults: ReadonlyMap<string, JournalRecord>
+  readonly latestAbsence: JournalRecord | undefined
   readonly settledPosition: JournalPosition | undefined
 }
 
@@ -105,6 +109,7 @@ const emptyState = (): CleanupHistoryState => ({
   observations: new Map(),
   mutations: new Map(),
   mutationResults: new Map(),
+  latestAbsence: undefined,
   settledPosition: undefined
 })
 
@@ -213,7 +218,7 @@ export const validateCleanupHistory = <Authorization>(
       ) {
         return invalid("cleanup observation result has no exact preceding intent or subject identity")
       }
-      state = { ...state, observations: mapWith(state.observations, identity.key, record) }
+      state = { ...state, latestAbsence: undefined, observations: mapWith(state.observations, identity.key, record) }
       continue
     }
 
@@ -260,23 +265,32 @@ export const validateCleanupHistory = <Authorization>(
     if (event._tag === data.absenceTag) {
       const identity = strategies.absence(event, state.observations)
       const observed = identity === undefined ? undefined : state.observations.get(identity.key)
+      const latestObservation = latest(state.observations)
+      const latestMutation = latest(state.mutations)
       const latestMutationResult = latest(state.mutationResults)
+      const mutationResultForLatestIntent =
+        latestMutation !== undefined &&
+        latestMutationResult !== undefined &&
+        latestMutationResult.position > latestMutation.position
+          ? latestMutationResult
+          : undefined
       if (
         identity === undefined ||
         observed === undefined ||
+        latestObservation !== observed ||
         !exactRecord(record, data.runId, identity.recordKey) ||
         !identity.identityMatches ||
         !identity.observationMatches ||
         observed.event._tag !== data.observedTag ||
         !strategies.isAbsentObservation(observed.event) ||
-        (state.mutations.size > 0 &&
-          (latestMutationResult === undefined ||
-            observed.position >= record.position ||
-            observed.position <= latestMutationResult.position)) ||
+        (latestMutation !== undefined &&
+          (observed.position >= record.position ||
+            observed.position <= (mutationResultForLatestIntent?.position ?? latestMutation.position))) ||
         identity.cause !== (state.mutations.size > 0 ? "MutationResponseReconciliation" : "InitialAbsence")
       ) {
         return invalid("cleanup absence confirmation lacks the exact fresh absence and cause")
       }
+      state = { ...state, latestAbsence: record }
       continue
     }
 
@@ -289,18 +303,26 @@ export const validateCleanupHistory = <Authorization>(
     }
 
     if (event._tag === data.settledTag) {
-      const absence = [...prefix.family]
-        .reverse()
-        .find((candidate) => candidate.position < record.position && candidate.event._tag === data.absenceTag)
-      const identity = strategies.settled(event)
-      const latestMutationResult = [...state.mutationResults.values()].at(lastElementOffset)
+      const absence = state.latestAbsence
+      const latestMutation = latest(state.mutations)
+      const latestMutationResult = latest(state.mutationResults)
+      const mutationResultForLatestIntent =
+        latestMutation !== undefined &&
+        latestMutationResult !== undefined &&
+        latestMutationResult.position > latestMutation.position
+          ? latestMutationResult
+          : undefined
+      const settled =
+        absence === undefined
+          ? undefined
+          : strategies.settled(event, { absence, mutationResult: mutationResultForLatestIntent })
       if (
-        identity === undefined ||
+        settled === undefined ||
         absence === undefined ||
-        !exactRecord(record, data.runId, identity.recordKey) ||
-        !identity.identityMatches ||
-        (state.mutations.size > 0 &&
-          (latestMutationResult === undefined || absence.position <= latestMutationResult.position))
+        !exactRecord(record, data.runId, settled.recordKey) ||
+        !settled.identityMatches ||
+        !settled.resultMatches ||
+        absence.position >= record.position
       ) {
         return invalid("cleanup settlement lacks the exact preceding absence and result identity")
       }

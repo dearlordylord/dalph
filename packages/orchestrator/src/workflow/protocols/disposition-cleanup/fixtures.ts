@@ -7,7 +7,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  encodeTaskRevisionFingerprint
 } from "@dalph/contracts"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
@@ -17,10 +18,10 @@ import {
   WorktreeCleanupEvidenceRevision,
   WorktreeCleanupOwner
 } from "./disposition.js"
-import { replacementPredecessorsFor, replacementWorktreeObservationOperationIdFor } from "./provenance-fixtures.js"
+import { replacementPredecessorsFor, replacementWorktreeObservationOperationIdFor } from "./provenance-identities.js"
 
-const dispositionPosition = 9
-const authorizationObservationPosition = 3
+const dispositionPosition = 18
+const authorizationObservationPosition = 15
 
 export const runId = RunId.make("issue-69-worktree-run")
 export const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
@@ -38,7 +39,9 @@ export const successor = PlannedTaskAttempt.make({
   ...attempt,
   attemptId: AttemptId.make("issue-69-p2"),
   branch: TaskBranchRef.make("refs/heads/task/issue-69-p2"),
-  taskRevision: TaskRevision.make("revision:2"),
+  taskRevision: encodeTaskRevisionFingerprint(
+    JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
+  ),
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 export const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({

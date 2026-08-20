@@ -188,8 +188,8 @@ export class WorktreeCleanupBoundary extends Context.Service<WorktreeCleanupBoun
 
 /** Calls visible at the controlled boundary, retained for ordering assertions. */
 export const WorktreeCleanupBoundaryCall = Schema.TaggedUnion({
-  Observe: { operationId: OperationId, ordinal: CleanupObservationOrdinal },
-  Remove: { operationId: OperationId, ordinal: CleanupMutationOrdinal }
+  Observe: { locator: WorktreeLocator, operationId: OperationId, ordinal: CleanupObservationOrdinal },
+  Remove: { branch: TaskBranchRef, locator: WorktreeLocator, operationId: OperationId, ordinal: CleanupMutationOrdinal }
 })
 export type WorktreeCleanupBoundaryCall = typeof WorktreeCleanupBoundaryCall.Type
 
@@ -217,6 +217,7 @@ export const worktreeCleanupTestLayer = (input: {
             yield* Ref.update(calls, (current) => [
               ...current,
               WorktreeCleanupBoundaryCall.cases.Observe.make({
+                locator: authorization.locator,
                 operationId: authorization.operationId,
                 ordinal: CleanupObservationOrdinal.make(current.filter((call) => call._tag === "Observe").length + 1)
               })
@@ -234,6 +235,8 @@ export const worktreeCleanupTestLayer = (input: {
             yield* Ref.update(calls, (current) => [
               ...current,
               WorktreeCleanupBoundaryCall.cases.Remove.make({
+                branch: authorization.owner.branch,
+                locator: authorization.locator,
                 operationId: authorization.operationId,
                 ordinal: attempt
               })

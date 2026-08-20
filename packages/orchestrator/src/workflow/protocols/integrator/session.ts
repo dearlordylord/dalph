@@ -6,7 +6,7 @@ import type { OperationId } from "../../identity.js"
 import { integratorRunStartedRecordKey, integratorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
+import { StartedIntegrationResponsibility } from "../integration-admission/responsibility.js"
 import { IntegratorJournalContradiction } from "./errors.js"
 import {
   IntegratorCandidateResourceLocator,

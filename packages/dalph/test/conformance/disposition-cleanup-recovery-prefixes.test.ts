@@ -16,7 +16,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  encodeTaskRevisionFingerprint
 } from "@dalph/contracts"
 import {
   FixtureTarget,
@@ -87,20 +88,22 @@ const successor = PlannedTaskAttempt.make({
   ...attempt,
   attemptId: AttemptId.make("issue-69-recovery-p2"),
   branch: TaskBranchRef.make("refs/heads/task/issue-69-recovery-p2"),
-  taskRevision: TaskRevision.make("revision:2"),
+  taskRevision: encodeTaskRevisionFingerprint(
+    JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
+  ),
   worktree: WorktreeLocator.make("/tmp/issue-69-recovery-p2")
 })
 const authorization = WorktreeCleanupAuthorization.make({
   causalPredecessors: replacementPredecessorsFor(attempt),
   disposition: PlannedAttemptCleanupDisposition.cases.Superseded.make({
-    dispositionAt: JournalPosition.make(9),
+    dispositionAt: JournalPosition.make(18),
     plannedAttempt: attempt,
     successorAttempt: successor
   }),
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.worktree,
-  observationAt: JournalPosition.make(3),
+  observationAt: JournalPosition.make(15),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-recovery-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
@@ -125,7 +128,7 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.branch,
-  observationAt: JournalPosition.make(3),
+  observationAt: JournalPosition.make(15),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-recovery-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),

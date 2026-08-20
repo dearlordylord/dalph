@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
+import { encodeTaskRevisionFingerprint } from "@dalph/contracts"
 import {
   dispositionCleanupAuthoredCassetteCatalog,
   dispositionCleanupRecordedCassetteCatalog,
@@ -38,36 +39,56 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
       if (cassette.scenario === "SupersededWorktreeAndBranch") {
         expect(tags).toEqual([
           "WorkflowRunBegan",
-          "GitReadIntentRecorded",
-          "PlannedAttemptWorktreeObserved",
           "TaskClaimAcquisitionIntended",
           "TaskClaimAcquired",
+          "TaskAttemptPlanned",
           "AttemptChoiceApplied",
           "PlannedAttemptExecutorWorkResponsibilityBegan",
           "PlannedAttemptExecutorWorkReported",
+          "TaskTrackerReadIntentRecorded",
+          "TaskTrackerFactsObserved",
+          "TaskTrackerReadIntentRecorded",
+          "TaskTrackerFactsObserved",
+          "TaskTrackerReadIntentRecorded",
+          "TaskTrackerFactsObserved",
+          "GitReadIntentRecorded",
+          "PlannedAttemptWorktreeObserved",
+          "GitReadIntentRecorded",
+          "TargetLineageObserved",
           "PlannedAttemptReplaced",
           ...expected.events
         ])
-        const replacement = run.records[8]?.event
+        const replacement = run.records.find(({ event }) => event._tag === "PlannedAttemptReplaced")?.event
         if (replacement?._tag !== "PlannedAttemptReplaced")
           return yield* Effect.die("missing exact replacement evidence")
         expect(replacement.successorPlan.plannedAttempt).toMatchObject({
           attemptId: "issue-69-maintained-p2",
           branch: "refs/heads/task/issue-69-maintained-p2",
           worktree: "/tmp/issue-69-maintained-p2",
-          taskRevision: "issue-69-maintained-revision:successor"
+          taskRevision: encodeTaskRevisionFingerprint(
+            JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
+          )
         })
       }
       if (cassette.scenario === "ChangedGitFactsPreserveResources") {
         expect(tags).toEqual([
           "WorkflowRunBegan",
-          "GitReadIntentRecorded",
-          "PlannedAttemptWorktreeObserved",
           "TaskClaimAcquisitionIntended",
           "TaskClaimAcquired",
+          "TaskAttemptPlanned",
           "AttemptChoiceApplied",
           "PlannedAttemptExecutorWorkResponsibilityBegan",
           "PlannedAttemptExecutorWorkReported",
+          "TaskTrackerReadIntentRecorded",
+          "TaskTrackerFactsObserved",
+          "TaskTrackerReadIntentRecorded",
+          "TaskTrackerFactsObserved",
+          "TaskTrackerReadIntentRecorded",
+          "TaskTrackerFactsObserved",
+          "GitReadIntentRecorded",
+          "PlannedAttemptWorktreeObserved",
+          "GitReadIntentRecorded",
+          "TargetLineageObserved",
           "PlannedAttemptReplaced",
           ...expected.events
         ])

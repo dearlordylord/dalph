@@ -1,16 +1,8 @@
 /* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; claim authority stays journal-derived. */
 import { type AttemptId, type PlannedTaskAttempt } from "@dalph/contracts"
-import { Schema } from "effect"
 import type { JournalRecord } from "../workflow-journal/store.js"
 import { causalPredecessorOperationIds } from "./causal-history.js"
-import {
-  TaskAttemptPlannedEvent,
-  TaskClaimAcquiredEvent,
-  TaskClaimAcquisitionIntendedEvent,
-  type WorkflowJournalEvent
-} from "./registry/event.js"
-import { PlannedAttemptReplacedEvent } from "./protocols/attempt-choice/replacement-events.js"
-import { TaskClaimReacquisitionDirectedEvent } from "./protocols/task-claim-reacquisition/events.js"
+import type { WorkflowJournalEvent } from "./registry/event.js"
 import { taskClaimReacquisitionOperationId } from "./protocols/task-claim-reacquisition/plan.js"
 import { recordedTaskAttemptPlans } from "./protocols/task-attempt-planning/journal-evidence.js"
 import { journalPrefixPredecessorOf } from "../workflow-journal/prefix-lineage.js"
@@ -37,13 +29,12 @@ const authorizedClaimsByPrefix = new WeakMap<
 >()
 
 /** Journal facts that can change the exact claim authorized for a planned attempt. */
-const ClaimAuthorityJournalEvent = Schema.Union([
-  TaskAttemptPlannedEvent,
-  PlannedAttemptReplacedEvent,
-  TaskClaimAcquisitionIntendedEvent,
-  TaskClaimAcquiredEvent,
-  TaskClaimReacquisitionDirectedEvent
-])
+const isClaimAuthorityJournalEvent = (event: WorkflowJournalEvent): boolean =>
+  event._tag === "TaskAttemptPlanned" ||
+  event._tag === "PlannedAttemptReplaced" ||
+  event._tag === "TaskClaimAcquisitionIntended" ||
+  event._tag === "TaskClaimAcquired" ||
+  event._tag === "TaskClaimReacquisitionDirected"
 
 const deriveAuthorizedClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,
@@ -88,7 +79,7 @@ export const authorizedClaimForAttempt = (
   if (cachedByAttempt?.has(plannedAttempt.attemptId) === true) return cachedByAttempt.get(plannedAttempt.attemptId)
   const predecessor = journalPrefixPredecessorOf(records)
   const authorized =
-    predecessor !== undefined && !Schema.is(ClaimAuthorityJournalEvent)(predecessor.appended.event)
+    predecessor !== undefined && !isClaimAuthorityJournalEvent(predecessor.appended.event)
       ? authorizedClaimForAttempt(predecessor.prior, plannedAttempt)
       : deriveAuthorizedClaimForAttempt(records, plannedAttempt)
   const cache = cachedByAttempt ?? new Map<AttemptId, AcquiredClaimEvent | undefined>()

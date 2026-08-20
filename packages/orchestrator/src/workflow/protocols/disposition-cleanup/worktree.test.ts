@@ -13,7 +13,8 @@ import {
   TaskId,
   TaskRevision,
   TaskExecutorLocator,
-  WorktreeLocator
+  WorktreeLocator,
+  encodeTaskRevisionFingerprint
 } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
@@ -69,11 +70,13 @@ const successor = PlannedTaskAttempt.make({
   ...attempt,
   attemptId: AttemptId.make("issue-69-p2"),
   branch: TaskBranchRef.make("refs/heads/task/issue-69-p2"),
-  taskRevision: TaskRevision.make("revision:2"),
+  taskRevision: encodeTaskRevisionFingerprint(
+    JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
+  ),
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
-  dispositionAt: JournalPosition.make(9),
+  dispositionAt: JournalPosition.make(18),
   plannedAttempt: attempt,
   successorAttempt: successor
 })
@@ -83,7 +86,7 @@ const authorization = WorktreeCleanupAuthorization.make({
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.worktree,
-  observationAt: JournalPosition.make(3),
+  observationAt: JournalPosition.make(15),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),

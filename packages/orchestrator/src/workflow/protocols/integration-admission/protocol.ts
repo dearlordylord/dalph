@@ -16,9 +16,15 @@ import {
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
-import { acceptedResultEquivalence, integrationResponsibilityEquivalence } from "./responsibility.js"
+import {
+  acceptedResultEquivalence,
+  integrationResponsibilityEquivalence,
+  StartedIntegrationResponsibility
+} from "./responsibility.js"
 import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
 import { EvidenceReference, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
+
+export { StartedIntegrationResponsibility } from "./responsibility.js"
 
 /**
  * Exists only before the exact integration-start occurrence. It is derived
@@ -39,15 +45,6 @@ export const QueuedIntegrationResponsibility = Schema.TaggedStruct("QueuedIntegr
   queuedAt: JournalPosition
 })
 export type QueuedIntegrationResponsibility = typeof QueuedIntegrationResponsibility.Type
-
-export const StartedIntegrationResponsibility = Schema.TaggedStruct("StartedIntegrationResponsibility", {
-  acceptedResult: AcceptedResult,
-  integrationTarget: IntegrationTarget,
-  plannedAttempt: PlannedTaskAttempt,
-  queuedAt: JournalPosition,
-  startedAt: JournalPosition
-})
-export type StartedIntegrationResponsibility = typeof StartedIntegrationResponsibility.Type
 
 export const IntegrationResponsibility = Schema.Union([
   QueuedIntegrationResponsibility,

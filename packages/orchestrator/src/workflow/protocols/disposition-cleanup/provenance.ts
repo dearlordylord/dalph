@@ -41,8 +41,14 @@ import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../attempt
 import { latestPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
 import type { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import type { AttemptChoiceRequestId, AttemptChoiceSubject, AttemptQuiescenceProof } from "../attempt-choice/events.js"
+import type { OperationId } from "../../identity.js"
 import { integratorCorrelationsEqual, validateIntegratorSuccessorSessionFixed } from "../integrator/state.js"
-import { integratorSuccessorChronologyIsValid } from "../integrator/events.js"
+import {
+  IntegratorRunCorrelation,
+  integratorRetryRunOrdinal,
+  integratorSuccessorChronologyIsValid
+} from "../integrator/events.js"
+import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-authorization.js"
 import {
   IntegrationQuarantineDirectionFingerprint,
   integrationQuarantineDirectionSubject
@@ -88,16 +94,35 @@ const operationIdSetsEqual = (left: ReadonlyArray<unknown>, right: ReadonlyArray
   new Set(right).size === right.length &&
   left.every((operationId) => right.includes(operationId))
 
-type RestartApplicationRecord = JournalRecord & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+/** Compares decoded journal values without relying on object property order. */
+const structuralEqual = (left: unknown, right: unknown): boolean => {
+  if (Object.is(left, right)) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => structuralEqual(value, right[index]))
+    )
+  }
+  if (!isRecord(left) || !isRecord(right)) return false
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key) && structuralEqual(left[key], right[key]))
+  )
 }
 
-type ReplacementRecord = JournalRecord & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
-}
+type SettlementContext = { readonly absence: JournalRecord; readonly mutationResult: JournalRecord | undefined }
 
-type ClaimRecord = JournalRecord & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>
+type RestartApplicationRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
+    readonly choice: "RestartTaskImplementation"
+  }
 }
 
 const exactAppliedRestart = (
@@ -116,46 +141,68 @@ const exactAppliedRestart = (
 const recordedReplacement = (
   records: ReadonlyArray<JournalRecord>,
   subject: AttemptChoiceSubject
-): ReplacementRecord | undefined => {
+): JournalRecord | undefined => {
   const replacements = records.filter(
-    (record): record is ReplacementRecord =>
+    (record) =>
       record.event._tag === "PlannedAttemptReplaced" &&
       plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, subject.plannedAttempt)
   )
   return replacements.length === 1 ? replacements[0] : undefined
 }
 
+/** Reconstructs the exact claim retained at a Restart application's position. */
 const claimAuthorityAtApplication = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
   application: RestartApplicationRecord
 ): ActiveTaskClaim | undefined => {
   const claim = records.findLast(
-    (record): record is ClaimRecord =>
-      record.position <= application.position &&
-      record.event._tag === "TaskClaimAcquired" &&
-      record.event.claim.taskId === plannedAttempt.taskId
+    (
+      record
+    ): record is JournalRecord & {
+      readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>
+    } => {
+      if (
+        record.position > application.position ||
+        record.event._tag !== "TaskClaimAcquired" ||
+        record.event.claim.taskId !== plannedAttempt.taskId
+      ) {
+        return false
+      }
+      const claim = record.event.claim
+      return records.some((intent) => {
+        if (
+          intent.position >= record.position ||
+          intent.runId !== record.runId ||
+          intent.event._tag !== "TaskClaimAcquisitionIntended" ||
+          intent.key !== intentRecordKey(claim.operationId)
+        ) {
+          return false
+        }
+        return (
+          intent.event.operation.acquisition.operationId === claim.operationId &&
+          intent.event.operation.acquisition.taskId === claim.taskId &&
+          intent.event.operation.acquisition.owner === claim.owner &&
+          intent.event.operation.acquisition.token === claim.token
+        )
+      })
+    }
   )
   return claim?.event.claim
 }
 
 const proofFor = (
-  evidence: ReturnType<typeof latestPlannedAttemptExecutorEvidence>
-): AttemptQuiescenceProof | undefined => {
-  if (evidence === undefined) return undefined
-  switch (evidence.source._tag) {
-    case "CommandResponse":
-      return { _tag: "CommandResponse", reportOrdinal: evidence.source.ordinal }
-    case "CommandProjection":
-      return {
-        _tag: "CommandProjection",
-        commandOrdinal: evidence.source.commandOrdinal,
-        projectionOrdinal: evidence.source.projectionOrdinal
-      }
-    case "StateProjection":
-      return { _tag: "StateProjection", observationOrdinal: evidence.source.ordinal }
-  }
-}
+  evidence: NonNullable<ReturnType<typeof latestPlannedAttemptExecutorEvidence>>
+): AttemptQuiescenceProof =>
+  Match.valueTags(evidence.source, {
+    CommandResponse: ({ ordinal }) => ({ _tag: "CommandResponse" as const, reportOrdinal: ordinal }),
+    CommandProjection: ({ commandOrdinal, projectionOrdinal }) => ({
+      _tag: "CommandProjection" as const,
+      commandOrdinal,
+      projectionOrdinal
+    }),
+    StateProjection: ({ ordinal }) => ({ _tag: "StateProjection" as const, observationOrdinal: ordinal })
+  })
 
 const terminalRestartQuiescence = (
   evidence: NonNullable<ReturnType<typeof latestPlannedAttemptExecutorEvidence>>,
@@ -165,6 +212,33 @@ const terminalRestartQuiescence = (
   evidence.report.result._tag !== "Completed" &&
   evidence.report.result._tag !== "Failed" &&
   evidence.observedAt > application.position
+
+/** Links terminal result identity to the exact successful mutation or absence reconciliation. */
+const settlementResultMatches = (
+  settledResult: unknown,
+  context: SettlementContext,
+  mutationResultTag: string,
+  absenceTag: string,
+  fallbackResult: (observation: Readonly<Record<string, unknown>>) => unknown
+): boolean => {
+  const absenceEvent = context.absence.event
+  if (absenceEvent._tag !== absenceTag || !isRecord(absenceEvent)) return false
+  if (!("observation" in absenceEvent) || !isRecord(absenceEvent.observation)) return false
+  const absenceObservation = absenceEvent.observation
+  const recordedMutation = context.mutationResult?.event
+  if (
+    recordedMutation !== undefined &&
+    recordedMutation._tag === mutationResultTag &&
+    "result" in recordedMutation &&
+    isRecord(recordedMutation.result)
+  ) {
+    const mutationResult = recordedMutation.result
+    return ["Removed", "AlreadyAbsent"].includes(String(mutationResult._tag))
+      ? structuralEqual(settledResult, mutationResult)
+      : structuralEqual(settledResult, fallbackResult(absenceObservation))
+  }
+  return structuralEqual(settledResult, fallbackResult(absenceObservation))
+}
 
 const claimsEqual = (left: ActiveTaskClaim, right: ActiveTaskClaim): boolean =>
   left.operationId === right.operationId &&
@@ -201,6 +275,15 @@ const exactExecutorQuiescence = (
     plannedAttempt
   )
   if (evidence === undefined || evidence.observedAt <= after || evidence.observedAt >= before) return false
+  const laterExecutorCommand = records.some(
+    ({ event, position }) =>
+      position > evidence.observedAt &&
+      position < before &&
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.runId === plannedAttempt.runId &&
+      event.plannedAttempt.attemptId === plannedAttempt.attemptId
+  )
+  if (laterExecutorCommand) return false
   const quiescent =
     evidence.report._tag === "SafelySuspended" ||
     (evidence.report._tag === "Terminal" && application === undefined) ||
@@ -220,6 +303,205 @@ const replacementWitnessOperationIds = (
   replacement.witness.targetLineageObservationOperationId
 ]
 
+/**
+ * Resolves every witness named by P2 to its own durable intent/outcome pair.
+ * The atomic replacement event is not authority by itself: a forged event or
+ * a copied operation id must fail when its upstream read chronology is absent.
+ */
+const validateReplacementWitnessRecords = (
+  records: ReadonlyArray<JournalRecord>,
+  replacement: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>,
+  application: JournalRecord,
+  replacementRecord: JournalRecord
+): string | undefined => {
+  const runId = replacement.subject.plannedAttempt.runId
+  const after = application.position
+  const before = replacementRecord.position
+  const exactIntent = (operationId: OperationId, position: JournalPosition): JournalRecord | undefined => {
+    const intents = records.filter(
+      (candidate) =>
+        candidate.event._tag === "TaskTrackerReadIntentRecorded" &&
+        candidate.event.operation.operationId === operationId &&
+        candidate.runId === runId &&
+        candidate.key === intentRecordKey(operationId) &&
+        candidate.position < position
+    )
+    return intents.length === 1 ? intents[0] : undefined
+  }
+  const exactGitIntent = (operationId: OperationId, position: JournalPosition): JournalRecord | undefined => {
+    const intents = records.filter(
+      (candidate) =>
+        candidate.event._tag === "GitReadIntentRecorded" &&
+        candidate.event.operation.operationId === operationId &&
+        candidate.runId === runId &&
+        candidate.key === intentRecordKey(operationId) &&
+        candidate.position < position
+    )
+    return intents.length === 1 ? intents[0] : undefined
+  }
+  const exactClaimIntent = (position: JournalPosition): JournalRecord | undefined => {
+    const intents = records.filter(
+      (candidate) =>
+        candidate.event._tag === "TaskClaimAcquisitionIntended" &&
+        candidate.event.operation.acquisition.operationId === replacement.witness.expectedClaim.operationId &&
+        candidate.runId === runId &&
+        candidate.key === intentRecordKey(replacement.witness.expectedClaim.operationId) &&
+        candidate.position < position
+    )
+    return intents.length === 1 ? intents[0] : undefined
+  }
+  const claimOutcomes = records.filter(
+    (candidate) =>
+      candidate.event._tag === "TaskClaimAcquired" &&
+      candidate.event.claim.operationId === replacement.witness.expectedClaim.operationId
+  )
+  const claimOutcome = claimOutcomes.length === 1 ? claimOutcomes[0] : undefined
+  if (
+    claimOutcome === undefined ||
+    claimOutcome.runId !== runId ||
+    claimOutcome.key !== outcomeRecordKey(replacement.witness.expectedClaim.operationId) ||
+    claimOutcome.position >= before ||
+    !structuralEqual(
+      claimOutcome.event._tag === "TaskClaimAcquired" ? claimOutcome.event.claim : undefined,
+      replacement.witness.expectedClaim
+    ) ||
+    exactClaimIntent(claimOutcome.position) === undefined
+  ) {
+    return "replacement provenance lacks the exact claim intent and acquired outcome witness"
+  }
+
+  const graphOperationId = replacement.witness.graphObservationOperationId
+  const graphOutcomes = records.filter(
+    (candidate) =>
+      candidate.event._tag === "TaskTrackerFactsObserved" && candidate.event.operationId === graphOperationId
+  )
+  const graphOutcome = graphOutcomes.length === 1 ? graphOutcomes[0] : undefined
+  const graphIntent = graphOutcome === undefined ? undefined : exactIntent(graphOperationId, graphOutcome.position)
+  const graphIntentIsExact =
+    graphIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+    graphIntent.event.operation._tag === "ReadTrackerGraph"
+  if (
+    graphOutcome === undefined ||
+    graphOutcome.runId !== runId ||
+    graphOutcome.key !== outcomeRecordKey(graphOperationId) ||
+    graphOutcome.position <= after ||
+    graphOutcome.position >= before ||
+    graphOutcome.event._tag !== "TaskTrackerFactsObserved" ||
+    graphOutcome.event.observation._tag !== "CompleteTaskTrackerFacts" ||
+    !graphOutcome.event.observation.factFamilies[0]?.taskIds.includes(replacement.subject.plannedAttempt.taskId) ||
+    !graphIntentIsExact
+  ) {
+    return "replacement provenance lacks the exact graph read intent and complete facts outcome"
+  }
+
+  const specificationOperationId = replacement.witness.specificationObservationOperationId
+  const specificationOutcomes = records.filter(
+    (candidate) =>
+      candidate.event._tag === "TaskTrackerFactsObserved" && candidate.event.operationId === specificationOperationId
+  )
+  const specificationOutcome = specificationOutcomes.length === 1 ? specificationOutcomes[0] : undefined
+  const specificationIntent =
+    specificationOutcome === undefined
+      ? undefined
+      : exactIntent(specificationOperationId, specificationOutcome.position)
+  const specificationIntentIsExact =
+    specificationIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+    specificationIntent.event.operation._tag === "ReadTaskWorkSpecification"
+  if (
+    specificationOutcome === undefined ||
+    specificationOutcome.runId !== runId ||
+    specificationOutcome.key !== outcomeRecordKey(specificationOperationId) ||
+    specificationOutcome.position <= after ||
+    specificationOutcome.position >= before ||
+    specificationOutcome.event._tag !== "TaskTrackerFactsObserved" ||
+    specificationOutcome.event.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
+    specificationOutcome.event.observation.factFamily.taskId !== replacement.subject.plannedAttempt.taskId ||
+    specificationOutcome.event.observation.factFamily.fingerprint !== replacement.subject.observedTaskRevision ||
+    !specificationIntentIsExact
+  ) {
+    return "replacement provenance lacks the exact authored specification read witness"
+  }
+
+  const claimObservationOperationId = replacement.witness.claimObservationOperationId
+  const claimObservationOutcomes = records.filter(
+    (candidate) =>
+      candidate.event._tag === "TaskTrackerFactsObserved" && candidate.event.operationId === claimObservationOperationId
+  )
+  const claimObservationOutcome = claimObservationOutcomes.length === 1 ? claimObservationOutcomes[0] : undefined
+  const claimObservationIntent =
+    claimObservationOutcome === undefined
+      ? undefined
+      : exactIntent(claimObservationOperationId, claimObservationOutcome.position)
+  const claimObservationIntentIsExact =
+    claimObservationIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+    claimObservationIntent.event.operation._tag === "ReadTaskClaim"
+  if (
+    claimObservationOutcome === undefined ||
+    claimObservationOutcome.runId !== runId ||
+    claimObservationOutcome.key !== outcomeRecordKey(claimObservationOperationId) ||
+    claimObservationOutcome.position <= after ||
+    claimObservationOutcome.position >= before ||
+    claimObservationOutcome.event._tag !== "TaskTrackerFactsObserved" ||
+    claimObservationOutcome.event.observation._tag !== "FocusedTaskClaimFacts" ||
+    !structuralEqual(claimObservationOutcome.event.observation.observation, replacement.witness.expectedClaim) ||
+    !claimObservationIntentIsExact
+  ) {
+    return "replacement provenance lacks the exact claim observation read witness"
+  }
+
+  const worktreeOperationId = replacement.witness.oldWorktreeObservationOperationId
+  const worktreeOutcomes = records.filter(
+    (candidate) =>
+      candidate.event._tag === "PlannedAttemptWorktreeObserved" && candidate.event.operationId === worktreeOperationId
+  )
+  const worktreeOutcome = worktreeOutcomes.length === 1 ? worktreeOutcomes[0] : undefined
+  const worktreeIntent =
+    worktreeOutcome === undefined ? undefined : exactGitIntent(worktreeOperationId, worktreeOutcome.position)
+  const worktreeIntentIsExact =
+    worktreeIntent?.event._tag === "GitReadIntentRecorded" && worktreeIntent.event.operation._tag === "ReadTaskWorktree"
+  if (
+    worktreeOutcome === undefined ||
+    worktreeOutcome.runId !== runId ||
+    worktreeOutcome.key !== outcomeRecordKey(worktreeOperationId) ||
+    worktreeOutcome.position <= after ||
+    worktreeOutcome.position >= before ||
+    worktreeOutcome.event._tag !== "PlannedAttemptWorktreeObserved" ||
+    !structuralEqual(worktreeOutcome.event.observation, replacement.witness.oldWorktreeProof) ||
+    !worktreeIntentIsExact ||
+    !plannedTaskAttemptEquivalence(worktreeIntent.event.operation.plannedAttempt, replacement.subject.plannedAttempt)
+  ) {
+    return "replacement provenance lacks the exact old-worktree read witness"
+  }
+
+  const lineageOperationId = replacement.witness.targetLineageObservationOperationId
+  const lineageOutcomes = records.filter(
+    (candidate) =>
+      candidate.event._tag === "TargetLineageObserved" && candidate.event.operationId === lineageOperationId
+  )
+  const lineageOutcome = lineageOutcomes.length === 1 ? lineageOutcomes[0] : undefined
+  const lineageIntent =
+    lineageOutcome === undefined ? undefined : exactGitIntent(lineageOperationId, lineageOutcome.position)
+  const lineageIntentIsExact =
+    lineageIntent?.event._tag === "GitReadIntentRecorded" && lineageIntent.event.operation._tag === "ReadTargetLineage"
+  if (
+    lineageOutcome === undefined ||
+    lineageOutcome.runId !== runId ||
+    lineageOutcome.key !== outcomeRecordKey(lineageOperationId) ||
+    lineageOutcome.position <= after ||
+    lineageOutcome.position >= before ||
+    lineageOutcome.event._tag !== "TargetLineageObserved" ||
+    !plannedTaskAttemptEquivalence(lineageOutcome.event.plannedAttempt, replacement.subject.plannedAttempt) ||
+    lineageOutcome.event.observation.plannedBaseSha !== replacement.subject.plannedAttempt.baseSha ||
+    lineageOutcome.event.observation.targetHeadSha !== replacement.witness.targetHeadSha ||
+    !lineageOutcome.event.observation.plannedBaseIsAncestorOfTargetHead ||
+    !lineageIntentIsExact ||
+    !plannedTaskAttemptEquivalence(lineageIntent.event.operation.plannedAttempt, replacement.subject.plannedAttempt)
+  ) {
+    return "replacement provenance lacks the exact target-lineage read witness"
+  }
+  return undefined
+}
+
 const validatePlannedAttemptDisposition = (
   records: ReadonlyArray<JournalRecord>,
   disposition: PlannedAttemptCleanupDisposition,
@@ -236,7 +518,12 @@ const validatePlannedAttemptDisposition = (
     }
     const replacement = record.event
     const canonicalReplacement = recordedReplacement(records, replacement.subject)
-    if (canonicalReplacement !== record) {
+    const matchingReplacements = records.filter(
+      (candidate) =>
+        candidate.event._tag === "PlannedAttemptReplaced" &&
+        plannedTaskAttemptEquivalence(candidate.event.subject.plannedAttempt, replacement.subject.plannedAttempt)
+    )
+    if (matchingReplacements.length !== 1 || matchingReplacements[0] !== record || canonicalReplacement !== record) {
       return invalid("replacement provenance does not resolve the exact canonical replacement record")
     }
     if (!plannedTaskAttemptEquivalence(replacement.subject.plannedAttempt, disposition.plannedAttempt)) {
@@ -245,18 +532,16 @@ const validatePlannedAttemptDisposition = (
     if (!plannedTaskAttemptEquivalence(replacement.successorPlan.plannedAttempt, disposition.successorAttempt)) {
       return invalid("replacement provenance names a foreign successor attempt")
     }
-    const appliedRestart = records.find((candidate): candidate is RestartApplicationRecord => {
-      if (candidate.position >= record.position || candidate.event._tag !== "AttemptChoiceApplied") return false
-      return (
-        candidate.runId === disposition.plannedAttempt.runId &&
-        candidate.key === attemptChoiceAppliedRecordKey(candidate.event.requestId) &&
-        candidate.event.choice === "RestartTaskImplementation" &&
-        sameAttemptChoiceRequestId(candidate.event.requestId, replacement.requestId) &&
-        sameAttemptChoiceSubject(candidate.event.subject, replacement.subject)
-      )
-    })
+    const appliedRestart = exactAppliedRestart(records, replacement.requestId, replacement.subject)
     if (appliedRestart === undefined) {
       return invalid("replacement provenance lacks the exact earlier applied Restart choice")
+    }
+    if (
+      appliedRestart.position >= record.position ||
+      appliedRestart.runId !== disposition.plannedAttempt.runId ||
+      appliedRestart.key !== attemptChoiceAppliedRecordKey(appliedRestart.event.requestId)
+    ) {
+      return invalid("replacement provenance Restart choice has a foreign position, Run, or key")
     }
     if (
       !exactExecutorQuiescence(
@@ -285,6 +570,8 @@ const validatePlannedAttemptDisposition = (
     if (!operationIdsEqual(causalPredecessors, replacement.successorPlan.predecessorOperationIds)) {
       return invalid("cleanup authorization omits or invents replacement authority predecessors")
     }
+    const witnessIssue = validateReplacementWitnessRecords(records, replacement, appliedRestart, record)
+    if (witnessIssue !== undefined) return invalid(witnessIssue)
     return valid("durable PlannedAttemptReplaced proves the exact successor disposition")
   }
 
@@ -340,15 +627,39 @@ const validatePlannedAttemptDisposition = (
       return invalid("abandonment provenance lacks the exact executor quiescence proof")
     }
     const retainedClaim = records.findLast(
-      (candidate) =>
-        candidate.position <= record.position &&
-        candidate.event._tag === "TaskClaimAcquired" &&
-        candidate.event.claim.taskId === disposition.plannedAttempt.taskId
+      (
+        candidate
+      ): candidate is JournalRecord & {
+        readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>
+      } => {
+        if (
+          candidate.position > appliedChoice.position ||
+          candidate.event._tag !== "TaskClaimAcquired" ||
+          candidate.event.claim.taskId !== disposition.plannedAttempt.taskId ||
+          candidate.event.claim.operationId !== abandonment.expectedClaim.operationId
+        ) {
+          return false
+        }
+        const claim = candidate.event.claim
+        return records.some((intent) => {
+          if (
+            intent.position >= candidate.position ||
+            intent.runId !== candidate.runId ||
+            intent.event._tag !== "TaskClaimAcquisitionIntended" ||
+            intent.key !== intentRecordKey(claim.operationId)
+          ) {
+            return false
+          }
+          return (
+            intent.event.operation.acquisition.operationId === claim.operationId &&
+            intent.event.operation.acquisition.taskId === claim.taskId &&
+            intent.event.operation.acquisition.owner === claim.owner &&
+            intent.event.operation.acquisition.token === claim.token
+          )
+        })
+      }
     )
-    if (
-      retainedClaim?.event._tag !== "TaskClaimAcquired" ||
-      !claimsEqual(retainedClaim.event.claim, abandonment.expectedClaim)
-    ) {
+    if (retainedClaim === undefined || !claimsEqual(retainedClaim.event.claim, abandonment.expectedClaim)) {
       return invalid("abandonment provenance lacks the exact stopped claim authority")
     }
     if (!operationIdsEqual(causalPredecessors, [abandonment.expectedClaim.operationId])) {
@@ -645,6 +956,18 @@ export const validateIntegratorCandidateCleanupProvenance = (
   ) {
     return invalid("candidate cleanup successor settlement witness does not follow its fresh target-lineage read")
   }
+  const successorRun = IntegratorRunCorrelation.make({
+    ordinal: integratorRetryRunOrdinal,
+    session: disposition.successor
+  })
+  const canonicalSuccessorAuthorization = evaluateIntegratorRetryAuthorization(records, successorRun, {
+    predecessorSession: disposition.predecessor,
+    requiredDirection: "FullRerun",
+    requiredTargetLineageObservedAt: disposition.successor.targetLineageObservedAt
+  })
+  if (canonicalSuccessorAuthorization._tag === "Rejected") {
+    return invalid(`candidate cleanup successor retry reconstruction failed: ${canonicalSuccessorAuthorization.detail}`)
+  }
   const canonical = validateIntegratorSuccessorSessionFixed(records, disposition.predecessor, disposition.successor)
   return canonical._tag === "Valid"
     ? valid("durable S1, canonical provider absence, FullRerun direction, and S2 prove candidate disposition")
@@ -882,12 +1205,24 @@ const worktreeHistoryDescriptor = (
             identityMatches: event.observation.locator === authorization.locator
           }
         : undefined,
-    settled: (event) =>
+    settled: (event, context) =>
       event._tag === "WorktreeCleanupSettled"
         ? {
             recordKey: worktreeCleanupSettledRecordKey(authorization.operationId),
             identityMatches:
-              event.result.locator === authorization.locator && event.result.branch === authorization.owner.branch
+              event.result.locator === authorization.locator && event.result.branch === authorization.owner.branch,
+            resultMatches: settlementResultMatches(
+              event.result,
+              context,
+              "WorktreeCleanupMutationResultRecorded",
+              "WorktreeCleanupAbsenceConfirmed",
+              (observation) => ({
+                _tag: "AlreadyAbsent",
+                branch: authorization.owner.branch,
+                locator: authorization.locator,
+                revision: observation["revision"]
+              })
+            )
           }
         : undefined,
     isPresentObservation: (event) => event._tag === "WorktreeCleanupObserved" && event.observation._tag === "Present",
@@ -993,11 +1328,22 @@ const branchHistoryDescriptor = (
             identityMatches: event.observation.branch === authorization.locator
           }
         : undefined,
-    settled: (event) =>
+    settled: (event, context) =>
       event._tag === "BranchCleanupSettled"
         ? {
             recordKey: branchCleanupSettledRecordKey(authorization.operationId),
-            identityMatches: event.result.branch === authorization.locator
+            identityMatches: event.result.branch === authorization.locator,
+            resultMatches: settlementResultMatches(
+              event.result,
+              context,
+              "BranchCleanupMutationResultRecorded",
+              "BranchCleanupAbsenceConfirmed",
+              (observation) => ({
+                _tag: "AlreadyAbsent",
+                branch: authorization.locator,
+                revision: observation["revision"]
+              })
+            )
           }
         : undefined,
     isPresentObservation: (event) => event._tag === "BranchCleanupObserved" && event.observation._tag === "Present",
@@ -1107,12 +1453,25 @@ const candidateHistoryDescriptor = (
             identityMatches: event.observation.locator === authorization.locator
           }
         : undefined,
-    settled: (event) =>
+    settled: (event, context) =>
       event._tag === "IntegratorCandidateCleanupSettled"
         ? {
             recordKey: integratorCandidateCleanupSettledRecordKey(authorization.operationId),
             identityMatches:
-              event.result.locator === authorization.locator && event.result.sessionId === authorization.owner.sessionId
+              event.result.locator === authorization.locator &&
+              event.result.sessionId === authorization.owner.sessionId,
+            resultMatches: settlementResultMatches(
+              event.result,
+              context,
+              "IntegratorCandidateCleanupMutationResultRecorded",
+              "IntegratorCandidateCleanupAbsenceConfirmed",
+              (observation) => ({
+                _tag: "AlreadyAbsent",
+                locator: authorization.locator,
+                revision: observation["revision"],
+                sessionId: authorization.owner.sessionId
+              })
+            )
           }
         : undefined,
     isPresentObservation: (event) =>

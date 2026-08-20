@@ -8,6 +8,7 @@ import {
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
+  integratorSuccessorSessionFixedRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
   integrationQuarantinedRecordKey,
   integrationProviderRunActivityAbsentRecordKey
@@ -20,20 +21,23 @@ import {
   type IntegrationQuarantinedEvent
 } from "../integration-quarantine/events.js"
 import type { IntegratorRunPreparationInput } from "./session.js"
-import { integratorRunCorrelationForSession } from "./session.js"
 import {
   IntegratorGitObservation,
   type IntegratorCandidateText,
-  type IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   integratorRetryRunOrdinal,
-  integratorRunCorrelationsEqual
+  integratorRunCorrelationsEqual,
+  IntegratorRunCorrelation
 } from "./events.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
 
 type SessionRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
 }
+type SuccessorSessionRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSuccessorSessionFixed" }>
+}
+type CanonicalSessionRecord = SessionRecord | SuccessorSessionRecord
 type RunStartedRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunStarted" }>
 }
@@ -71,7 +75,7 @@ type IntegratorRetryLineage = { readonly intent: GitReadIntentRecord; readonly o
 /** One exact `(S, E, Q, D, L)` Retry relation reconstructed from Journal records. */
 export type IntegratorRetryAuthorization = {
   readonly session: IntegratorRunCorrelation["session"]
-  readonly sessionRecord: SessionRecord
+  readonly sessionRecord: CanonicalSessionRecord
   readonly ordinalOneEvidence: IntegratorRetryOrdinalOneEvidence
   readonly quarantine: QuarantineRecord
   readonly direction: DirectionRecord
@@ -87,6 +91,9 @@ type IntegratorRetryAuthorizationResult =
 /** Bounds used while reconstructing the fresh lineage pair for one Retry relation. */
 type IntegratorRetryAuthorizationOptions = {
   readonly beforePosition?: JournalPosition
+  /** FullRerun uses the same exact S1/Q/D/L reconstruction as Retry. */
+  readonly predecessorSession?: IntegratorRunCorrelation["session"]
+  readonly requiredDirection?: "Retry" | "FullRerun"
   readonly requiredTargetLineageObservedAt?: JournalPosition
 }
 
@@ -125,6 +132,11 @@ const isGitReadIntentRecord = (record: JournalRecord): record is GitReadIntentRe
 
 const runIdFor = (run: IntegratorRunCorrelation) => run.session.plannedAttempt.runId
 
+const authoritySessionFor = (
+  run: IntegratorRunCorrelation,
+  options: IntegratorRetryAuthorizationOptions
+): IntegratorRunCorrelation["session"] => options.predecessorSession ?? run.session
+
 const hasForeignRunRecord = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation): boolean =>
   records.some((record) => record.runId !== runIdFor(run))
 
@@ -137,8 +149,28 @@ const hasDuplicateRecordIdentity = (records: ReadonlyArray<JournalRecord>): bool
 
 const exactSessionRecord = (
   records: ReadonlyArray<JournalRecord>,
-  session: IntegratorRunCorrelation["session"]
-): SessionRecord | undefined => {
+  session: IntegratorRunCorrelation["session"],
+  direction: "Retry" | "FullRerun",
+  predecessorSession: IntegratorRunCorrelation["session"]
+): CanonicalSessionRecord | undefined => {
+  if (direction === "FullRerun") {
+    const successors = records.filter(
+      (record): record is SuccessorSessionRecord =>
+        record.event._tag === "IntegratorSuccessorSessionFixed" &&
+        record.runId === session.plannedAttempt.runId &&
+        record.event.successor.sessionId === session.sessionId &&
+        integratorCorrelationsEqual(record.event.successor, session) &&
+        integratorCorrelationsEqual(record.event.predecessor, predecessorSession) &&
+        record.key ===
+          integratorSuccessorSessionFixedRecordKey(
+            record.event.predecessor,
+            record.event.quarantineAt,
+            record.event.directionAppliedAt
+          ) &&
+        record.position > session.targetLineageObservedAt
+    )
+    return successors.length === 1 ? successors[0] : undefined
+  }
   const key = integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(session))
   const matches = records.filter(
     (record): record is SessionRecord =>
@@ -154,7 +186,7 @@ const exactSessionRecord = (
 const exactRunStart = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation,
-  sessionRecord: SessionRecord,
+  sessionRecord: CanonicalSessionRecord,
   beforePosition: JournalPosition
 ): RunStartedRecord | undefined => {
   const matches = records.filter(
@@ -336,11 +368,11 @@ const providerAbsenceMatches = (
 
 const ordinalOneEvidence = (
   records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation,
-  sessionRecord: SessionRecord,
-  quarantine: QuarantineRecord
+  sessionRecord: CanonicalSessionRecord,
+  quarantine: QuarantineRecord,
+  authoritySession: IntegratorRunCorrelation["session"]
 ): IntegratorRetryOrdinalOneEvidence | undefined => {
-  const runOne = integratorRunCorrelationForSession(run.session, IntegratorRunOrdinal.make(1))
+  const runOne = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: authoritySession })
   const start = exactRunStart(records, runOne, sessionRecord, quarantine.position)
   return start === undefined
     ? undefined
@@ -350,12 +382,14 @@ const ordinalOneEvidence = (
 
 const exactDirectionAndQuarantine = (
   records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation
+  run: IntegratorRunCorrelation,
+  options: IntegratorRetryAuthorizationOptions,
+  authoritySession: IntegratorRunCorrelation["session"]
 ): { readonly direction: DirectionRecord; readonly quarantine: QuarantineRecord } | string => {
   const runId = runIdFor(run)
   const sessionDirections = records.filter(
     (record): record is DirectionRecord =>
-      isDirectionRecord(record) && record.event.fingerprint.sessionId === run.session.sessionId
+      isDirectionRecord(record) && record.event.fingerprint.sessionId === authoritySession.sessionId
   )
   /* v8 ignore next -- @preserve retryPreflightIssue rejects every foreign or wrongly keyed session direction before this helper is reached. */
   if (
@@ -372,33 +406,31 @@ const exactDirectionAndQuarantine = (
       isDirectionRecord(record) &&
       record.runId === runId &&
       record.event.requestId.runId === runId &&
-      record.event.fingerprint.direction === "Retry" &&
-      record.event.fingerprint.sessionId === run.session.sessionId &&
+      record.event.fingerprint.direction === (options.requiredDirection ?? "Retry") &&
+      record.event.fingerprint.sessionId === authoritySession.sessionId &&
       record.key ===
         integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
   )
-  if (retryDirections.length !== 1) return "Retry requires one exact applied Retry direction for its session and Run"
+  if (retryDirections.length !== 1) return "Retry requires one exact applied direction for its session and Run"
   const direction = retryDirections[0]
   /* v8 ignore next -- @preserve a length-one array always yields an element; this guard protects malformed runtime data. */
-  if (direction === undefined) return "Retry requires one exact applied Retry direction for its session and Run"
+  if (direction === undefined) return "Retry requires one exact applied direction for its session and Run"
   /* v8 ignore next -- @preserve duplicate direction subjects have the same deterministic key and are rejected by retryPreflightIssue before this helper is reached. */
-  if (!hasUniqueDirectionSubject(records, run, direction))
+  if (!hasUniqueDirectionSubject(records, direction, authoritySession))
     return "Retry must be the unique winning quarantine direction"
-  const quarantine = exactPriorQuarantine(records, run, direction)
-  return quarantine === undefined
-    ? "Retry direction has no exact earlier ordinal-one quarantine"
-    : { direction, quarantine }
+  const quarantine = exactPriorQuarantine(records, run, direction, authoritySession)
+  return quarantine === undefined ? "direction has no exact earlier ordinal-one quarantine" : { direction, quarantine }
 }
 
 const hasUniqueDirectionSubject = (
   records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation,
-  direction: DirectionRecord
+  direction: DirectionRecord,
+  authoritySession: IntegratorRunCorrelation["session"]
 ): boolean =>
   records.filter(
     (record) =>
       isDirectionRecord(record) &&
-      record.event.fingerprint.sessionId === run.session.sessionId &&
+      record.event.fingerprint.sessionId === authoritySession.sessionId &&
       record.event.fingerprint.quarantineAt === direction.event.fingerprint.quarantineAt &&
       record.key ===
         integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
@@ -407,7 +439,8 @@ const hasUniqueDirectionSubject = (
 const exactPriorQuarantine = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation,
-  direction: DirectionRecord
+  direction: DirectionRecord,
+  authoritySession: IntegratorRunCorrelation["session"]
 ): QuarantineRecord | undefined => {
   const quarantine = oneRecordAt(records, direction.event.fingerprint.quarantineAt)
   if (quarantine === undefined || !isQuarantineRecord(quarantine)) return undefined
@@ -416,7 +449,7 @@ const exactPriorQuarantine = (
       integrationQuarantinedRecordKey(quarantine.event.correlation.sessionId, quarantine.event.basis) &&
     quarantine.position < direction.position &&
     quarantine.event.basis._tag !== "RetryTargetHeadChanged" &&
-    integratorCorrelationsEqual(quarantine.event.correlation, run.session)
+    integratorCorrelationsEqual(quarantine.event.correlation, authoritySession)
     ? quarantine
     : undefined
 }
@@ -489,21 +522,28 @@ const isMatchingLineageIntent = (
   plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, run.session.plannedAttempt) &&
   integrationTargetEquivalence(record.event.operation.integrationTarget, run.session.integrationTarget)
 
-const exactSessionQuarantines = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation): boolean =>
+const exactSessionQuarantines = (
+  records: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  authoritySession: IntegratorRunCorrelation["session"]
+): boolean =>
   records.every(
     (record) =>
       !isQuarantineRecord(record) ||
-      record.event.correlation.sessionId !== run.session.sessionId ||
+      record.event.correlation.sessionId !== authoritySession.sessionId ||
       (record.runId === runIdFor(run) &&
-        integratorCorrelationsEqual(record.event.correlation, run.session) &&
+        integratorCorrelationsEqual(record.event.correlation, authoritySession) &&
         record.key === integrationQuarantinedRecordKey(record.event.correlation.sessionId, record.event.basis))
   )
 
-const exactSessionDirections = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation): boolean =>
+const exactSessionDirections = (
+  records: ReadonlyArray<JournalRecord>,
+  authoritySession: IntegratorRunCorrelation["session"]
+): boolean =>
   records.every(
     (record) =>
       !isDirectionRecord(record) ||
-      record.event.fingerprint.sessionId !== run.session.sessionId ||
+      record.event.fingerprint.sessionId !== authoritySession.sessionId ||
       record.key ===
         integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
   )
@@ -519,14 +559,16 @@ export const evaluateIntegratorRetryAuthorization = (
   options: IntegratorRetryAuthorizationOptions = {}
 ): IntegratorRetryAuthorizationResult => {
   if (run.ordinal !== integratorRetryRunOrdinal) return rejected("Retry authorization applies only to run ordinal two")
-  const preflightIssue = retryPreflightIssue(records, run)
+  const authoritySession = authoritySessionFor(run, options)
+  const preflightIssue = retryPreflightIssue(records, run, authoritySession)
   if (preflightIssue !== undefined) return rejected(preflightIssue)
   return authorizeRetryRelation(records, run, options)
 }
 
 const retryPreflightIssue = (
   records: ReadonlyArray<JournalRecord>,
-  run: IntegratorRunCorrelation
+  run: IntegratorRunCorrelation,
+  authoritySession: IntegratorRunCorrelation["session"]
 ): string | undefined => {
   if (hasForeignRunRecord(records, run) || hasDuplicateRecordIdentity(records)) {
     return "Retry authorization requires one exact Journal history for the Run"
@@ -536,13 +578,14 @@ const retryPreflightIssue = (
       (record) =>
         isQuarantineRecord(record) &&
         record.event.basis._tag === "RetryTargetHeadChanged" &&
-        integratorCorrelationsEqual(record.event.correlation, run.session)
+        integratorCorrelationsEqual(record.event.correlation, authoritySession)
     )
   ) {
     return "Retry authorization was terminated by a changed-head quarantine"
   }
-  if (!exactSessionQuarantines(records, run)) return "Retry history contains a foreign or wrongly keyed quarantine"
-  return exactSessionDirections(records, run)
+  if (!exactSessionQuarantines(records, run, authoritySession))
+    return "Retry history contains a foreign or wrongly keyed quarantine"
+  return exactSessionDirections(records, authoritySession)
     ? undefined
     : "Retry history contains a foreign or wrongly keyed direction"
 }
@@ -552,11 +595,22 @@ const authorizeRetryRelation = (
   run: IntegratorRunCorrelation,
   options: IntegratorRetryAuthorizationOptions
 ): IntegratorRetryAuthorizationResult => {
-  const sessionRecord = exactSessionRecord(records, run.session)
+  const authoritySession = authoritySessionFor(run, options)
+  const sessionRecord = exactSessionRecord(records, run.session, options.requiredDirection ?? "Retry", authoritySession)
   if (sessionRecord === undefined) return rejected("Retry has no exact fixed session S")
-  const directionAndQuarantine = exactDirectionAndQuarantine(records, run)
+  const ordinalOneSessionRecord =
+    options.requiredDirection === "FullRerun"
+      ? exactSessionRecord(records, authoritySession, "Retry", authoritySession)
+      : sessionRecord
+  if (ordinalOneSessionRecord === undefined) return rejected("Retry has no exact predecessor fixed session S1")
+  const directionAndQuarantine = exactDirectionAndQuarantine(records, run, options, authoritySession)
   if (typeof directionAndQuarantine === "string") return rejected(directionAndQuarantine)
-  const evidence = ordinalOneEvidence(records, run, sessionRecord, directionAndQuarantine.quarantine)
+  const evidence = ordinalOneEvidence(
+    records,
+    ordinalOneSessionRecord,
+    directionAndQuarantine.quarantine,
+    authoritySession
+  )
   if (evidence === undefined) return rejected("Retry quarantine has no exact modern ordinal-one terminal evidence")
   const lineage = freshLineage(records, run, directionAndQuarantine.direction, options)
   if (lineage === undefined)
