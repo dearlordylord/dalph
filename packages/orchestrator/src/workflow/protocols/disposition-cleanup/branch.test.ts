@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { GitCommitSha } from "@dalph/contracts"
+import { GitCommitSha, WorktreeLocator } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -51,7 +51,7 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.branch,
-  observationAt: JournalPosition.make(15),
+  observationAt: JournalPosition.make(16),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
@@ -142,6 +142,41 @@ const present = BranchCleanupObservation.cases.Present.make({
   registeredWorktree: null,
   revision: BranchCleanupEvidenceRevision.make(1)
 })
+
+it.effect("table-reconciles changed branch owner, head, and revision without a branch mutation", () =>
+  Effect.gen(function* () {
+    const cases = [
+      BranchCleanupObservation.cases.Foreign.make({
+        branch: attempt.branch,
+        observedHead: GitCommitSha.make("2".repeat(40)),
+        observedWorktree: WorktreeLocator.make("/tmp/foreign-branch-worktree"),
+        reason: "DifferentHead",
+        revision: BranchCleanupEvidenceRevision.make(2)
+      }),
+      BranchCleanupObservation.cases.Foreign.make({
+        branch: attempt.branch,
+        observedHead: baseSha,
+        observedWorktree: WorktreeLocator.make("/tmp/foreign-branch-worktree"),
+        reason: "RegisteredWorktree",
+        revision: BranchCleanupEvidenceRevision.make(2)
+      }),
+      BranchCleanupObservation.cases.Unreadable.make({ branch: attempt.branch, detail: "provider read failed" })
+    ]
+    for (const observation of cases) {
+      const result = yield* Effect.gen(function* () {
+        yield* begin()
+        const outcome = yield* runBranchCleanup(branchAuthorization)
+        const calls = yield* (yield* TestBranchCleanupBoundary).calls()
+        return { calls, outcome }
+      }).pipe(
+        Effect.provide(branchCleanupTestLayer({ observations: [observation] })),
+        Effect.provide(memoryJournalTestLayer)
+      )
+      expect(result.outcome._tag).toBe("Preserved")
+      expect(result.calls.map(({ _tag }) => _tag)).toEqual(["Observe"])
+    }
+  })
+)
 
 it.effect("deletes a planned branch only after the exact worktree settlement", () =>
   Effect.gen(function* () {

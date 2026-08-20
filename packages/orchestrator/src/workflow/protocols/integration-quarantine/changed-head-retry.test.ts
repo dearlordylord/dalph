@@ -19,7 +19,9 @@ import {
   integrationQuarantinedRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
   integratorRunStartedRecordKey,
-  integratorSessionFixedRecordKey
+  integratorSessionFixedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord, JournalStoreService } from "../../../workflow-journal/store.js"
@@ -96,7 +98,7 @@ const appendLineage = Effect.fn("ChangedHeadRetryTest.appendLineage")(function* 
   const operation = lineageOperationFor(session, suffix)
   yield* journal.append(
     session.plannedAttempt.runId,
-    JournalRecordKey.make(`changed-head-retry:${suffix}:intent`),
+    intentRecordKey(operation.operationId),
     GitReadIntentRecordedEvent.make({
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
@@ -106,7 +108,7 @@ const appendLineage = Effect.fn("ChangedHeadRetryTest.appendLineage")(function* 
   )
   return yield* journal.append(
     session.plannedAttempt.runId,
-    JournalRecordKey.make(`changed-head-retry:${suffix}:observed`),
+    outcomeRecordKey(operation.operationId),
     TargetLineageObservedEvent.make({
       observation: {
         plannedBaseIsAncestorOfTargetHead: true,

@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- One chronological validator owns the exact run-one, Q, D, and fresh-lineage Retry relation. */
-import { plannedTaskAttemptEquivalence, IntegrationTarget } from "@dalph/contracts"
+import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { Schema } from "effect"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -30,6 +30,7 @@ import {
   IntegratorRunCorrelation
 } from "./events.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
+import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 
 type SessionRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
@@ -98,7 +99,6 @@ type IntegratorRetryAuthorizationOptions = {
 }
 
 const targetLineageObservationEquivalence = Schema.toEquivalence(TargetLineageObservation)
-const integrationTargetEquivalence = Schema.toEquivalence(IntegrationTarget)
 const integratorGitObservationEquivalence = Schema.toEquivalence(IntegratorGitObservation)
 
 const rejected = (detail: string): IntegratorRetryAuthorizationResult => ({ _tag: "Rejected", detail })
@@ -127,9 +127,6 @@ const isDirectionRecord = (record: JournalRecord): record is DirectionRecord =>
   record.event._tag === "IntegrationQuarantineDirectionApplied"
 const isTargetLineageRecord = (record: JournalRecord): record is TargetLineageRecord =>
   record.event._tag === "TargetLineageObserved"
-const isGitReadIntentRecord = (record: JournalRecord): record is GitReadIntentRecord =>
-  record.event._tag === "GitReadIntentRecorded"
-
 const runIdFor = (run: IntegratorRunCorrelation) => run.session.plannedAttempt.runId
 
 const authoritySessionFor = (
@@ -464,17 +461,22 @@ const freshLineage = (
     .filter((record): record is TargetLineageRecord => isFreshLineageObservation(record, run, direction, options))
     .toSorted((left, right) => Number(right.position) - Number(left.position))
   for (const observation of observations) {
-    const sameOperationObservations = records.filter(
-      (record) => isTargetLineageRecord(record) && record.event.operationId === observation.event.operationId
+    const lineage = exactTargetLineageRecord(
+      records,
+      {
+        // The fresh Git read is allowed to prove either the unchanged head or
+        // a changed head; the caller compares this exact observed payload with
+        // the requested preparation after the intent/result pair is proven.
+        expectedTargetHead: observation.event.observation.targetHeadSha,
+        integrationTarget: run.session.integrationTarget,
+        plannedAttempt: run.session.plannedAttempt,
+        targetLineageObservedAt: observation.position
+      },
+      options.beforePosition === undefined
+        ? { afterPosition: direction.position }
+        : { afterPosition: direction.position, beforePosition: options.beforePosition }
     )
-    const intents = records.filter((record): record is GitReadIntentRecord =>
-      isMatchingLineageIntent(record, run, observation, direction)
-    )
-    if (sameOperationObservations.length === 1 && intents.length === 1) {
-      const intent = intents[0]
-      /* v8 ignore next -- @preserve intents.length === 1 guarantees an element at index zero; this guard protects malformed runtime data. */
-      if (intent !== undefined) return { intent, observation }
-    }
+    if (lineage !== undefined) return lineage
   }
   return undefined
 }
@@ -506,21 +508,6 @@ const isLineagePositionWithinBounds = (
 ): boolean =>
   (options.beforePosition === undefined || position < options.beforePosition) &&
   (options.requiredTargetLineageObservedAt === undefined || position === options.requiredTargetLineageObservedAt)
-
-const isMatchingLineageIntent = (
-  record: JournalRecord,
-  run: IntegratorRunCorrelation,
-  observation: TargetLineageRecord,
-  direction: DirectionRecord
-): record is GitReadIntentRecord =>
-  isGitReadIntentRecord(record) &&
-  record.runId === runIdFor(run) &&
-  record.event.operation._tag === "ReadTargetLineage" &&
-  record.event.operation.operationId === observation.event.operationId &&
-  record.position > direction.position &&
-  record.position < observation.position &&
-  plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, run.session.plannedAttempt) &&
-  integrationTargetEquivalence(record.event.operation.integrationTarget, run.session.integrationTarget)
 
 const exactSessionQuarantines = (
   records: ReadonlyArray<JournalRecord>,
@@ -564,6 +551,23 @@ export const evaluateIntegratorRetryAuthorization = (
   if (preflightIssue !== undefined) return rejected(preflightIssue)
   return authorizeRetryRelation(records, run, options)
 }
+
+/**
+ * Reconstructs the one canonical FullRerun relation. Candidate cleanup and
+ * ordinary successor activation share this path so ordinal-two authority
+ * cannot be weakened by a cleanup-local provider/quarantine predicate.
+ */
+export const evaluateIntegratorFullRerunAuthorization = (
+  records: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  predecessorSession: IntegratorRunCorrelation["session"],
+  targetLineageObservedAt: JournalPosition
+) =>
+  evaluateIntegratorRetryAuthorization(records, run, {
+    predecessorSession,
+    requiredDirection: "FullRerun",
+    requiredTargetLineageObservedAt: targetLineageObservedAt
+  })
 
 const retryPreflightIssue = (
   records: ReadonlyArray<JournalRecord>,

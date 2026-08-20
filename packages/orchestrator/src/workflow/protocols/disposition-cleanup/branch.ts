@@ -332,6 +332,14 @@ const existingSettled = (records: ReadonlyArray<JournalRecord>, authorization: B
       branchCleanupAuthorizationEquals(record.event.authorization, authorization)
   )?.event
 
+const existingContradiction = (records: ReadonlyArray<JournalRecord>, authorization: BranchCleanupAuthorization) =>
+  records.find(
+    (record): record is JournalRecord & { readonly event: BranchCleanupContradictedEvent } =>
+      record.event._tag === "BranchCleanupContradicted" &&
+      record.event.authorization.operationId === authorization.operationId &&
+      branchCleanupAuthorizationEquals(record.event.authorization, authorization)
+  )?.event
+
 const observeFresh = Effect.fn("BranchCleanup.observeFresh")(function* (
   authorization: BranchCleanupAuthorization,
   records: ReadonlyArray<JournalRecord>
@@ -469,6 +477,10 @@ export const runBranchCleanup = Effect.fn("BranchCleanup.run")(function* (author
   const history = validateBranchCleanupHistory(records, authorization)
   if (history._tag === "Invalid") {
     return BranchCleanupOutcome.cases.Preserved.make({ authorization, reason: history.detail })
+  }
+  const contradictedBeforeReplay = existingContradiction(records, authorization)
+  if (contradictedBeforeReplay !== undefined) {
+    return BranchCleanupOutcome.cases.Preserved.make({ authorization, reason: contradictedBeforeReplay.detail })
   }
   // A valid terminal prefix is the recovery answer. Do not reread or append
   // anything on a second or later invocation of the same settled operation.

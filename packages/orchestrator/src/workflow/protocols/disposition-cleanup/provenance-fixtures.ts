@@ -1,8 +1,11 @@
+/* eslint-disable max-lines -- Shared deterministic authority fixtures preserve exact append chronology for cassettes and focused tests. */
+
 import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutorReport,
+  TaskRevision,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
 import type { PlannedTaskAttempt } from "@dalph/contracts"
@@ -27,8 +30,10 @@ import {
   integratorSuccessorSessionFixedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  attemptImplementationAbandonedRecordKey,
   plannedAttemptReplacedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import {
@@ -75,20 +80,34 @@ import {
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
-import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId, AttemptChoiceSubject } from "../attempt-choice/events.js"
+import {
+  AttemptChoiceAppliedEvent,
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject,
+  AttemptImplementationAbandonedEvent
+} from "../attempt-choice/events.js"
+import {
+  PlannedAttemptCleanupDisposition,
+  WorktreeCleanupAuthorization,
+  WorktreeCleanupEvidenceRevision,
+  WorktreeCleanupOwner
+} from "./disposition.js"
 import { PlannedAttemptReplacedEvent, PlannedAttemptReplacementWitness } from "../attempt-choice/replacement-events.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
+
+import { replacementFixtureIdsFor } from "./provenance-identities.js"
 
 export {
   replacementFixtureIdsFor,
   replacementPredecessorsFor,
   replacementWorktreeObservationOperationIdFor
 } from "./provenance-identities.js"
-import { replacementFixtureIdsFor } from "./provenance-identities.js"
 
 const quarantinePositionOffset = 5
 const activityAbsencePositionOffset = 4
@@ -252,6 +271,19 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
     plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
     PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
   )
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
   const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
   yield* journal.append(
     plannedAttempt.runId,
@@ -342,6 +374,159 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
     })
   )
   return yield* journal.append(plannedAttempt.runId, plannedAttemptReplacedRecordKey(plannedAttempt.attemptId), event)
+})
+
+/**
+ * Appends a complete Stop/Abandoned terminal witness and the exact Git read
+ * used by a worktree cleanup authorization. This fixture intentionally keeps
+ * the responsibility, command intent, correlated safe report, and claim
+ * authority in one immutable chronology so cleanup cannot accept a forged
+ * direct abandonment report.
+ */
+export const appendAbandonedProvenance = Effect.fn("DispositionCleanupTest.appendAbandonedProvenance")(function* (
+  plannedAttempt: PlannedTaskAttempt,
+  cleanupOperationId = OperationId.make(`abandoned:${plannedAttempt.attemptId}:cleanup`)
+) {
+  const journal = yield* JournalStore
+  const began = (yield* journal.read(plannedAttempt.runId)).find(
+    ({ event: candidate }) => candidate._tag === "WorkflowRunBegan"
+  )
+  if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("abandoned fixture requires a begun Run")
+  const suffix = plannedAttempt.attemptId
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make(`abandoned:${suffix}:claim`),
+    owner: ClaimOwner.make("abandoned-fixture"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make(`abandoned:${suffix}:token`)
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make(`abandoned:${suffix}:plan`),
+    plannedAttempt,
+    predecessorOperationIds: [claim.operationId]
+  })
+  const requestId = AttemptChoiceRequestId.make({ nonce: `abandoned:${suffix}:stop`, runId: plannedAttempt.runId })
+  const subject = AttemptChoiceSubject.make({
+    observedTaskRevision: TaskRevision.make(`abandoned:${suffix}:observed`),
+    plannedAttempt
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(claim.operationId),
+    TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(claim.operationId),
+    TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    attemptPlanRecordKey(plannedAttempt.attemptId),
+    TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    attemptChoiceAppliedRecordKey(requestId),
+    AttemptChoiceAppliedEvent.make({
+      choice: "StopTaskImplementation",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId,
+      subject,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+  )
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: reportOrdinal,
+      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  const abandonment = yield* journal.append(
+    plannedAttempt.runId,
+    attemptImplementationAbandonedRecordKey(requestId),
+    AttemptImplementationAbandonedEvent.make({
+      expectedClaim: claim,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      proof: { _tag: "CommandResponse", reportOrdinal },
+      requestId,
+      subject,
+      version: workflowJournalEventVersion
+    })
+  )
+  const observationOperation = WorkflowOperation.cases.ReadTaskWorktree.make({
+    operationId: OperationId.make(`abandoned:${suffix}:worktree-observation`),
+    plannedAttempt,
+    predecessorOperationIds: [claim.operationId]
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(observationOperation.operationId),
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: observationOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const observation = yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(observationOperation.operationId),
+    PlannedAttemptWorktreeObservedEvent.make({
+      observation: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: observationOperation.operationId,
+      version: workflowJournalEventVersion
+    })
+  )
+  const disposition = PlannedAttemptCleanupDisposition.cases.Abandoned.make({
+    dispositionAt: abandonment.position,
+    plannedAttempt,
+    requestId
+  })
+  return WorktreeCleanupAuthorization.make({
+    causalPredecessors: [claim.operationId],
+    disposition,
+    evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
+    expectedHead: plannedAttempt.baseSha,
+    locator: plannedAttempt.worktree,
+    observationAt: observation.position,
+    observationOperationId: observationOperation.operationId,
+    operationId: cleanupOperationId,
+    owner: WorktreeCleanupOwner.make({ attemptId: plannedAttempt.attemptId, branch: plannedAttempt.branch }),
+    writerQuiescent: true
+  })
 })
 
 interface CandidateAuthorityPrefix {

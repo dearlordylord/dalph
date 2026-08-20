@@ -44,6 +44,7 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
           "TaskAttemptPlanned",
           "AttemptChoiceApplied",
           "PlannedAttemptExecutorWorkResponsibilityBegan",
+          "PlannedAttemptExecutorCommandIntended",
           "PlannedAttemptExecutorWorkReported",
           "TaskTrackerReadIntentRecorded",
           "TaskTrackerFactsObserved",
@@ -78,6 +79,7 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
           "TaskAttemptPlanned",
           "AttemptChoiceApplied",
           "PlannedAttemptExecutorWorkResponsibilityBegan",
+          "PlannedAttemptExecutorCommandIntended",
           "PlannedAttemptExecutorWorkReported",
           "TaskTrackerReadIntentRecorded",
           "TaskTrackerFactsObserved",
@@ -90,6 +92,22 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
           "GitReadIntentRecorded",
           "TargetLineageObserved",
           "PlannedAttemptReplaced",
+          ...expected.events
+        ])
+      }
+      if (cassette.scenario === "AbandonedWorktree") {
+        expect(tags).toEqual([
+          "WorkflowRunBegan",
+          "TaskClaimAcquisitionIntended",
+          "TaskClaimAcquired",
+          "TaskAttemptPlanned",
+          "AttemptChoiceApplied",
+          "PlannedAttemptExecutorWorkResponsibilityBegan",
+          "PlannedAttemptExecutorCommandIntended",
+          "PlannedAttemptExecutorWorkReported",
+          "AttemptImplementationAbandoned",
+          "GitReadIntentRecorded",
+          "PlannedAttemptWorktreeObserved",
           ...expected.events
         ])
       }

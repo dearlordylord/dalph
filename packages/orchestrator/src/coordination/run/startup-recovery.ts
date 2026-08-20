@@ -45,6 +45,10 @@ import {
   type CompletionTaskBoundaryService
 } from "../../workflow/protocols/integration-finality/events.js"
 import { ApplicationExitAdmission } from "../application-exit/lifecycle.js"
+import {
+  DispositionCleanupActivation,
+  activateDispositionCleanup
+} from "../../workflow/protocols/disposition-cleanup/loop.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -148,6 +152,11 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     integrationFinality !== undefined,
     completionTask !== undefined
   )
+  // Ordinary activation reconstructs cleanup authority from the exact Run
+  // journal before the caller receives its workflow context.  No caller-made
+  // resource candidate is admitted at this boundary; the composed cleanup
+  // loop consumes this validated set (and family protocols revalidate it).
+  const cleanupResponsibilities = yield* activateDispositionCleanup(runId)
   const evidenceStore = acceptedResultEvidenceStore
   const requiredContext = Context.empty().pipe(
     Context.add(WorkflowInterpreter, interpreter),
@@ -161,7 +170,11 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     Context.add(TaskWorkCapacityControl, taskWorkCapacityControl),
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),
     Context.add(WorkflowTrace, trace),
-    Context.add(CoordinatorOwnership, ownership)
+    Context.add(CoordinatorOwnership, ownership),
+    Context.add(
+      DispositionCleanupActivation,
+      DispositionCleanupActivation.of({ responsibilities: cleanupResponsibilities })
+    )
   )
   const optionalContext = Context.empty().pipe(
     Context.add(DeliveryRuntimeResources, runtimeResources),

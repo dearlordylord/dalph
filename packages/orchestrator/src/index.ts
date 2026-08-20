@@ -168,6 +168,7 @@ export * from "./workflow/protocols/disposition-cleanup/provenance.js"
 export * from "./workflow/protocols/disposition-cleanup/loop.js"
 export {
   appendCandidateProvenance,
+  appendAbandonedProvenance,
   appendCurrentQuarantineProvenance,
   appendReplacementProvenance,
   replacementFixtureIdsFor,

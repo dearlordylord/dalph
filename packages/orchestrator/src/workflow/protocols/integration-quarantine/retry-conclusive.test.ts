@@ -30,7 +30,9 @@ import {
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
-  integratorSessionFixedRecordKey
+  integratorSessionFixedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import {
@@ -149,14 +151,10 @@ const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
   yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
 
   const initialLineageOperationId = OperationId.make("retry-conclusive-initial-lineage")
-  yield* appendRecord(
-    journal,
-    JournalRecordKey.make("retry-conclusive:initial-intent"),
-    makeLineageIntent(initialLineageOperationId)
-  )
+  yield* appendRecord(journal, intentRecordKey(initialLineageOperationId), makeLineageIntent(initialLineageOperationId))
   const initialLineage = yield* appendRecord(
     journal,
-    JournalRecordKey.make("retry-conclusive:initial-observation"),
+    outcomeRecordKey(initialLineageOperationId),
     makeTargetLineage(initialLineageOperationId, fixedHead)
   )
 
@@ -226,14 +224,10 @@ const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
 
   const freshLineageOperationId = OperationId.make("retry-conclusive-fresh-lineage")
   const directionPosition = q1.position + 1
-  yield* appendRecord(
-    journal,
-    JournalRecordKey.make("retry-conclusive:fresh-intent"),
-    makeLineageIntent(freshLineageOperationId)
-  )
+  yield* appendRecord(journal, intentRecordKey(freshLineageOperationId), makeLineageIntent(freshLineageOperationId))
   const freshLineage = yield* appendRecord(
     journal,
-    JournalRecordKey.make("retry-conclusive:fresh-observation"),
+    outcomeRecordKey(freshLineageOperationId),
     makeTargetLineage(freshLineageOperationId, fixedHead)
   )
 

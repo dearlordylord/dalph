@@ -89,6 +89,49 @@ const present = IntegratorCandidateCleanupObservation.cases.Present.make({
   writerQuiescent: true
 })
 
+it.effect("table-reconciles changed candidate owner, locator, and revision without a mutation", () =>
+  Effect.gen(function* () {
+    const foreignSession = IntegratorSessionId.make("session:issue-69-foreign")
+    const cases = [
+      IntegratorCandidateCleanupObservation.cases.Foreign.make({
+        locator: IntegratorCandidateResourceLocator.make("candidate:issue-69-foreign"),
+        observedSessionId: foreignSession,
+        reason: "OtherSession",
+        revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+      }),
+      IntegratorCandidateCleanupObservation.cases.Present.make({
+        locator: predecessor.candidateResource,
+        revision: IntegratorCandidateCleanupEvidenceRevision.make(2),
+        sessionId: foreignSession,
+        writerQuiescent: true
+      }),
+      IntegratorCandidateCleanupObservation.cases.Unreadable.make({
+        detail: "provider read failed",
+        locator: predecessor.candidateResource
+      })
+    ]
+    for (const observation of cases) {
+      const result = yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(
+          runId,
+          FixtureTarget.make("issue-69-candidate-property-protocol"),
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        )
+        yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+        const outcome = yield* runIntegratorCandidateCleanup(authorization)
+        const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
+        return { calls, outcome }
+      }).pipe(
+        Effect.provide(integratorCandidateCleanupTestLayer({ observations: [observation] })),
+        Effect.provide(memoryJournalTestLayer)
+      )
+      expect(result.outcome._tag).toBe("Preserved")
+      expect(result.calls.map(({ _tag }) => _tag)).toEqual(["Observe"])
+    }
+  })
+)
+
 it.effect("removes only a quarantined predecessor candidate", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore

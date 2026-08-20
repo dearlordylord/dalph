@@ -27,7 +27,9 @@ import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memor
 import {
   outcomeRecordKey,
   intentRecordKey,
-  worktreeCleanupObservationIntendedRecordKey
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  worktreeCleanupObservationIntendedRecordKey,
+  worktreeCleanupAuthorizedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
@@ -45,14 +47,23 @@ import {
   worktreeCleanupTestLayer,
   WorktreeCleanupMutationResult,
   WorktreeCleanupObservationIntendedEvent,
-  WorktreeCleanupObservation
+  WorktreeCleanupObservation,
+  WorktreeCleanupAuthorizedEvent
 } from "./worktree.js"
+import { branchCleanupTestLayer } from "./branch.js"
+import { integratorCandidateCleanupTestLayer } from "./integrator-candidate.js"
+import { activateDispositionCleanup, runDispositionCleanupLoop } from "./loop.js"
 import {
+  appendAbandonedProvenance,
   appendReplacementProvenance,
   replacementPredecessorsFor,
   replacementWorktreeObservationOperationIdFor
 } from "./provenance-fixtures.js"
 import { validateWorktreeCleanupHistory } from "./provenance.js"
+import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal
+} from "../planned-attempt-executor-work/events.js"
 
 const runId = RunId.make("issue-69-worktree-run")
 const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
@@ -76,7 +87,7 @@ const successor = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
-  dispositionAt: JournalPosition.make(18),
+  dispositionAt: JournalPosition.make(19),
   plannedAttempt: attempt,
   successorAttempt: successor
 })
@@ -86,7 +97,7 @@ const authorization = WorktreeCleanupAuthorization.make({
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.worktree,
-  observationAt: JournalPosition.make(15),
+  observationAt: JournalPosition.make(16),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
@@ -119,6 +130,13 @@ const present = WorktreeCleanupObservation.cases.Present.make({
   writerQuiescent: true
 })
 
+const secondAttempt = PlannedTaskAttempt.make({
+  ...attempt,
+  attemptId: AttemptId.make("issue-69-p1-second"),
+  branch: TaskBranchRef.make("refs/heads/task/issue-69-p1-second"),
+  worktree: WorktreeLocator.make("/tmp/issue-69-p1-second")
+})
+
 it.effect("removes the exact superseded worktree after fresh matching facts", () =>
   setup(
     [
@@ -143,6 +161,177 @@ it.effect("removes the exact superseded worktree after fresh matching facts", ()
       })
     )
   )
+)
+
+it.effect("ordinary activation selects two exact worktree operations independently and excludes a contradiction", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-ordinary-cleanup-activation"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const firstAuthorization = yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-valid-cleanup-1"))
+    const secondAuthorization = yield* appendAbandonedProvenance(
+      secondAttempt,
+      OperationId.make("issue-69-valid-cleanup-2")
+    )
+    const contradictoryAuthorization = WorktreeCleanupAuthorization.make({
+      ...firstAuthorization,
+      expectedHead: GitCommitSha.make("2".repeat(40)),
+      operationId: OperationId.make("issue-69-contradictory-cleanup")
+    })
+    yield* journal.append(
+      runId,
+      worktreeCleanupAuthorizedRecordKey(firstAuthorization.operationId),
+      WorktreeCleanupAuthorizedEvent.make({
+        authorization: firstAuthorization,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      worktreeCleanupAuthorizedRecordKey(secondAuthorization.operationId),
+      WorktreeCleanupAuthorizedEvent.make({
+        authorization: secondAuthorization,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      worktreeCleanupAuthorizedRecordKey(contradictoryAuthorization.operationId),
+      WorktreeCleanupAuthorizedEvent.make({
+        authorization: contradictoryAuthorization,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    const activated = yield* activateDispositionCleanup(runId)
+    expect(activated.worktree.map(({ operationId }) => operationId)).toEqual([
+      firstAuthorization.operationId,
+      secondAuthorization.operationId
+    ])
+    const loop = yield* runDispositionCleanupLoop(runId)
+    expect(loop.worktreeOutcomes.map(({ _tag }) => _tag)).toEqual(["Settled", "Settled"])
+    expect(loop.worktreeOutcomes.map(({ authorization }) => authorization.operationId)).toEqual([
+      firstAuthorization.operationId,
+      secondAuthorization.operationId
+    ])
+    expect((yield* (yield* TestWorktreeCleanupBoundary).calls()).map(({ operationId }) => operationId)).not.toContain(
+      contradictoryAuthorization.operationId
+    )
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          present,
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          }),
+          WorktreeCleanupObservation.cases.Present.make({
+            attemptId: secondAttempt.attemptId,
+            branch: secondAttempt.branch,
+            headSha: secondAttempt.baseSha,
+            locator: secondAttempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(1),
+            writerQuiescent: true
+          }),
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: secondAttempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          }),
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: secondAttempt.branch,
+            locator: secondAttempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(branchCleanupTestLayer({ observations: [] })),
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("removes an abandoned worktree only after the durable Stop and executor witness", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-abandoned-worktree"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const abandonedAuthorization = yield* appendAbandonedProvenance(attempt)
+    const result = yield* runWorktreeCleanup(abandonedAuthorization)
+    expect(result._tag).toBe("Settled")
+    expect((yield* (yield* TestWorktreeCleanupBoundary).calls()).map((call) => call._tag)).toEqual([
+      "Observe",
+      "Remove",
+      "Observe"
+    ])
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          present,
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("preserves an abandoned cleanup when a later executor command follows the safe report", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-abandoned-later-command"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const abandonedAuthorization = yield* appendAbandonedProvenance(attempt)
+    const laterOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, laterOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: laterOrdinal,
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const result = yield* runWorktreeCleanup(abandonedAuthorization)
+    expect(result._tag).toBe("Preserved")
+    expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
+  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("replays a settled worktree twice without a boundary call or journal write", () =>

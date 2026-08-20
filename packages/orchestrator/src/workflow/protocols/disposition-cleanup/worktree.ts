@@ -337,6 +337,14 @@ const existingSettled = (records: ReadonlyArray<JournalRecord>, authorization: W
       worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
   )?.event
 
+const existingContradiction = (records: ReadonlyArray<JournalRecord>, authorization: WorktreeCleanupAuthorization) =>
+  records.find(
+    (record): record is JournalRecord & { readonly event: WorktreeCleanupContradictedEvent } =>
+      record.event._tag === "WorktreeCleanupContradicted" &&
+      record.event.authorization.operationId === authorization.operationId &&
+      worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
+  )?.event
+
 const observationHasAuthorizedLocator = (
   observation: WorktreeCleanupObservation,
   authorization: WorktreeCleanupAuthorization
@@ -488,6 +496,11 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
   const history = validateWorktreeCleanupHistory(records, authorization)
   if (history._tag === "Invalid") {
     return WorktreeCleanupOutcome.cases.Preserved.make({ authorization, reason: history.detail })
+  }
+
+  const contradictedBeforeReplay = existingContradiction(records, authorization)
+  if (contradictedBeforeReplay !== undefined) {
+    return WorktreeCleanupOutcome.cases.Preserved.make({ authorization, reason: contradictedBeforeReplay.detail })
   }
 
   // A valid terminal prefix is already the durable answer. Replaying it must

@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Family-specific provenance and history checks stay co-located for auditability. */
 
-import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
+import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { Match } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
@@ -38,9 +38,13 @@ import {
   worktreeCleanupSettledRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../attempt-choice/events.js"
-import { latestPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
+import {
+  exactAppliedRestart,
+  exactExecutorQuiescenceEvidence,
+  recordedReplacement,
+  restartClaimAuthorityAtApplication
+} from "../attempt-choice/restart-authority-evidence.js"
 import type { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
-import type { AttemptChoiceRequestId, AttemptChoiceSubject, AttemptQuiescenceProof } from "../attempt-choice/events.js"
 import type { OperationId } from "../../identity.js"
 import { integratorCorrelationsEqual, validateIntegratorSuccessorSessionFixed } from "../integrator/state.js"
 import {
@@ -48,7 +52,7 @@ import {
   integratorRetryRunOrdinal,
   integratorSuccessorChronologyIsValid
 } from "../integrator/events.js"
-import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-authorization.js"
+import { evaluateIntegratorFullRerunAuthorization } from "../integrator/retry-authorization.js"
 import {
   IntegrationQuarantineDirectionFingerprint,
   integrationQuarantineDirectionSubject
@@ -57,6 +61,8 @@ import {
   quarantineRecordForFingerprint,
   validateProviderRunActivityAbsent
 } from "../integration-quarantine/canonical-provenance.js"
+import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
+import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
 import {
   branchCleanupAuthorizationEquals,
@@ -119,100 +125,6 @@ const structuralEqual = (left: unknown, right: unknown): boolean => {
 
 type SettlementContext = { readonly absence: JournalRecord; readonly mutationResult: JournalRecord | undefined }
 
-type RestartApplicationRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
-    readonly choice: "RestartTaskImplementation"
-  }
-}
-
-const exactAppliedRestart = (
-  records: ReadonlyArray<JournalRecord>,
-  requestId: AttemptChoiceRequestId,
-  subject: AttemptChoiceSubject
-): RestartApplicationRecord | undefined =>
-  records.find(
-    (record): record is RestartApplicationRecord =>
-      record.event._tag === "AttemptChoiceApplied" &&
-      record.event.choice === "RestartTaskImplementation" &&
-      sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
-      sameAttemptChoiceSubject(record.event.subject, subject)
-  )
-
-const recordedReplacement = (
-  records: ReadonlyArray<JournalRecord>,
-  subject: AttemptChoiceSubject
-): JournalRecord | undefined => {
-  const replacements = records.filter(
-    (record) =>
-      record.event._tag === "PlannedAttemptReplaced" &&
-      plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, subject.plannedAttempt)
-  )
-  return replacements.length === 1 ? replacements[0] : undefined
-}
-
-/** Reconstructs the exact claim retained at a Restart application's position. */
-const claimAuthorityAtApplication = (
-  records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
-  application: RestartApplicationRecord
-): ActiveTaskClaim | undefined => {
-  const claim = records.findLast(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>
-    } => {
-      if (
-        record.position > application.position ||
-        record.event._tag !== "TaskClaimAcquired" ||
-        record.event.claim.taskId !== plannedAttempt.taskId
-      ) {
-        return false
-      }
-      const claim = record.event.claim
-      return records.some((intent) => {
-        if (
-          intent.position >= record.position ||
-          intent.runId !== record.runId ||
-          intent.event._tag !== "TaskClaimAcquisitionIntended" ||
-          intent.key !== intentRecordKey(claim.operationId)
-        ) {
-          return false
-        }
-        return (
-          intent.event.operation.acquisition.operationId === claim.operationId &&
-          intent.event.operation.acquisition.taskId === claim.taskId &&
-          intent.event.operation.acquisition.owner === claim.owner &&
-          intent.event.operation.acquisition.token === claim.token
-        )
-      })
-    }
-  )
-  return claim?.event.claim
-}
-
-const proofFor = (
-  evidence: NonNullable<ReturnType<typeof latestPlannedAttemptExecutorEvidence>>
-): AttemptQuiescenceProof =>
-  Match.valueTags(evidence.source, {
-    CommandResponse: ({ ordinal }) => ({ _tag: "CommandResponse" as const, reportOrdinal: ordinal }),
-    CommandProjection: ({ commandOrdinal, projectionOrdinal }) => ({
-      _tag: "CommandProjection" as const,
-      commandOrdinal,
-      projectionOrdinal
-    }),
-    StateProjection: ({ ordinal }) => ({ _tag: "StateProjection" as const, observationOrdinal: ordinal })
-  })
-
-const terminalRestartQuiescence = (
-  evidence: NonNullable<ReturnType<typeof latestPlannedAttemptExecutorEvidence>>,
-  application: RestartApplicationRecord
-): boolean =>
-  evidence.report._tag === "Terminal" &&
-  evidence.report.result._tag !== "Completed" &&
-  evidence.report.result._tag !== "Failed" &&
-  evidence.observedAt > application.position
-
 /** Links terminal result identity to the exact successful mutation or absence reconciliation. */
 const settlementResultMatches = (
   settledResult: unknown,
@@ -223,8 +135,16 @@ const settlementResultMatches = (
 ): boolean => {
   const absenceEvent = context.absence.event
   if (absenceEvent._tag !== absenceTag || !isRecord(absenceEvent)) return false
-  if (!("observation" in absenceEvent) || !isRecord(absenceEvent.observation)) return false
-  const absenceObservation = absenceEvent.observation
+  const absenceObservationValue: unknown = "observation" in absenceEvent ? absenceEvent.observation : undefined
+  if (!isRecord(absenceObservationValue)) return false
+  const absenceObservation = absenceObservationValue
+  if (
+    !isRecord(settledResult) ||
+    !Object.prototype.hasOwnProperty.call(settledResult, "revision") ||
+    settledResult["revision"] !== absenceObservation["revision"]
+  ) {
+    return false
+  }
   const recordedMutation = context.mutationResult?.event
   if (
     recordedMutation !== undefined &&
@@ -245,52 +165,6 @@ const claimsEqual = (left: ActiveTaskClaim, right: ActiveTaskClaim): boolean =>
   left.owner === right.owner &&
   left.taskId === right.taskId &&
   left.token === right.token
-
-const quiescenceProofsEqual = (left: AttemptQuiescenceProof, right: AttemptQuiescenceProof): boolean => {
-  if (left._tag !== right._tag) return false
-  switch (left._tag) {
-    case "CommandResponse":
-      return right._tag === "CommandResponse" && right.reportOrdinal === left.reportOrdinal
-    case "CommandProjection":
-      return (
-        right._tag === "CommandProjection" &&
-        right.commandOrdinal === left.commandOrdinal &&
-        right.projectionOrdinal === left.projectionOrdinal
-      )
-    case "StateProjection":
-      return right._tag === "StateProjection" && right.observationOrdinal === left.observationOrdinal
-  }
-}
-
-const exactExecutorQuiescence = (
-  records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
-  after: JournalPosition,
-  before: JournalPosition,
-  expected: AttemptQuiescenceProof,
-  application?: ReturnType<typeof exactAppliedRestart>
-): boolean => {
-  const evidence = latestPlannedAttemptExecutorEvidence(
-    records.filter((record) => record.position < before),
-    plannedAttempt
-  )
-  if (evidence === undefined || evidence.observedAt <= after || evidence.observedAt >= before) return false
-  const laterExecutorCommand = records.some(
-    ({ event, position }) =>
-      position > evidence.observedAt &&
-      position < before &&
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.runId === plannedAttempt.runId &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )
-  if (laterExecutorCommand) return false
-  const quiescent =
-    evidence.report._tag === "SafelySuspended" ||
-    (evidence.report._tag === "Terminal" && application === undefined) ||
-    (application !== undefined && terminalRestartQuiescence(evidence, application))
-  const proof = proofFor(evidence)
-  return quiescent && proof !== undefined && quiescenceProofsEqual(proof, expected)
-}
 
 const replacementWitnessOperationIds = (
   replacement: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
@@ -388,7 +262,7 @@ const validateReplacementWitnessRecords = (
     graphOutcome.position >= before ||
     graphOutcome.event._tag !== "TaskTrackerFactsObserved" ||
     graphOutcome.event.observation._tag !== "CompleteTaskTrackerFacts" ||
-    !graphOutcome.event.observation.factFamilies[0]?.taskIds.includes(replacement.subject.plannedAttempt.taskId) ||
+    !graphOutcome.event.observation.factFamilies[0].taskIds.includes(replacement.subject.plannedAttempt.taskId) ||
     !graphIntentIsExact
   ) {
     return "replacement provenance lacks the exact graph read intent and complete facts outcome"
@@ -544,7 +418,7 @@ const validatePlannedAttemptDisposition = (
       return invalid("replacement provenance Restart choice has a foreign position, Run, or key")
     }
     if (
-      !exactExecutorQuiescence(
+      !exactExecutorQuiescenceEvidence(
         records,
         disposition.plannedAttempt,
         appliedRestart.position,
@@ -555,8 +429,8 @@ const validatePlannedAttemptDisposition = (
     ) {
       return invalid("replacement provenance lacks the exact executor quiescence proof")
     }
-    const retainedClaim = claimAuthorityAtApplication(records, disposition.plannedAttempt, appliedRestart)
-    if (retainedClaim === undefined || !claimsEqual(retainedClaim, replacement.witness.expectedClaim)) {
+    const retainedClaim = restartClaimAuthorityAtApplication(records, appliedRestart)
+    if (retainedClaim === undefined || !claimsEqual(retainedClaim.claim, replacement.witness.expectedClaim)) {
       return invalid("replacement provenance lacks the exact claim authority at Restart application")
     }
     if (
@@ -604,7 +478,7 @@ const validatePlannedAttemptDisposition = (
     if (appliedChoice === undefined) return invalid("abandonment provenance lacks the applied Stop choice")
     if (
       record.event.proof._tag === "CommandResponse" &&
-      !exactExecutorQuiescence(
+      !exactExecutorQuiescenceEvidence(
         records,
         disposition.plannedAttempt,
         appliedChoice.position,
@@ -616,7 +490,7 @@ const validatePlannedAttemptDisposition = (
     }
     if (
       record.event.proof._tag !== "CommandResponse" &&
-      !exactExecutorQuiescence(
+      !exactExecutorQuiescenceEvidence(
         records,
         disposition.plannedAttempt,
         appliedChoice.position,
@@ -626,40 +500,11 @@ const validatePlannedAttemptDisposition = (
     ) {
       return invalid("abandonment provenance lacks the exact executor quiescence proof")
     }
-    const retainedClaim = records.findLast(
-      (
-        candidate
-      ): candidate is JournalRecord & {
-        readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>
-      } => {
-        if (
-          candidate.position > appliedChoice.position ||
-          candidate.event._tag !== "TaskClaimAcquired" ||
-          candidate.event.claim.taskId !== disposition.plannedAttempt.taskId ||
-          candidate.event.claim.operationId !== abandonment.expectedClaim.operationId
-        ) {
-          return false
-        }
-        const claim = candidate.event.claim
-        return records.some((intent) => {
-          if (
-            intent.position >= candidate.position ||
-            intent.runId !== candidate.runId ||
-            intent.event._tag !== "TaskClaimAcquisitionIntended" ||
-            intent.key !== intentRecordKey(claim.operationId)
-          ) {
-            return false
-          }
-          return (
-            intent.event.operation.acquisition.operationId === claim.operationId &&
-            intent.event.operation.acquisition.taskId === claim.taskId &&
-            intent.event.operation.acquisition.owner === claim.owner &&
-            intent.event.operation.acquisition.token === claim.token
-          )
-        })
-      }
+    const retainedClaim = authorizedClaimForAttempt(
+      records.filter(({ position }) => position <= record.position),
+      disposition.plannedAttempt
     )
-    if (retainedClaim === undefined || !claimsEqual(retainedClaim.event.claim, abandonment.expectedClaim)) {
+    if (retainedClaim === undefined || !claimsEqual(retainedClaim.claim, abandonment.expectedClaim)) {
       return invalid("abandonment provenance lacks the exact stopped claim authority")
     }
     if (!operationIdsEqual(causalPredecessors, [abandonment.expectedClaim.operationId])) {
@@ -702,7 +547,8 @@ const validateWorktreeAuthorityObservation = (
   family: "worktree" | "branch"
 ): CleanupProvenanceValidation => {
   const plannedAttempt = authorization.disposition.plannedAttempt
-  const observation = recordAt(records, authorization.observationAt)
+  const observations = records.filter((record) => record.position === authorization.observationAt)
+  const observation = observations.length === 1 ? observations[0] : undefined
   if (
     observation?.event._tag !== "PlannedAttemptWorktreeObserved" ||
     observation.runId !== plannedAttempt.runId ||
@@ -717,7 +563,7 @@ const validateWorktreeAuthorityObservation = (
   ) {
     return invalid(`${family} cleanup authorization does not bind an exact preceding planned-worktree observation`)
   }
-  const intent = records.find(
+  const intents = records.filter(
     (record) =>
       record.position < observation.position &&
       record.runId === plannedAttempt.runId &&
@@ -727,7 +573,7 @@ const validateWorktreeAuthorityObservation = (
       record.event.operation.operationId === authorization.observationOperationId &&
       plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, plannedAttempt)
   )
-  if (intent === undefined) {
+  if (intents.length !== 1) {
     return invalid(`${family} cleanup authorization lacks the exact preceding planned-worktree read intent`)
   }
   const authorizationPosition = firstCleanupAuthorizationPosition(
@@ -765,33 +611,19 @@ const validateCandidateAuthorityObservation = (
   authorization: IntegratorCandidateCleanupAuthorization
 ): CleanupProvenanceValidation => {
   const predecessor = authorization.disposition.predecessor
-  const observation = recordAt(records, authorization.observationAt)
+  const lineage = exactTargetLineageRecord(records, {
+    expectedTargetHead: predecessor.expectedTargetHead,
+    integrationTarget: predecessor.integrationTarget,
+    plannedAttempt: predecessor.plannedAttempt,
+    targetLineageObservedAt: authorization.observationAt
+  })
+  const observation = lineage?.observation
   if (
-    observation?.event._tag !== "TargetLineageObserved" ||
-    observation.runId !== predecessor.plannedAttempt.runId ||
-    observation.key !== outcomeRecordKey(authorization.observationOperationId) ||
+    observation === undefined ||
     observation.event.operationId !== authorization.observationOperationId ||
-    !plannedTaskAttemptEquivalence(observation.event.plannedAttempt, predecessor.plannedAttempt) ||
-    observation.event.observation.plannedBaseSha !== predecessor.plannedAttempt.baseSha ||
-    observation.event.observation.targetHeadSha !== predecessor.expectedTargetHead ||
-    !observation.event.observation.plannedBaseIsAncestorOfTargetHead
+    observation.key !== outcomeRecordKey(authorization.observationOperationId)
   ) {
     return invalid("candidate cleanup authorization does not bind the exact predecessor target-lineage observation")
-  }
-  const intent = records.find(
-    (record) =>
-      record.position < observation.position &&
-      record.runId === predecessor.plannedAttempt.runId &&
-      record.key === intentRecordKey(authorization.observationOperationId) &&
-      record.event._tag === "GitReadIntentRecorded" &&
-      record.event.operation._tag === "ReadTargetLineage" &&
-      record.event.operation.operationId === authorization.observationOperationId &&
-      plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, predecessor.plannedAttempt) &&
-      record.event.operation.integrationTarget.repository === predecessor.integrationTarget.repository &&
-      record.event.operation.integrationTarget.ref === predecessor.integrationTarget.ref
-  )
-  if (intent === undefined) {
-    return invalid("candidate cleanup authorization lacks the exact predecessor target-lineage read intent")
   }
   const authorizationPosition = firstCleanupAuthorizationPosition(records, authorization.operationId, [
     "IntegratorCandidateCleanupAuthorized",
@@ -960,11 +792,12 @@ export const validateIntegratorCandidateCleanupProvenance = (
     ordinal: integratorRetryRunOrdinal,
     session: disposition.successor
   })
-  const canonicalSuccessorAuthorization = evaluateIntegratorRetryAuthorization(records, successorRun, {
-    predecessorSession: disposition.predecessor,
-    requiredDirection: "FullRerun",
-    requiredTargetLineageObservedAt: disposition.successor.targetLineageObservedAt
-  })
+  const canonicalSuccessorAuthorization = evaluateIntegratorFullRerunAuthorization(
+    records,
+    successorRun,
+    disposition.predecessor,
+    disposition.successor.targetLineageObservedAt
+  )
   if (canonicalSuccessorAuthorization._tag === "Rejected") {
     return invalid(`candidate cleanup successor retry reconstruction failed: ${canonicalSuccessorAuthorization.detail}`)
   }

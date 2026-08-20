@@ -29,7 +29,9 @@ import {
   integrationQuarantinedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
-  integratorSuccessorSessionFixedRecordKey
+  integratorSuccessorSessionFixedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import {
   InRunJournal,
@@ -110,9 +112,26 @@ const detail = IntegrationQuarantineFailureDetail.make("the provider has no owne
 const makeHistory = Effect.fn("ProviderFailureTest.makeHistory")(function* () {
   const journal = yield* JournalStore
   yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  const lineageOperationId = OperationId.make("provider-failure:lineage-operation")
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: responsibility.integrationTarget,
+    operationId: lineageOperationId,
+    plannedAttempt,
+    predecessorOperationIds: []
+  })
+  yield* journal.append(
+    runId,
+    intentRecordKey(lineageOperationId),
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: lineageOperation,
+      version: workflowJournalEventVersion
+    })
+  )
   const lineage = yield* journal.append(
     runId,
-    JournalRecordKey.make("provider-failure:lineage"),
+    outcomeRecordKey(lineageOperationId),
     TargetLineageObservedEvent.make({
       observation: TargetLineageObservation.make({
         plannedBaseIsAncestorOfTargetHead: true,
@@ -120,7 +139,7 @@ const makeHistory = Effect.fn("ProviderFailureTest.makeHistory")(function* () {
         targetHeadSha: targetHead
       }),
       occurrenceClassification: "NonActionOccurrence",
-      operationId: OperationId.make("provider-failure:lineage-operation"),
+      operationId: lineageOperationId,
       plannedAttempt,
       version: workflowJournalEventVersion
     })
@@ -194,7 +213,7 @@ const makeRetryHistory = Effect.fn("ProviderFailureTest.makeRetryHistory")(funct
   const freshOperationId = OperationId.make("provider-failure:fresh-lineage-operation")
   yield* history.journal.append(
     runId,
-    JournalRecordKey.make("provider-failure:fresh-lineage-intent"),
+    intentRecordKey(freshOperationId),
     GitReadIntentRecordedEvent.make({
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
@@ -209,7 +228,7 @@ const makeRetryHistory = Effect.fn("ProviderFailureTest.makeRetryHistory")(funct
   )
   yield* history.journal.append(
     runId,
-    JournalRecordKey.make("provider-failure:fresh-lineage-observation"),
+    outcomeRecordKey(freshOperationId),
     TargetLineageObservedEvent.make({
       observation: TargetLineageObservation.make({
         plannedBaseIsAncestorOfTargetHead: true,
@@ -259,7 +278,7 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
   const freshOperationId = OperationId.make("provider-failure:successor-lineage-operation")
   yield* history.journal.append(
     runId,
-    JournalRecordKey.make("provider-failure:successor-lineage-intent"),
+    intentRecordKey(freshOperationId),
     GitReadIntentRecordedEvent.make({
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
@@ -274,7 +293,7 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
   )
   const freshLineage = yield* history.journal.append(
     runId,
-    JournalRecordKey.make("provider-failure:successor-lineage-observation"),
+    outcomeRecordKey(freshOperationId),
     TargetLineageObservedEvent.make({
       observation: TargetLineageObservation.make({
         plannedBaseIsAncestorOfTargetHead: true,

@@ -101,6 +101,7 @@ interface CleanupHistoryState {
   readonly mutations: ReadonlyMap<string, JournalRecord>
   readonly mutationResults: ReadonlyMap<string, JournalRecord>
   readonly latestAbsence: JournalRecord | undefined
+  readonly contradictedPosition: JournalPosition | undefined
   readonly settledPosition: JournalPosition | undefined
 }
 
@@ -110,6 +111,7 @@ const emptyState = (): CleanupHistoryState => ({
   mutations: new Map(),
   mutationResults: new Map(),
   latestAbsence: undefined,
+  contradictedPosition: undefined,
   settledPosition: undefined
 })
 
@@ -184,6 +186,9 @@ export const validateCleanupHistory = <Authorization>(
     if (event._tag === data.authorizationTag) continue
     if (state.settledPosition !== undefined) {
       return invalid("cleanup history contains an event after terminal settlement")
+    }
+    if (state.contradictedPosition !== undefined) {
+      return invalid("cleanup history contains an event after terminal contradiction")
     }
     const recordedAuthorization = strategies.authorizationOf(event)
     if (
@@ -299,6 +304,7 @@ export const validateCleanupHistory = <Authorization>(
       if (identity === undefined || !exactRecord(record, data.runId, identity.recordKey) || !identity.identityMatches) {
         return invalid("cleanup contradiction has a foreign key, authorization, or subject")
       }
+      state = { ...state, contradictedPosition: record.position }
       continue
     }
 

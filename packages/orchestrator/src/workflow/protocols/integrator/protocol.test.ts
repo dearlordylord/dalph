@@ -26,7 +26,9 @@ import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/ide
 import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
-  integrationQuarantinedRecordKey
+  integrationQuarantinedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
@@ -356,7 +358,7 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
   const operationId = OperationId.make("operation-target-lineage-retry")
   const intent = yield* harness.journal.append(
     runId,
-    JournalRecordKey.make("integrator-retry:lineage-intent"),
+    intentRecordKey(operationId),
     GitReadIntentRecordedEvent.make({
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
@@ -371,7 +373,7 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
   )
   const observation = yield* harness.journal.append(
     runId,
-    JournalRecordKey.make("integrator-retry:lineage-observation"),
+    outcomeRecordKey(operationId),
     TargetLineageObservedEvent.make({
       observation: TargetLineageObservation.make({
         plannedBaseIsAncestorOfTargetHead: true,
@@ -1464,7 +1466,7 @@ describe("outer Integrator protocol", () => {
       const secondOperationId = OperationId.make("operation-target-lineage-retry-second")
       yield* harness.journal.append(
         runId,
-        JournalRecordKey.make("integrator-retry:lineage-intent-second"),
+        intentRecordKey(secondOperationId),
         GitReadIntentRecordedEvent.make({
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
@@ -1479,7 +1481,7 @@ describe("outer Integrator protocol", () => {
       )
       yield* harness.journal.append(
         runId,
-        JournalRecordKey.make("integrator-retry:lineage-observation-second"),
+        outcomeRecordKey(secondOperationId),
         TargetLineageObservedEvent.make({
           observation: TargetLineageObservation.make({
             plannedBaseIsAncestorOfTargetHead: true,

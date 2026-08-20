@@ -395,6 +395,17 @@ const existingSettled = (
       integratorCandidateCleanupAuthorizationEquals(record.event.authorization, authorization)
   )?.event
 
+const existingContradiction = (
+  records: ReadonlyArray<JournalRecord>,
+  authorization: IntegratorCandidateCleanupAuthorization
+) =>
+  records.find(
+    (record): record is JournalRecord & { readonly event: IntegratorCandidateCleanupContradictedEvent } =>
+      record.event._tag === "IntegratorCandidateCleanupContradicted" &&
+      record.event.authorization.operationId === authorization.operationId &&
+      integratorCandidateCleanupAuthorizationEquals(record.event.authorization, authorization)
+  )?.event
+
 const observeFresh = Effect.fn("IntegratorCandidateCleanup.observeFresh")(function* (
   authorization: IntegratorCandidateCleanupAuthorization,
   records: ReadonlyArray<JournalRecord>
@@ -530,6 +541,13 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
   const history = validateIntegratorCandidateCleanupHistory(records, authorization)
   if (history._tag === "Invalid") {
     return IntegratorCandidateCleanupOutcome.cases.Preserved.make({ authorization, reason: history.detail })
+  }
+  const contradictedBeforeReplay = existingContradiction(records, authorization)
+  if (contradictedBeforeReplay !== undefined) {
+    return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
+      authorization,
+      reason: contradictedBeforeReplay.detail
+    })
   }
   // A valid terminal prefix is the recovery answer. Do not reread or append
   // anything on a second or later invocation of the same settled operation.
