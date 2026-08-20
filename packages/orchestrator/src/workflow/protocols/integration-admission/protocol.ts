@@ -353,7 +353,6 @@ const transferredAdmissionIndexesFor = (
   const predecessor = journalPrefixPredecessorOf(records)
   if (predecessor === undefined || predecessor.appended !== records[records.length - 1]) return undefined
   const prior = integrationAdmissionPrefixIndexesFor(predecessor.prior)
-  if (!admissionIndexesByPrefix.has(predecessor.prior)) return undefined
   admissionIndexesByPrefix.delete(predecessor.prior)
   advanceIntegrationAdmissionPrefixIndexes(prior, predecessor.appended)
   return prior

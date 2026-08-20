@@ -410,6 +410,7 @@ it("settles an exact finality prefix, rejects a mismatch, and suppresses a later
   const unrelatedAppend = [...settled, responsibilityRecordAt(7)]
 
   expect(deriveIntegrationAdmission(prior).responsibilities).toHaveLength(1)
+  expect(deriveIntegrationAdmission(finalityRecords({ duplicateFacts: true }))).toEqual({ responsibilities: [] })
   rememberValidatedJournalPrefixSuccessor(
     { records: prior, runId: fixture.runId },
     { records: settled, runId: fixture.runId },
@@ -468,6 +469,7 @@ it("incrementally preserves accepted-result suppression for queued, unknown, and
   expect(appendAndDerive([], acceptedReportAt(1))).toEqual([])
   expect(appendAndDerive([responsibilityRecordAt(1)], runningReportAt(2))).toEqual([])
   expect(appendAndDerive([responsibilityRecordAt(1), restartChoiceAt(2)], acceptedReportAt(3))).toEqual([])
+  expect(appendAndDerive([responsibilityRecordAt(1)], acceptedReportAt(2))).toHaveLength(1)
 })
 
 it.effect("queues only a durable accepted result after restart and evidence checks", () =>

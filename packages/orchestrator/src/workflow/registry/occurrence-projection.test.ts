@@ -221,6 +221,58 @@ it("projects both integration actions and rejects every inexact start relationsh
   })
 })
 
+it.effect("rejects an integration start whose responsibility facts are not exact", () =>
+  Effect.gen(function* () {
+    const mismatchedAttempt = PlannedTaskAttempt.make({
+      ...plannedAttempt,
+      attemptId: AttemptId.make("occurrence-mismatched-start-attempt")
+    })
+    const failure = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        IntegrationResponsibilityBeganEvent.make({
+          acceptedResult,
+          integrationTarget,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        2,
+        IntegrationStartedEvent.make({
+          acceptedResult,
+          integrationTarget,
+          plannedAttempt: mismatchedAttempt,
+          responsibilityBeganAt: JournalPosition.make(1),
+          version: workflowJournalEventVersion
+        })
+      )
+    ]).pipe(Effect.flip)
+
+    expect(failure._tag).toBe("SchemaError")
+  })
+)
+
+it.effect("keeps duplicate integration responsibility occurrences fail-closed without mutating the first index", () =>
+  Effect.gen(function* () {
+    const first = record(
+      1,
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const duplicate = { ...first, key: JournalRecordKey.make("occurrence-duplicate-responsibility") }
+    const projection = yield* projectWorkflowOccurrences([first, duplicate])
+
+    expect(projection.occurrences).toHaveLength(2)
+    expect(projection.occurrences[0]?.recordedAt).toEqual(JournalPosition.make(1))
+    expect(projection.occurrences[1]?.recordedAt).toEqual(JournalPosition.make(1))
+  })
+)
+
 it.effect("projects journaled integration actions through the complete occurrence boundary", () =>
   Effect.gen(function* () {
     const projection = yield* projectWorkflowOccurrences([

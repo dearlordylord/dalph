@@ -505,9 +505,6 @@ const invalidNonRestartOutcomeRelationship = (
   if (occurrence._tag === "TaskTrackerFactsObserved") {
     return invalidTrackerRelationship(indexes.trackerActions, occurrence, index)
   }
-  if (isRestartDependentOccurrence(occurrence)) {
-    return invalidRestartOccurrenceRelationship(indexes, occurrence, index)
-  }
   if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
     return invalidExecutorRelationship(indexes.executorResponsibilities, occurrence, index)
   }

@@ -44,7 +44,11 @@ import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../wo
 import { JournalReadSource } from "../workflow-journal/read-source.js"
 import { InRunJournal, JournalStore, RunLifecycleJournal, type JournalRecord } from "../workflow-journal/store.js"
 import { OperationId } from "../workflow/identity.js"
-import { TaskClaimAcquisitionIntendedEvent, taskTrackerReadIntent } from "../workflow/registry/event.js"
+import {
+  TaskClaimAcquisitionIntendedEvent,
+  WorkflowRunBeganEvent,
+  taskTrackerReadIntent
+} from "../workflow/registry/event.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
@@ -194,6 +198,46 @@ const sqliteReaderLayer = (filename: JournalDatabaseLocator) => {
 
 const readerFromRecords = (records: ReadonlyArray<JournalRecord>) =>
   makeTraceReader({ read: () => Effect.succeed(records) })
+
+it.effect("maps projection failures consistently through complete and cursor trace reads", () =>
+  Effect.gen(function* () {
+    const records: ReadonlyArray<JournalRecord> = [
+      {
+        event: WorkflowRunBeganEvent.make({
+          initialControlPolicy: initialPolicy,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          target,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("trace-projection-invalid-begin"),
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: IntegrationStartedEvent.make({
+          acceptedResult: integrationAcceptedResult,
+          integrationTarget,
+          plannedAttempt: integrationPlannedAttempt,
+          responsibilityBeganAt: JournalPosition.make(1),
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("trace-projection-invalid-start"),
+        position: JournalPosition.make(2),
+        runId
+      }
+    ]
+    const reader = readerFromRecords(records)
+
+    const historyFailure = yield* Effect.flip(reader.read(runId))
+    expect(historyFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+
+    const cursorFailure = yield* Effect.flip(
+      reader.readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
+    )
+    expect(cursorFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+  })
+)
 
 it.effect("keeps the composed trace reader context read-only", () =>
   Effect.gen(function* () {
