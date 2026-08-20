@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- Admission reconstruction and its prefix indexes stay co-located for chronology auditability. */
+/* eslint-disable max-lines -- Admission reconstruction and its process-local prefix indexes stay co-located for chronology auditability. */
 import { Context, Effect, Layer, Schema } from "effect"
 import {
   AcceptedResult,
@@ -18,7 +18,16 @@ import { InRunJournal, type JournalRecord } from "../../../workflow-journal/stor
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
 import { acceptedResultEquivalence, integrationResponsibilityEquivalence } from "./responsibility.js"
-import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
+import {
+  completionSuccessObservationEquals,
+  completionTaskClaimEquals,
+  type CompletionClaimDeletedEvent,
+  type CompletionClaimDeletionIntendedEvent,
+  type CompletionClaimReplacedEvent,
+  type CompletionClaimReplacementIntendedEvent,
+  type CompletionTaskClaim,
+  type IntegrationFinalitySettledEvent
+} from "../integration-finality/events.js"
 import { EvidenceReference, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
 import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 
@@ -112,7 +121,7 @@ export class AcceptedResultSuppressedByRestart extends Schema.TaggedError<Accept
   { attemptId: AttemptId, runId: RunId }
 ) {}
 
-const restartChoiceCommittedBefore = (
+const restartChoiceCommittedBeforeRecords = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
   terminalAt: JournalPosition
@@ -124,6 +133,202 @@ const restartChoiceCommittedBefore = (
       event.choice === "RestartTaskImplementation" &&
       plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt)
   )
+
+type RestartChoiceApplication = { readonly plannedAttempt: PlannedTaskAttempt; readonly recordedAt: JournalPosition }
+
+type FinalityClaimFacts = {
+  readonly claim: CompletionTaskClaim
+  readonly replacementIntent?: CompletionClaimReplacementIntendedEvent
+  readonly replacement?: CompletionClaimReplacedEvent
+  readonly deletionIntent?: CompletionClaimDeletionIntendedEvent
+  readonly deleted?: CompletionClaimDeletedEvent
+  readonly settlement?: IntegrationFinalitySettledEvent
+}
+
+type ClaimFinalityEvent =
+  | CompletionClaimReplacementIntendedEvent
+  | CompletionClaimReplacedEvent
+  | CompletionClaimDeletionIntendedEvent
+  | CompletionClaimDeletedEvent
+  | IntegrationFinalitySettledEvent
+
+const isClaimFinalityEvent = (event: JournalRecord["event"]): event is ClaimFinalityEvent =>
+  event._tag === "CompletionClaimReplacementIntended" ||
+  event._tag === "CompletionClaimReplaced" ||
+  event._tag === "CompletionClaimDeletionIntended" ||
+  event._tag === "CompletionClaimDeleted" ||
+  event._tag === "IntegrationFinalitySettled"
+
+/** Memoizes structural claim keys for repeated event objects without retaining primitive identities. */
+const completionClaimKeysByIdentity = new WeakMap<object, string>()
+
+const completionClaimKey = (claim: CompletionTaskClaim): string => {
+  const cached = completionClaimKeysByIdentity.get(claim)
+  if (cached !== undefined) return cached
+  const key = JSON.stringify(claim)
+  completionClaimKeysByIdentity.set(claim, key)
+  return key
+}
+
+const finalityFactsAreSettled = (facts: FinalityClaimFacts): boolean => {
+  const { deleted, replacement, settlement } = facts
+  return (
+    facts.replacementIntent !== undefined &&
+    facts.deletionIntent !== undefined &&
+    replacement !== undefined &&
+    deleted !== undefined &&
+    settlement !== undefined &&
+    settlement.replacementOperationId === replacement.operationId &&
+    settlement.deletionOperationId === deleted.operationId &&
+    completionSuccessObservationEquals(settlement.successObservation, deleted.successObservation)
+  )
+}
+
+type IntegrationAdmissionPrefixIndexes = {
+  readonly queuedAttemptIds: ReadonlySet<AttemptId>
+  readonly executorResponsibilities: ReadonlyMap<AttemptId, PlannedTaskAttempt>
+  readonly restartChoices: ReadonlyMap<AttemptId, ReadonlyArray<RestartChoiceApplication>>
+  readonly finalityFacts: ReadonlyMap<string, FinalityClaimFacts>
+  readonly settledClaimsByAttempt: ReadonlyMap<AttemptId, ReadonlyArray<CompletionTaskClaim>>
+}
+
+const emptyIntegrationAdmissionPrefixIndexes = (): IntegrationAdmissionPrefixIndexes => ({
+  queuedAttemptIds: new Set(),
+  executorResponsibilities: new Map(),
+  restartChoices: new Map(),
+  finalityFacts: new Map(),
+  settledClaimsByAttempt: new Map()
+})
+
+const settledClaimsForAttempt = (
+  indexes: IntegrationAdmissionPrefixIndexes,
+  plannedAttempt: PlannedTaskAttempt
+): ReadonlyArray<CompletionTaskClaim> => indexes.settledClaimsByAttempt.get(plannedAttempt.attemptId) ?? []
+
+const exactSettledClaim = (indexes: IntegrationAdmissionPrefixIndexes, claim: CompletionTaskClaim): boolean =>
+  settledClaimsForAttempt(indexes, claim.plannedAttempt).some((settled) => completionTaskClaimEquals(settled, claim))
+
+const restartChoiceCommittedBefore = (
+  indexes: IntegrationAdmissionPrefixIndexes,
+  plannedAttempt: PlannedTaskAttempt,
+  terminalAt: JournalPosition
+): boolean =>
+  (indexes.restartChoices.get(plannedAttempt.attemptId) ?? []).some(
+    (choice) => choice.recordedAt < terminalAt && plannedTaskAttemptEquivalence(choice.plannedAttempt, plannedAttempt)
+  )
+
+const finalityFactsWithReplacementIntent = (
+  facts: FinalityClaimFacts,
+  event: CompletionClaimReplacementIntendedEvent
+): FinalityClaimFacts => (facts.replacementIntent === undefined ? { ...facts, replacementIntent: event } : facts)
+
+const finalityFactsWithReplacement = (
+  facts: FinalityClaimFacts,
+  event: CompletionClaimReplacedEvent
+): FinalityClaimFacts => (facts.replacement === undefined ? { ...facts, replacement: event } : facts)
+
+const finalityFactsWithDeletionIntent = (
+  facts: FinalityClaimFacts,
+  event: CompletionClaimDeletionIntendedEvent
+): FinalityClaimFacts => (facts.deletionIntent === undefined ? { ...facts, deletionIntent: event } : facts)
+
+const finalityFactsWithDeleted = (facts: FinalityClaimFacts, event: CompletionClaimDeletedEvent): FinalityClaimFacts =>
+  facts.deleted === undefined ? { ...facts, deleted: event } : facts
+
+const finalityFactsWithSettlement = (
+  facts: FinalityClaimFacts,
+  event: IntegrationFinalitySettledEvent
+): FinalityClaimFacts => ({ ...facts, settlement: event })
+
+const finalityFactsForEvent = (prior: FinalityClaimFacts, event: ClaimFinalityEvent): FinalityClaimFacts => {
+  switch (event._tag) {
+    case "CompletionClaimReplacementIntended":
+      return finalityFactsWithReplacementIntent(prior, event)
+    case "CompletionClaimReplaced":
+      return finalityFactsWithReplacement(prior, event)
+    case "CompletionClaimDeletionIntended":
+      return finalityFactsWithDeletionIntent(prior, event)
+    case "CompletionClaimDeleted":
+      return finalityFactsWithDeleted(prior, event)
+    case "IntegrationFinalitySettled":
+      return finalityFactsWithSettlement(prior, event)
+  }
+}
+
+const updateFinalityFacts = (
+  prior: IntegrationAdmissionPrefixIndexes,
+  event: ClaimFinalityEvent
+): IntegrationAdmissionPrefixIndexes => {
+  const key = completionClaimKey(event.claim)
+  const nextFacts = finalityFactsForEvent(prior.finalityFacts.get(key) ?? { claim: event.claim }, event)
+  const finalityFacts = new Map([...prior.finalityFacts, [key, nextFacts] as const])
+  if (event._tag !== "IntegrationFinalitySettled") return { ...prior, finalityFacts }
+
+  const attemptId = event.claim.plannedAttempt.attemptId
+  const remaining = (prior.settledClaimsByAttempt.get(attemptId) ?? []).filter(
+    (claim) => !completionTaskClaimEquals(claim, event.claim)
+  )
+  const nextSettled = finalityFactsAreSettled(nextFacts) ? [...remaining, event.claim] : remaining
+  const settledClaimsByAttempt = new Map([...prior.settledClaimsByAttempt, [attemptId, nextSettled] as const])
+  return { ...prior, finalityFacts, settledClaimsByAttempt }
+}
+
+const advanceIntegrationAdmissionPrefixIndexes = (
+  prior: IntegrationAdmissionPrefixIndexes,
+  record: JournalRecord
+): IntegrationAdmissionPrefixIndexes => {
+  const event = record.event
+  if (event._tag === "IntegrationResponsibilityBegan") {
+    const queuedAttemptIds = new Set([...prior.queuedAttemptIds, event.plannedAttempt.attemptId])
+    return { ...prior, queuedAttemptIds }
+  }
+  if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+    const executorResponsibilities = new Map([
+      ...prior.executorResponsibilities,
+      [event.plannedAttempt.attemptId, event.plannedAttempt] as const
+    ])
+    return { ...prior, executorResponsibilities }
+  }
+  if (event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation") {
+    const attemptId = event.subject.plannedAttempt.attemptId
+    const restartChoices = new Map([
+      ...prior.restartChoices,
+      [
+        attemptId,
+        [
+          ...(prior.restartChoices.get(attemptId) ?? []),
+          { plannedAttempt: event.subject.plannedAttempt, recordedAt: record.position }
+        ]
+      ] as const
+    ])
+    return { ...prior, restartChoices }
+  }
+  return isClaimFinalityEvent(event) ? updateFinalityFacts(prior, event) : prior
+}
+
+const admissionIndexesByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, IntegrationAdmissionPrefixIndexes>()
+
+const integrationAdmissionPrefixIndexesFor = (
+  records: ReadonlyArray<JournalRecord>
+): IntegrationAdmissionPrefixIndexes => {
+  const cached = admissionIndexesByPrefix.get(records)
+  if (cached !== undefined) return cached
+
+  const predecessor = journalPrefixPredecessorOf(records)
+  if (predecessor !== undefined && predecessor.appended === records[records.length - 1]) {
+    const prior = integrationAdmissionPrefixIndexesFor(predecessor.prior)
+    const next = advanceIntegrationAdmissionPrefixIndexes(prior, predecessor.appended)
+    admissionIndexesByPrefix.set(records, next)
+    return next
+  }
+
+  let indexes = emptyIntegrationAdmissionPrefixIndexes()
+  for (const record of records.toSorted((left, right) => left.position - right.position)) {
+    indexes = advanceIntegrationAdmissionPrefixIndexes(indexes, record)
+  }
+  admissionIndexesByPrefix.set(records, indexes)
+  return indexes
+}
 
 const hasDurableAcceptedResult = (
   records: ReadonlyArray<JournalRecord>,
@@ -234,14 +439,11 @@ const startedFor = (
  * blocker; the settlement remains available separately as delivery evidence.
  */
 const settledFor = (
-  records: ReadonlyArray<JournalRecord>,
+  indexes: IntegrationAdmissionPrefixIndexes,
   queued: JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type }
 ): boolean =>
-  records.some(
-    ({ event }) =>
-      event._tag === "IntegrationFinalitySettled" &&
-      plannedTaskAttemptEquivalence(event.claim.plannedAttempt, queued.event.plannedAttempt) &&
-      deriveIntegrationFinalityStateFor(records, event.claim)?._tag === "IntegrationFinalitySettled"
+  settledClaimsForAttempt(indexes, queued.event.plannedAttempt).some((claim) =>
+    plannedTaskAttemptEquivalence(claim.plannedAttempt, queued.event.plannedAttempt)
   )
 
 /** Finds accepted terminal facts that still need their exact durable integration responsibility. */
@@ -256,41 +458,25 @@ type ExecutorWorkReportedEvent = Extract<
 >
 
 const incrementalUnqueuedAcceptedResultsForTerminal = (
-  records: ReadonlyArray<JournalRecord>,
+  indexes: IntegrationAdmissionPrefixIndexes,
   prior: ReadonlyArray<UnqueuedAcceptedResult>,
   appended: ExecutorWorkReportedEvent,
   terminalAt: JournalPosition
 ): ReadonlyArray<UnqueuedAcceptedResult> => {
   if (appended.report._tag !== "Terminal" || appended.report.result._tag !== "Accepted") return prior
-  const queued = records.some(
-    ({ event }) =>
-      event._tag === "IntegrationResponsibilityBegan" &&
-      event.plannedAttempt.attemptId === appended.report.correlation.attemptId
-  )
-  if (queued) return prior
-  const plannedAttempt = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-      event.plannedAttempt.attemptId === appended.report.correlation.attemptId
-  )?.event
-  if (
-    plannedAttempt?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" ||
-    restartChoiceCommittedBefore(records, plannedAttempt.plannedAttempt, terminalAt)
-  ) {
+  if (indexes.queuedAttemptIds.has(appended.report.correlation.attemptId)) return prior
+  const plannedAttempt = indexes.executorResponsibilities.get(appended.report.correlation.attemptId)
+  if (plannedAttempt === undefined || restartChoiceCommittedBefore(indexes, plannedAttempt, terminalAt)) {
     return prior
   }
   return [
     ...prior,
-    UnqueuedAcceptedResult.make({
-      acceptedResult: appended.report.result.acceptedResult,
-      plannedAttempt: plannedAttempt.plannedAttempt,
-      terminalAt
-    })
+    UnqueuedAcceptedResult.make({ acceptedResult: appended.report.result.acceptedResult, plannedAttempt, terminalAt })
   ]
 }
 
 const incrementalUnqueuedAcceptedResultsFor = (
-  records: ReadonlyArray<JournalRecord>,
+  indexes: IntegrationAdmissionPrefixIndexes,
   prior: ReadonlyArray<UnqueuedAcceptedResult>,
   appendedRecord: JournalRecord
 ): ReadonlyArray<UnqueuedAcceptedResult> => {
@@ -299,7 +485,7 @@ const incrementalUnqueuedAcceptedResultsFor = (
     return prior.filter(({ plannedAttempt }) => plannedAttempt.attemptId !== appended.plannedAttempt.attemptId)
   }
   if (appended._tag !== "PlannedAttemptExecutorWorkReported") return prior
-  return incrementalUnqueuedAcceptedResultsForTerminal(records, prior, appended, appendedRecord.position)
+  return incrementalUnqueuedAcceptedResultsForTerminal(indexes, prior, appended, appendedRecord.position)
 }
 
 export const deriveUnqueuedAcceptedResults = (
@@ -308,40 +494,29 @@ export const deriveUnqueuedAcceptedResults = (
   const cached = unqueuedAcceptedResultsByPrefix.get(records)
   if (cached !== undefined) return cached
 
+  const indexes = integrationAdmissionPrefixIndexesFor(records)
   const predecessor = journalPrefixPredecessorOf(records)
   if (predecessor !== undefined) {
     const prior = unqueuedAcceptedResultsByPrefix.get(predecessor.prior)
     if (prior !== undefined && predecessor.appended === records[records.length - 1]) {
-      const results = incrementalUnqueuedAcceptedResultsFor(records, prior, predecessor.appended)
+      const results = incrementalUnqueuedAcceptedResultsFor(indexes, prior, predecessor.appended)
       unqueuedAcceptedResultsByPrefix.set(records, results)
       return results
     }
   }
 
-  const queuedAttemptIds = new Set(
-    records.flatMap(({ event }) =>
-      event._tag === "IntegrationResponsibilityBegan" ? [event.plannedAttempt.attemptId] : []
-    )
-  )
-  const executorResponsibilities = new Map(
-    records.flatMap(({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-        ? [[event.plannedAttempt.attemptId, event.plannedAttempt] as const]
-        : []
-    )
-  )
   const results = records.flatMap((record) => {
     const event = record.event
     if (
       event._tag !== "PlannedAttemptExecutorWorkReported" ||
       event.report._tag !== "Terminal" ||
       event.report.result._tag !== "Accepted" ||
-      queuedAttemptIds.has(event.report.correlation.attemptId)
+      indexes.queuedAttemptIds.has(event.report.correlation.attemptId)
     ) {
       return []
     }
-    const plannedAttempt = executorResponsibilities.get(event.report.correlation.attemptId)
-    return plannedAttempt === undefined || restartChoiceCommittedBefore(records, plannedAttempt, record.position)
+    const plannedAttempt = indexes.executorResponsibilities.get(event.report.correlation.attemptId)
+    return plannedAttempt === undefined || restartChoiceCommittedBefore(indexes, plannedAttempt, record.position)
       ? []
       : [
           UnqueuedAcceptedResult.make({
@@ -362,6 +537,7 @@ export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>
   const cached = integrationAdmissionByPrefix.get(records)
   if (cached !== undefined) return cached
 
+  const indexes = integrationAdmissionPrefixIndexesFor(records)
   const predecessor = journalPrefixPredecessorOf(records)
   if (predecessor !== undefined) {
     const prior = integrationAdmissionByPrefix.get(predecessor.prior)
@@ -374,7 +550,7 @@ export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>
             ...appendedRecord,
             event: appended
           }
-          if (settledFor(records, queued)) return prior
+          if (settledFor(indexes, queued)) return prior
           return {
             responsibilities: [
               ...prior.responsibilities,
@@ -410,8 +586,7 @@ export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>
           }
         }
         if (appended._tag === "IntegrationFinalitySettled") {
-          const settled = deriveIntegrationFinalityStateFor(records, appended.claim)
-          if (settled?._tag === "IntegrationFinalitySettled") {
+          if (exactSettledClaim(indexes, appended.claim)) {
             return {
               responsibilities: prior.responsibilities.filter(
                 (responsibility) =>
@@ -433,7 +608,7 @@ export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>
         (record): record is JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type } =>
           record.event._tag === "IntegrationResponsibilityBegan"
       )
-      .filter((record) => !settledFor(records, record))
+      .filter((record) => !settledFor(indexes, record))
       .toSorted((left, right) => left.position - right.position)
       .map((queued) => {
         const started = startedFor(records, queued)
@@ -503,7 +678,7 @@ export const queueAcceptedResultIntegrationResponsibility = Effect.fn(
   )
   if (
     acceptedTerminal !== undefined &&
-    restartChoiceCommittedBefore(records, plannedAttempt, acceptedTerminal.position)
+    restartChoiceCommittedBeforeRecords(records, plannedAttempt, acceptedTerminal.position)
   ) {
     return yield* new AcceptedResultSuppressedByRestart({
       attemptId: plannedAttempt.attemptId,

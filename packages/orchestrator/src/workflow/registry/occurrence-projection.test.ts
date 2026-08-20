@@ -1229,6 +1229,7 @@ it.effect("rejects a Restart read failure without one exact earlier authority re
       return expect.fail("expected applied Restart, read action, and failure")
     }
     const laterAction = { ...action, recordedAt: JournalPosition.make(failure.recordedAt + 1) }
+    const laterApplied = { ...applied, recordedAt: JournalPosition.make(failure.recordedAt + 1) }
     const wrongTarget = {
       ...failure,
       failure: AttemptRestartTaskFactsReadFailure.make({
@@ -1245,6 +1246,7 @@ it.effect("rejects a Restart read failure without one exact earlier authority re
     for (const occurrences of [
       [failure],
       [failure, applied, action],
+      [laterApplied, failure],
       [applied, laterAction, failure],
       [applied, action, action, failure],
       [applied, action, wrongTarget],

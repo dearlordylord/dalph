@@ -328,7 +328,8 @@ const restartChoiceKey = (occurrence: {
 
 /** The relationship facts needed to validate one projected occurrence once. */
 type OccurrenceRelationshipIndexes = {
-  readonly appliedRestartChoices: Map<string, number>
+  /** Every exact Restart application, retained with its journal position so a later occurrence cannot satisfy an earlier one. */
+  readonly appliedRestartChoices: Map<string, Array<JournalPosition>>
   readonly executorResponsibilities: Map<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>
   readonly gitReads: Map<string, Array<GitReadInitiated>>
   readonly integrationResponsibilities: Map<JournalPosition, IntegrationResponsibilityBegan>
@@ -342,10 +343,6 @@ const emptyOccurrenceRelationshipIndexes = (): OccurrenceRelationshipIndexes => 
   integrationResponsibilities: new Map(),
   trackerActions: new Map()
 })
-
-const increment = (counts: Map<string, number>, key: string): void => {
-  counts.set(key, (counts.get(key) ?? 0) + 1)
-}
 
 const ambiguousRelationship = Symbol("ambiguous workflow-occurrence relationship")
 type IndexedRelationship<A> = A | typeof ambiguousRelationship
@@ -433,7 +430,10 @@ const isRestartDependentOccurrence = (occurrence: WorkflowOccurrence): occurrenc
 const restartOccurrenceHasExactAppliedChoice = (
   indexes: OccurrenceRelationshipIndexes,
   occurrence: RestartDependentOccurrence
-): boolean => indexes.appliedRestartChoices.get(restartChoiceKey(occurrence)) === 1
+): boolean => {
+  const applications = indexes.appliedRestartChoices.get(restartChoiceKey(occurrence)) ?? []
+  return applications.filter((recordedAt) => recordedAt < occurrence.recordedAt).length === 1
+}
 
 const invalidRestartOccurrenceRelationship = (
   indexes: OccurrenceRelationshipIndexes,
@@ -542,7 +542,10 @@ const rememberExecutorResponsibility = (
 
 const rememberRestartChoice = (occurrence: WorkflowOccurrence, indexes: OccurrenceRelationshipIndexes): boolean => {
   if (occurrence._tag !== "AppliedAttemptChoice" || occurrence.choice !== "RestartTaskImplementation") return false
-  increment(indexes.appliedRestartChoices, restartChoiceKey(occurrence))
+  const key = restartChoiceKey(occurrence)
+  const applications = indexes.appliedRestartChoices.get(key) ?? []
+  applications.push(occurrence.recordedAt)
+  indexes.appliedRestartChoices.set(key, applications)
   return true
 }
 

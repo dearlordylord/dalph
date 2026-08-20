@@ -248,6 +248,11 @@ it("reuses a graph projection and safely replays an accepted prefix without proc
   const target = FixtureTarget.make("target-fallback")
   const firstGraph = reconstructedTaskGraphFor(prior.runState.graphKnowledge, target)
   expect(reconstructedTaskGraphFor(prior.runState.graphKnowledge, target)).toBe(firstGraph)
+  const coldRecords = records.map((record) => ({ ...record, event: structuredClone(record.event) }))
+  const cold = reduceWorkflowJournalHistory(runId, coldRecords)
+  expect(cold).toEqual(prior)
+  if (cold._tag !== "ValidWorkflowJournalHistory") return
+  expect(reconstructedTaskGraphFor(cold.runState.graphKnowledge, target)).toEqual(firstGraph)
   const nextOperation = makeTrackerGraphObservationOperation(
     OperationId.make("observation-fallback-next"),
     FixtureTarget.make("target-fallback-next")
