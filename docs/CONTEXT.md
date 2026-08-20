@@ -164,6 +164,50 @@ production proves. A journal record is the durable envelope for an event, not
 the event or outside happening itself.
 _Avoid_: Journal record, command, proposed operation, physical occurrence
 
+**Production trace read**:
+When Alice asks to inspect one Run, the presentation boundary calls the
+read-only `TraceReader` over that Run's committed `JournalStore` prefix. The
+reader validates the Run beginning, contiguous `JournalPosition`s, and explicit
+causal links before returning history; it does not append journal records or
+call a provider.
+_Avoid_: Live workflow execution, provider refresh, mutable projection store
+
+**Trace position identity**:
+When the reader returns one projected occurrence at journal position 7 for Run
+R, Alice receives the exact pair `(RunId R, JournalPosition 7)`. The same
+schema is used for a historical cursor, a history item, and every relationship
+that points at an occurrence; no presentation-local ordinal can replace it.
+_Avoid_: Array index, story frame number, operation identity
+
+**Graph at cursor**:
+When Alice selects a committed cursor, the reader reconstructs the latest
+complete task-tracker graph observation at or before that cursor through the
+trace boundary. The graph is descriptive history fixed to that prefix; it is
+not a current tracker fact and cannot include an observation recorded later.
+_Avoid_: Current task graph, provider cache, cursor-independent snapshot
+
+**Causal predecessor lookup**:
+When Alice asks why one projected operation appears, the reader follows the
+named predecessor `OperationId` relationship inside the validated Run prefix
+and returns that predecessor's exact trace identity. An absent, duplicate, or
+non-earlier predecessor is a failed read, not a fallback to the previous
+journal record.
+_Avoid_: Previous array item, inferred adjacency, operation selection
+
+**Fixed-history/current-status composition**:
+When Alice reconnects while watching a Run, presentation keeps the selected
+historical trace cursor unchanged and reads a separate passive current-status
+signal. The status boundary may reconnect or change without rewriting history,
+appending a journal fact, or granting provider mutation capability.
+_Avoid_: Live status persisted as history, status-derived cursor, workflow action
+
+**Read-only trace source**:
+When presentation reads a committed Run prefix, its source exposes only the
+journal `read` boundary. Journal append/lifecycle operations and tracker, Git,
+executor, and provider mutation capabilities remain outside the source and are
+not recoverable through the trace view.
+_Avoid_: Journal store, workflow coordinator, provider adapter
+
 **Tracker-graph read initiated**:
 The initiated action established when the Dalph coordinator commits one exact
 tracker-read intent and owns its continuation. The constructed

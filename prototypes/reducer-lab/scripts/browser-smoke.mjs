@@ -98,7 +98,7 @@ try {
     document.querySelector("#root")?.addEventListener("dalph-cassette-lab:delivery-frame", (event) => {
       const article = document.querySelector("#selected-cassette")
       const workbench = document.querySelector('[data-role="delivery-workbench"]')
-      const frameSelector = document.querySelector('[data-role="delivery-workbench"] select')
+      const frameSelector = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
       globalThis.__deliveryFrameTrace.push({
         catalogKey: event.detail.catalogKey,
         frameCount: event.detail.frameCount,
@@ -182,6 +182,38 @@ try {
   assert.match(prototypeInstrument.sourceText, /const trackerGraph = yield\* TrackerGraphRelation/u)
   assert.match(prototypeInstrument.sourceText, /return yield\* reflectDeliverySettlements\(settlements\)/u)
   console.log("✓ renders the prototype code and graph instrument from captured Delivery facts")
+  const tracePanel = workbench.locator('[data-role="trace-history"]')
+  assert.equal(await tracePanel.count(), 1)
+  assert.match(await tracePanel.textContent() ?? "", /production TraceReader/u)
+  const traceSelector = tracePanel.getByLabel("Journal cursor")
+  const traceOptionCount = await traceSelector.locator("option").count()
+  assert.ok(traceOptionCount > 1)
+  const traceIdentity = async () => ({
+    journalPosition: await tracePanel.locator('[data-role="trace-cursor"]').getAttribute("data-journal-position"),
+    runId: await tracePanel.locator('[data-role="trace-cursor"]').getAttribute("data-run-id")
+  })
+  const traceOptionIdentity = async (index) => ({
+    journalPosition: await traceSelector.locator("option").nth(index).getAttribute("data-journal-position"),
+    runId: await traceSelector.locator("option").nth(index).getAttribute("data-run-id")
+  })
+  await traceSelector.selectOption("1")
+  assert.deepEqual(await traceIdentity(), await traceOptionIdentity(1))
+  await tracePanel.getByRole("button", { name: "Select previous production journal cursor" }).click()
+  assert.deepEqual(await traceIdentity(), await traceOptionIdentity(0))
+  await tracePanel.getByRole("button", { name: "Select next production journal cursor" }).click()
+  assert.deepEqual(await traceIdentity(), await traceOptionIdentity(1))
+  assert.ok((await traceIdentity()).runId?.length > 0)
+  assert.ok(Number((await traceIdentity()).journalPosition) > 0)
+  await traceSelector.selectOption(String(traceOptionCount - 1))
+  const causalPredecessor = tracePanel.locator('[data-role="trace-causal-predecessor"]').first()
+  assert.equal(await causalPredecessor.count(), 1)
+  const successorCursor = await traceIdentity()
+  assert.ok(await causalPredecessor.getAttribute("data-predecessor-operation-id"))
+  await causalPredecessor.click()
+  const predecessorCursor = await traceIdentity()
+  assert.equal(predecessorCursor.runId, successorCursor.runId)
+  assert.ok(Number(predecessorCursor.journalPosition) < Number(successorCursor.journalPosition))
+  console.log("✓ navigates the Lab by exact production (RunId, JournalPosition) cursors")
   const primaryBeforeGuide = await workbench.evaluate((element) => {
     const controls = element.querySelector(".delivery-timeline-controls")
     const graph = element.querySelector("dalph-delivery-graph")
@@ -198,7 +230,7 @@ try {
     "Established settlements in this timeline: 0."
   )
   await page.waitForFunction(
-    () => document.querySelector('[data-role="delivery-workbench"] select')?.options.length > 1,
+    () => document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')?.options.length > 1,
     undefined,
     { timeout: terminalTimeoutMs }
   )
@@ -206,7 +238,7 @@ try {
   assert.ok(frameCount > 2)
   const containedMomentTruth = await page.evaluate(() => {
     const frame = document.querySelector('[data-role="delivery-frame"]')
-    const selector = document.querySelector('[data-role="delivery-workbench"] select')
+    const selector = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
     const moment = frame?.querySelector(".delivery-moment-evidence")
     if (!(selector instanceof HTMLSelectElement) || !(moment instanceof HTMLElement)) return null
     const selected = selector.value
@@ -337,7 +369,7 @@ try {
   console.log("✓ keeps selected-task feedback separate from delivery encodings")
 
   const synchronizedSelection = await page.evaluate(() => {
-    const timeline = document.querySelector('[data-role="delivery-workbench"] select')
+    const timeline = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
     const graph = document.querySelector("dalph-delivery-graph")
     if (!(timeline instanceof HTMLSelectElement) || graph === null) return null
     for (const option of timeline.options) {
@@ -395,7 +427,7 @@ try {
   console.log("✓ keeps every per-task meaning visible at desktop width")
 
   const combinedEncoding = await page.evaluate(() => {
-    const selector = document.querySelector('[data-role="delivery-workbench"] select')
+    const selector = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
     const graph = document.querySelector("dalph-delivery-graph")
     if (!(selector instanceof HTMLSelectElement) || graph === null) return false
     for (const option of selector.options) {
@@ -494,7 +526,7 @@ try {
   )
   const integrationFrameSelector = page.getByLabel("Observed moment")
   const integrationOrderFrames = await page.evaluate(() => {
-    const select = document.querySelector('[data-role="delivery-workbench"] select')
+    const select = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
     if (!(select instanceof HTMLSelectElement)) return []
     return [...select.options].map((option) => {
       select.value = option.value
@@ -578,7 +610,7 @@ try {
   const linkedWorkbench = page.locator('[data-role="delivery-workbench"]')
   const linkedFrameSelector = linkedWorkbench.getByLabel("Observed moment")
   const linkedFrameTruth = await page.evaluate(() => {
-    const select = document.querySelector('[data-role="delivery-workbench"] select')
+    const select = document.querySelector('[data-role="delivery-workbench"] .delivery-timeline-controls select')
     const graph = document.querySelector("dalph-delivery-graph")
     if (!(select instanceof HTMLSelectElement) || graph === null) return []
     return [...select.options].map((option, index) => {

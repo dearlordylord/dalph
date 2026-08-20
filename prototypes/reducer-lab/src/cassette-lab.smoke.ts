@@ -1,6 +1,11 @@
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
 import { AuthoredCassetteStoryItem } from "../../../packages/dalph/src/cassettes/authored-domain.ts"
 import { renderAuthoredStoryItemLandmark } from "../../../packages/dalph/src/cassettes/authored-presentation.ts"
+import {
+  AuthoredObservationCaptureOrder,
+  type AuthoredObservationMoment
+} from "../../../packages/dalph/src/cassettes/authored-runner.ts"
+import "./trace-cursor-selection.test.ts"
 import "./delivery-playback.test.ts"
 import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
 import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette-domain.ts"
@@ -33,8 +38,18 @@ import {
 } from "./cassette-lab-view.ts"
 import { deliverySourceExplanationAt } from "./delivery-source-explanation.ts"
 import { dominantTaskTone } from "./cassette-lab-workbench.ts"
+import {
+  TraceCursorSelected,
+  auxiliaryTraceCorrelation,
+  makeTraceCursorSelectionModel,
+  projectTraceCursorSelection,
+  updateTraceCursorSelection
+} from "./trace-cursor-selection.ts"
 
 type CompletedCassette = Extract<CassetteLabResult, { readonly _tag: "Completed" }>
+
+const authoredStoryPosition = (value: number): AuthoredObservationMoment["storyPosition"] =>
+  value as AuthoredObservationMoment["storyPosition"]
 
 const deliveryMomentIndex = (result: CompletedCassette, deliveryFrameIndex: number): number => {
   const frame = result.deliveryFrames?.[deliveryFrameIndex]
@@ -223,6 +238,58 @@ await scenario("runs every maintained cassette through production to its declare
       assert(result.observationMoments === null, `${result.catalogKey} must not fabricate a Delivery runtime chronology`)
     }
   }
+})
+
+await scenario("drives Reducer Lab durable history, graph, and causal navigation from production TraceReader", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  assert(result?._tag === "Completed", "The authored trace fixture must complete")
+  if (result?._tag !== "Completed") return
+  assert(result.traceHistories !== null && result.traceHistories.length > 0, "The Lab must retain production trace views")
+  if (result.traceHistories === null) return
+  const traceHistories = result.traceHistories
+  assert(traceHistories.length === result.journalRecordCount, "The Lab must materialize one production view for every committed journal position")
+  assert(
+    traceHistories.every((history, index) =>
+      history.version === 1
+      && history.cursor.runId === result.runId
+      && history.cursor.position === index + 1
+      && history.items.every(({ identity }) => identity.runId === result.runId)
+    ),
+    "Trace views must retain the schema version and exact (RunId, JournalPosition) identity for every commit"
+  )
+  assert(result.traceHistories.some(({ graph }) => graph !== null), "The Lab must consume a production graph-at-history view")
+  assert(
+    result.traceHistories.some(({ relationships }) => relationships.workflowCausalEdges.length > 0),
+    "The Lab must consume production-proven workflow-causal predecessors"
+  )
+})
+
+await scenario("does not derive Lab workflow occurrences or causality from capture order, story position, or frame index", () => {
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  assert(result?._tag === "Completed" && result.traceHistories !== null, "The production trace fixture is unavailable")
+  if (result?._tag !== "Completed" || result.traceHistories === null) return
+  const first = result.traceHistories[0]
+  const later = result.traceHistories.at(-1)
+  if (first === undefined || later === undefined) throw new Error("The production cursor fixture is empty")
+  const model = makeTraceCursorSelectionModel(result.traceHistories.map(({ cursor }) => cursor), [
+    auxiliaryTraceCorrelation(
+      "AuthoredStoryOccurrence",
+      AuthoredObservationCaptureOrder.make(9_999),
+      authoredStoryPosition(9_999),
+      null
+    ),
+    auxiliaryTraceCorrelation(
+      "DeliveryRuntimeOwner",
+      AuthoredObservationCaptureOrder.make(1),
+      authoredStoryPosition(0),
+      null
+    )
+  ])
+  const selected = updateTraceCursorSelection(model, TraceCursorSelected.make({ cursor: first.cursor }))
+  assert(projectTraceCursorSelection(selected).cursor?.position === first.cursor.position, "Selection must use the exact production cursor, not auxiliary chronology")
+  assert(projectTraceCursorSelection(selected).cursor?.position !== 9_999, "Authored story position must not become a journal position")
+  assert(projectTraceCursorSelection(updateTraceCursorSelection(selected, TraceCursorSelected.make({ cursor: later.cursor }))).cursor?.position === later.cursor.position, "Frame-like local values must not replace production cursor selection")
+  assert(later.relationships.workflowCausalEdges.every(({ predecessorOperationId, successorOperationId }) => predecessorOperationId !== successorOperationId), "Causal edges must remain the production reader's operation identities")
 })
 
 await scenario("runs maintained application Exit stories through the production request boundary", () => {
@@ -781,6 +848,91 @@ await scenario("shows the production-observed graph frontier bounded tickets and
   workbench?.querySelector<HTMLButtonElement>("button[data-role='next-frame']")?.click()
   assert(workbench?.querySelector("tr[data-task-id='A']")?.getAttribute("aria-current") === "true", "Task selection must remain synchronized across frame navigation")
 
+})
+
+await scenario("selects exact production cursors for Lab back/forward history while keeping authored/runtime moments auxiliary", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+    throw new Error("The production trace fixture is missing")
+  }
+  const done = settled(singleCassetteSettledEvent)
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const workbench = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
+  const panel = workbench?.querySelector<HTMLElement>("[data-role='trace-history']")
+  if (panel === undefined || panel === null) throw new Error("The production trace history panel is missing")
+  assert(panel.textContent?.includes("production TraceReader") === true, "The Lab must name the production trace reader")
+  assert(panel.querySelectorAll("[data-role='trace-cursor-selector'] option").length === result.traceHistories.length, "Every committed position must be selectable")
+  assert(panel.querySelector("[data-role='trace-auxiliary-chronology']") !== null, "Authored/runtime chronology must be visibly auxiliary")
+
+  const graphIndex = result.traceHistories.findIndex((history) =>
+    history.graph !== null && history.relationships.workflowCausalEdges.length > 0
+  )
+  if (graphIndex < 0) throw new Error("The trace fixture has no graph and causal history cursor")
+  const traceSelector = panel.querySelector<HTMLSelectElement>("[data-role='trace-cursor-selector']")
+  if (traceSelector === null) throw new Error("The exact production cursor selector is missing")
+  chooseOption(traceSelector, String(graphIndex))
+  const graphHistory = result.traceHistories[graphIndex]
+  if (graphHistory === undefined || graphHistory.graph === null) throw new Error("The selected graph cursor disappeared")
+  const selectedCursor = panel.querySelector<HTMLElement>("[data-role='trace-cursor']")
+  assert(selectedCursor?.dataset.runId === String(graphHistory.cursor.runId), "Selection must retain the production RunId")
+  assert(selectedCursor?.dataset.journalPosition === String(graphHistory.cursor.position), "Selection must retain the exact JournalPosition")
+  assert(panel.querySelector("[data-role='trace-graph']")?.textContent?.includes(String(graphHistory.graph.observation.recordedAt)) === true, "Graph display must come from the selected production history view")
+  const causal = graphHistory.relationships.workflowCausalEdges[0]
+  assert(causal !== undefined && panel.querySelector("[data-role='trace-causal-edges']")?.textContent?.includes(causal.predecessorOperationId) === true, "Causal navigation must display production predecessor evidence")
+  const predecessorItem = causal === undefined
+    ? undefined
+    : graphHistory.items.find((item) => item.operationIds.includes(causal.predecessorOperationId))
+  assert(predecessorItem !== undefined, "The production predecessor operation must be projected to an exact history item")
+  const predecessorButton = panel.querySelector<HTMLButtonElement>("[data-role='trace-causal-predecessor']")
+  predecessorButton?.click()
+  assert(
+    panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(predecessorItem?.identity.position),
+    "Causal predecessor navigation must select the predecessor item's exact JournalPosition"
+  )
+
+  const latestIndex = result.traceHistories.length - 1
+  chooseOption(traceSelector, String(latestIndex))
+  assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex]?.cursor.position), "The selector must move to the exact latest production cursor")
+  panel.querySelector<HTMLButtonElement>("button[data-role='trace-previous-cursor']")?.click()
+  assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex - 1]?.cursor.position), "Back must select the preceding production cursor")
+  panel.querySelector<HTMLButtonElement>("button[data-role='trace-next-cursor']")?.click()
+  assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex]?.cursor.position), "Forward must restore the exact later production cursor")
+})
+
+await scenario("fails visibly when a displayed production predecessor is not projected", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+    throw new Error("The production causal fixture is missing")
+  }
+  const graphIndex = result.traceHistories.findIndex((history) => history.relationships.workflowCausalEdges.length > 0)
+  if (graphIndex < 0) throw new Error("The production causal fixture has no edge")
+  const malformedResult = {
+    ...result,
+    traceHistories: result.traceHistories.map((history, index) => index === graphIndex ? { ...history, items: [] } : history)
+  }
+  mountCassetteLab({
+    revision: "acceptance-revision",
+    root,
+    rows: [row],
+    runCassette: async () => malformedResult
+  })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const panel = document.querySelector<HTMLElement>("[data-role='trace-history']")
+  const traceSelector = panel?.querySelector<HTMLSelectElement>("[data-role='trace-cursor-selector']")
+  if (panel === null || panel === undefined || traceSelector === null || traceSelector === undefined) {
+    throw new Error("The malformed production trace panel is missing")
+  }
+  chooseOption(traceSelector, String(graphIndex))
+  panel.querySelector<HTMLButtonElement>("[data-role='trace-causal-predecessor']")?.click()
+  assert(panel.querySelector("[data-role='trace-causal-navigation-error']")?.textContent?.includes("PredecessorNotProjected") === true, "A missing projected predecessor must fail visibly")
 })
 
 await scenario("shows represented and off-graph responsibilities without inventing tracker nodes", async () => {
@@ -1586,7 +1738,7 @@ await scenario("shows grouping relationships exact obligations and settlement st
     && frame.deliveries.some(({ obligations }) => obligations.length > 0)
   )
   const workbench = document.querySelector("[data-role='delivery-workbench']")
-  const select = workbench?.querySelector("select") as HTMLSelectElement | null
+  const select = workbench?.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (select === null || groupingIndex < 0) throw new Error("Grouping timeline controls are missing")
   for (const option of select.options) {
     if (option.value === String(deliveryMomentIndex(result, groupingIndex))) option.setAttribute("selected", "")

@@ -97,6 +97,10 @@ import {
   TargetPromotionGitReadObservation,
   targetPromotionCorrelationFor,
   type TargetPromotionGitService,
+  type TraceAtCursor,
+  TraceCursor,
+  TraceReader,
+  TraceReaderLayer,
   memoryEvidenceStoreLayer,
   EvidenceStore,
   type EvidenceStoreFailure,
@@ -142,6 +146,8 @@ export interface AuthoredScenarioCassetteRun {
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
   readonly runId: RunId
+  /** Historical views are read from the production trace reader at exact journal cursors. */
+  readonly traceHistories: ReadonlyArray<TraceAtCursor>
 }
 
 interface AuthoredTaggedDiagnostic {
@@ -2700,6 +2706,10 @@ const runAuthoredScenarioCassetteWith = (request: {
       const deliveryFrames = observationMoments.flatMap((moment) =>
         moment._tag === "DeliveryPublicationMoment" ? [moment.deliveryFrame] : []
       )
+      const traceHistories = yield* Effect.gen(function* () {
+        const reader = yield* TraceReader
+        return yield* Effect.forEach(records, ({ position }) => reader.readAt(TraceCursor.make({ position, runId })))
+      }).pipe(Effect.provide(TraceReaderLayer.pipe(Layer.provide(journalLayer))))
       return {
         activationOrdinals,
         cassette,
@@ -2709,7 +2719,8 @@ const runAuthoredScenarioCassetteWith = (request: {
         observationMoments,
         observedBehavior,
         records,
-        runId
+        runId,
+        traceHistories
       } satisfies AuthoredScenarioCassetteRun
     })
   )
