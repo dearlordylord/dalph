@@ -8,19 +8,21 @@ import {
   IntegrationTargetSelection,
   QueuedIntegrationResponsibility,
   StartedIntegrationResponsibility,
+  deriveIntegrationAdmission,
   deriveUnqueuedAcceptedResults,
   integrationTargetSelectionLayer,
   queueAcceptedResultIntegrationResponsibility,
   selectStartableIntegrationResponsibilities,
   startQueuedIntegration
 } from "./protocol.js"
-import { IntegrationResponsibilityBeganEvent } from "./events.js"
+import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
 import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
 import {
   InRunJournal,
   JournalRecord,
@@ -154,6 +156,80 @@ it("derives one unqueued accepted result from matching executor responsibility a
       ? false
       : acceptedResultEquivalence(result.acceptedResult, fixture.qualifiedCandidate.run.session.acceptedResult)
   ).toBe(true)
+})
+
+it("transfers one linear prefix index and cold-replays an older branch without leaking mutations", () => {
+  const responsibility = JournalRecord.make({
+    event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt: fixture.plannedAttempt,
+      version: workflowJournalEventVersion
+    }),
+    key: JournalRecordKey.make("branch-responsibility"),
+    position: JournalPosition.make(1),
+    runId: fixture.runId
+  })
+  const report = JournalRecord.make({
+    event: PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      report: {
+        _tag: "Terminal",
+        correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
+        result: { _tag: "Accepted", acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult }
+      },
+      version: workflowJournalEventVersion
+    }),
+    key: JournalRecordKey.make("branch-accepted"),
+    position: JournalPosition.make(2),
+    runId: fixture.runId
+  })
+  const prefix = [responsibility, report]
+  const queuedEvent = IntegrationResponsibilityBeganEvent.make({
+    acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
+    integrationTarget: fixture.integrationTarget,
+    plannedAttempt: fixture.plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const queuedRecord = JournalRecord.make({
+    event: queuedEvent,
+    key: JournalRecordKey.make("branch-queued"),
+    position: JournalPosition.make(3),
+    runId: fixture.runId
+  })
+  const startedRecord = JournalRecord.make({
+    event: IntegrationStartedEvent.make({
+      acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
+      integrationTarget: fixture.integrationTarget,
+      plannedAttempt: fixture.plannedAttempt,
+      responsibilityBeganAt: JournalPosition.make(3),
+      version: workflowJournalEventVersion
+    }),
+    key: JournalRecordKey.make("branch-started"),
+    position: JournalPosition.make(3),
+    runId: fixture.runId
+  })
+  const queuedBranch = [...prefix, queuedRecord]
+  const startedBranch = [...prefix, startedRecord]
+  const coldStartedResults = deriveUnqueuedAcceptedResults([...prefix, startedRecord])
+
+  expect(deriveUnqueuedAcceptedResults(prefix)).toHaveLength(1)
+  expect(deriveIntegrationAdmission(prefix).responsibilities).toHaveLength(0)
+  rememberValidatedJournalPrefixSuccessor(
+    { records: prefix, runId: fixture.runId },
+    { records: queuedBranch, runId: fixture.runId },
+    queuedRecord
+  )
+  rememberValidatedJournalPrefixSuccessor(
+    { records: prefix, runId: fixture.runId },
+    { records: startedBranch, runId: fixture.runId },
+    startedRecord
+  )
+
+  expect(deriveUnqueuedAcceptedResults(queuedBranch)).toEqual([])
+  expect(deriveUnqueuedAcceptedResults(startedBranch)).toEqual(coldStartedResults)
+  expect(deriveIntegrationAdmission(queuedBranch).responsibilities).toHaveLength(1)
+  expect(deriveIntegrationAdmission(startedBranch).responsibilities).toEqual(
+    deriveIntegrationAdmission([...prefix, startedRecord]).responsibilities
+  )
 })
 
 it("retains the journal event shape used for queued responsibility", () => {

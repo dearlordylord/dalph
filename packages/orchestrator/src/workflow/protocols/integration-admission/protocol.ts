@@ -121,20 +121,13 @@ export class AcceptedResultSuppressedByRestart extends Schema.TaggedError<Accept
   { attemptId: AttemptId, runId: RunId }
 ) {}
 
-const restartChoiceCommittedBeforeRecords = (
-  records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
-  terminalAt: JournalPosition
-): boolean =>
-  records.some(
-    ({ event, position }) =>
-      position < terminalAt &&
-      event._tag === "AttemptChoiceApplied" &&
-      event.choice === "RestartTaskImplementation" &&
-      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt)
-  )
-
 type RestartChoiceApplication = { readonly plannedAttempt: PlannedTaskAttempt; readonly recordedAt: JournalPosition }
+
+type IndexedAcceptedTerminal = {
+  readonly acceptedResult: AcceptedResult
+  readonly position: JournalPosition
+  readonly runId: RunId
+}
 
 type FinalityClaimFacts = {
   readonly claim: CompletionTaskClaim
@@ -185,16 +178,20 @@ const finalityFactsAreSettled = (facts: FinalityClaimFacts): boolean => {
 }
 
 type IntegrationAdmissionPrefixIndexes = {
-  readonly queuedAttemptIds: ReadonlySet<AttemptId>
-  readonly executorResponsibilities: ReadonlyMap<AttemptId, PlannedTaskAttempt>
-  readonly restartChoices: ReadonlyMap<AttemptId, ReadonlyArray<RestartChoiceApplication>>
-  readonly finalityFacts: ReadonlyMap<string, FinalityClaimFacts>
-  readonly settledClaimsByAttempt: ReadonlyMap<AttemptId, ReadonlyArray<CompletionTaskClaim>>
+  readonly queuedAttemptIds: Set<AttemptId>
+  readonly executorResponsibilities: Map<AttemptId, PlannedTaskAttempt>
+  readonly executorResponsibilitiesFirst: Map<AttemptId, PlannedTaskAttempt>
+  readonly acceptedTerminalsByAttempt: Map<AttemptId, Array<IndexedAcceptedTerminal>>
+  readonly restartChoices: Map<AttemptId, Array<RestartChoiceApplication>>
+  readonly finalityFacts: Map<string, FinalityClaimFacts>
+  readonly settledClaimsByAttempt: Map<AttemptId, Array<CompletionTaskClaim>>
 }
 
 const emptyIntegrationAdmissionPrefixIndexes = (): IntegrationAdmissionPrefixIndexes => ({
   queuedAttemptIds: new Set(),
   executorResponsibilities: new Map(),
+  executorResponsibilitiesFirst: new Map(),
+  acceptedTerminalsByAttempt: new Map(),
   restartChoices: new Map(),
   finalityFacts: new Map(),
   settledClaimsByAttempt: new Map()
@@ -255,58 +252,125 @@ const finalityFactsForEvent = (prior: FinalityClaimFacts, event: ClaimFinalityEv
   }
 }
 
-const updateFinalityFacts = (
-  prior: IntegrationAdmissionPrefixIndexes,
-  event: ClaimFinalityEvent
-): IntegrationAdmissionPrefixIndexes => {
+const updateFinalityFacts = (indexes: IntegrationAdmissionPrefixIndexes, event: ClaimFinalityEvent): void => {
   const key = completionClaimKey(event.claim)
-  const nextFacts = finalityFactsForEvent(prior.finalityFacts.get(key) ?? { claim: event.claim }, event)
-  const finalityFacts = new Map([...prior.finalityFacts, [key, nextFacts] as const])
-  if (event._tag !== "IntegrationFinalitySettled") return { ...prior, finalityFacts }
+  const nextFacts = finalityFactsForEvent(indexes.finalityFacts.get(key) ?? { claim: event.claim }, event)
+  // eslint-disable-next-line functional/immutable-data -- This map is owned by one exact linear prefix.
+  indexes.finalityFacts.set(key, nextFacts)
+  if (event._tag !== "IntegrationFinalitySettled") return
 
   const attemptId = event.claim.plannedAttempt.attemptId
-  const remaining = (prior.settledClaimsByAttempt.get(attemptId) ?? []).filter(
+  const remaining = (indexes.settledClaimsByAttempt.get(attemptId) ?? []).filter(
     (claim) => !completionTaskClaimEquals(claim, event.claim)
   )
   const nextSettled = finalityFactsAreSettled(nextFacts) ? [...remaining, event.claim] : remaining
-  const settledClaimsByAttempt = new Map([...prior.settledClaimsByAttempt, [attemptId, nextSettled] as const])
-  return { ...prior, finalityFacts, settledClaimsByAttempt }
+  // eslint-disable-next-line functional/immutable-data -- This map is owned by one exact linear prefix.
+  indexes.settledClaimsByAttempt.set(attemptId, nextSettled)
+}
+
+const indexQueuedResponsibility = (
+  indexes: IntegrationAdmissionPrefixIndexes,
+  event: JournalRecord["event"]
+): boolean => {
+  if (event._tag !== "IntegrationResponsibilityBegan") return false
+  // eslint-disable-next-line functional/immutable-data -- This set is owned by one exact linear prefix.
+  indexes.queuedAttemptIds.add(event.plannedAttempt.attemptId)
+  return true
+}
+
+const indexExecutorResponsibility = (
+  indexes: IntegrationAdmissionPrefixIndexes,
+  event: JournalRecord["event"]
+): boolean => {
+  if (event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return false
+  // eslint-disable-next-line functional/immutable-data -- This map is owned by one exact linear prefix.
+  indexes.executorResponsibilities.set(event.plannedAttempt.attemptId, event.plannedAttempt)
+  if (!indexes.executorResponsibilitiesFirst.has(event.plannedAttempt.attemptId)) {
+    // eslint-disable-next-line functional/immutable-data -- This map is owned by one exact linear prefix.
+    indexes.executorResponsibilitiesFirst.set(event.plannedAttempt.attemptId, event.plannedAttempt)
+  }
+  return true
+}
+
+const indexRestartChoice = (indexes: IntegrationAdmissionPrefixIndexes, record: JournalRecord): boolean => {
+  const event = record.event
+  if (event._tag !== "AttemptChoiceApplied" || event.choice !== "RestartTaskImplementation") return false
+  const attemptId = event.subject.plannedAttempt.attemptId
+  const choice = { plannedAttempt: event.subject.plannedAttempt, recordedAt: record.position }
+  const choices = indexes.restartChoices.get(attemptId)
+  if (choices !== undefined) {
+    // eslint-disable-next-line functional/immutable-data -- This array is owned by one exact linear prefix.
+    choices.push(choice)
+    return true
+  }
+  // eslint-disable-next-line functional/immutable-data -- This map is owned by one exact linear prefix.
+  indexes.restartChoices.set(attemptId, [choice])
+  return true
+}
+
+const indexAcceptedTerminal = (indexes: IntegrationAdmissionPrefixIndexes, record: JournalRecord): boolean => {
+  const event = record.event
+  if (
+    event._tag !== "PlannedAttemptExecutorWorkReported" ||
+    event.report._tag !== "Terminal" ||
+    event.report.result._tag !== "Accepted"
+  ) {
+    return false
+  }
+  const attemptId = event.report.correlation.attemptId
+  const terminal = {
+    acceptedResult: event.report.result.acceptedResult,
+    position: record.position,
+    runId: event.report.correlation.runId
+  }
+  const terminals = indexes.acceptedTerminalsByAttempt.get(attemptId)
+  if (terminals !== undefined) {
+    // eslint-disable-next-line functional/immutable-data -- This array is owned by one exact linear prefix.
+    terminals.push(terminal)
+    return true
+  }
+  // eslint-disable-next-line functional/immutable-data -- This map is owned by one exact linear prefix.
+  indexes.acceptedTerminalsByAttempt.set(attemptId, [terminal])
+  return true
 }
 
 const advanceIntegrationAdmissionPrefixIndexes = (
-  prior: IntegrationAdmissionPrefixIndexes,
+  indexes: IntegrationAdmissionPrefixIndexes,
   record: JournalRecord
-): IntegrationAdmissionPrefixIndexes => {
-  const event = record.event
-  if (event._tag === "IntegrationResponsibilityBegan") {
-    const queuedAttemptIds = new Set([...prior.queuedAttemptIds, event.plannedAttempt.attemptId])
-    return { ...prior, queuedAttemptIds }
-  }
-  if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-    const executorResponsibilities = new Map([
-      ...prior.executorResponsibilities,
-      [event.plannedAttempt.attemptId, event.plannedAttempt] as const
-    ])
-    return { ...prior, executorResponsibilities }
-  }
-  if (event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation") {
-    const attemptId = event.subject.plannedAttempt.attemptId
-    const restartChoices = new Map([
-      ...prior.restartChoices,
-      [
-        attemptId,
-        [
-          ...(prior.restartChoices.get(attemptId) ?? []),
-          { plannedAttempt: event.subject.plannedAttempt, recordedAt: record.position }
-        ]
-      ] as const
-    ])
-    return { ...prior, restartChoices }
-  }
-  return isClaimFinalityEvent(event) ? updateFinalityFacts(prior, event) : prior
+): void => {
+  if (indexQueuedResponsibility(indexes, record.event)) return
+  if (indexExecutorResponsibility(indexes, record.event)) return
+  if (indexRestartChoice(indexes, record)) return
+  if (indexAcceptedTerminal(indexes, record)) return
+  if (isClaimFinalityEvent(record.event)) updateFinalityFacts(indexes, record.event)
 }
 
 const admissionIndexesByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, IntegrationAdmissionPrefixIndexes>()
+
+const transferredAdmissionIndexesFor = (
+  records: ReadonlyArray<JournalRecord>
+): IntegrationAdmissionPrefixIndexes | undefined => {
+  const predecessor = journalPrefixPredecessorOf(records)
+  if (predecessor === undefined || predecessor.appended !== records[records.length - 1]) return undefined
+  const prior = integrationAdmissionPrefixIndexesFor(predecessor.prior)
+  if (!admissionIndexesByPrefix.has(predecessor.prior)) return undefined
+  admissionIndexesByPrefix.delete(predecessor.prior)
+  advanceIntegrationAdmissionPrefixIndexes(prior, predecessor.appended)
+  return prior
+}
+
+const replayIntegrationAdmissionPrefixIndexes = (
+  records: ReadonlyArray<JournalRecord>
+): IntegrationAdmissionPrefixIndexes => {
+  const indexes = emptyIntegrationAdmissionPrefixIndexes()
+  for (const record of records) {
+    if (!isClaimFinalityEvent(record.event)) advanceIntegrationAdmissionPrefixIndexes(indexes, record)
+  }
+  for (const record of records.toSorted((left, right) => left.position - right.position)) {
+    if (isClaimFinalityEvent(record.event)) updateFinalityFacts(indexes, record.event)
+  }
+  return indexes
+}
 
 const integrationAdmissionPrefixIndexesFor = (
   records: ReadonlyArray<JournalRecord>
@@ -314,46 +378,31 @@ const integrationAdmissionPrefixIndexesFor = (
   const cached = admissionIndexesByPrefix.get(records)
   if (cached !== undefined) return cached
 
-  const predecessor = journalPrefixPredecessorOf(records)
-  if (predecessor !== undefined && predecessor.appended === records[records.length - 1]) {
-    const prior = integrationAdmissionPrefixIndexesFor(predecessor.prior)
-    const next = advanceIntegrationAdmissionPrefixIndexes(prior, predecessor.appended)
-    admissionIndexesByPrefix.set(records, next)
-    return next
-  }
-
-  let indexes = emptyIntegrationAdmissionPrefixIndexes()
-  for (const record of records.toSorted((left, right) => left.position - right.position)) {
-    indexes = advanceIntegrationAdmissionPrefixIndexes(indexes, record)
-  }
+  const indexes = transferredAdmissionIndexesFor(records) ?? replayIntegrationAdmissionPrefixIndexes(records)
   admissionIndexesByPrefix.set(records, indexes)
   return indexes
 }
 
+const acceptedTerminalFor = (
+  indexes: IntegrationAdmissionPrefixIndexes,
+  plannedAttempt: PlannedTaskAttempt,
+  acceptedResult: AcceptedResult
+): IndexedAcceptedTerminal | undefined =>
+  (indexes.acceptedTerminalsByAttempt.get(plannedAttempt.attemptId) ?? []).find(
+    (terminal) =>
+      terminal.runId === plannedAttempt.runId && acceptedResultEquivalence(terminal.acceptedResult, acceptedResult)
+  )
+
 const hasDurableAcceptedResult = (
-  records: ReadonlyArray<JournalRecord>,
+  indexes: IntegrationAdmissionPrefixIndexes,
   plannedAttempt: PlannedTaskAttempt,
   acceptedResult: AcceptedResult
 ): boolean => {
-  const responsibility = records.find(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )
-  if (
-    responsibility?.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" ||
-    !plannedTaskAttemptEquivalence(responsibility.event.plannedAttempt, plannedAttempt)
-  ) {
-    return false
-  }
-  return records.some(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report._tag === "Terminal" &&
-      event.report.correlation.attemptId === plannedAttempt.attemptId &&
-      event.report.correlation.runId === plannedAttempt.runId &&
-      event.report.result._tag === "Accepted" &&
-      acceptedResultEquivalence(event.report.result.acceptedResult, acceptedResult)
+  const responsibility = indexes.executorResponsibilitiesFirst.get(plannedAttempt.attemptId)
+  return (
+    responsibility !== undefined &&
+    plannedTaskAttemptEquivalence(responsibility, plannedAttempt) &&
+    acceptedTerminalFor(indexes, plannedAttempt, acceptedResult) !== undefined
   )
 }
 
@@ -667,25 +716,18 @@ export const queueAcceptedResultIntegrationResponsibility = Effect.fn(
 )(function* (plannedAttempt: PlannedTaskAttempt, acceptedResult: AcceptedResult, integrationTarget: IntegrationTarget) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(plannedAttempt.runId)
-  const acceptedTerminal = records.find(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report._tag === "Terminal" &&
-      event.report.result._tag === "Accepted" &&
-      event.report.correlation.attemptId === plannedAttempt.attemptId &&
-      event.report.correlation.runId === plannedAttempt.runId &&
-      acceptedResultEquivalence(event.report.result.acceptedResult, acceptedResult)
-  )
+  const indexes = integrationAdmissionPrefixIndexesFor(records)
+  const acceptedTerminal = acceptedTerminalFor(indexes, plannedAttempt, acceptedResult)
   if (
     acceptedTerminal !== undefined &&
-    restartChoiceCommittedBeforeRecords(records, plannedAttempt, acceptedTerminal.position)
+    restartChoiceCommittedBefore(indexes, plannedAttempt, acceptedTerminal.position)
   ) {
     return yield* new AcceptedResultSuppressedByRestart({
       attemptId: plannedAttempt.attemptId,
       runId: plannedAttempt.runId
     })
   }
-  if (!hasDurableAcceptedResult(records, plannedAttempt, acceptedResult)) {
+  if (!hasDurableAcceptedResult(indexes, plannedAttempt, acceptedResult)) {
     return yield* new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
   }
   yield* qualifyAcceptedResultEvidence(plannedAttempt, acceptedResult)
