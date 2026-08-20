@@ -14,15 +14,33 @@ import {
  * disposable.  A cleanup authorization cannot be made from a task lifecycle,
  * process age, or an inferred terminal state.
  */
-export const PlannedAttemptCleanupDisposition = Schema.TaggedUnion({
-  Abandoned: { dispositionAt: JournalPosition, plannedAttempt: PlannedTaskAttempt, requestId: AttemptChoiceRequestId },
-  Settled: { dispositionAt: JournalPosition, plannedAttempt: PlannedTaskAttempt, settlementOperationId: OperationId },
-  Superseded: {
+const PlannedAttemptCleanupDispositionSuperseded = Schema.TaggedStruct("Superseded", {
+  dispositionAt: JournalPosition,
+  plannedAttempt: PlannedTaskAttempt,
+  successorAttempt: PlannedTaskAttempt
+}).check(
+  Schema.makeFilter((disposition) =>
+    disposition.plannedAttempt.attemptId !== disposition.successorAttempt.attemptId &&
+    disposition.plannedAttempt.worktree !== disposition.successorAttempt.worktree &&
+    disposition.plannedAttempt.branch !== disposition.successorAttempt.branch
+      ? undefined
+      : "superseded cleanup requires a distinct successor attempt, worktree, and branch"
+  )
+)
+
+export const PlannedAttemptCleanupDisposition = Schema.Union([
+  Schema.TaggedStruct("Abandoned", {
     dispositionAt: JournalPosition,
     plannedAttempt: PlannedTaskAttempt,
-    successorAttempt: PlannedTaskAttempt
-  }
-})
+    requestId: AttemptChoiceRequestId
+  }),
+  Schema.TaggedStruct("Settled", {
+    dispositionAt: JournalPosition,
+    plannedAttempt: PlannedTaskAttempt,
+    settlementOperationId: OperationId
+  }),
+  PlannedAttemptCleanupDispositionSuperseded
+]).pipe(Schema.toTaggedUnion("_tag"))
 export type PlannedAttemptCleanupDisposition = typeof PlannedAttemptCleanupDisposition.Type
 
 /** Structural equality for the immutable terminal occurrence used by both

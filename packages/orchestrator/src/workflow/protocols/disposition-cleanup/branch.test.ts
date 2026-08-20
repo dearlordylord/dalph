@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
+import { GitCommitSha } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -48,7 +49,12 @@ const begin = Effect.fn("Issue69BranchTest.begin")(function* () {
     WorktreeCleanupSettledEvent.make({
       authorization,
       occurrenceClassification: "NonActionOccurrence",
-      result: { _tag: "AlreadyAbsent", locator: authorization.locator, revision: authorization.evidenceRevision },
+      result: {
+        _tag: "AlreadyAbsent",
+        branch: authorization.owner.branch,
+        locator: authorization.locator,
+        revision: authorization.evidenceRevision
+      },
       version: workflowJournalEventVersion
     })
   )
@@ -57,6 +63,7 @@ const begin = Effect.fn("Issue69BranchTest.begin")(function* () {
 const present = BranchCleanupObservation.cases.Present.make({
   branch: attempt.branch,
   headSha: baseSha,
+  registeredWorktree: null,
   revision: BranchCleanupEvidenceRevision.make(1)
 })
 
@@ -66,11 +73,17 @@ it.effect("deletes a planned branch only after the exact worktree settlement", (
     const result = yield* runBranchCleanup(branchAuthorization)
     const boundary = yield* TestBranchCleanupBoundary
     expect(result._tag).toBe("Settled")
-    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove"])
+    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
   }).pipe(
     Effect.provide(
       branchCleanupTestLayer({
-        observations: [present],
+        observations: [
+          present,
+          BranchCleanupObservation.cases.Absent.make({
+            branch: attempt.branch,
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ],
         mutations: [
           BranchCleanupMutationResult.cases.Removed.make({
             branch: attempt.branch,
@@ -96,4 +109,83 @@ it.effect("does not read or mutate a branch before worktree cleanup settles", ()
     expect(result._tag).toBe("Preserved")
     expect(yield* boundary.calls()).toEqual([])
   }).pipe(Effect.provide(branchCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("preserves a branch whose fresh observation still has a registered worktree", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const result = yield* runBranchCleanup(branchAuthorization)
+    const boundary = yield* TestBranchCleanupBoundary
+    expect(result._tag).toBe("Preserved")
+    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe"])
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          BranchCleanupObservation.cases.Present.make({
+            branch: attempt.branch,
+            headSha: baseSha,
+            registeredWorktree: attempt.worktree,
+            revision: BranchCleanupEvidenceRevision.make(1)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("does not call a branch boundary when the journaled authorization is replayed with changed facts", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const first = yield* runBranchCleanup(branchAuthorization)
+    const replay = BranchCleanupAuthorization.make({
+      ...branchAuthorization,
+      expectedHead: GitCommitSha.make("2".repeat(40))
+    })
+    const second = yield* runBranchCleanup(replay)
+    const boundary = yield* TestBranchCleanupBoundary
+    expect(first._tag).toBe("Pending")
+    expect(second._tag).toBe("Preserved")
+    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove"])
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [present],
+        mutations: [BranchCleanupMutationResult.cases.Unknown.make({ branch: attempt.branch, detail: "lost" })]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("reconciles a lost branch response after restart without duplicate removal", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const first = yield* runBranchCleanup(branchAuthorization)
+    const second = yield* runBranchCleanup(branchAuthorization)
+    const boundary = yield* TestBranchCleanupBoundary
+    expect(first._tag).toBe("Pending")
+    expect(second._tag).toBe("Settled")
+    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          present,
+          BranchCleanupObservation.cases.Absent.make({
+            branch: attempt.branch,
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          BranchCleanupMutationResult.cases.Unknown.make({
+            branch: attempt.branch,
+            detail: "response lost after apply"
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
 )

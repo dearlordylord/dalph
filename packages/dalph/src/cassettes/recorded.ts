@@ -802,6 +802,7 @@ type RecordedCleanupEntry = Extract<RecordedCassetteEntry, { readonly _tag: Clea
 
 const cleanupEventTags = {
   BranchCleanupAuthorized: true,
+  BranchCleanupAbsenceConfirmed: true,
   BranchCleanupContradicted: true,
   BranchCleanupMutationIntended: true,
   BranchCleanupMutationResultRecorded: true,
@@ -809,6 +810,7 @@ const cleanupEventTags = {
   BranchCleanupObserved: true,
   BranchCleanupSettled: true,
   IntegratorCandidateCleanupAuthorized: true,
+  IntegratorCandidateCleanupAbsenceConfirmed: true,
   IntegratorCandidateCleanupContradicted: true,
   IntegratorCandidateCleanupMutationIntended: true,
   IntegratorCandidateCleanupMutationResultRecorded: true,
@@ -816,6 +818,7 @@ const cleanupEventTags = {
   IntegratorCandidateCleanupObserved: true,
   IntegratorCandidateCleanupSettled: true,
   WorktreeCleanupAuthorized: true,
+  WorktreeCleanupAbsenceConfirmed: true,
   WorktreeCleanupContradicted: true,
   WorktreeCleanupMutationIntended: true,
   WorktreeCleanupMutationResultRecorded: true,
@@ -839,6 +842,7 @@ const withoutEventVersion = (event: CleanupJournalEvent): RecordedCleanupEntry =
 const recordCleanupEntry = (event: CleanupJournalEvent): RecordedCleanupEntry =>
   Match.valueTags(event, {
     WorktreeCleanupAuthorized: withoutEventVersion,
+    WorktreeCleanupAbsenceConfirmed: withoutEventVersion,
     WorktreeCleanupObservationIntended: withoutEventVersion,
     WorktreeCleanupObserved: withoutEventVersion,
     WorktreeCleanupMutationIntended: withoutEventVersion,
@@ -846,6 +850,7 @@ const recordCleanupEntry = (event: CleanupJournalEvent): RecordedCleanupEntry =>
     WorktreeCleanupContradicted: withoutEventVersion,
     WorktreeCleanupSettled: withoutEventVersion,
     BranchCleanupAuthorized: withoutEventVersion,
+    BranchCleanupAbsenceConfirmed: withoutEventVersion,
     BranchCleanupObservationIntended: withoutEventVersion,
     BranchCleanupObserved: withoutEventVersion,
     BranchCleanupMutationIntended: withoutEventVersion,
@@ -853,6 +858,7 @@ const recordCleanupEntry = (event: CleanupJournalEvent): RecordedCleanupEntry =>
     BranchCleanupContradicted: withoutEventVersion,
     BranchCleanupSettled: withoutEventVersion,
     IntegratorCandidateCleanupAuthorized: withoutEventVersion,
+    IntegratorCandidateCleanupAbsenceConfirmed: withoutEventVersion,
     IntegratorCandidateCleanupObservationIntended: withoutEventVersion,
     IntegratorCandidateCleanupObserved: withoutEventVersion,
     IntegratorCandidateCleanupMutationIntended: withoutEventVersion,
@@ -1534,6 +1540,7 @@ const lyricForIntegrationQuarantineEntry = (entry: RecordedIntegrationQuarantine
 const lyricForCleanupEntry = (entry: RecordedCleanupEntry): string =>
   Match.valueTags(entry, {
     WorktreeCleanupAuthorized: () => "Dalph authorized exact worktree cleanup.",
+    WorktreeCleanupAbsenceConfirmed: () => "A fresh absence reconciled the exact worktree cleanup subject.",
     WorktreeCleanupObservationIntended: () => "Dalph intended a fresh worktree cleanup observation.",
     WorktreeCleanupObserved: (value) =>
       `Git reported ${value.observation._tag} for the exact worktree cleanup subject.`,
@@ -1544,6 +1551,7 @@ const lyricForCleanupEntry = (entry: RecordedCleanupEntry): string =>
       "Fresh Git facts contradicted worktree cleanup authority; the worktree was preserved.",
     WorktreeCleanupSettled: () => "The exact worktree cleanup responsibility settled.",
     BranchCleanupAuthorized: () => "Dalph authorized exact branch cleanup after worktree settlement.",
+    BranchCleanupAbsenceConfirmed: () => "A fresh absence reconciled the exact branch cleanup subject.",
     BranchCleanupObservationIntended: () => "Dalph intended a fresh branch cleanup observation.",
     BranchCleanupObserved: (value) => `Git reported ${value.observation._tag} for the exact branch cleanup subject.`,
     BranchCleanupMutationIntended: (value) => `Dalph intended branch removal attempt ${value.attempt}.`,
@@ -1552,6 +1560,8 @@ const lyricForCleanupEntry = (entry: RecordedCleanupEntry): string =>
     BranchCleanupContradicted: () => "Fresh Git facts contradicted branch cleanup authority; the branch was preserved.",
     BranchCleanupSettled: () => "The exact branch cleanup responsibility settled.",
     IntegratorCandidateCleanupAuthorized: () => "Dalph authorized exact predecessor-candidate cleanup.",
+    IntegratorCandidateCleanupAbsenceConfirmed: () =>
+      "A fresh absence reconciled the exact predecessor-candidate cleanup subject.",
     IntegratorCandidateCleanupObservationIntended: () =>
       "Dalph intended a fresh predecessor-candidate ownership observation.",
     IntegratorCandidateCleanupObserved: (value) =>

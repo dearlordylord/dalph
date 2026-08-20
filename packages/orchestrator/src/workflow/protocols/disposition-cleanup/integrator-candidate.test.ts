@@ -97,15 +97,22 @@ it.effect("removes only a quarantined predecessor candidate", () =>
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
     expect(result._tag).toBe("Settled")
-    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove"])
+    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
   }).pipe(
     Effect.provide(
       integratorCandidateCleanupTestLayer({
-        observations: [present],
+        observations: [
+          present,
+          IntegratorCandidateCleanupObservation.cases.Absent.make({
+            locator: predecessor.candidateResource,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+          })
+        ],
         mutations: [
           IntegratorCandidateCleanupMutationResult.cases.Removed.make({
             locator: predecessor.candidateResource,
-            revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(2),
+            sessionId: predecessor.sessionId
           })
         ]
       })
@@ -135,6 +142,43 @@ it.effect("preserves a live predecessor candidate writer", () =>
             observedSessionId: successor.sessionId,
             reason: "LiveWriter",
             revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("reconciles a lost predecessor-candidate response after restart without duplicate removal", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-candidate-restart"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const first = yield* runIntegratorCandidateCleanup(authorization)
+    const second = yield* runIntegratorCandidateCleanup(authorization)
+    const boundary = yield* TestIntegratorCandidateCleanupBoundary
+    expect(first._tag).toBe("Pending")
+    expect(second._tag).toBe("Settled")
+    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+  }).pipe(
+    Effect.provide(
+      integratorCandidateCleanupTestLayer({
+        observations: [
+          present,
+          IntegratorCandidateCleanupObservation.cases.Absent.make({
+            locator: predecessor.candidateResource,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+            detail: "response lost after apply",
+            locator: predecessor.candidateResource,
+            sessionId: predecessor.sessionId
           })
         ]
       })

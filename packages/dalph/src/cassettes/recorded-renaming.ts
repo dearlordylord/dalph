@@ -910,6 +910,16 @@ const renameWorktreeCleanupObservation = (
       })
   })
 
+const renameWorktreeCleanupAbsence = (
+  observation: Extract<WorktreeCleanupObservation, { readonly _tag: "Absent" }>,
+  maps: IdentityRenamingMaps
+) =>
+  completeFields<typeof observation>({
+    _tag: "Absent",
+    locator: renamed(observation.locator, maps.worktreeLocators),
+    revision: preserveCassetteValue(observation.revision)
+  })
+
 const renameWorktreeCleanupMutationResult = (
   result: WorktreeCleanupMutationResult,
   maps: IdentityRenamingMaps
@@ -918,24 +928,28 @@ const renameWorktreeCleanupMutationResult = (
     Removed: (value) =>
       completeFields<typeof value>({
         _tag: "Removed",
+        branch: renamed(value.branch, maps.taskBranchRefs),
         locator: renamed(value.locator, maps.worktreeLocators),
         revision: preserveCassetteValue(value.revision)
       }),
     AlreadyAbsent: (value) =>
       completeFields<typeof value>({
         _tag: "AlreadyAbsent",
+        branch: renamed(value.branch, maps.taskBranchRefs),
         locator: renamed(value.locator, maps.worktreeLocators),
         revision: preserveCassetteValue(value.revision)
       }),
     DefinitelyNotApplied: (value) =>
       completeFields<typeof value>({
         _tag: "DefinitelyNotApplied",
+        branch: renamed(value.branch, maps.taskBranchRefs),
         detail: preserveCassetteValue(value.detail),
         locator: renamed(value.locator, maps.worktreeLocators)
       }),
     Unknown: (value) =>
       completeFields<typeof value>({
         _tag: "Unknown",
+        branch: renamed(value.branch, maps.taskBranchRefs),
         detail: preserveCassetteValue(value.detail),
         locator: renamed(value.locator, maps.worktreeLocators)
       })
@@ -954,12 +968,14 @@ const renameWorktreeCleanupSettledResult = (
     Removed: (value) =>
       completeFields<typeof value>({
         _tag: "Removed",
+        branch: renamed(value.branch, maps.taskBranchRefs),
         locator: renamed(value.locator, maps.worktreeLocators),
         revision: preserveCassetteValue(value.revision)
       }),
     AlreadyAbsent: (value) =>
       completeFields<typeof value>({
         _tag: "AlreadyAbsent",
+        branch: renamed(value.branch, maps.taskBranchRefs),
         locator: renamed(value.locator, maps.worktreeLocators),
         revision: preserveCassetteValue(value.revision)
       })
@@ -975,6 +991,8 @@ const renameBranchCleanupObservation = (
         _tag: "Present",
         branch: renamed(value.branch, maps.taskBranchRefs),
         headSha: preserveCassetteValue(value.headSha),
+        registeredWorktree:
+          value.registeredWorktree === null ? null : renamed(value.registeredWorktree, maps.worktreeLocators),
         revision: preserveCassetteValue(value.revision)
       }),
     Absent: (value) =>
@@ -998,6 +1016,16 @@ const renameBranchCleanupObservation = (
         branch: renamed(value.branch, maps.taskBranchRefs),
         detail: preserveCassetteValue(value.detail)
       })
+  })
+
+const renameBranchCleanupAbsence = (
+  observation: Extract<BranchCleanupObservation, { readonly _tag: "Absent" }>,
+  maps: IdentityRenamingMaps
+) =>
+  completeFields<typeof observation>({
+    _tag: "Absent",
+    branch: renamed(observation.branch, maps.taskBranchRefs),
+    revision: preserveCassetteValue(observation.revision)
   })
 
 const renameBranchCleanupMutationResult = (
@@ -1087,6 +1115,16 @@ const renameIntegratorCandidateCleanupObservation = (
       })
   })
 
+const renameIntegratorCandidateCleanupAbsence = (
+  observation: Extract<IntegratorCandidateCleanupObservation, { readonly _tag: "Absent" }>,
+  maps: IdentityRenamingMaps
+) =>
+  completeFields<typeof observation>({
+    _tag: "Absent",
+    locator: renameIntegratorCandidateResource(observation.locator, maps),
+    revision: preserveCassetteValue(observation.revision)
+  })
+
 const renameIntegratorCandidateCleanupMutationResult = (
   result: IntegratorCandidateCleanupMutationResult,
   maps: IdentityRenamingMaps
@@ -1096,25 +1134,29 @@ const renameIntegratorCandidateCleanupMutationResult = (
       completeFields<typeof value>({
         _tag: "Removed",
         locator: renameIntegratorCandidateResource(value.locator, maps),
-        revision: preserveCassetteValue(value.revision)
+        revision: preserveCassetteValue(value.revision),
+        sessionId: renameIntegratorSession(value.sessionId, maps)
       }),
     AlreadyAbsent: (value) =>
       completeFields<typeof value>({
         _tag: "AlreadyAbsent",
         locator: renameIntegratorCandidateResource(value.locator, maps),
-        revision: preserveCassetteValue(value.revision)
+        revision: preserveCassetteValue(value.revision),
+        sessionId: renameIntegratorSession(value.sessionId, maps)
       }),
     DefinitelyNotApplied: (value) =>
       completeFields<typeof value>({
         _tag: "DefinitelyNotApplied",
         detail: preserveCassetteValue(value.detail),
-        locator: renameIntegratorCandidateResource(value.locator, maps)
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        sessionId: renameIntegratorSession(value.sessionId, maps)
       }),
     Unknown: (value) =>
       completeFields<typeof value>({
         _tag: "Unknown",
         detail: preserveCassetteValue(value.detail),
-        locator: renameIntegratorCandidateResource(value.locator, maps)
+        locator: renameIntegratorCandidateResource(value.locator, maps),
+        sessionId: renameIntegratorSession(value.sessionId, maps)
       })
   })
 
@@ -1132,13 +1174,15 @@ const renameIntegratorCandidateCleanupSettledResult = (
       completeFields<typeof value>({
         _tag: "Removed",
         locator: renameIntegratorCandidateResource(value.locator, maps),
-        revision: preserveCassetteValue(value.revision)
+        revision: preserveCassetteValue(value.revision),
+        sessionId: renameIntegratorSession(value.sessionId, maps)
       }),
     AlreadyAbsent: (value) =>
       completeFields<typeof value>({
         _tag: "AlreadyAbsent",
         locator: renameIntegratorCandidateResource(value.locator, maps),
-        revision: preserveCassetteValue(value.revision)
+        revision: preserveCassetteValue(value.revision),
+        sessionId: renameIntegratorSession(value.sessionId, maps)
       })
   })
 
@@ -1149,6 +1193,7 @@ type RecordedCleanupEntry = Extract<
       | "WorktreeCleanupAuthorized"
       | "WorktreeCleanupObservationIntended"
       | "WorktreeCleanupObserved"
+      | "WorktreeCleanupAbsenceConfirmed"
       | "WorktreeCleanupMutationIntended"
       | "WorktreeCleanupMutationResultRecorded"
       | "WorktreeCleanupContradicted"
@@ -1156,6 +1201,7 @@ type RecordedCleanupEntry = Extract<
       | "BranchCleanupAuthorized"
       | "BranchCleanupObservationIntended"
       | "BranchCleanupObserved"
+      | "BranchCleanupAbsenceConfirmed"
       | "BranchCleanupMutationIntended"
       | "BranchCleanupMutationResultRecorded"
       | "BranchCleanupContradicted"
@@ -1163,6 +1209,7 @@ type RecordedCleanupEntry = Extract<
       | "IntegratorCandidateCleanupAuthorized"
       | "IntegratorCandidateCleanupObservationIntended"
       | "IntegratorCandidateCleanupObserved"
+      | "IntegratorCandidateCleanupAbsenceConfirmed"
       | "IntegratorCandidateCleanupMutationIntended"
       | "IntegratorCandidateCleanupMutationResultRecorded"
       | "IntegratorCandidateCleanupContradicted"
@@ -1193,6 +1240,16 @@ const renameCleanupEntry = (entry: RecordedCleanupEntry, maps: IdentityRenamingM
         _tag: "WorktreeCleanupObserved",
         authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
         observation: renameWorktreeCleanupObservation(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
+    WorktreeCleanupAbsenceConfirmed: (value) =>
+      completeFields<typeof value>({
+        _tag: "WorktreeCleanupAbsenceConfirmed",
+        authorization: renameWorktreeCleanupAuthorization(value.authorization, maps),
+        cause: preserveCassetteValue(value.cause),
+        observation: renameWorktreeCleanupAbsence(value.observation, maps),
         occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
         operationId: renamed(value.operationId, maps.operationIds),
         ordinal: preserveCassetteValue(value.ordinal)
@@ -1256,6 +1313,16 @@ const renameCleanupEntry = (entry: RecordedCleanupEntry, maps: IdentityRenamingM
         operationId: renamed(value.operationId, maps.operationIds),
         ordinal: preserveCassetteValue(value.ordinal)
       }),
+    BranchCleanupAbsenceConfirmed: (value) =>
+      completeFields<typeof value>({
+        _tag: "BranchCleanupAbsenceConfirmed",
+        authorization: renameBranchCleanupAuthorization(value.authorization, maps),
+        cause: preserveCassetteValue(value.cause),
+        observation: renameBranchCleanupAbsence(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
     BranchCleanupMutationIntended: (value) =>
       completeFields<typeof value>({
         _tag: "BranchCleanupMutationIntended",
@@ -1311,6 +1378,16 @@ const renameCleanupEntry = (entry: RecordedCleanupEntry, maps: IdentityRenamingM
         _tag: "IntegratorCandidateCleanupObserved",
         authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
         observation: renameIntegratorCandidateCleanupObservation(value.observation, maps),
+        occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
+        operationId: renamed(value.operationId, maps.operationIds),
+        ordinal: preserveCassetteValue(value.ordinal)
+      }),
+    IntegratorCandidateCleanupAbsenceConfirmed: (value) =>
+      completeFields<typeof value>({
+        _tag: "IntegratorCandidateCleanupAbsenceConfirmed",
+        authorization: renameIntegratorCandidateCleanupAuthorization(value.authorization, maps),
+        cause: preserveCassetteValue(value.cause),
+        observation: renameIntegratorCandidateCleanupAbsence(value.observation, maps),
         occurrenceClassification: preserveCassetteValue(value.occurrenceClassification),
         operationId: renamed(value.operationId, maps.operationIds),
         ordinal: preserveCassetteValue(value.ordinal)
@@ -1429,6 +1506,7 @@ const renameRecordedCassetteEntry = (
       WorktreeCleanupAuthorized: (entry) => renameCleanupEntry(entry, maps),
       WorktreeCleanupObservationIntended: (entry) => renameCleanupEntry(entry, maps),
       WorktreeCleanupObserved: (entry) => renameCleanupEntry(entry, maps),
+      WorktreeCleanupAbsenceConfirmed: (entry) => renameCleanupEntry(entry, maps),
       WorktreeCleanupMutationIntended: (entry) => renameCleanupEntry(entry, maps),
       WorktreeCleanupMutationResultRecorded: (entry) => renameCleanupEntry(entry, maps),
       WorktreeCleanupContradicted: (entry) => renameCleanupEntry(entry, maps),
@@ -1436,6 +1514,7 @@ const renameRecordedCassetteEntry = (
       BranchCleanupAuthorized: (entry) => renameCleanupEntry(entry, maps),
       BranchCleanupObservationIntended: (entry) => renameCleanupEntry(entry, maps),
       BranchCleanupObserved: (entry) => renameCleanupEntry(entry, maps),
+      BranchCleanupAbsenceConfirmed: (entry) => renameCleanupEntry(entry, maps),
       BranchCleanupMutationIntended: (entry) => renameCleanupEntry(entry, maps),
       BranchCleanupMutationResultRecorded: (entry) => renameCleanupEntry(entry, maps),
       BranchCleanupContradicted: (entry) => renameCleanupEntry(entry, maps),
@@ -1443,6 +1522,7 @@ const renameRecordedCassetteEntry = (
       IntegratorCandidateCleanupAuthorized: (entry) => renameCleanupEntry(entry, maps),
       IntegratorCandidateCleanupObservationIntended: (entry) => renameCleanupEntry(entry, maps),
       IntegratorCandidateCleanupObserved: (entry) => renameCleanupEntry(entry, maps),
+      IntegratorCandidateCleanupAbsenceConfirmed: (entry) => renameCleanupEntry(entry, maps),
       IntegratorCandidateCleanupMutationIntended: (entry) => renameCleanupEntry(entry, maps),
       IntegratorCandidateCleanupMutationResultRecorded: (entry) => renameCleanupEntry(entry, maps),
       IntegratorCandidateCleanupContradicted: (entry) => renameCleanupEntry(entry, maps),

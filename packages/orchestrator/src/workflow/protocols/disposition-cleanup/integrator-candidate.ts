@@ -1,8 +1,11 @@
+/* eslint-disable max-lines -- The candidate authority, recovery chronology, and controlled boundary stay co-located for auditability. */
+
 import { Effect, Context, Layer, Ref, Schema } from "effect"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord } from "../../../workflow-journal/store.js"
 import {
   integratorCandidateCleanupAuthorizedRecordKey,
+  integratorCandidateCleanupAbsenceConfirmedRecordKey,
   integratorCandidateCleanupContradictedRecordKey,
   integratorCandidateCleanupMutationIntendedRecordKey,
   integratorCandidateCleanupMutationResultRecordedRecordKey,
@@ -15,7 +18,8 @@ import {
   CleanupObservationOrdinal,
   IntegratorCandidateCleanupAuthorization,
   IntegratorCandidateCleanupEvidenceRevision,
-  cleanupMutationRequestLimit
+  cleanupMutationRequestLimit,
+  integratorCandidateCleanupAuthorizationEquals
 } from "./disposition.js"
 import { IntegratorCandidateResourceLocator, IntegratorSessionId } from "../integrator/events.js"
 import { OperationId } from "../../identity.js"
@@ -43,10 +47,22 @@ export type IntegratorCandidateCleanupObservation = typeof IntegratorCandidateCl
 
 /** Result of one exact predecessor-candidate disposal request. */
 export const IntegratorCandidateCleanupMutationResult = Schema.TaggedUnion({
-  Removed: { locator: IntegratorCandidateResourceLocator, revision: IntegratorCandidateCleanupEvidenceRevision },
-  AlreadyAbsent: { locator: IntegratorCandidateResourceLocator, revision: IntegratorCandidateCleanupEvidenceRevision },
-  DefinitelyNotApplied: { detail: Schema.String, locator: IntegratorCandidateResourceLocator },
-  Unknown: { detail: Schema.String, locator: IntegratorCandidateResourceLocator }
+  Removed: {
+    locator: IntegratorCandidateResourceLocator,
+    revision: IntegratorCandidateCleanupEvidenceRevision,
+    sessionId: IntegratorSessionId
+  },
+  AlreadyAbsent: {
+    locator: IntegratorCandidateResourceLocator,
+    revision: IntegratorCandidateCleanupEvidenceRevision,
+    sessionId: IntegratorSessionId
+  },
+  DefinitelyNotApplied: {
+    detail: Schema.String,
+    locator: IntegratorCandidateResourceLocator,
+    sessionId: IntegratorSessionId
+  },
+  Unknown: { detail: Schema.String, locator: IntegratorCandidateResourceLocator, sessionId: IntegratorSessionId }
 })
 export type IntegratorCandidateCleanupMutationResult = typeof IntegratorCandidateCleanupMutationResult.Type
 
@@ -97,6 +113,22 @@ export const IntegratorCandidateCleanupObservedEvent = Schema.TaggedStruct("Inte
   version: Schema.Literal(workflowJournalEventVersion)
 })
 export type IntegratorCandidateCleanupObservedEvent = typeof IntegratorCandidateCleanupObservedEvent.Type
+
+/** A fresh candidate absence proof reconciles an initial or ambiguous disposal without fabricating a result. */
+export const IntegratorCandidateCleanupAbsenceConfirmedEvent = Schema.TaggedStruct(
+  "IntegratorCandidateCleanupAbsenceConfirmed",
+  {
+    authorization: IntegratorCandidateCleanupAuthorization,
+    cause: Schema.Literals(["InitialAbsence", "MutationResponseReconciliation"]),
+    observation: IntegratorCandidateCleanupObservation.cases.Absent,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+export type IntegratorCandidateCleanupAbsenceConfirmedEvent =
+  typeof IntegratorCandidateCleanupAbsenceConfirmedEvent.Type
 
 /** Intent preceding one exact bounded predecessor-candidate delete request. */
 export const IntegratorCandidateCleanupMutationIntendedEvent = Schema.TaggedStruct(
@@ -158,6 +190,7 @@ export const IntegratorCandidateCleanupJournalEvent = Schema.Union([
   IntegratorCandidateCleanupAuthorizedEvent,
   IntegratorCandidateCleanupObservationIntendedEvent,
   IntegratorCandidateCleanupObservedEvent,
+  IntegratorCandidateCleanupAbsenceConfirmedEvent,
   IntegratorCandidateCleanupMutationIntendedEvent,
   IntegratorCandidateCleanupMutationResultRecordedEvent,
   IntegratorCandidateCleanupContradictedEvent,
@@ -181,8 +214,8 @@ export class IntegratorCandidateCleanupBoundary extends Context.Service<
 >()("@dalph/IntegratorCandidateCleanupBoundary") {}
 
 export const IntegratorCandidateCleanupBoundaryCall = Schema.TaggedUnion({
-  Observe: { ordinal: CleanupObservationOrdinal },
-  Remove: { ordinal: CleanupMutationOrdinal }
+  Observe: { operationId: OperationId, ordinal: CleanupObservationOrdinal },
+  Remove: { operationId: OperationId, ordinal: CleanupMutationOrdinal }
 })
 export type IntegratorCandidateCleanupBoundaryCall = typeof IntegratorCandidateCleanupBoundaryCall.Type
 
@@ -207,10 +240,15 @@ export const integratorCandidateCleanupTestLayer = (input: {
             const current = yield* Ref.getAndUpdate(observations, (values) =>
               values.length > 1 ? values.slice(1) : values
             )
-            const ordinal = CleanupObservationOrdinal.make((yield* Ref.get(calls)).length + 1)
+            const ordinal = CleanupObservationOrdinal.make(
+              (yield* Ref.get(calls)).filter((call) => call._tag === "Observe").length + 1
+            )
             yield* Ref.update(calls, (values) => [
               ...values,
-              IntegratorCandidateCleanupBoundaryCall.cases.Observe.make({ ordinal })
+              IntegratorCandidateCleanupBoundaryCall.cases.Observe.make({
+                operationId: authorization.operationId,
+                ordinal
+              })
             ])
             return (
               current[0] ??
@@ -224,7 +262,10 @@ export const integratorCandidateCleanupTestLayer = (input: {
           Effect.gen(function* () {
             yield* Ref.update(calls, (values) => [
               ...values,
-              IntegratorCandidateCleanupBoundaryCall.cases.Remove.make({ ordinal: attempt })
+              IntegratorCandidateCleanupBoundaryCall.cases.Remove.make({
+                operationId: authorization.operationId,
+                ordinal: attempt
+              })
             ])
             const current = yield* Ref.getAndUpdate(mutations, (values) =>
               values.length > 1 ? values.slice(1) : values
@@ -233,7 +274,8 @@ export const integratorCandidateCleanupTestLayer = (input: {
               current[0] ??
               IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
                 detail: "script exhausted",
-                locator: authorization.locator
+                locator: authorization.locator,
+                sessionId: authorization.owner.sessionId
               })
             )
           })
@@ -245,8 +287,17 @@ export const integratorCandidateCleanupTestLayer = (input: {
     })
   )
 
-const recordsWith = (records: ReadonlyArray<JournalRecord>, tag: IntegratorCandidateCleanupJournalEvent["_tag"]) =>
-  records.filter((record) => record.event._tag === tag)
+const recordsWith = (
+  records: ReadonlyArray<JournalRecord>,
+  tag: IntegratorCandidateCleanupJournalEvent["_tag"],
+  operationId: OperationId
+) =>
+  records.filter(
+    (record) =>
+      record.event._tag === tag &&
+      "authorization" in record.event &&
+      record.event.authorization.operationId === operationId
+  )
 
 const appendEvent = Effect.fn("IntegratorCandidateCleanup.appendEvent")(function* (
   runId: Parameters<InRunJournal["Service"]["append"]>[0],
@@ -267,6 +318,151 @@ const exactPresent = (
   observation.revision === authorization.evidenceRevision &&
   observation.writerQuiescent
 
+const observationHasAuthorizedLocator = (
+  observation: IntegratorCandidateCleanupObservation,
+  authorization: IntegratorCandidateCleanupAuthorization
+): boolean => observation.locator === authorization.locator
+
+/** Every candidate result must identify the exact predecessor resource and session. */
+export const integratorCandidateCleanupMutationResultMatchesAuthorization = (
+  result: IntegratorCandidateCleanupMutationResult,
+  authorization: IntegratorCandidateCleanupAuthorization
+): boolean => result.locator === authorization.locator && result.sessionId === authorization.owner.sessionId
+
+const nextObservationOrdinal = (
+  records: ReadonlyArray<JournalRecord>,
+  operationId: OperationId
+): CleanupObservationOrdinal =>
+  CleanupObservationOrdinal.make(
+    recordsWith(records, "IntegratorCandidateCleanupObservationIntended", operationId).length + 1
+  )
+
+const existingAuthorization = (records: ReadonlyArray<JournalRecord>, operationId: OperationId) =>
+  records.find(
+    (record): record is JournalRecord & { readonly event: IntegratorCandidateCleanupAuthorizedEvent } =>
+      record.event._tag === "IntegratorCandidateCleanupAuthorized" &&
+      record.event.authorization.operationId === operationId
+  )?.event
+
+const existingSettled = (
+  records: ReadonlyArray<JournalRecord>,
+  authorization: IntegratorCandidateCleanupAuthorization
+) =>
+  records.find(
+    (record): record is JournalRecord & { readonly event: IntegratorCandidateCleanupSettledEvent } =>
+      record.event._tag === "IntegratorCandidateCleanupSettled" &&
+      record.event.authorization.operationId === authorization.operationId &&
+      integratorCandidateCleanupAuthorizationEquals(record.event.authorization, authorization)
+  )?.event
+
+const observeFresh = Effect.fn("IntegratorCandidateCleanup.observeFresh")(function* (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  records: ReadonlyArray<JournalRecord>
+) {
+  const boundary = yield* IntegratorCandidateCleanupBoundary
+  const runId = authorization.disposition.predecessor.plannedAttempt.runId
+  const ordinal = nextObservationOrdinal(records, authorization.operationId)
+  const operationId = OperationId.make(`${authorization.operationId}:observe:${ordinal}`)
+  const key = integratorCandidateCleanupObservationIntendedRecordKey(authorization.operationId, ordinal)
+  if (!records.some((record) => record.key === key)) {
+    yield* appendEvent(
+      runId,
+      key,
+      IntegratorCandidateCleanupObservationIntendedEvent.make({
+        authorization,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        operationId,
+        ordinal,
+        version: workflowJournalEventVersion
+      })
+    )
+  }
+  const observed = yield* boundary.observe(authorization)
+  yield* appendEvent(
+    runId,
+    integratorCandidateCleanupObservedRecordKey(authorization.operationId, ordinal),
+    IntegratorCandidateCleanupObservedEvent.make({
+      authorization,
+      observation: observed,
+      occurrenceClassification: "NonActionOccurrence",
+      operationId,
+      ordinal,
+      version: workflowJournalEventVersion
+    })
+  )
+  return { observed, operationId, ordinal, records: yield* (yield* InRunJournal).read(runId) }
+})
+
+const appendContradiction = Effect.fn("IntegratorCandidateCleanup.appendContradiction")(function* (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  observation: IntegratorCandidateCleanupObservation,
+  operationId: OperationId,
+  detail: string,
+  records: ReadonlyArray<JournalRecord>
+) {
+  const runId = authorization.disposition.predecessor.plannedAttempt.runId
+  const key = integratorCandidateCleanupContradictedRecordKey(authorization.operationId)
+  if (!records.some((record) => record.key === key)) {
+    yield* appendEvent(
+      runId,
+      key,
+      IntegratorCandidateCleanupContradictedEvent.make({
+        authorization,
+        detail,
+        observation,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+  }
+})
+
+const settleFromAbsence = Effect.fn("IntegratorCandidateCleanup.settleFromAbsence")(function* (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  observation: IntegratorCandidateCleanupObservation,
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal,
+  cause: "InitialAbsence" | "MutationResponseReconciliation",
+  result: Extract<IntegratorCandidateCleanupMutationResult, { readonly _tag: "AlreadyAbsent" | "Removed" }>,
+  records: ReadonlyArray<JournalRecord>
+) {
+  if (observation._tag !== "Absent")
+    return yield* Effect.die("candidate absence settlement requires an Absent observation")
+  const runId = authorization.disposition.predecessor.plannedAttempt.runId
+  const absenceKey = integratorCandidateCleanupAbsenceConfirmedRecordKey(authorization.operationId, ordinal)
+  if (!records.some((record) => record.key === absenceKey)) {
+    yield* appendEvent(
+      runId,
+      absenceKey,
+      IntegratorCandidateCleanupAbsenceConfirmedEvent.make({
+        authorization,
+        cause,
+        observation,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId,
+        ordinal,
+        version: workflowJournalEventVersion
+      })
+    )
+  }
+  const settled = existingSettled(records, authorization)
+  if (settled === undefined) {
+    yield* appendEvent(
+      runId,
+      integratorCandidateCleanupSettledRecordKey(authorization.operationId),
+      IntegratorCandidateCleanupSettledEvent.make({
+        authorization,
+        occurrenceClassification: "NonActionOccurrence",
+        result,
+        version: workflowJournalEventVersion
+      })
+    )
+  }
+  return IntegratorCandidateCleanupOutcome.cases.Settled.make({ authorization, result: settled?.result ?? result })
+})
+
 /** Reconciles only the quarantined predecessor candidate. */
 export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateCleanup.run")(function* (
   authorization: IntegratorCandidateCleanupAuthorization
@@ -275,13 +471,17 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
   const journal = yield* InRunJournal
   const runId = authorization.disposition.predecessor.plannedAttempt.runId
   let records = yield* journal.read(runId)
+  const journalAuthorization = existingAuthorization(records, authorization.operationId)
   if (
-    !records.some(
-      (record) =>
-        record.event._tag === "IntegratorCandidateCleanupAuthorized" &&
-        record.event.authorization.operationId === authorization.operationId
-    )
+    journalAuthorization !== undefined &&
+    !integratorCandidateCleanupAuthorizationEquals(journalAuthorization.authorization, authorization)
   ) {
+    return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
+      authorization,
+      reason: "journaled candidate authorization differs from the requested authorization"
+    })
+  }
+  if (journalAuthorization === undefined) {
     yield* appendEvent(
       runId,
       integratorCandidateCleanupAuthorizedRecordKey(authorization.operationId),
@@ -294,98 +494,59 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
     )
     records = yield* journal.read(runId)
   }
-  const observationOrdinal = CleanupObservationOrdinal.make(
-    recordsWith(records, "IntegratorCandidateCleanupObservationIntended").length + 1
+  const settled = existingSettled(records, authorization)
+  const firstObservation = yield* observeFresh(authorization, records)
+  records = firstObservation.records
+  const observation = firstObservation.observed
+  if (
+    settled !== undefined &&
+    observation._tag === "Absent" &&
+    observationHasAuthorizedLocator(observation, authorization)
   )
-  const observationOperationId = OperationId.make(`${authorization.operationId}:observe:${observationOrdinal}`)
-  const observationKey = integratorCandidateCleanupObservationIntendedRecordKey(
-    authorization.operationId,
-    observationOrdinal
-  )
-  if (!records.some((record) => record.key === observationKey)) {
-    yield* appendEvent(
-      runId,
-      observationKey,
-      IntegratorCandidateCleanupObservationIntendedEvent.make({
-        authorization,
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        operationId: observationOperationId,
-        ordinal: observationOrdinal,
-        version: workflowJournalEventVersion
-      })
-    )
-    records = yield* journal.read(runId)
-  }
-  const observation = yield* boundary.observe(authorization)
-  yield* appendEvent(
-    runId,
-    integratorCandidateCleanupObservedRecordKey(authorization.operationId, observationOrdinal),
-    IntegratorCandidateCleanupObservedEvent.make({
+    return IntegratorCandidateCleanupOutcome.cases.Settled.make({ authorization, result: settled.result })
+  if (settled !== undefined) {
+    yield* appendContradiction(
       authorization,
       observation,
-      occurrenceClassification: "NonActionOccurrence",
-      operationId: observationOperationId,
-      ordinal: observationOrdinal,
-      version: workflowJournalEventVersion
+      firstObservation.operationId,
+      "a settled candidate cleanup was reopened with a present, unreadable, or foreign resource",
+      records
+    )
+    return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
+      authorization,
+      reason: "settled candidate cleanup was contradicted"
     })
-  )
-  const settled = records.find(
-    (record): record is JournalRecord & { readonly event: IntegratorCandidateCleanupSettledEvent } =>
-      record.event._tag === "IntegratorCandidateCleanupSettled" &&
-      record.event.authorization.operationId === authorization.operationId
-  )?.event
-  if (settled !== undefined && observation._tag === "Absent")
-    return IntegratorCandidateCleanupOutcome.cases.Settled.make({ authorization, result: settled.result })
-  if (observation._tag === "Absent") {
+  }
+  if (observation._tag === "Absent" && observationHasAuthorizedLocator(observation, authorization)) {
     const result = IntegratorCandidateCleanupMutationResult.cases.AlreadyAbsent.make({
       locator: authorization.locator,
-      revision: observation.revision
+      revision: observation.revision,
+      sessionId: authorization.owner.sessionId
     })
-    const attempt = CleanupMutationOrdinal.make(1)
-    yield* appendEvent(
-      runId,
-      integratorCandidateCleanupMutationResultRecordedRecordKey(authorization.operationId, attempt),
-      IntegratorCandidateCleanupMutationResultRecordedEvent.make({
-        attempt,
-        authorization,
-        occurrenceClassification: "NonActionOccurrence",
-        operationId: OperationId.make(`${authorization.operationId}:mutation:1`),
-        result,
-        version: workflowJournalEventVersion
-      })
+    return yield* settleFromAbsence(
+      authorization,
+      observation,
+      firstObservation.operationId,
+      firstObservation.ordinal,
+      "InitialAbsence",
+      result,
+      records
     )
-    yield* appendEvent(
-      runId,
-      integratorCandidateCleanupSettledRecordKey(authorization.operationId),
-      IntegratorCandidateCleanupSettledEvent.make({
-        authorization,
-        occurrenceClassification: "NonActionOccurrence",
-        result,
-        version: workflowJournalEventVersion
-      })
-    )
-    return IntegratorCandidateCleanupOutcome.cases.Settled.make({ authorization, result })
   }
-  if (!exactPresent(observation, authorization)) {
-    yield* appendEvent(
-      runId,
-      integratorCandidateCleanupContradictedRecordKey(authorization.operationId),
-      IntegratorCandidateCleanupContradictedEvent.make({
-        authorization,
-        detail: observation._tag === "Unreadable" ? observation.detail : "candidate ownership or revision changed",
-        observation,
-        occurrenceClassification: "NonActionOccurrence",
-        operationId: observationOperationId,
-        version: workflowJournalEventVersion
-      })
+  if (!observationHasAuthorizedLocator(observation, authorization) || !exactPresent(observation, authorization)) {
+    yield* appendContradiction(
+      authorization,
+      observation,
+      firstObservation.operationId,
+      observation._tag === "Unreadable" ? observation.detail : "candidate ownership or revision changed",
+      records
     )
     return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
       authorization,
       reason: "fresh candidate facts contradicted authorization"
     })
   }
-  const count = recordsWith(records, "IntegratorCandidateCleanupMutationIntended").length
+  const count = recordsWith(records, "IntegratorCandidateCleanupMutationIntended", authorization.operationId).length
   if (count >= cleanupMutationRequestLimit)
     return IntegratorCandidateCleanupOutcome.cases.Pending.make({
       authorization,
@@ -419,18 +580,48 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
       version: workflowJournalEventVersion
     })
   )
-  if (result._tag === "Removed" || result._tag === "AlreadyAbsent") {
-    yield* appendEvent(
-      runId,
-      integratorCandidateCleanupSettledRecordKey(authorization.operationId),
-      IntegratorCandidateCleanupSettledEvent.make({
-        authorization,
-        occurrenceClassification: "NonActionOccurrence",
-        result,
-        version: workflowJournalEventVersion
-      })
+  records = yield* journal.read(runId)
+  if (!integratorCandidateCleanupMutationResultMatchesAuthorization(result, authorization)) {
+    yield* appendContradiction(
+      authorization,
+      observation,
+      mutationOperationId,
+      "candidate mutation response identified a different resource or session",
+      records
     )
-    return IntegratorCandidateCleanupOutcome.cases.Settled.make({ authorization, result })
+    return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
+      authorization,
+      reason: "candidate mutation response contradicted authorization"
+    })
+  }
+  if (result._tag === "Removed" || result._tag === "AlreadyAbsent") {
+    const postMutationObservation = yield* observeFresh(authorization, records)
+    records = postMutationObservation.records
+    if (
+      postMutationObservation.observed._tag === "Absent" &&
+      observationHasAuthorizedLocator(postMutationObservation.observed, authorization)
+    ) {
+      return yield* settleFromAbsence(
+        authorization,
+        postMutationObservation.observed,
+        postMutationObservation.operationId,
+        postMutationObservation.ordinal,
+        "MutationResponseReconciliation",
+        result,
+        records
+      )
+    }
+    yield* appendContradiction(
+      authorization,
+      postMutationObservation.observed,
+      postMutationObservation.operationId,
+      "candidate mutation did not receive a fresh authorized absence proof",
+      records
+    )
+    return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
+      authorization,
+      reason: "candidate mutation was not followed by a fresh authorized absence"
+    })
   }
   return IntegratorCandidateCleanupOutcome.cases.Pending.make({
     authorization,

@@ -17,9 +17,10 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
       const expected =
         dispositionCleanupRecordedCassetteCatalog[key as keyof typeof dispositionCleanupRecordedCassetteCatalog]
       const recordedTags = recorded.entries.map(({ _tag }) => _tag)
-      for (const tag of expected.events) expect(recordedTags).toContain(tag)
+      const filteredCleanupTags = recordedTags.filter((tag) => tag.includes("Cleanup"))
+      expect(filteredCleanupTags).toEqual(expected.events)
       if (expected.events.length > 0) expect(renderRecordedCassetteLyrics(recorded)).toContain("cleanup")
-      else expect(recordedTags.some((tag) => tag.includes("Cleanup"))).toBe(false)
+      else expect(filteredCleanupTags).toEqual([])
       expect(run.boundaryCalls).toEqual(cassette.expectedBoundaryCalls)
     }
   })

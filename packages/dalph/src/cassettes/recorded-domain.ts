@@ -123,6 +123,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     operationId: OperationId,
     ordinal: CleanupObservationOrdinal
   },
+  WorktreeCleanupAbsenceConfirmed: {
+    authorization: WorktreeCleanupAuthorization,
+    cause: Schema.Literals(["InitialAbsence", "MutationResponseReconciliation"]),
+    observation: WorktreeCleanupObservation.cases.Absent,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
   WorktreeCleanupMutationIntended: {
     attempt: CleanupMutationOrdinal,
     authorization: WorktreeCleanupAuthorization,
@@ -172,6 +180,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     operationId: OperationId,
     ordinal: CleanupObservationOrdinal
   },
+  BranchCleanupAbsenceConfirmed: {
+    authorization: BranchCleanupAuthorization,
+    cause: Schema.Literals(["InitialAbsence", "MutationResponseReconciliation"]),
+    observation: BranchCleanupObservation.cases.Absent,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
   BranchCleanupMutationIntended: {
     attempt: CleanupMutationOrdinal,
     authorization: BranchCleanupAuthorization,
@@ -214,6 +230,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   IntegratorCandidateCleanupObserved: {
     authorization: IntegratorCandidateCleanupAuthorization,
     observation: IntegratorCandidateCleanupObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    operationId: OperationId,
+    ordinal: CleanupObservationOrdinal
+  },
+  IntegratorCandidateCleanupAbsenceConfirmed: {
+    authorization: IntegratorCandidateCleanupAuthorization,
+    cause: Schema.Literals(["InitialAbsence", "MutationResponseReconciliation"]),
+    observation: IntegratorCandidateCleanupObservation.cases.Absent,
     occurrenceClassification: Schema.Literal("NonActionOccurrence"),
     operationId: OperationId,
     ordinal: CleanupObservationOrdinal

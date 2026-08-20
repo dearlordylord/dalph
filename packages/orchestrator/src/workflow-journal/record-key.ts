@@ -62,6 +62,13 @@ export const worktreeCleanupObservedRecordKey = (
 ): JournalRecordKey =>
   JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:observation:${ordinal}`)
 
+/** Stable key for a fresh absence proof that reconciles cleanup without a mutation result. */
+export const worktreeCleanupAbsenceConfirmedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:worktree:absence:${ordinal}`)
+
 /** Stable key for one numbered worktree remove request. */
 export const worktreeCleanupMutationIntendedRecordKey = (
   operationId: OperationId,
@@ -97,6 +104,11 @@ export const branchCleanupObservedRecordKey = (
   ordinal: CleanupObservationOrdinal
 ): JournalRecordKey =>
   JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:observation:${ordinal}`)
+export const branchCleanupAbsenceConfirmedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:branch:absence:${ordinal}`)
 export const branchCleanupMutationIntendedRecordKey = (
   operationId: OperationId,
   ordinal: CleanupMutationOrdinal
@@ -127,6 +139,11 @@ export const integratorCandidateCleanupObservedRecordKey = (
   ordinal: CleanupObservationOrdinal
 ): JournalRecordKey =>
   JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:observation:${ordinal}`)
+export const integratorCandidateCleanupAbsenceConfirmedRecordKey = (
+  operationId: OperationId,
+  ordinal: CleanupObservationOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`${dispositionCleanupRecordKeyPrefix(operationId)}:integrator-candidate:absence:${ordinal}`)
 export const integratorCandidateCleanupMutationIntendedRecordKey = (
   operationId: OperationId,
   ordinal: CleanupMutationOrdinal

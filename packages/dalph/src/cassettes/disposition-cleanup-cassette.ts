@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- The maintained cleanup cassette keeps all three family stories and their exact boundary scripts together. */
+
 import { Effect, Layer, Schema } from "effect"
 import {
   AttemptId,
@@ -78,7 +80,14 @@ export type DispositionCleanupCassette = typeof DispositionCleanupCassette.Type
 export const dispositionCleanupAuthoredCassetteCatalog = {
   supersededWorktreeAndBranch: DispositionCleanupCassette.make({
     actor: "Alice",
-    expectedBoundaryCalls: ["observe worktree W1", "remove worktree W1", "observe branch B1", "remove branch B1"],
+    expectedBoundaryCalls: [
+      "observe worktree W1",
+      "remove worktree W1",
+      "observe worktree W1",
+      "observe branch B1",
+      "remove branch B1",
+      "observe branch B1"
+    ],
     forbiddenResult: "delete P2, a moved/untracked resource, or workflow-journal evidence",
     name: "Restarted task disposes only settled P1 resources",
     scenario: "SupersededWorktreeAndBranch",
@@ -86,7 +95,7 @@ export const dispositionCleanupAuthoredCassetteCatalog = {
       "Alice restarts changed task; Restart first-choice wins and P1 is superseded by P2.",
       "Dalph authorizes W1 with the P1 disposition, owner, head, and Git evidence revision.",
       "Fresh matching Git facts permit worktree removal; branch authorization follows W1 settlement.",
-      "A fresh absent read settles both exact resources while P2 continues."
+      "A fresh absent read after each mutation settles both exact resources while P2 continues."
     ],
     terminalResult: "P1 worktree and branch settled; P2 remains live",
     version: 1
@@ -106,14 +115,14 @@ export const dispositionCleanupAuthoredCassetteCatalog = {
   }),
   fullRerunPredecessorCandidate: DispositionCleanupCassette.make({
     actor: "Alice",
-    expectedBoundaryCalls: ["observe C1", "remove C1"],
+    expectedBoundaryCalls: ["observe C1", "remove C1", "observe C1"],
     forbiddenResult: "delete S1 history, C2, or the live successor candidate",
     name: "FullRerun disposes only the quarantined predecessor candidate",
     scenario: "FullRerunPredecessorCandidate",
     story: [
       "FullRerun creates fresh S2/C2 while S1/C1 remains quarantined.",
       "Dalph authorizes only predecessor C1, reads owner/session and revision, then deletes C1.",
-      "S1 evidence and C2 remain available for their owning protocols."
+      "A fresh absent read settles C1; S1 evidence and C2 remain available for their owning protocols."
     ],
     terminalResult: "C1 settled; S1 history and C2 preserved",
     version: 1
@@ -143,12 +152,18 @@ export const dispositionCleanupRecordedCassetteCatalog = {
       "WorktreeCleanupObserved",
       "WorktreeCleanupMutationIntended",
       "WorktreeCleanupMutationResultRecorded",
+      "WorktreeCleanupObservationIntended",
+      "WorktreeCleanupObserved",
+      "WorktreeCleanupAbsenceConfirmed",
       "WorktreeCleanupSettled",
       "BranchCleanupAuthorized",
       "BranchCleanupObservationIntended",
       "BranchCleanupObserved",
       "BranchCleanupMutationIntended",
       "BranchCleanupMutationResultRecorded",
+      "BranchCleanupObservationIntended",
+      "BranchCleanupObserved",
+      "BranchCleanupAbsenceConfirmed",
       "BranchCleanupSettled"
     ]
   },
@@ -169,6 +184,9 @@ export const dispositionCleanupRecordedCassetteCatalog = {
       "IntegratorCandidateCleanupObserved",
       "IntegratorCandidateCleanupMutationIntended",
       "IntegratorCandidateCleanupMutationResultRecorded",
+      "IntegratorCandidateCleanupObservationIntended",
+      "IntegratorCandidateCleanupObserved",
+      "IntegratorCandidateCleanupAbsenceConfirmed",
       "IntegratorCandidateCleanupSettled"
     ]
   },
@@ -306,6 +324,7 @@ const worktreePresent = WorktreeCleanupObservation.cases.Present.make({
 const branchPresent = BranchCleanupObservation.cases.Present.make({
   branch: issue69Attempt.branch,
   headSha: issue69BaseSha,
+  registeredWorktree: null,
   revision: BranchCleanupEvidenceRevision.make(1)
 })
 const candidatePresent = IntegratorCandidateCleanupObservation.cases.Present.make({
@@ -325,9 +344,16 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
   const worktreeBoundaryInput =
     cassette.scenario === "SupersededWorktreeAndBranch"
       ? {
-          observations: [worktreePresent],
+          observations: [
+            worktreePresent,
+            WorktreeCleanupObservation.cases.Absent.make({
+              locator: issue69Attempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+            })
+          ],
           mutations: [
             WorktreeCleanupMutationResult.cases.Removed.make({
+              branch: issue69Attempt.branch,
               locator: issue69Attempt.worktree,
               revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
             })
@@ -349,7 +375,13 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
   const branchBoundaryInput =
     cassette.scenario === "SupersededWorktreeAndBranch"
       ? {
-          observations: [branchPresent],
+          observations: [
+            branchPresent,
+            BranchCleanupObservation.cases.Absent.make({
+              branch: issue69Attempt.branch,
+              revision: BranchCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+            })
+          ],
           mutations: [
             BranchCleanupMutationResult.cases.Removed.make({
               branch: issue69Attempt.branch,
@@ -361,11 +393,18 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
   const candidateBoundaryInput =
     cassette.scenario === "FullRerunPredecessorCandidate"
       ? {
-          observations: [candidatePresent],
+          observations: [
+            candidatePresent,
+            IntegratorCandidateCleanupObservation.cases.Absent.make({
+              locator: issue69Predecessor.candidateResource,
+              revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+            })
+          ],
           mutations: [
             IntegratorCandidateCleanupMutationResult.cases.Removed.make({
               locator: issue69Predecessor.candidateResource,
-              revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision),
+              sessionId: issue69Predecessor.sessionId
             })
           ]
         }

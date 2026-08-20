@@ -97,9 +97,16 @@ const present = WorktreeCleanupObservation.cases.Present.make({
 
 it.effect("removes the exact superseded worktree after fresh matching facts", () =>
   setup(
-    [present],
+    [
+      present,
+      WorktreeCleanupObservation.cases.Absent.make({
+        locator: attempt.worktree,
+        revision: WorktreeCleanupEvidenceRevision.make(2)
+      })
+    ],
     [
       WorktreeCleanupMutationResult.cases.Removed.make({
+        branch: attempt.branch,
         locator: attempt.worktree,
         revision: WorktreeCleanupEvidenceRevision.make(2)
       })
@@ -108,11 +115,104 @@ it.effect("removes the exact superseded worktree after fresh matching facts", ()
     Effect.tap(({ calls, result }) =>
       Effect.sync(() => {
         expect(result._tag).toBe("Settled")
+        expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+      })
+    )
+  )
+)
+
+it.effect("does not call a boundary when a replayed operation has different authorization facts", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-authorization-replay"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const first = yield* runWorktreeCleanup(authorization)
+    const replayedAuthorization = WorktreeCleanupAuthorization.make({
+      ...authorization,
+      expectedHead: GitCommitSha.make("2".repeat(40))
+    })
+    const second = yield* runWorktreeCleanup(replayedAuthorization)
+    const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
+    expect(first._tag).toBe("Pending")
+    expect(second._tag).toBe("Preserved")
+    expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove"])
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [present],
+        mutations: [
+          WorktreeCleanupMutationResult.cases.Unknown.make({
+            branch: attempt.branch,
+            detail: "lost",
+            locator: attempt.worktree
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("records initial absence as reconciliation, never as a mutation result", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-initial-absence"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const result = yield* runWorktreeCleanup(authorization)
+    const records = yield* journal.read(runId)
+    expect(result._tag).toBe("Settled")
+    expect(records.map(({ event }) => event._tag)).not.toContain("WorktreeCleanupMutationResultRecorded")
+    expect(records.map(({ event }) => event._tag)).toContain("WorktreeCleanupAbsenceConfirmed")
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("preserves an invalid successful mutation response instead of settling", () =>
+  setup(
+    [present],
+    [
+      WorktreeCleanupMutationResult.cases.Removed.make({
+        branch: attempt.branch,
+        locator: WorktreeLocator.make("/tmp/foreign-worktree"),
+        revision: WorktreeCleanupEvidenceRevision.make(2)
+      })
+    ]
+  ).pipe(
+    Effect.tap(({ calls, result }) =>
+      Effect.sync(() => {
+        expect(result._tag).toBe("Preserved")
         expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove"])
       })
     )
   )
 )
+
+it("rejects a superseded disposition that reuses predecessor identity", () => {
+  expect(() =>
+    PlannedAttemptCleanupDisposition.cases.Superseded.make({
+      dispositionAt: JournalPosition.make(2),
+      plannedAttempt: attempt,
+      successorAttempt: attempt
+    })
+  ).toThrow()
+})
 
 it.effect("preserves changed or unreadable worktree facts without a remove call", () =>
   setup([
@@ -152,7 +252,11 @@ it.effect("reconciles an applied response loss with a fresh absence and never du
             })
           ],
           mutations: [
-            WorktreeCleanupMutationResult.cases.Unknown.make({ detail: "response lost", locator: attempt.worktree })
+            WorktreeCleanupMutationResult.cases.Unknown.make({
+              branch: attempt.branch,
+              detail: "response lost",
+              locator: attempt.worktree
+            })
           ]
         })
       )
@@ -177,9 +281,21 @@ it.effect("reconciles an applied response loss with a fresh absence and never du
 const boundBoundaryLayer = worktreeCleanupTestLayer({
   observations: [present],
   mutations: [
-    WorktreeCleanupMutationResult.cases.Unknown.make({ detail: "unknown", locator: attempt.worktree }),
-    WorktreeCleanupMutationResult.cases.Unknown.make({ detail: "unknown", locator: attempt.worktree }),
-    WorktreeCleanupMutationResult.cases.Unknown.make({ detail: "unknown", locator: attempt.worktree })
+    WorktreeCleanupMutationResult.cases.Unknown.make({
+      branch: attempt.branch,
+      detail: "unknown",
+      locator: attempt.worktree
+    }),
+    WorktreeCleanupMutationResult.cases.Unknown.make({
+      branch: attempt.branch,
+      detail: "unknown",
+      locator: attempt.worktree
+    }),
+    WorktreeCleanupMutationResult.cases.Unknown.make({
+      branch: attempt.branch,
+      detail: "unknown",
+      locator: attempt.worktree
+    })
   ]
 })
 

@@ -67,6 +67,7 @@ import {
   integrationProviderRunActivityAbsentRecordKey,
   integratorSuccessorSessionFixedRecordKey,
   worktreeCleanupAuthorizedRecordKey,
+  worktreeCleanupAbsenceConfirmedRecordKey,
   worktreeCleanupObservationIntendedRecordKey,
   worktreeCleanupObservedRecordKey,
   worktreeCleanupMutationIntendedRecordKey,
@@ -74,6 +75,7 @@ import {
   worktreeCleanupContradictedRecordKey,
   worktreeCleanupSettledRecordKey,
   branchCleanupAuthorizedRecordKey,
+  branchCleanupAbsenceConfirmedRecordKey,
   branchCleanupObservationIntendedRecordKey,
   branchCleanupObservedRecordKey,
   branchCleanupMutationIntendedRecordKey,
@@ -81,6 +83,7 @@ import {
   branchCleanupContradictedRecordKey,
   branchCleanupSettledRecordKey,
   integratorCandidateCleanupAuthorizedRecordKey,
+  integratorCandidateCleanupAbsenceConfirmedRecordKey,
   integratorCandidateCleanupObservationIntendedRecordKey,
   integratorCandidateCleanupObservedRecordKey,
   integratorCandidateCleanupMutationIntendedRecordKey,
@@ -405,6 +408,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       _tag: "GenericEventDescriptor",
       expectedKey: worktreeCleanupObservedRecordKey(event.authorization.operationId, event.ordinal)
     }),
+    WorktreeCleanupAbsenceConfirmed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: worktreeCleanupAbsenceConfirmedRecordKey(event.authorization.operationId, event.ordinal)
+    }),
     WorktreeCleanupMutationIntended: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: worktreeCleanupMutationIntendedRecordKey(event.authorization.operationId, event.attempt)
@@ -432,6 +439,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     BranchCleanupObserved: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: branchCleanupObservedRecordKey(event.authorization.operationId, event.ordinal)
+    }),
+    BranchCleanupAbsenceConfirmed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: branchCleanupAbsenceConfirmedRecordKey(event.authorization.operationId, event.ordinal)
     }),
     BranchCleanupMutationIntended: (event) => ({
       _tag: "GenericEventDescriptor",
@@ -463,6 +474,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     IntegratorCandidateCleanupObserved: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorCandidateCleanupObservedRecordKey(event.authorization.operationId, event.ordinal)
+    }),
+    IntegratorCandidateCleanupAbsenceConfirmed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: integratorCandidateCleanupAbsenceConfirmedRecordKey(event.authorization.operationId, event.ordinal)
     }),
     IntegratorCandidateCleanupMutationIntended: (event) => ({
       _tag: "GenericEventDescriptor",
