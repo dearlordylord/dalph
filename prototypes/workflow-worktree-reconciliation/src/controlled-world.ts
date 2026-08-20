@@ -7,10 +7,11 @@ import {
   ControlledWorld,
   ControlledWorktreeObservation,
   DecisionEvidence,
-  ExecutorAdmissionContact,
+  ExecutorBoundaryContact,
   fixture,
   plannedAttempt,
   ProposalObservation,
+  ResponsibilityProjectionEvidence,
   type WorktreeDecision,
   type WorktreeProcessInstance
 } from "./contracts.ts"
@@ -20,7 +21,9 @@ const gitLedgerPath = (workspace: string): string => join(workspace, "controlled
 const activityLedgerPath = (workspace: string): string => join(workspace, "activity-evidence.ndjson")
 const proposalLedgerPath = (workspace: string): string => join(workspace, "proposal-observations.ndjson")
 const decisionLedgerPath = (workspace: string): string => join(workspace, "decision-evidence.ndjson")
-const executorAdmissionLedgerPath = (workspace: string): string => join(workspace, "executor-admission-contacts.ndjson")
+const executorBoundaryLedgerPath = (workspace: string): string => join(workspace, "executor-boundary-contacts.ndjson")
+const responsibilityProjectionLedgerPath = (workspace: string): string =>
+  join(workspace, "responsibility-projections.ndjson")
 
 const writeDurably = async (path: string, contents: string): Promise<void> => {
   const temporaryPath = `${path}.${process.pid}.tmp`
@@ -66,7 +69,7 @@ export const initializeControlledWorld = async (workspace: string): Promise<void
       })
     )}\n`
   )
-  await writeDurably(executorAdmissionLedgerPath(workspace), "")
+  await writeDurably(executorBoundaryLedgerPath(workspace), "")
 }
 
 export const readControlledWorld = async (workspace: string): Promise<ControlledWorld> =>
@@ -82,8 +85,12 @@ export const loadProposalObservations = (workspace: string): Promise<ReadonlyArr
   readLines(proposalLedgerPath(workspace), Schema.decodeUnknownSync(ProposalObservation))
 export const loadDecisionEvidence = (workspace: string): Promise<ReadonlyArray<DecisionEvidence>> =>
   readLines(decisionLedgerPath(workspace), Schema.decodeUnknownSync(DecisionEvidence))
-export const loadExecutorAdmissionContacts = (workspace: string): Promise<ReadonlyArray<ExecutorAdmissionContact>> =>
-  readLines(executorAdmissionLedgerPath(workspace), Schema.decodeUnknownSync(ExecutorAdmissionContact))
+export const loadExecutorBoundaryContacts = (workspace: string): Promise<ReadonlyArray<ExecutorBoundaryContact>> =>
+  readLines(executorBoundaryLedgerPath(workspace), Schema.decodeUnknownSync(ExecutorBoundaryContact))
+export const loadResponsibilityProjectionEvidence = (
+  workspace: string
+): Promise<ReadonlyArray<ResponsibilityProjectionEvidence>> =>
+  readLines(responsibilityProjectionLedgerPath(workspace), Schema.decodeUnknownSync(ResponsibilityProjectionEvidence))
 
 /** The controlled boundary identity carried into each fake Git observation. */
 export interface BoundaryContext {
@@ -210,13 +217,13 @@ export const recordDecisionEvidence = async (
   processInstance: WorktreeProcessInstance,
   decision: WorktreeDecision,
   source: "ControlledGitFreshRead" | "ReplayedWorkflowResult",
-  executorAdmissions: number
+  executorBoundaryContacts: number
 ): Promise<void> =>
   appendLine(
     decisionLedgerPath(workspace),
     DecisionEvidence.make({
       decision,
-      executorAdmissions,
+      executorBoundaryContacts,
       operationId: fixture.operationId,
       processInstance,
       runId: fixture.runId,
@@ -224,11 +231,10 @@ export const recordDecisionEvidence = async (
     })
   )
 
-/** Records an actual contact only if a future prototype branch crosses the executor boundary. */
-export const recordExecutorAdmissionContact = async (
+export const recordResponsibilityProjection = async (
   workspace: string,
-  contact: ExecutorAdmissionContact
-): Promise<void> => appendLine(executorAdmissionLedgerPath(workspace), contact)
+  projection: ResponsibilityProjectionEvidence
+): Promise<void> => appendLine(responsibilityProjectionLedgerPath(workspace), projection)
 
 export const setControlledObservation = async (
   workspace: string,

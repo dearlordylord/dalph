@@ -40,6 +40,8 @@ import {
   FixtureTarget
 } from "@dalph/orchestrator"
 import type { GitWorktreeService } from "../../../packages/orchestrator/dist/src/authorities/git/worktree.js"
+import type { ResponsibilityFreshFacts } from "../../../packages/orchestrator/dist/src/coordination/frontier/fresh-facts.js"
+import type { ReconstructedRunState } from "../../../packages/orchestrator/dist/src/coordination/reconstruction/state.js"
 import { Effect, Layer, Schema, SubscriptionRef } from "effect"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { Activity, Workflow, WorkflowEngine } from "effect/unstable/workflow"
@@ -58,9 +60,11 @@ import { deliveryProposalsOf } from "../../../packages/orchestrator/dist/src/coo
 import { makeApplicationExitLifecycle } from "../../../packages/orchestrator/dist/src/coordination/application-exit/lifecycle.js"
 import { deliveryRuntimeResourcesLayer } from "../../../packages/orchestrator/dist/src/coordination/delivery/delivery-runtime-resources.js"
 import { reduceWorkflowJournalHistory } from "../../../packages/orchestrator/dist/src/coordination/reconstruction/history.js"
+import { deriveJournalResponsibilityFacts } from "@dalph/orchestrator"
 import { intentRecordKey, outcomeRecordKey } from "../../../packages/orchestrator/dist/src/workflow-journal/record-key.js"
 import { makeJournal } from "../../../packages/orchestrator/dist/src/coordination/delivery/journal.js"
-import { appendReady, hasReadyOutcome, loadJournalRecords } from "./journal.ts"
+import { appendReady, loadJournalRecords } from "./journal.ts"
+import { executorBoundaryTrapLayer } from "./executor-trap.ts"
 import {
   controlledGitWorktreeLayer,
   runBlindControlledGitRetry,
@@ -69,10 +73,11 @@ import {
 import {
   changeFactsDuringDowntime,
   loadActivityEvidence,
-  loadExecutorAdmissionContacts,
+  loadExecutorBoundaryContacts,
   recordActivityResultAvailable,
   recordDecisionEvidence,
   recordProposalObservation,
+  recordResponsibilityProjection,
   readControlledWorld
 } from "./controlled-world.ts"
 import {
@@ -82,7 +87,7 @@ import {
   plannedAttempt,
   WorktreeActivityError,
   WorktreeActivityResult,
-  WorktreeDecision,
+  type WorktreeActivityFailureReason,
   type WorktreeDecision as WorktreeDecisionType,
   WorktreeScenario,
   type WorktreeProcessInstance,
@@ -189,27 +194,37 @@ const WorktreeWorkflow = Workflow.make("DalphWorktreeReconciliation234", {
   error: WorktreeActivityError,
   idempotencyKey: ({ runId }) => runId,
   payload: WorktreeWorkflowPayload.fields,
-  success: Schema.Struct({
-    activity: WorktreeActivityResult,
-    historicalDecision: WorktreeDecision
-  })
+  success: WorktreeActivityResult
 })
 
 const operationAllocation = OperationIdAllocator.of({
   allocate: () => Effect.die("the accepted worktree proposal must not allocate a new OperationId")
 })
 
-const activityErrorOf = (cause: unknown, worktree: WorktreeLocator): WorktreeActivityError => {
+export const mapWorktreeActivityFailure = (
+  cause: unknown,
+  worktree: WorktreeLocator
+): WorktreeActivityError => {
   const tag =
     cause !== null && typeof cause === "object" && "_tag" in cause && typeof cause._tag === "string"
       ? cause._tag
-      : ""
-  const reason =
-    tag === "ContradictoryWorktreeState"
-      ? "ContradictoryWorktreeState"
-      : tag === "GitWorktreeCreateFailure" || tag === "CoordinatorOwnershipError"
-        ? "GitWorktreeCreateFailure"
-        : "GitWorktreeReadFailure"
+      : undefined
+  const knownReasons: ReadonlySet<WorktreeActivityFailureReason> = new Set([
+    "CompetingWorktreeRegistrations",
+    "ConflictingWorktreeRegistration",
+    "ContradictoryWorktreeState",
+    "CoordinatorLockObservationContradiction",
+    "CoordinatorOwnershipLost",
+    "ForeignWorktreeRegistration",
+    "GitWorktreeCreateFailure",
+    "GitWorktreeReadFailure",
+    "UntrackedWorktreePath",
+    "WorktreeBaseMismatch"
+  ])
+  const reason: WorktreeActivityFailureReason =
+    tag !== undefined && knownReasons.has(tag as WorktreeActivityFailureReason)
+      ? (tag as WorktreeActivityFailureReason)
+      : "UnknownActivityFailure"
   return WorktreeActivityError.make({
     detail: cause instanceof Error ? cause.message : String(cause),
     reason,
@@ -226,13 +241,25 @@ const activityFor = (payload: WorktreeWorkflowPayloadType, git: GitWorktreeServi
       : runControlledGitWorktreeReconciliation(git, plannedAttempt)
   return proof.pipe(
     Effect.map((ready) => activityResultFor(payload, ready)),
-    Effect.mapError((cause) => activityErrorOf(cause, payload.worktree))
+    Effect.mapError((cause) => mapWorktreeActivityFailure(cause, payload.worktree))
   )
+}
+
+type WorktreeResponsibilityFreshFacts = Extract<
+  ResponsibilityFreshFacts,
+  { readonly _tag: "WorkflowOperationFreshFacts" }
+> & {
+  readonly responsibility: Extract<
+    Extract<ResponsibilityFreshFacts, { readonly _tag: "WorkflowOperationFreshFacts" }>["responsibility"],
+    { readonly _tag: "TaskWorktreeResponsibility" }
+  >
 }
 
 interface FoldedJournal {
   readonly accepted: boolean
-  readonly acceptedAt: JournalPosition
+  readonly position: JournalPosition
+  readonly responsibility: WorktreeResponsibilityFreshFacts
+  readonly runState: ReconstructedRunState
 }
 
 const foldedJournalOf = (records: Awaited<ReturnType<typeof loadJournalRecords>>): FoldedJournal => {
@@ -240,12 +267,28 @@ const foldedJournalOf = (records: Awaited<ReturnType<typeof loadJournalRecords>>
   if (reduced._tag === "InvalidWorkflowJournalHistory") {
     throw new Error(`controlled Journal history is invalid: ${String(reduced)}`)
   }
-  const ready = records.find(({ event }) => event._tag === "TaskWorktreeReady")
-  const intended = records.find(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")
-  const accepted = hasReadyOutcome(records)
-  const acceptedAt = ready?.position ?? intended?.position
-  if (acceptedAt === undefined) throw new Error("controlled Journal has no reconciliation intent")
-  return { accepted, acceptedAt }
+  const responsibility = deriveJournalResponsibilityFacts(reduced.runState).find(
+    (facts): facts is WorktreeResponsibilityFreshFacts =>
+      facts._tag === "WorkflowOperationFreshFacts" &&
+      facts.responsibility._tag === "TaskWorktreeResponsibility" &&
+      facts.responsibility.operation.operationId === fixture.operationId &&
+      facts.responsibility.operation.plannedAttempt.attemptId === fixture.attemptId &&
+      facts.responsibility.operation.plannedAttempt.runId === fixture.runId &&
+      facts.responsibility.operation.plannedAttempt.taskId === fixture.taskId &&
+      facts.responsibility.operation.plannedAttempt.baseSha === fixture.baseSha &&
+      facts.responsibility.operation.plannedAttempt.branch === fixture.branch &&
+      facts.responsibility.operation.plannedAttempt.worktree === fixture.worktree
+  )
+  if (responsibility === undefined) {
+    throw new Error("controlled Journal has no exact reconstructed worktree responsibility")
+  }
+  const position = reduced.runState.appliedThrough ?? responsibility.responsibility.beganAt
+  return {
+    accepted: responsibility.disposition._tag === "Settled",
+    position,
+    responsibility,
+    runState: reduced.runState
+  }
 }
 
 const transition = RunnableFrontierTransition.ReconcileTaskWorktree({
@@ -256,7 +299,7 @@ const transition = RunnableFrontierTransition.ReconcileTaskWorktree({
 /** Ordinary planning derives proposal presence from the reread-and-folded Journal, never from a local shortcut. */
 const proposalContributionsFor = (history: FoldedJournal): ReturnType<typeof deliveryProposalsOf> =>
   deliveryProposalsOf({
-    acceptedAt: history.acceptedAt,
+    acceptedAt: history.position,
     acceptedOperationIds: new Set([fixture.operationId]),
     fresh: [],
     runId: fixture.runId,
@@ -268,7 +311,7 @@ const bundleFor = (graph: TrackerGraphState, history: FoldedJournal): DeliveryRe
     proposalContributions: proposalContributionsFor(history),
     reflectionProposals: [],
     runtimeFacts: {
-      acceptedAt: history.acceptedAt,
+      acceptedAt: history.position,
       pauseCoverage: {
         _tag: "PauseCoverageGraphNotEstablished",
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
@@ -297,7 +340,7 @@ const currentDecision = (
     Effect.orElseSucceed(() => "WaitWorktreeNotReady" as const),
     Effect.tap((decision) =>
       Effect.promise(async () => {
-        const contacts = await loadExecutorAdmissionContacts(input.workspace)
+        const contacts = await loadExecutorBoundaryContacts(input.workspace)
         await recordDecisionEvidence(
           input.workspace,
           input.processInstance,
@@ -349,8 +392,7 @@ export const runWorkflowReconciliation = async (
         success: WorktreeActivityResult
       })
       const activityResult = yield* activity.pipe(Effect.provide(workflowContext))
-      const historicalDecision: WorktreeDecisionType = "ContinueWorktreeReady"
-      return { activity: activityResult, historicalDecision }
+      return activityResult
     })
   )
   const runtime = workflowRuntimeLayer(join(input.workspace, "workflow.sqlite"), handler, gitLayer)
@@ -363,6 +405,25 @@ export const runWorkflowReconciliation = async (
         const initialHistory = foldedJournalOf(initialRecords)
         const graph = yield* graphStateFor.pipe(Effect.orDie)
         const current = yield* SubscriptionRef.make(bundleFor(graph, initialHistory))
+        const initialDisposition = initialHistory.responsibility.disposition._tag
+        if (
+          initialDisposition !== "Ready" &&
+          initialDisposition !== "Settled" &&
+          initialDisposition !== "WorkflowOperationTaskClaimConstraint"
+        ) {
+          return yield* Effect.die(
+            `unexpected initial responsibility disposition: ${initialDisposition}`
+          )
+        }
+        yield* Effect.promise(() =>
+          recordResponsibilityProjection(input.workspace, {
+            disposition: initialDisposition,
+            operationId: fixture.operationId,
+            position: initialHistory.position,
+            processInstance: input.processInstance,
+            runId: fixture.runId
+          })
+        )
         if (!initialHistory.accepted) {
           yield* Effect.promise(() =>
             recordProposalObservation(input.workspace, {
@@ -421,10 +482,11 @@ export const runWorkflowReconciliation = async (
               // Ordinary executor code appends through the persistent Journal and
               // then folds that Journal again before changing its process-local signal.
               const beforeAppend = yield* journal.read(fixture.runId)
-              if (!hasReadyOutcome(beforeAppend)) {
+              const beforeHistory = foldedJournalOf(beforeAppend)
+              if (!beforeHistory.accepted) {
                 yield* appendReady(journal, {
                   operationId: fixture.operationId,
-                  proof: workflowResult.activity.proof,
+                  proof: workflowResult.proof,
                   version: workflowJournalEventVersion
                 }).pipe(Effect.orDie)
               }
@@ -433,18 +495,33 @@ export const runWorkflowReconciliation = async (
               if (!publishedHistory.accepted) return yield* Effect.die("Journal publication did not fold as accepted")
               yield* SubscriptionRef.set(current, bundleFor(graph, publishedHistory))
               yield* Effect.promise(() =>
+                recordResponsibilityProjection(input.workspace, {
+                  disposition: "Settled",
+                  operationId: fixture.operationId,
+                  position: publishedHistory.position,
+                  processInstance: input.processInstance,
+                  runId: fixture.runId
+                })
+              )
+              yield* Effect.promise(() =>
                 recordProposalObservation(input.workspace, {
                   _tag: "AbsentAfterJournalPublication",
                   processInstance: input.processInstance
                 })
               )
               if (input.scenario === "ReplayHistoricalRead") {
-                const contacts = yield* Effect.promise(() => loadExecutorAdmissionContacts(input.workspace))
+                const contacts = yield* Effect.promise(() => loadExecutorBoundaryContacts(input.workspace))
+                const replayedProofDecision: WorktreeDecisionType =
+                  workflowResult.proof.baseSha === fixture.baseSha &&
+                  workflowResult.proof.branch === fixture.branch &&
+                  workflowResult.proof.worktree === fixture.worktree
+                    ? "ContinueWorktreeReady"
+                    : "WaitWorktreeNotReady"
                 yield* Effect.promise(() =>
                   recordDecisionEvidence(
                     input.workspace,
                     input.processInstance,
-                    workflowResult.historicalDecision,
+                    replayedProofDecision,
                     "ReplayedWorkflowResult",
                     contacts.length
                   )
@@ -462,6 +539,7 @@ export const runWorkflowReconciliation = async (
             runId: fixture.runId,
             worktreeRoot: fixture.worktree
           }),
+          executorBoundaryTrapLayer(input.workspace, input.processInstance),
           Layer.succeed(OperationIdAllocator, operationAllocation),
           Layer.succeed(DeliveryActionExecutor, DeliveryActionExecutor.of(executor))
         )

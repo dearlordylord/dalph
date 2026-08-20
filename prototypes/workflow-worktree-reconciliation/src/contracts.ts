@@ -9,7 +9,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { OperationId, PlannedWorktreeReady } from "@dalph/orchestrator"
+import { JournalPosition, OperationId, PlannedWorktreeReady } from "@dalph/orchestrator"
 import { Schema } from "effect"
 
 /** The one exact reconciliation operation used by every child and durable seam. */
@@ -108,20 +108,37 @@ export const WorktreeActivityResult = Schema.Struct({
 })
 export type WorktreeActivityResult = typeof WorktreeActivityResult.Type
 
+/** Every known controlled Git/ownership failure remains distinguishable across the Activity boundary. */
+export const WorktreeActivityFailureReason = Schema.Literals([
+  "CompetingWorktreeRegistrations",
+  "ConflictingWorktreeRegistration",
+  "ContradictoryWorktreeState",
+  "CoordinatorLockObservationContradiction",
+  "CoordinatorOwnershipLost",
+  "ForeignWorktreeRegistration",
+  "GitWorktreeCreateFailure",
+  "GitWorktreeReadFailure",
+  "UntrackedWorktreePath",
+  "UnknownActivityFailure",
+  "WorktreeBaseMismatch"
+])
+export type WorktreeActivityFailureReason = typeof WorktreeActivityFailureReason.Type
+
 /** Typed Activity failure; contradictory controlled Git facts cannot become a defect or an absent result. */
 export class WorktreeActivityError extends Schema.TaggedError<WorktreeActivityError>()("WorktreeActivityError", {
   detail: Schema.String,
-  reason: Schema.Literals(["ContradictoryWorktreeState", "GitWorktreeReadFailure", "GitWorktreeCreateFailure"]),
+  reason: WorktreeActivityFailureReason,
   worktree: WorktreeLocator
 }) {}
 
-/** An observation of the real executor boundary; this experiment must produce none. */
-export const ExecutorAdmissionContact = Schema.Struct({
+/** An observed call at the real executor boundary; this experiment must produce none. */
+export const ExecutorBoundaryContact = Schema.Struct({
+  method: Schema.Literals(["project", "requestSuspension", "startOrContinue"]),
   operationId: WorktreeOperationId,
   processInstance: WorktreeProcessInstance,
   runId: RunId
 })
-export type ExecutorAdmissionContact = typeof ExecutorAdmissionContact.Type
+export type ExecutorBoundaryContact = typeof ExecutorBoundaryContact.Type
 
 /** Process-local proposal visibility evidence; no proposal is persisted as authority. */
 export const ProposalObservation = Schema.TaggedUnion({
@@ -134,13 +151,23 @@ export type ProposalObservation = typeof ProposalObservation.Type
 /** Current decision evidence is separate from the historical Journal outcome. */
 export const DecisionEvidence = Schema.Struct({
   decision: WorktreeDecision,
-  executorAdmissions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  executorBoundaryContacts: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   operationId: WorktreeOperationId,
   processInstance: WorktreeProcessInstance,
   runId: RunId,
   source: Schema.Literals(["ControlledGitFreshRead", "ReplayedWorkflowResult"])
 })
 export type DecisionEvidence = typeof DecisionEvidence.Type
+
+/** The ordinary production Journal projection changed its exact operation from pending to settled. */
+export const ResponsibilityProjectionEvidence = Schema.Struct({
+  disposition: Schema.Literals(["Ready", "Settled", "WorkflowOperationTaskClaimConstraint"]),
+  operationId: WorktreeOperationId,
+  position: JournalPosition,
+  processInstance: WorktreeProcessInstance,
+  runId: RunId
+})
+export type ResponsibilityProjectionEvidence = typeof ResponsibilityProjectionEvidence.Type
 
 /** Child stdout protocol owned by the parent harness. */
 export const ChildMessage = Schema.TaggedUnion({

@@ -8,12 +8,13 @@ import { Schema } from "effect"
 import {
   type ActivityEvidence,
   ChildMessage,
-  type ExecutorAdmissionContact,
+  type ExecutorBoundaryContact,
   fixture,
   type ChildMessage as ChildMessageType,
   type ControlledGitCall,
   type DecisionEvidence,
   type ProposalObservation,
+  type ResponsibilityProjectionEvidence,
   type WorktreeDecision,
   type WorktreeScenario
 } from "./contracts.ts"
@@ -22,9 +23,10 @@ import {
   initializeControlledWorld,
   loadActivityEvidence,
   loadDecisionEvidence,
-  loadExecutorAdmissionContacts,
+  loadExecutorBoundaryContacts,
   loadGitCalls,
-  loadProposalObservations
+  loadProposalObservations,
+  loadResponsibilityProjectionEvidence
 } from "./controlled-world.ts"
 import { inspectDurableInventory, type DurableInventory } from "./inventory.ts"
 import { loadJournalRecords } from "./journal.ts"
@@ -125,7 +127,7 @@ export interface WorkflowReconciliationResult {
   readonly activityEvidence: ReadonlyArray<ActivityEvidence>
   readonly childMessages: ReadonlyArray<ChildMessageType>
   readonly decisionEvidence: ReadonlyArray<DecisionEvidence>
-  readonly executorContacts: ReadonlyArray<ExecutorAdmissionContact>
+  readonly executorBoundaryContacts: ReadonlyArray<ExecutorBoundaryContact>
   readonly executionIds: ReadonlyArray<string>
   readonly firstExit: ChildExit
   readonly gitCalls: ReadonlyArray<ControlledGitCall>
@@ -134,6 +136,7 @@ export interface WorkflowReconciliationResult {
   readonly journalEventTags: ReadonlyArray<string>
   readonly physicalWorktreeCreated: boolean
   readonly proposalObservations: ReadonlyArray<ProposalObservation>
+  readonly responsibilityProjections: ReadonlyArray<ResponsibilityProjectionEvidence>
   readonly scenario: WorktreeScenario
   readonly stderr: ReadonlyArray<string>
   readonly secondExit: ChildExit
@@ -197,7 +200,8 @@ export const runWorkflowReconciliationScenario = async (input: {
       activityEvidence,
       proposalObservations,
       decisionEvidence,
-      executorContacts,
+      executorBoundaryContacts,
+      responsibilityProjections,
       journalRecords,
       physicalWorktreeCreated
     ] =
@@ -206,7 +210,8 @@ export const runWorkflowReconciliationScenario = async (input: {
         loadActivityEvidence(workspace),
         loadProposalObservations(workspace),
         loadDecisionEvidence(workspace),
-        loadExecutorAdmissionContacts(workspace),
+        loadExecutorBoundaryContacts(workspace),
+        loadResponsibilityProjectionEvidence(workspace),
         loadJournalRecords(workspace),
         physicalWorktreeWasCreated(workspace)
       ])
@@ -216,7 +221,7 @@ export const runWorkflowReconciliationScenario = async (input: {
       activityEvidence,
       childMessages: allMessages,
       decisionEvidence,
-      executorContacts,
+      executorBoundaryContacts,
       executionIds: observation.executionIds,
       firstExit,
       gitCalls,
@@ -225,6 +230,7 @@ export const runWorkflowReconciliationScenario = async (input: {
       journalEventTags: journalRecords.map(({ event }) => event._tag),
       physicalWorktreeCreated,
       proposalObservations,
+      responsibilityProjections,
       scenario: input.scenario,
       stderr: allStderr,
       secondExit: secondExitInfo,

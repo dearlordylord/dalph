@@ -79,16 +79,6 @@ export const runJournalEffect = <A, E, R>(workspace: string, effect: Effect.Effe
 export const appendReady = (journal: JournalStoreService, proof: Parameters<typeof TaskWorktreeReadyEvent.make>[0]) =>
   journal.append(fixture.runId, outcomeRecordKey(fixture.operationId), TaskWorktreeReadyEvent.make(proof))
 
-export const hasReadyOutcome = (records: ReadonlyArray<JournalRecord>): boolean =>
-  records.some(
-    ({ event }) =>
-      event._tag === "TaskWorktreeReady" &&
-      event.operationId === fixture.operationId &&
-      event.proof.baseSha === fixture.baseSha &&
-      event.proof.branch === fixture.branch &&
-      event.proof.worktree === fixture.worktree
-  )
-
 export const loadJournalRecords = (workspace: string): Promise<ReadonlyArray<JournalRecord>> =>
   Effect.runPromise(
     Effect.scoped(
