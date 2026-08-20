@@ -2,6 +2,7 @@ packages:
   - "."
   - "packages/*"
   - "prototypes/durable-computation"
+  - "prototypes/workflow-worktree-reconciliation"
   - "prototypes/reducer-lab"
 
 minimumReleaseAge: 1440

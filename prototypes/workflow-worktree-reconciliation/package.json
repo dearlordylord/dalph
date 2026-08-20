@@ -1,0 +1,21 @@
+{
+  "name": "@dalph/workflow-worktree-reconciliation-prototype",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@dalph/contracts": "workspace:*",
+    "@dalph/orchestrator": "workspace:*",
+    "@effect/platform-node": "4.0.0-beta.106",
+    "@effect/sql-sqlite-node": "4.0.0-beta.106",
+    "effect": "4.0.0-beta.106"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "vitest": "4.1.10"
+  }
+}

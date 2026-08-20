@@ -195,6 +195,31 @@ importers:
         specifier: 7.3.6
         version: 7.3.6(@types/node@26.1.1)(yaml@2.9.0)
 
+  prototypes/workflow-worktree-reconciliation:
+    dependencies:
+      '@dalph/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@dalph/orchestrator':
+        specifier: workspace:*
+        version: link:../../packages/orchestrator
+      '@effect/platform-node':
+        specifier: 4.0.0-beta.106
+        version: 4.0.0-beta.106(effect@4.0.0-beta.106)(ioredis@5.11.1)
+      '@effect/sql-sqlite-node':
+        specifier: 4.0.0-beta.106
+        version: 4.0.0-beta.106(effect@4.0.0-beta.106)
+      effect:
+        specifier: 4.0.0-beta.106
+        version: 4.0.0-beta.106
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+      vitest:
+        specifier: 4.1.10
+        version: 4.1.10(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(vite@7.3.6(@types/node@26.1.1)(yaml@2.9.0))
+
 packages:
 
   '@babel/helper-string-parser@7.29.7':
