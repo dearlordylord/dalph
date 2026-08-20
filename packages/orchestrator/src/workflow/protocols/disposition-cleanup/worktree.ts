@@ -487,6 +487,14 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
     return WorktreeCleanupOutcome.cases.Preserved.make({ authorization, reason: history.detail })
   }
 
+  // A valid terminal prefix is already the durable answer. Replaying it must
+  // not perform another Git read (or append a second authorization/observation
+  // prefix): the recorded absence and settlement are the recovery proof.
+  const settledBeforeReplay = existingSettled(records, authorization)
+  if (settledBeforeReplay !== undefined) {
+    return WorktreeCleanupOutcome.cases.Settled.make({ authorization, result: settledBeforeReplay.result })
+  }
+
   const journalAuthorization = existingAuthorization(records, authorization.operationId)
   if (
     journalAuthorization !== undefined &&
@@ -511,26 +519,9 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
     records = yield* journal.read(runId)
   }
 
-  const settled = existingSettled(records, authorization)
   const firstObservation = yield* observeFresh(authorization, records)
   records = firstObservation.records
   const observed = firstObservation.observed
-
-  if (settled !== undefined) {
-    if (observed._tag === "Absent" && observationHasAuthorizedLocator(observed, authorization))
-      return WorktreeCleanupOutcome.cases.Settled.make({ authorization, result: settled.result })
-    yield* appendContradiction(
-      authorization,
-      observed,
-      firstObservation.operationId,
-      "a settled worktree cleanup was reopened with a present, unreadable, or foreign locator",
-      records
-    )
-    return WorktreeCleanupOutcome.cases.Preserved.make({
-      authorization,
-      reason: "settled cleanup no longer proves absence"
-    })
-  }
 
   if (observed._tag === "Absent" && observationHasAuthorizedLocator(observed, authorization)) {
     const alreadyAbsent = WorktreeCleanupMutationResult.cases.AlreadyAbsent.make({

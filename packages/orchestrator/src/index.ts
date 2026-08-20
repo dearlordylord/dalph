@@ -167,7 +167,9 @@ export * from "./workflow/protocols/disposition-cleanup/integrator-candidate.js"
 export * from "./workflow/protocols/disposition-cleanup/provenance.js"
 export {
   appendCandidateProvenance,
+  appendCurrentQuarantineProvenance,
   appendReplacementProvenance,
+  replacementFixtureIdsFor,
   replacementPredecessorsFor,
   replacementProvenanceFor,
   replacementWorktreeObservationOperationIdFor

@@ -40,11 +40,15 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
           "WorkflowRunBegan",
           "GitReadIntentRecorded",
           "PlannedAttemptWorktreeObserved",
+          "TaskClaimAcquisitionIntended",
+          "TaskClaimAcquired",
           "AttemptChoiceApplied",
+          "PlannedAttemptExecutorWorkResponsibilityBegan",
+          "PlannedAttemptExecutorWorkReported",
           "PlannedAttemptReplaced",
           ...expected.events
         ])
-        const replacement = run.records[4]?.event
+        const replacement = run.records[8]?.event
         if (replacement?._tag !== "PlannedAttemptReplaced")
           return yield* Effect.die("missing exact replacement evidence")
         expect(replacement.successorPlan.plannedAttempt).toMatchObject({
@@ -59,7 +63,11 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
           "WorkflowRunBegan",
           "GitReadIntentRecorded",
           "PlannedAttemptWorktreeObserved",
+          "TaskClaimAcquisitionIntended",
+          "TaskClaimAcquired",
           "AttemptChoiceApplied",
+          "PlannedAttemptExecutorWorkResponsibilityBegan",
+          "PlannedAttemptExecutorWorkReported",
           "PlannedAttemptReplaced",
           ...expected.events
         ])
@@ -90,7 +98,19 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         expect(successorFixed.predecessor.sessionId).not.toBe(successorFixed.successor.sessionId)
       }
       if (cassette.scenario === "CurrentQuarantinePreserved") {
-        expect(tags).toEqual(["WorkflowRunBegan"])
+        expect(tags).toEqual([
+          "WorkflowRunBegan",
+          "IntegrationResponsibilityBegan",
+          "GitReadIntentRecorded",
+          "TargetLineageObserved",
+          "IntegratorSessionFixed",
+          "IntegrationStarted",
+          "IntegratorRunStarted",
+          "IntegrationProviderRunActivityAbsent",
+          "IntegrationQuarantined"
+        ])
+        expect(run.records.some(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toBe(false)
+        expect(run.records.some(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")).toBe(false)
       }
     }
   })

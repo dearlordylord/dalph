@@ -462,6 +462,12 @@ export const runBranchCleanup = Effect.fn("BranchCleanup.run")(function* (author
   if (history._tag === "Invalid") {
     return BranchCleanupOutcome.cases.Preserved.make({ authorization, reason: history.detail })
   }
+  // A valid terminal prefix is the recovery answer. Do not reread or append
+  // anything on a second or later invocation of the same settled operation.
+  const settledBeforeReplay = existingSettled(records, authorization)
+  if (settledBeforeReplay !== undefined) {
+    return BranchCleanupOutcome.cases.Settled.make({ authorization, result: settledBeforeReplay.result })
+  }
   const journalAuthorization = existingAuthorization(records, authorization.operationId)
   if (
     journalAuthorization !== undefined &&
@@ -485,29 +491,9 @@ export const runBranchCleanup = Effect.fn("BranchCleanup.run")(function* (author
     )
     records = yield* journal.read(runId)
   }
-  const settled = existingSettled(records, authorization)
   const firstObservation = yield* observeFresh(authorization, records)
   records = firstObservation.records
   const observation = firstObservation.observed
-  if (
-    settled !== undefined &&
-    observation._tag === "Absent" &&
-    observationHasAuthorizedBranch(observation, authorization)
-  )
-    return BranchCleanupOutcome.cases.Settled.make({ authorization, result: settled.result })
-  if (settled !== undefined) {
-    yield* appendContradiction(
-      authorization,
-      observation,
-      firstObservation.operationId,
-      "a settled branch cleanup was reopened with a present, unreadable, or foreign branch",
-      records
-    )
-    return BranchCleanupOutcome.cases.Preserved.make({
-      authorization,
-      reason: "settled branch cleanup was contradicted"
-    })
-  }
   if (observation._tag === "Absent" && observationHasAuthorizedBranch(observation, authorization)) {
     const result = BranchCleanupMutationResult.cases.AlreadyAbsent.make({
       branch: authorization.locator,

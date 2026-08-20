@@ -125,6 +125,49 @@ it.effect("removes only a quarantined predecessor candidate", () =>
   )
 )
 
+it.effect("replays a settled predecessor candidate twice without a boundary call or journal write", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-candidate-settled-replay"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const first = yield* runIntegratorCandidateCleanup(authorization)
+    const afterFirst = yield* journal.read(runId)
+    const second = yield* runIntegratorCandidateCleanup(authorization)
+    const afterSecond = yield* journal.read(runId)
+    const third = yield* runIntegratorCandidateCleanup(authorization)
+    const afterThird = yield* journal.read(runId)
+    const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
+    expect([first, second, third].map((result) => result._tag)).toEqual(["Settled", "Settled", "Settled"])
+    expect(afterSecond).toEqual(afterFirst)
+    expect(afterThird).toEqual(afterFirst)
+    expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+  }).pipe(
+    Effect.provide(
+      integratorCandidateCleanupTestLayer({
+        observations: [
+          present,
+          IntegratorCandidateCleanupObservation.cases.Absent.make({
+            locator: predecessor.candidateResource,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+            locator: predecessor.candidateResource,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(2),
+            sessionId: predecessor.sessionId
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
 it.effect("preserves a live predecessor candidate writer", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore

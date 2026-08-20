@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- Family-specific provenance and history checks stay co-located for auditability. */
 
-import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
-import { Schema } from "effect"
+import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
+import { Match } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
@@ -21,11 +21,8 @@ import {
   integratorCandidateCleanupObservationIntendedRecordKey,
   integratorCandidateCleanupObservedRecordKey,
   integratorCandidateCleanupSettledRecordKey,
-  integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
-  integrationQuarantinedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
-  integratorRunStartedRecordKey,
   attemptChoiceAppliedRecordKey,
   attemptImplementationAbandonedRecordKey,
   intentRecordKey,
@@ -41,26 +38,35 @@ import {
   worktreeCleanupSettledRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../attempt-choice/events.js"
+import { latestPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
+import type { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import type { AttemptChoiceRequestId, AttemptChoiceSubject, AttemptQuiescenceProof } from "../attempt-choice/events.js"
 import { integratorCorrelationsEqual, validateIntegratorSuccessorSessionFixed } from "../integrator/state.js"
+import { integratorSuccessorChronologyIsValid } from "../integrator/events.js"
 import {
-  IntegratorRunCorrelation,
-  IntegratorRunOrdinal,
-  integratorSuccessorChronologyIsValid,
-  integratorRunCorrelationsEqual
-} from "../integrator/events.js"
-import { integrationQuarantineDirectionSubject } from "../integration-quarantine/events.js"
+  IntegrationQuarantineDirectionFingerprint,
+  integrationQuarantineDirectionSubject
+} from "../integration-quarantine/events.js"
+import {
+  quarantineRecordForFingerprint,
+  validateProviderRunActivityAbsent
+} from "../integration-quarantine/canonical-provenance.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
 import {
-  BranchCleanupAuthorization,
-  IntegratorCandidateCleanupAuthorization,
-  WorktreeCleanupAuthorization,
   branchCleanupAuthorizationEquals,
-  integratorCandidateCleanupAuthorizationEquals,
   cleanupMutationRequestLimit,
+  integratorCandidateCleanupAuthorizationEquals,
   plannedAttemptCleanupDispositionEquals,
-  worktreeCleanupAuthorizationEquals
+  worktreeCleanupAuthorizationEquals,
+  type BranchCleanupAuthorization,
+  type IntegratorCandidateCleanupAuthorization,
+  type PlannedAttemptCleanupDisposition,
+  type WorktreeCleanupAuthorization
 } from "./disposition.js"
-import type { PlannedAttemptCleanupDisposition } from "./disposition.js"
+import { validateCleanupHistory, type CleanupHistoryDescriptor } from "./cleanup-history.js"
+import type { BranchCleanupObservation } from "./branch.js"
+import type { IntegratorCandidateCleanupObservation } from "./integrator-candidate.js"
+import type { WorktreeCleanupObservation } from "./worktree.js"
 
 /** Result of checking the durable upstream facts before cleanup authorization. */
 export type CleanupProvenanceValidation =
@@ -69,13 +75,150 @@ export type CleanupProvenanceValidation =
 
 const valid = (detail: string): CleanupProvenanceValidation => ({ _tag: "Valid", detail })
 const invalid = (detail: string): CleanupProvenanceValidation => ({ _tag: "Invalid", detail })
-const latestElementOffset = -1
 
 const recordAt = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): JournalRecord | undefined =>
   records.find((record) => record.position === position)
 
 const operationIdsEqual = (left: ReadonlyArray<unknown>, right: ReadonlyArray<unknown>): boolean =>
   left.length === right.length && left.every((operationId, index) => operationId === right[index])
+
+const operationIdSetsEqual = (left: ReadonlyArray<unknown>, right: ReadonlyArray<unknown>): boolean =>
+  left.length === right.length &&
+  new Set(left).size === left.length &&
+  new Set(right).size === right.length &&
+  left.every((operationId) => right.includes(operationId))
+
+type RestartApplicationRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+}
+
+type ReplacementRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
+}
+
+type ClaimRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>
+}
+
+const exactAppliedRestart = (
+  records: ReadonlyArray<JournalRecord>,
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject
+): RestartApplicationRecord | undefined =>
+  records.find(
+    (record): record is RestartApplicationRecord =>
+      record.event._tag === "AttemptChoiceApplied" &&
+      record.event.choice === "RestartTaskImplementation" &&
+      sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
+      sameAttemptChoiceSubject(record.event.subject, subject)
+  )
+
+const recordedReplacement = (
+  records: ReadonlyArray<JournalRecord>,
+  subject: AttemptChoiceSubject
+): ReplacementRecord | undefined => {
+  const replacements = records.filter(
+    (record): record is ReplacementRecord =>
+      record.event._tag === "PlannedAttemptReplaced" &&
+      plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, subject.plannedAttempt)
+  )
+  return replacements.length === 1 ? replacements[0] : undefined
+}
+
+const claimAuthorityAtApplication = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  application: RestartApplicationRecord
+): ActiveTaskClaim | undefined => {
+  const claim = records.findLast(
+    (record): record is ClaimRecord =>
+      record.position <= application.position &&
+      record.event._tag === "TaskClaimAcquired" &&
+      record.event.claim.taskId === plannedAttempt.taskId
+  )
+  return claim?.event.claim
+}
+
+const proofFor = (
+  evidence: ReturnType<typeof latestPlannedAttemptExecutorEvidence>
+): AttemptQuiescenceProof | undefined => {
+  if (evidence === undefined) return undefined
+  switch (evidence.source._tag) {
+    case "CommandResponse":
+      return { _tag: "CommandResponse", reportOrdinal: evidence.source.ordinal }
+    case "CommandProjection":
+      return {
+        _tag: "CommandProjection",
+        commandOrdinal: evidence.source.commandOrdinal,
+        projectionOrdinal: evidence.source.projectionOrdinal
+      }
+    case "StateProjection":
+      return { _tag: "StateProjection", observationOrdinal: evidence.source.ordinal }
+  }
+}
+
+const terminalRestartQuiescence = (
+  evidence: NonNullable<ReturnType<typeof latestPlannedAttemptExecutorEvidence>>,
+  application: RestartApplicationRecord
+): boolean =>
+  evidence.report._tag === "Terminal" &&
+  evidence.report.result._tag !== "Completed" &&
+  evidence.report.result._tag !== "Failed" &&
+  evidence.observedAt > application.position
+
+const claimsEqual = (left: ActiveTaskClaim, right: ActiveTaskClaim): boolean =>
+  left.operationId === right.operationId &&
+  left.owner === right.owner &&
+  left.taskId === right.taskId &&
+  left.token === right.token
+
+const quiescenceProofsEqual = (left: AttemptQuiescenceProof, right: AttemptQuiescenceProof): boolean => {
+  if (left._tag !== right._tag) return false
+  switch (left._tag) {
+    case "CommandResponse":
+      return right._tag === "CommandResponse" && right.reportOrdinal === left.reportOrdinal
+    case "CommandProjection":
+      return (
+        right._tag === "CommandProjection" &&
+        right.commandOrdinal === left.commandOrdinal &&
+        right.projectionOrdinal === left.projectionOrdinal
+      )
+    case "StateProjection":
+      return right._tag === "StateProjection" && right.observationOrdinal === left.observationOrdinal
+  }
+}
+
+const exactExecutorQuiescence = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  after: JournalPosition,
+  before: JournalPosition,
+  expected: AttemptQuiescenceProof,
+  application?: ReturnType<typeof exactAppliedRestart>
+): boolean => {
+  const evidence = latestPlannedAttemptExecutorEvidence(
+    records.filter((record) => record.position < before),
+    plannedAttempt
+  )
+  if (evidence === undefined || evidence.observedAt <= after || evidence.observedAt >= before) return false
+  const quiescent =
+    evidence.report._tag === "SafelySuspended" ||
+    (evidence.report._tag === "Terminal" && application === undefined) ||
+    (application !== undefined && terminalRestartQuiescence(evidence, application))
+  const proof = proofFor(evidence)
+  return quiescent && proof !== undefined && quiescenceProofsEqual(proof, expected)
+}
+
+const replacementWitnessOperationIds = (
+  replacement: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
+) => [
+  replacement.witness.expectedClaim.operationId,
+  replacement.witness.claimObservationOperationId,
+  replacement.witness.graphObservationOperationId,
+  replacement.witness.oldWorktreeObservationOperationId,
+  replacement.witness.specificationObservationOperationId,
+  replacement.witness.targetLineageObservationOperationId
+]
 
 const validatePlannedAttemptDisposition = (
   records: ReadonlyArray<JournalRecord>,
@@ -92,13 +235,17 @@ const validatePlannedAttemptDisposition = (
       return invalid("cleanup requires the exact durable PlannedAttemptReplaced occurrence")
     }
     const replacement = record.event
+    const canonicalReplacement = recordedReplacement(records, replacement.subject)
+    if (canonicalReplacement !== record) {
+      return invalid("replacement provenance does not resolve the exact canonical replacement record")
+    }
     if (!plannedTaskAttemptEquivalence(replacement.subject.plannedAttempt, disposition.plannedAttempt)) {
       return invalid("replacement provenance names a foreign predecessor attempt")
     }
     if (!plannedTaskAttemptEquivalence(replacement.successorPlan.plannedAttempt, disposition.successorAttempt)) {
       return invalid("replacement provenance names a foreign successor attempt")
     }
-    const appliedRestart = records.find((candidate) => {
+    const appliedRestart = records.find((candidate): candidate is RestartApplicationRecord => {
       if (candidate.position >= record.position || candidate.event._tag !== "AttemptChoiceApplied") return false
       return (
         candidate.runId === disposition.plannedAttempt.runId &&
@@ -110,6 +257,30 @@ const validatePlannedAttemptDisposition = (
     })
     if (appliedRestart === undefined) {
       return invalid("replacement provenance lacks the exact earlier applied Restart choice")
+    }
+    if (
+      !exactExecutorQuiescence(
+        records,
+        disposition.plannedAttempt,
+        appliedRestart.position,
+        record.position,
+        replacement.witness.quiescenceProof,
+        appliedRestart
+      )
+    ) {
+      return invalid("replacement provenance lacks the exact executor quiescence proof")
+    }
+    const retainedClaim = claimAuthorityAtApplication(records, disposition.plannedAttempt, appliedRestart)
+    if (retainedClaim === undefined || !claimsEqual(retainedClaim, replacement.witness.expectedClaim)) {
+      return invalid("replacement provenance lacks the exact claim authority at Restart application")
+    }
+    if (
+      !operationIdSetsEqual(
+        replacement.successorPlan.predecessorOperationIds,
+        replacementWitnessOperationIds(replacement)
+      )
+    ) {
+      return invalid("replacement provenance omits or invents a canonical witness operation")
     }
     if (!operationIdsEqual(causalPredecessors, replacement.successorPlan.predecessorOperationIds)) {
       return invalid("cleanup authorization omits or invents replacement authority predecessors")
@@ -144,6 +315,42 @@ const validatePlannedAttemptDisposition = (
       )
     })
     if (appliedChoice === undefined) return invalid("abandonment provenance lacks the applied Stop choice")
+    if (
+      record.event.proof._tag === "CommandResponse" &&
+      !exactExecutorQuiescence(
+        records,
+        disposition.plannedAttempt,
+        appliedChoice.position,
+        record.position,
+        record.event.proof
+      )
+    ) {
+      return invalid("abandonment provenance lacks the exact executor quiescence proof")
+    }
+    if (
+      record.event.proof._tag !== "CommandResponse" &&
+      !exactExecutorQuiescence(
+        records,
+        disposition.plannedAttempt,
+        appliedChoice.position,
+        record.position,
+        record.event.proof
+      )
+    ) {
+      return invalid("abandonment provenance lacks the exact executor quiescence proof")
+    }
+    const retainedClaim = records.findLast(
+      (candidate) =>
+        candidate.position <= record.position &&
+        candidate.event._tag === "TaskClaimAcquired" &&
+        candidate.event.claim.taskId === disposition.plannedAttempt.taskId
+    )
+    if (
+      retainedClaim?.event._tag !== "TaskClaimAcquired" ||
+      !claimsEqual(retainedClaim.event.claim, abandonment.expectedClaim)
+    ) {
+      return invalid("abandonment provenance lacks the exact stopped claim authority")
+    }
     if (!operationIdsEqual(causalPredecessors, [abandonment.expectedClaim.operationId])) {
       return invalid("cleanup authorization does not bind the exact stopped claim")
     }
@@ -329,68 +536,6 @@ export const validateIntegratorCandidateCleanupProvenance = (
   const observation = validateCandidateAuthorityObservation(records, authorization)
   if (observation._tag === "Invalid") return observation
   const disposition = authorization.disposition
-  const quarantine = recordAt(records, disposition.dispositionAt)
-  if (
-    quarantine?.event._tag !== "IntegrationQuarantined" ||
-    quarantine.runId !== disposition.predecessor.plannedAttempt.runId ||
-    quarantine.key !== integrationQuarantinedRecordKey(disposition.predecessor.sessionId, quarantine.event.basis) ||
-    !integratorCorrelationsEqual(quarantine.event.correlation, disposition.predecessor)
-  ) {
-    return invalid("candidate cleanup requires the exact durable predecessor quarantine")
-  }
-  if (
-    records.some(
-      (record) =>
-        record.event._tag === "IntegrationQuarantined" &&
-        record.event.correlation.sessionId === disposition.predecessor.sessionId &&
-        record.position > quarantine.position
-    )
-  ) {
-    return invalid("candidate cleanup quarantine is not the latest canonical predecessor quarantine")
-  }
-  if (quarantine.event.basis._tag !== "ProviderRunFailure") {
-    return invalid("candidate cleanup requires canonical provider-activity absence evidence for the quarantine")
-  }
-  const providerFailureBasis = quarantine.event.basis
-  const predecessorRun = IntegratorRunCorrelation.make({
-    ordinal: IntegratorRunOrdinal.make(1),
-    session: disposition.predecessor
-  })
-  const activityAbsence = records.find(
-    (record) =>
-      record.event._tag === "IntegrationProviderRunActivityAbsent" &&
-      record.position === providerFailureBasis.ownedActivityProvenAbsentAt &&
-      record.position < quarantine.position &&
-      record.runId === disposition.predecessor.plannedAttempt.runId &&
-      record.key === integrationProviderRunActivityAbsentRecordKey(predecessorRun) &&
-      integratorRunCorrelationsEqual(record.event.run, predecessorRun) &&
-      integratorCorrelationsEqual(record.event.correlation, disposition.predecessor) &&
-      record.event.detail === providerFailureBasis.detail
-  )
-  if (activityAbsence === undefined) {
-    return invalid("candidate cleanup quarantine lacks the exact provider activity-absence witness")
-  }
-  const predecessorRunStart = records.find(
-    (record) =>
-      record.event._tag === "IntegratorRunStarted" &&
-      record.position < activityAbsence.position &&
-      record.runId === disposition.predecessor.plannedAttempt.runId &&
-      record.key === integratorRunStartedRecordKey(predecessorRun) &&
-      integratorRunCorrelationsEqual(record.event.run, predecessorRun)
-  )
-  if (predecessorRunStart === undefined) {
-    return invalid("candidate cleanup provider activity-absence witness lacks the exact predecessor run start")
-  }
-  const conflictingPredecessorRunEvidence = records.some(
-    (record) =>
-      (record.event._tag === "IntegratorRunResultRecorded" ||
-        record.event._tag === "IntegratorRunCandidateGitReadIntended" ||
-        record.event._tag === "IntegratorRunCandidateGitObserved") &&
-      integratorRunCorrelationsEqual(record.event.run, predecessorRun)
-  )
-  if (conflictingPredecessorRunEvidence) {
-    return invalid("candidate cleanup provider activity-absence contradicts predecessor run evidence")
-  }
   const direction = recordAt(records, disposition.directionAppliedAt)
   if (
     direction?.event._tag !== "IntegrationQuarantineDirectionApplied" ||
@@ -404,6 +549,7 @@ export const validateIntegratorCandidateCleanupProvenance = (
   ) {
     return invalid("candidate cleanup requires the exact applied FullRerun direction")
   }
+
   const matchingDirections = records.filter(
     (record) =>
       record.event._tag === "IntegrationQuarantineDirectionApplied" &&
@@ -413,11 +559,62 @@ export const validateIntegratorCandidateCleanupProvenance = (
   if (matchingDirections.length !== 1 || matchingDirections[0] !== direction) {
     return invalid("candidate cleanup direction reconstruction is duplicate or contradictory")
   }
-  const directionOperationId = direction.event.requestId.nonce
-  if (!operationIdsEqual(authorization.causalPredecessors, [directionOperationId])) {
+
+  const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+    direction: "FullRerun",
+    quarantineAt: disposition.dispositionAt,
+    sessionId: disposition.predecessor.sessionId
+  })
+  const quarantine = quarantineRecordForFingerprint(records, fingerprint)
+  if (
+    quarantine === undefined ||
+    quarantine.runId !== disposition.predecessor.plannedAttempt.runId ||
+    !integratorCorrelationsEqual(quarantine.event.correlation, disposition.predecessor)
+  ) {
+    return invalid("candidate cleanup requires the canonical predecessor quarantine and evidence")
+  }
+  if (direction.position <= quarantine.position) {
+    return invalid("candidate cleanup FullRerun direction must follow the canonical predecessor quarantine")
+  }
+  if (
+    records.some(
+      (record) =>
+        record.event._tag === "IntegrationQuarantined" &&
+        record.event.correlation.sessionId === disposition.predecessor.sessionId &&
+        record.position > quarantine.position
+    )
+  ) {
+    return invalid("candidate cleanup quarantine is not the latest canonical predecessor quarantine")
+  }
+  const providerFailure = quarantine.event.basis
+  if (providerFailure._tag !== "ProviderRunFailure") {
+    return invalid("candidate cleanup requires canonical provider-activity absence evidence for the quarantine")
+  }
+
+  const absence = records.find(
+    (
+      record
+    ): record is JournalRecord & {
+      readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationProviderRunActivityAbsent" }>
+    } =>
+      record.position === providerFailure.ownedActivityProvenAbsentAt &&
+      record.event._tag === "IntegrationProviderRunActivityAbsent"
+  )
+  const absenceValidation = absence === undefined ? undefined : validateProviderRunActivityAbsent(records, absence)
+  if (
+    absenceValidation?._tag !== "Valid" ||
+    absenceValidation.record.position >= quarantine.position ||
+    !integratorCorrelationsEqual(absenceValidation.run.session, disposition.predecessor) ||
+    absenceValidation.record.event.detail !== providerFailure.detail
+  ) {
+    return invalid("candidate cleanup quarantine lacks the exact provider activity-absence witness")
+  }
+
+  if (!operationIdsEqual(authorization.causalPredecessors, [direction.event.requestId.nonce])) {
     return invalid("candidate authorization does not bind the exact FullRerun request")
   }
-  const successorRecord = records.find(
+
+  const matchingSuccessors = records.filter(
     (record) =>
       record.event._tag === "IntegratorSuccessorSessionFixed" &&
       record.runId === disposition.predecessor.plannedAttempt.runId &&
@@ -432,7 +629,8 @@ export const validateIntegratorCandidateCleanupProvenance = (
       record.event.directionAppliedAt === disposition.directionAppliedAt &&
       integratorCorrelationsEqual(record.event.successor, disposition.successor)
   )
-  if (successorRecord?.event._tag !== "IntegratorSuccessorSessionFixed") {
+  const successorRecord = matchingSuccessors[0]
+  if (matchingSuccessors.length !== 1 || successorRecord?.event._tag !== "IntegratorSuccessorSessionFixed") {
     return invalid("candidate cleanup requires the exact durable predecessor-successor relation")
   }
   if (
@@ -441,110 +639,158 @@ export const validateIntegratorCandidateCleanupProvenance = (
       quarantineAt: disposition.dispositionAt,
       directionAppliedAt: disposition.directionAppliedAt,
       successor: disposition.successor
-    })
+    }) ||
+    successorRecord.position <= disposition.directionAppliedAt ||
+    successorRecord.position <= disposition.successor.targetLineageObservedAt
   ) {
-    return invalid("candidate cleanup successor chronology is not Q < D < fresh lineage")
-  }
-  if (successorRecord.position <= disposition.successor.targetLineageObservedAt) {
     return invalid("candidate cleanup successor settlement witness does not follow its fresh target-lineage read")
   }
   const canonical = validateIntegratorSuccessorSessionFixed(records, disposition.predecessor, disposition.successor)
   return canonical._tag === "Valid"
-    ? valid("durable quarantine, FullRerun direction, and canonical successor prove candidate disposition")
+    ? valid("durable S1, canonical provider absence, FullRerun direction, and S2 prove candidate disposition")
     : invalid(canonical.detail)
 }
 
-const hasAbsenceCause = (
-  records: ReadonlyArray<JournalRecord>,
-  operationId: string,
-  cause: "InitialAbsence" | "MutationResponseReconciliation",
-  beforePosition: JournalPosition
-): boolean => {
-  const mutationExists = records.some((record) => {
-    if (record.position >= beforePosition) return false
-    const event = record.event
-    if (event._tag === "WorktreeCleanupMutationIntended") return event.authorization.operationId === operationId
-    if (event._tag === "BranchCleanupMutationIntended") return event.authorization.operationId === operationId
-    if (event._tag === "IntegratorCandidateCleanupMutationIntended") {
-      return event.authorization.operationId === operationId
-    }
-    return false
-  })
-  return cause === (mutationExists ? "MutationResponseReconciliation" : "InitialAbsence")
+const worktreeAuthorizationOf = (event: JournalRecord["event"]): WorktreeCleanupAuthorization | undefined =>
+  Match.value(event).pipe(
+    Match.tags({
+      WorktreeCleanupAuthorized: (candidate) => candidate.authorization,
+      WorktreeCleanupObservationIntended: (candidate) => candidate.authorization,
+      WorktreeCleanupObserved: (candidate) => candidate.authorization,
+      WorktreeCleanupMutationIntended: (candidate) => candidate.authorization,
+      WorktreeCleanupMutationResultRecorded: (candidate) => candidate.authorization,
+      WorktreeCleanupAbsenceConfirmed: (candidate) => candidate.authorization,
+      WorktreeCleanupContradicted: (candidate) => candidate.authorization,
+      WorktreeCleanupSettled: (candidate) => candidate.authorization
+    }),
+    Match.orElse(() => undefined)
+  )
+
+const branchAuthorizationOf = (event: JournalRecord["event"]): BranchCleanupAuthorization | undefined =>
+  Match.value(event).pipe(
+    Match.tags({
+      BranchCleanupAuthorized: (candidate) => candidate.authorization,
+      BranchCleanupObservationIntended: (candidate) => candidate.authorization,
+      BranchCleanupObserved: (candidate) => candidate.authorization,
+      BranchCleanupMutationIntended: (candidate) => candidate.authorization,
+      BranchCleanupMutationResultRecorded: (candidate) => candidate.authorization,
+      BranchCleanupAbsenceConfirmed: (candidate) => candidate.authorization,
+      BranchCleanupContradicted: (candidate) => candidate.authorization,
+      BranchCleanupSettled: (candidate) => candidate.authorization
+    }),
+    Match.orElse(() => undefined)
+  )
+
+const candidateAuthorizationOf = (event: JournalRecord["event"]): IntegratorCandidateCleanupAuthorization | undefined =>
+  Match.value(event).pipe(
+    Match.tags({
+      IntegratorCandidateCleanupAuthorized: (candidate) => candidate.authorization,
+      IntegratorCandidateCleanupObservationIntended: (candidate) => candidate.authorization,
+      IntegratorCandidateCleanupObserved: (candidate) => candidate.authorization,
+      IntegratorCandidateCleanupMutationIntended: (candidate) => candidate.authorization,
+      IntegratorCandidateCleanupMutationResultRecorded: (candidate) => candidate.authorization,
+      IntegratorCandidateCleanupAbsenceConfirmed: (candidate) => candidate.authorization,
+      IntegratorCandidateCleanupContradicted: (candidate) => candidate.authorization,
+      IntegratorCandidateCleanupSettled: (candidate) => candidate.authorization
+    }),
+    Match.orElse(() => undefined)
+  )
+
+const worktreeObservationEqual = (left: WorktreeCleanupObservation, right: WorktreeCleanupObservation): boolean => {
+  switch (left._tag) {
+    case "Present":
+      return (
+        right._tag === "Present" &&
+        right.attemptId === left.attemptId &&
+        right.branch === left.branch &&
+        right.headSha === left.headSha &&
+        right.locator === left.locator &&
+        right.revision === left.revision &&
+        right.writerQuiescent
+      )
+    case "Absent":
+      return right._tag === "Absent" && right.locator === left.locator && right.revision === left.revision
+    case "Foreign":
+      return (
+        right._tag === "Foreign" &&
+        right.locator === left.locator &&
+        right.observedBranch === left.observedBranch &&
+        right.observedHead === left.observedHead &&
+        right.reason === left.reason &&
+        right.revision === left.revision
+      )
+    case "Unregistered":
+      return right._tag === "Unregistered" && right.locator === left.locator && right.revision === left.revision
+    case "Unreadable":
+      return right._tag === "Unreadable" && right.locator === left.locator && right.detail === left.detail
+  }
 }
 
-const eventAuthorization = (event: JournalRecord["event"]): unknown =>
-  "authorization" in event ? event.authorization : undefined
+const branchObservationEqual = (left: BranchCleanupObservation, right: BranchCleanupObservation): boolean => {
+  switch (left._tag) {
+    case "Present":
+      return (
+        right._tag === "Present" &&
+        right.branch === left.branch &&
+        right.headSha === left.headSha &&
+        right.registeredWorktree === left.registeredWorktree &&
+        right.revision === left.revision
+      )
+    case "Absent":
+      return right._tag === "Absent" && right.branch === left.branch && right.revision === left.revision
+    case "Foreign":
+      return (
+        right._tag === "Foreign" &&
+        right.branch === left.branch &&
+        right.observedHead === left.observedHead &&
+        right.observedWorktree === left.observedWorktree &&
+        right.reason === left.reason &&
+        right.revision === left.revision
+      )
+    case "Unreadable":
+      return right._tag === "Unreadable" && right.branch === left.branch && right.detail === left.detail
+  }
+}
+
+const candidateObservationEqual = (
+  left: IntegratorCandidateCleanupObservation,
+  right: IntegratorCandidateCleanupObservation
+): boolean => {
+  switch (left._tag) {
+    case "Present":
+      return (
+        right._tag === "Present" &&
+        right.locator === left.locator &&
+        right.revision === left.revision &&
+        right.sessionId === left.sessionId &&
+        right.writerQuiescent
+      )
+    case "Absent":
+      return right._tag === "Absent" && right.locator === left.locator && right.revision === left.revision
+    case "Foreign":
+      return (
+        right._tag === "Foreign" &&
+        right.locator === left.locator &&
+        right.observedSessionId === left.observedSessionId &&
+        right.reason === left.reason &&
+        right.revision === left.revision
+      )
+    case "Unreadable":
+      return right._tag === "Unreadable" && right.locator === left.locator && right.detail === left.detail
+  }
+}
 
 const eventOperationId = (event: JournalRecord["event"]): string | undefined => {
-  const authorization = eventAuthorization(event)
-  if (typeof authorization !== "object" || authorization === null || !("operationId" in authorization)) return undefined
-  return typeof authorization.operationId === "string" ? authorization.operationId : undefined
+  if (!("authorization" in event)) return undefined
+  const authorization = event.authorization
+  if (!("operationId" in authorization)) return undefined
+  return authorization.operationId
 }
 
-const validateAuthorizationPrefix = (input: {
-  readonly records: ReadonlyArray<JournalRecord>
-  readonly operationId: string
-  readonly runId: string
-  readonly familyTags: ReadonlyArray<string>
-  readonly authorizedTag: string
-  readonly authorizedKey: JournalRecord["key"]
-  readonly authorization: unknown
-  readonly equals: (candidate: unknown, expected: unknown) => boolean
-}):
-  | {
-      readonly _tag: "Valid"
-      readonly family: ReadonlyArray<JournalRecord>
-      readonly authorizationAt?: JournalPosition
-    }
-  | { readonly _tag: "Invalid"; readonly detail: string } => {
-  const family = input.records
-    .filter(
-      (record) => input.familyTags.includes(record.event._tag) && eventOperationId(record.event) === input.operationId
-    )
-    .toSorted((left, right) => Number(left.position) - Number(right.position))
-  if (family.length === 0) return { _tag: "Valid", family }
-  const authorized = family.filter(({ event }) => event._tag === input.authorizedTag)
-  if (authorized.length === 0) {
-    return {
-      _tag: "Invalid",
-      detail: "cleanup history contains family events without an earlier CleanupAuthorized event"
-    }
-  }
-  if (authorized.length !== 1) {
-    return { _tag: "Invalid", detail: "cleanup history contains duplicate authorization records for one operation" }
-  }
-  const record = authorized[0]
-  if (record === undefined) {
-    return { _tag: "Invalid", detail: "cleanup history authorization record disappeared during reconstruction" }
-  }
-  const recordAuthorization = eventAuthorization(record.event)
-  if (
-    record.runId !== input.runId ||
-    record.key !== input.authorizedKey ||
-    !input.equals(recordAuthorization, input.authorization)
-  ) {
-    return { _tag: "Invalid", detail: "cleanup history contains a foreign or mis-keyed authorization" }
-  }
-  if (family.some(({ position }) => position < record.position)) {
-    return { _tag: "Invalid", detail: "cleanup history contains a family event before CleanupAuthorized" }
-  }
-  return { _tag: "Valid", family, authorizationAt: record.position }
-}
-
-const recordHasExactRunAndKey = (record: JournalRecord, runId: string, key: JournalRecord["key"]): boolean =>
-  record.runId === runId && record.key === key
-
-const mapWith = <K, V>(map: ReadonlyMap<K, V>, key: K, value: V): ReadonlyMap<K, V> =>
-  new Map<K, V>([...map, [key, value]])
-
-/** Reconstructs one operation-scoped worktree cleanup prefix before a retry. */
-export const validateWorktreeCleanupHistory = (
-  records: ReadonlyArray<JournalRecord>,
+const worktreeHistoryDescriptor = (
   authorization: WorktreeCleanupAuthorization
-): CleanupProvenanceValidation => {
-  const prefix = validateAuthorizationPrefix({
-    records,
+): CleanupHistoryDescriptor<WorktreeCleanupAuthorization> => ({
+  data: {
     operationId: authorization.operationId,
     runId: authorization.disposition.plannedAttempt.runId,
     familyTags: [
@@ -557,188 +803,108 @@ export const validateWorktreeCleanupHistory = (
       "WorktreeCleanupContradicted",
       "WorktreeCleanupSettled"
     ],
-    authorizedTag: "WorktreeCleanupAuthorized",
+    authorizationTag: "WorktreeCleanupAuthorized",
+    observationIntentTag: "WorktreeCleanupObservationIntended",
+    observedTag: "WorktreeCleanupObserved",
+    mutationIntentTag: "WorktreeCleanupMutationIntended",
+    mutationResultTag: "WorktreeCleanupMutationResultRecorded",
+    maxMutationAttempts: cleanupMutationRequestLimit,
+    absenceTag: "WorktreeCleanupAbsenceConfirmed",
+    contradictionTag: "WorktreeCleanupContradicted",
+    settledTag: "WorktreeCleanupSettled",
     authorizedKey: worktreeCleanupAuthorizedRecordKey(authorization.operationId),
     authorization,
-    equals: (candidate, expected) =>
-      candidate !== undefined &&
-      Schema.is(WorktreeCleanupAuthorization)(candidate) &&
-      Schema.is(WorktreeCleanupAuthorization)(expected) &&
-      worktreeCleanupAuthorizationEquals(candidate, expected)
-  })
-  if (prefix._tag === "Invalid") return prefix
-  const family = prefix.family
-  let intents: ReadonlyMap<string, JournalRecord> = new Map()
-  let observations: ReadonlyMap<string, JournalRecord> = new Map()
-  let mutations: ReadonlyMap<string, JournalRecord> = new Map()
-  let settledPosition: JournalPosition | undefined
-  for (const record of family) {
-    const event = record.event
-    if (event._tag === "WorktreeCleanupAuthorized") continue
-    if (settledPosition !== undefined && event._tag !== "WorktreeCleanupContradicted") {
-      return invalid("worktree cleanup history contains an event after terminal settlement")
-    }
-    if (event._tag === "WorktreeCleanupObservationIntended") {
-      if (
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          worktreeCleanupObservationIntendedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !worktreeCleanupAuthorizationEquals(event.authorization, authorization) ||
-        intents.has(`${event.operationId}:${event.ordinal}`)
-      ) {
-        return invalid("worktree observation intent has a foreign key, authorization, or duplicate ordinal")
-      }
-      intents = mapWith(intents, `${event.operationId}:${event.ordinal}`, record)
-      continue
-    }
-    if (event._tag === "WorktreeCleanupObserved") {
-      const key = `${event.operationId}:${event.ordinal}`
-      const intent = intents.get(key)
-      const observationIdentity =
-        event.observation.locator === authorization.locator &&
-        (event.observation._tag !== "Present" ||
-          (event.observation.attemptId === authorization.owner.attemptId &&
-            event.observation.branch === authorization.owner.branch &&
-            event.observation.revision === authorization.evidenceRevision &&
-            event.observation.writerQuiescent))
-      if (
-        intent === undefined ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          worktreeCleanupObservedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !worktreeCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !observationIdentity ||
-        observations.has(key)
-      ) {
-        return invalid("worktree observation result has no exact preceding intent or subject identity")
-      }
-      observations = mapWith(observations, key, record)
-      continue
-    }
-    if (event._tag === "WorktreeCleanupMutationIntended") {
-      const latestObservation = [...observations.values()].at(latestElementOffset)
-      if (
-        event.attempt > cleanupMutationRequestLimit ||
-        latestObservation?.event._tag !== "WorktreeCleanupObserved" ||
-        latestObservation.event.observation._tag !== "Present" ||
-        !worktreeCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          worktreeCleanupMutationIntendedRecordKey(authorization.operationId, event.attempt)
-        ) ||
-        mutations.has(String(event.attempt))
-      ) {
-        return invalid("worktree mutation intent is not preceded by exact present facts or has a foreign identity")
-      }
-      mutations = mapWith(mutations, String(event.attempt), record)
-      continue
-    }
-    if (event._tag === "WorktreeCleanupMutationResultRecorded") {
-      const intent = mutations.get(String(event.attempt))
-      if (
-        intent === undefined ||
-        event.operationId !==
-          (intent.event._tag === "WorktreeCleanupMutationIntended" ? intent.event.operationId : "") ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          worktreeCleanupMutationResultRecordedRecordKey(authorization.operationId, event.attempt)
-        ) ||
-        !worktreeCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.result.locator !== authorization.locator ||
-        event.result.branch !== authorization.owner.branch
-      ) {
-        return invalid("worktree mutation result has no exact preceding intent or subject identity")
-      }
-      continue
-    }
-    if (event._tag === "WorktreeCleanupAbsenceConfirmed") {
-      const key = `${event.operationId}:${event.ordinal}`
+    successDetail: "worktree cleanup history preserves the exact authorization and chronological subject prefix"
+  },
+  strategies: {
+    authorizationOf: worktreeAuthorizationOf,
+    authorizationEquals: worktreeCleanupAuthorizationEquals,
+    observationIntent: (event) =>
+      event._tag === "WorktreeCleanupObservationIntended"
+        ? {
+            key: event.operationId + ":" + event.ordinal,
+            recordKey: worktreeCleanupObservationIntendedRecordKey(authorization.operationId, event.ordinal)
+          }
+        : undefined,
+    observationResult: (event) =>
+      event._tag === "WorktreeCleanupObserved"
+        ? {
+            key: event.operationId + ":" + event.ordinal,
+            operationId: event.operationId,
+            recordKey: worktreeCleanupObservedRecordKey(authorization.operationId, event.ordinal),
+            identityMatches:
+              event.observation.locator === authorization.locator &&
+              (event.observation._tag !== "Present" ||
+                (event.observation.attemptId === authorization.owner.attemptId &&
+                  event.observation.branch === authorization.owner.branch &&
+                  event.observation.headSha === authorization.expectedHead &&
+                  event.observation.revision === authorization.evidenceRevision &&
+                  event.observation.writerQuiescent))
+          }
+        : undefined,
+    mutationIntent: (event) =>
+      event._tag === "WorktreeCleanupMutationIntended"
+        ? {
+            attempt: String(event.attempt),
+            operationId: event.operationId,
+            recordKey: worktreeCleanupMutationIntendedRecordKey(authorization.operationId, event.attempt)
+          }
+        : undefined,
+    mutationResult: (event) =>
+      event._tag === "WorktreeCleanupMutationResultRecorded"
+        ? {
+            attempt: String(event.attempt),
+            operationId: event.operationId,
+            recordKey: worktreeCleanupMutationResultRecordedRecordKey(authorization.operationId, event.attempt),
+            identityMatches:
+              event.result.locator === authorization.locator && event.result.branch === authorization.owner.branch
+          }
+        : undefined,
+    absence: (event, observations) => {
+      if (event._tag !== "WorktreeCleanupAbsenceConfirmed") return undefined
+      const key = event.operationId + ":" + event.ordinal
       const observed = observations.get(key)
-      const latestMutationResult = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position && candidate.event._tag === "WorktreeCleanupMutationResultRecorded"
-        )
-      if (
-        observed?.event._tag !== "WorktreeCleanupObserved" ||
-        observed.event.observation._tag !== "Absent" ||
-        event.observation.locator !== authorization.locator ||
-        (mutations.size > 0 &&
-          (latestMutationResult === undefined || observed.position <= latestMutationResult.position)) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          worktreeCleanupAbsenceConfirmedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !worktreeCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !hasAbsenceCause(family, authorization.operationId, event.cause, record.position)
-      ) {
-        return invalid("worktree absence confirmation lacks the exact fresh absence and cause")
+      const observedObservation =
+        observed?.event._tag === "WorktreeCleanupObserved" ? observed.event.observation : undefined
+      return {
+        key,
+        recordKey: worktreeCleanupAbsenceConfirmedRecordKey(authorization.operationId, event.ordinal),
+        cause: event.cause,
+        identityMatches: event.observation.locator === authorization.locator,
+        observationMatches:
+          observedObservation !== undefined && worktreeObservationEqual(event.observation, observedObservation)
       }
-      continue
-    }
-    if (event._tag === "WorktreeCleanupContradicted") {
-      if (
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          worktreeCleanupContradictedRecordKey(authorization.operationId)
-        ) ||
-        !worktreeCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.observation.locator !== authorization.locator
-      ) {
-        return invalid("worktree contradiction has a foreign key, authorization, or locator")
-      }
-      continue
-    }
-    if (event._tag === "WorktreeCleanupSettled") {
-      const absence = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position && candidate.event._tag === "WorktreeCleanupAbsenceConfirmed"
-        )
-      const latestMutationResult = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position && candidate.event._tag === "WorktreeCleanupMutationResultRecorded"
-        )
-      if (
-        absence === undefined ||
-        (mutations.size > 0 &&
-          (latestMutationResult === undefined || absence.position <= latestMutationResult.position)) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          worktreeCleanupSettledRecordKey(authorization.operationId)
-        ) ||
-        !worktreeCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.result.locator !== authorization.locator ||
-        event.result.branch !== authorization.owner.branch
-      ) {
-        return invalid("worktree settlement lacks the exact preceding absence and result identity")
-      }
-      settledPosition = record.position
-    }
+    },
+    contradiction: (event) =>
+      event._tag === "WorktreeCleanupContradicted"
+        ? {
+            recordKey: worktreeCleanupContradictedRecordKey(authorization.operationId),
+            identityMatches: event.observation.locator === authorization.locator
+          }
+        : undefined,
+    settled: (event) =>
+      event._tag === "WorktreeCleanupSettled"
+        ? {
+            recordKey: worktreeCleanupSettledRecordKey(authorization.operationId),
+            identityMatches:
+              event.result.locator === authorization.locator && event.result.branch === authorization.owner.branch
+          }
+        : undefined,
+    isPresentObservation: (event) => event._tag === "WorktreeCleanupObserved" && event.observation._tag === "Present",
+    isAbsentObservation: (event) => event._tag === "WorktreeCleanupObserved" && event.observation._tag === "Absent"
   }
-  return valid("worktree cleanup history preserves the exact authorization and chronological subject prefix")
-}
+})
 
-/** Reconstructs one operation-scoped branch cleanup prefix before a retry. */
-export const validateBranchCleanupHistory = (
+/** Reconstructs one operation-scoped worktree cleanup prefix before a retry. */
+export const validateWorktreeCleanupHistory = (
   records: ReadonlyArray<JournalRecord>,
+  authorization: WorktreeCleanupAuthorization
+): CleanupProvenanceValidation => validateCleanupHistory(records, worktreeHistoryDescriptor(authorization))
+
+const branchHistoryDescriptor = (
   authorization: BranchCleanupAuthorization
-): CleanupProvenanceValidation => {
-  const prefix = validateAuthorizationPrefix({
-    records,
+): CleanupHistoryDescriptor<BranchCleanupAuthorization> => ({
+  data: {
     operationId: authorization.operationId,
     runId: authorization.disposition.plannedAttempt.runId,
     familyTags: [
@@ -751,185 +917,104 @@ export const validateBranchCleanupHistory = (
       "BranchCleanupContradicted",
       "BranchCleanupSettled"
     ],
-    authorizedTag: "BranchCleanupAuthorized",
+    authorizationTag: "BranchCleanupAuthorized",
+    observationIntentTag: "BranchCleanupObservationIntended",
+    observedTag: "BranchCleanupObserved",
+    mutationIntentTag: "BranchCleanupMutationIntended",
+    mutationResultTag: "BranchCleanupMutationResultRecorded",
+    maxMutationAttempts: cleanupMutationRequestLimit,
+    absenceTag: "BranchCleanupAbsenceConfirmed",
+    contradictionTag: "BranchCleanupContradicted",
+    settledTag: "BranchCleanupSettled",
     authorizedKey: branchCleanupAuthorizedRecordKey(authorization.operationId),
     authorization,
-    equals: (candidate, expected) =>
-      candidate !== undefined &&
-      Schema.is(BranchCleanupAuthorization)(candidate) &&
-      Schema.is(BranchCleanupAuthorization)(expected) &&
-      branchCleanupAuthorizationEquals(candidate, expected)
-  })
-  if (prefix._tag === "Invalid") return prefix
-  const family = prefix.family
-  let intents: ReadonlyMap<string, JournalRecord> = new Map()
-  let observations: ReadonlyMap<string, JournalRecord> = new Map()
-  let mutations: ReadonlyMap<string, JournalRecord> = new Map()
-  let settledPosition: JournalPosition | undefined
-  for (const record of family) {
-    const event = record.event
-    if (event._tag === "BranchCleanupAuthorized") continue
-    if (settledPosition !== undefined && event._tag !== "BranchCleanupContradicted") {
-      return invalid("branch cleanup history contains an event after terminal settlement")
-    }
-    if (event._tag === "BranchCleanupObservationIntended") {
-      const key = `${event.operationId}:${event.ordinal}`
-      if (
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          branchCleanupObservationIntendedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !branchCleanupAuthorizationEquals(event.authorization, authorization) ||
-        intents.has(key)
-      ) {
-        return invalid("branch observation intent has a foreign key, authorization, or duplicate ordinal")
-      }
-      intents = mapWith(intents, key, record)
-      continue
-    }
-    if (event._tag === "BranchCleanupObserved") {
-      const key = `${event.operationId}:${event.ordinal}`
-      const intent = intents.get(key)
-      const identity =
-        event.observation.branch === authorization.locator &&
-        (event.observation._tag !== "Present" ||
-          (event.observation.headSha === authorization.expectedHead &&
-            event.observation.registeredWorktree === null &&
-            event.observation.revision === authorization.evidenceRevision))
-      if (
-        intent === undefined ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          branchCleanupObservedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !branchCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !identity ||
-        observations.has(key)
-      ) {
-        return invalid("branch observation result has no exact preceding intent or subject identity")
-      }
-      observations = mapWith(observations, key, record)
-      continue
-    }
-    if (event._tag === "BranchCleanupMutationIntended") {
-      const latestObservation = [...observations.values()].at(latestElementOffset)
-      if (
-        event.attempt > cleanupMutationRequestLimit ||
-        latestObservation?.event._tag !== "BranchCleanupObserved" ||
-        latestObservation.event.observation._tag !== "Present" ||
-        !branchCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          branchCleanupMutationIntendedRecordKey(authorization.operationId, event.attempt)
-        ) ||
-        mutations.has(String(event.attempt))
-      ) {
-        return invalid("branch mutation intent is not preceded by exact present facts or has a foreign identity")
-      }
-      mutations = mapWith(mutations, String(event.attempt), record)
-      continue
-    }
-    if (event._tag === "BranchCleanupMutationResultRecorded") {
-      const intent = mutations.get(String(event.attempt))
-      if (
-        intent === undefined ||
-        event.operationId !== (intent.event._tag === "BranchCleanupMutationIntended" ? intent.event.operationId : "") ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          branchCleanupMutationResultRecordedRecordKey(authorization.operationId, event.attempt)
-        ) ||
-        !branchCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.result.branch !== authorization.locator
-      ) {
-        return invalid("branch mutation result has no exact preceding intent or subject identity")
-      }
-      continue
-    }
-    if (event._tag === "BranchCleanupAbsenceConfirmed") {
-      const key = `${event.operationId}:${event.ordinal}`
+    successDetail: "branch cleanup history preserves the exact authorization and chronological subject prefix"
+  },
+  strategies: {
+    authorizationOf: branchAuthorizationOf,
+    authorizationEquals: branchCleanupAuthorizationEquals,
+    observationIntent: (event) =>
+      event._tag === "BranchCleanupObservationIntended"
+        ? {
+            key: event.operationId + ":" + event.ordinal,
+            recordKey: branchCleanupObservationIntendedRecordKey(authorization.operationId, event.ordinal)
+          }
+        : undefined,
+    observationResult: (event) =>
+      event._tag === "BranchCleanupObserved"
+        ? {
+            key: event.operationId + ":" + event.ordinal,
+            operationId: event.operationId,
+            recordKey: branchCleanupObservedRecordKey(authorization.operationId, event.ordinal),
+            identityMatches:
+              event.observation.branch === authorization.locator &&
+              (event.observation._tag !== "Present" ||
+                (event.observation.headSha === authorization.expectedHead &&
+                  event.observation.registeredWorktree === null &&
+                  event.observation.revision === authorization.evidenceRevision))
+          }
+        : undefined,
+    mutationIntent: (event) =>
+      event._tag === "BranchCleanupMutationIntended"
+        ? {
+            attempt: String(event.attempt),
+            operationId: event.operationId,
+            recordKey: branchCleanupMutationIntendedRecordKey(authorization.operationId, event.attempt)
+          }
+        : undefined,
+    mutationResult: (event) =>
+      event._tag === "BranchCleanupMutationResultRecorded"
+        ? {
+            attempt: String(event.attempt),
+            operationId: event.operationId,
+            recordKey: branchCleanupMutationResultRecordedRecordKey(authorization.operationId, event.attempt),
+            identityMatches: event.result.branch === authorization.locator
+          }
+        : undefined,
+    absence: (event, observations) => {
+      if (event._tag !== "BranchCleanupAbsenceConfirmed") return undefined
+      const key = event.operationId + ":" + event.ordinal
       const observed = observations.get(key)
-      const latestMutationResult = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position && candidate.event._tag === "BranchCleanupMutationResultRecorded"
-        )
-      if (
-        observed?.event._tag !== "BranchCleanupObserved" ||
-        observed.event.observation._tag !== "Absent" ||
-        event.observation.branch !== authorization.locator ||
-        (mutations.size > 0 &&
-          (latestMutationResult === undefined || observed.position <= latestMutationResult.position)) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          branchCleanupAbsenceConfirmedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !branchCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !hasAbsenceCause(family, authorization.operationId, event.cause, record.position)
-      ) {
-        return invalid("branch absence confirmation lacks the exact fresh absence and cause")
+      const observedObservation =
+        observed?.event._tag === "BranchCleanupObserved" ? observed.event.observation : undefined
+      return {
+        key,
+        recordKey: branchCleanupAbsenceConfirmedRecordKey(authorization.operationId, event.ordinal),
+        cause: event.cause,
+        identityMatches: event.observation.branch === authorization.locator,
+        observationMatches:
+          observedObservation !== undefined && branchObservationEqual(event.observation, observedObservation)
       }
-      continue
-    }
-    if (event._tag === "BranchCleanupContradicted") {
-      if (
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          branchCleanupContradictedRecordKey(authorization.operationId)
-        ) ||
-        !branchCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.observation.branch !== authorization.locator
-      ) {
-        return invalid("branch contradiction has a foreign key, authorization, or branch")
-      }
-      continue
-    }
-    if (event._tag === "BranchCleanupSettled") {
-      const absence = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position && candidate.event._tag === "BranchCleanupAbsenceConfirmed"
-        )
-      const latestMutationResult = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position && candidate.event._tag === "BranchCleanupMutationResultRecorded"
-        )
-      if (
-        absence === undefined ||
-        (mutations.size > 0 &&
-          (latestMutationResult === undefined || absence.position <= latestMutationResult.position)) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.plannedAttempt.runId,
-          branchCleanupSettledRecordKey(authorization.operationId)
-        ) ||
-        !branchCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.result.branch !== authorization.locator
-      ) {
-        return invalid("branch settlement lacks the exact preceding absence and result identity")
-      }
-      settledPosition = record.position
-    }
+    },
+    contradiction: (event) =>
+      event._tag === "BranchCleanupContradicted"
+        ? {
+            recordKey: branchCleanupContradictedRecordKey(authorization.operationId),
+            identityMatches: event.observation.branch === authorization.locator
+          }
+        : undefined,
+    settled: (event) =>
+      event._tag === "BranchCleanupSettled"
+        ? {
+            recordKey: branchCleanupSettledRecordKey(authorization.operationId),
+            identityMatches: event.result.branch === authorization.locator
+          }
+        : undefined,
+    isPresentObservation: (event) => event._tag === "BranchCleanupObserved" && event.observation._tag === "Present",
+    isAbsentObservation: (event) => event._tag === "BranchCleanupObserved" && event.observation._tag === "Absent"
   }
-  return valid("branch cleanup history preserves the exact authorization and chronological subject prefix")
-}
+})
 
-/** Reconstructs one operation-scoped candidate cleanup prefix before a retry. */
-export const validateIntegratorCandidateCleanupHistory = (
+/** Reconstructs one operation-scoped branch cleanup prefix before a retry. */
+export const validateBranchCleanupHistory = (
   records: ReadonlyArray<JournalRecord>,
+  authorization: BranchCleanupAuthorization
+): CleanupProvenanceValidation => validateCleanupHistory(records, branchHistoryDescriptor(authorization))
+
+const candidateHistoryDescriptor = (
   authorization: IntegratorCandidateCleanupAuthorization
-): CleanupProvenanceValidation => {
-  const prefix = validateAuthorizationPrefix({
-    records,
+): CleanupHistoryDescriptor<IntegratorCandidateCleanupAuthorization> => ({
+  data: {
     operationId: authorization.operationId,
     runId: authorization.disposition.predecessor.plannedAttempt.runId,
     familyTags: [
@@ -942,185 +1027,106 @@ export const validateIntegratorCandidateCleanupHistory = (
       "IntegratorCandidateCleanupContradicted",
       "IntegratorCandidateCleanupSettled"
     ],
-    authorizedTag: "IntegratorCandidateCleanupAuthorized",
+    authorizationTag: "IntegratorCandidateCleanupAuthorized",
+    observationIntentTag: "IntegratorCandidateCleanupObservationIntended",
+    observedTag: "IntegratorCandidateCleanupObserved",
+    mutationIntentTag: "IntegratorCandidateCleanupMutationIntended",
+    mutationResultTag: "IntegratorCandidateCleanupMutationResultRecorded",
+    maxMutationAttempts: cleanupMutationRequestLimit,
+    absenceTag: "IntegratorCandidateCleanupAbsenceConfirmed",
+    contradictionTag: "IntegratorCandidateCleanupContradicted",
+    settledTag: "IntegratorCandidateCleanupSettled",
     authorizedKey: integratorCandidateCleanupAuthorizedRecordKey(authorization.operationId),
     authorization,
-    equals: (candidate, expected) =>
-      candidate !== undefined &&
-      Schema.is(IntegratorCandidateCleanupAuthorization)(candidate) &&
-      Schema.is(IntegratorCandidateCleanupAuthorization)(expected) &&
-      integratorCandidateCleanupAuthorizationEquals(candidate, expected)
-  })
-  if (prefix._tag === "Invalid") return prefix
-  const family = prefix.family
-  let intents: ReadonlyMap<string, JournalRecord> = new Map()
-  let observations: ReadonlyMap<string, JournalRecord> = new Map()
-  let mutations: ReadonlyMap<string, JournalRecord> = new Map()
-  let settledPosition: JournalPosition | undefined
-  for (const record of family) {
-    const event = record.event
-    if (event._tag === "IntegratorCandidateCleanupAuthorized") continue
-    if (settledPosition !== undefined && event._tag !== "IntegratorCandidateCleanupContradicted") {
-      return invalid("candidate cleanup history contains an event after terminal settlement")
-    }
-    if (event._tag === "IntegratorCandidateCleanupObservationIntended") {
-      const key = `${event.operationId}:${event.ordinal}`
-      if (
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.predecessor.plannedAttempt.runId,
-          integratorCandidateCleanupObservationIntendedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !integratorCandidateCleanupAuthorizationEquals(event.authorization, authorization) ||
-        intents.has(key)
-      ) {
-        return invalid("candidate observation intent has a foreign key, authorization, or duplicate ordinal")
-      }
-      intents = mapWith(intents, key, record)
-      continue
-    }
-    if (event._tag === "IntegratorCandidateCleanupObserved") {
-      const key = `${event.operationId}:${event.ordinal}`
-      const intent = intents.get(key)
-      const identity =
-        event.observation.locator === authorization.locator &&
-        (event.observation._tag !== "Present" ||
-          (event.observation.sessionId === authorization.owner.sessionId &&
-            event.observation.revision === authorization.evidenceRevision &&
-            event.observation.writerQuiescent))
-      if (
-        intent === undefined ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.predecessor.plannedAttempt.runId,
-          integratorCandidateCleanupObservedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !integratorCandidateCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !identity ||
-        observations.has(key)
-      ) {
-        return invalid("candidate observation result has no exact preceding intent or subject identity")
-      }
-      observations = mapWith(observations, key, record)
-      continue
-    }
-    if (event._tag === "IntegratorCandidateCleanupMutationIntended") {
-      const latestObservation = [...observations.values()].at(latestElementOffset)
-      if (
-        event.attempt > cleanupMutationRequestLimit ||
-        latestObservation?.event._tag !== "IntegratorCandidateCleanupObserved" ||
-        latestObservation.event.observation._tag !== "Present" ||
-        !integratorCandidateCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.predecessor.plannedAttempt.runId,
-          integratorCandidateCleanupMutationIntendedRecordKey(authorization.operationId, event.attempt)
-        ) ||
-        mutations.has(String(event.attempt))
-      ) {
-        return invalid("candidate mutation intent is not preceded by exact present facts or has a foreign identity")
-      }
-      mutations = mapWith(mutations, String(event.attempt), record)
-      continue
-    }
-    if (event._tag === "IntegratorCandidateCleanupMutationResultRecorded") {
-      const intent = mutations.get(String(event.attempt))
-      if (
-        intent === undefined ||
-        event.operationId !==
-          (intent.event._tag === "IntegratorCandidateCleanupMutationIntended" ? intent.event.operationId : "") ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.predecessor.plannedAttempt.runId,
-          integratorCandidateCleanupMutationResultRecordedRecordKey(authorization.operationId, event.attempt)
-        ) ||
-        !integratorCandidateCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.result.locator !== authorization.locator ||
-        event.result.sessionId !== authorization.owner.sessionId
-      ) {
-        return invalid("candidate mutation result has no exact preceding intent or subject identity")
-      }
-      continue
-    }
-    if (event._tag === "IntegratorCandidateCleanupAbsenceConfirmed") {
-      const key = `${event.operationId}:${event.ordinal}`
+    successDetail: "candidate cleanup history preserves the exact authorization and chronological subject prefix"
+  },
+  strategies: {
+    authorizationOf: candidateAuthorizationOf,
+    authorizationEquals: integratorCandidateCleanupAuthorizationEquals,
+    observationIntent: (event) =>
+      event._tag === "IntegratorCandidateCleanupObservationIntended"
+        ? {
+            key: event.operationId + ":" + event.ordinal,
+            recordKey: integratorCandidateCleanupObservationIntendedRecordKey(authorization.operationId, event.ordinal)
+          }
+        : undefined,
+    observationResult: (event) =>
+      event._tag === "IntegratorCandidateCleanupObserved"
+        ? {
+            key: event.operationId + ":" + event.ordinal,
+            operationId: event.operationId,
+            recordKey: integratorCandidateCleanupObservedRecordKey(authorization.operationId, event.ordinal),
+            identityMatches:
+              event.observation.locator === authorization.locator &&
+              (event.observation._tag !== "Present" ||
+                (event.observation.sessionId === authorization.owner.sessionId &&
+                  event.observation.revision === authorization.evidenceRevision &&
+                  event.observation.writerQuiescent))
+          }
+        : undefined,
+    mutationIntent: (event) =>
+      event._tag === "IntegratorCandidateCleanupMutationIntended"
+        ? {
+            attempt: String(event.attempt),
+            operationId: event.operationId,
+            recordKey: integratorCandidateCleanupMutationIntendedRecordKey(authorization.operationId, event.attempt)
+          }
+        : undefined,
+    mutationResult: (event) =>
+      event._tag === "IntegratorCandidateCleanupMutationResultRecorded"
+        ? {
+            attempt: String(event.attempt),
+            operationId: event.operationId,
+            recordKey: integratorCandidateCleanupMutationResultRecordedRecordKey(
+              authorization.operationId,
+              event.attempt
+            ),
+            identityMatches:
+              event.result.locator === authorization.locator && event.result.sessionId === authorization.owner.sessionId
+          }
+        : undefined,
+    absence: (event, observations) => {
+      if (event._tag !== "IntegratorCandidateCleanupAbsenceConfirmed") return undefined
+      const key = event.operationId + ":" + event.ordinal
       const observed = observations.get(key)
-      const latestMutationResult = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position &&
-            candidate.event._tag === "IntegratorCandidateCleanupMutationResultRecorded"
-        )
-      if (
-        observed?.event._tag !== "IntegratorCandidateCleanupObserved" ||
-        observed.event.observation._tag !== "Absent" ||
-        event.observation.locator !== authorization.locator ||
-        (mutations.size > 0 &&
-          (latestMutationResult === undefined || observed.position <= latestMutationResult.position)) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.predecessor.plannedAttempt.runId,
-          integratorCandidateCleanupAbsenceConfirmedRecordKey(authorization.operationId, event.ordinal)
-        ) ||
-        !integratorCandidateCleanupAuthorizationEquals(event.authorization, authorization) ||
-        !hasAbsenceCause(family, authorization.operationId, event.cause, record.position)
-      ) {
-        return invalid("candidate absence confirmation lacks the exact fresh absence and cause")
+      const observedObservation =
+        observed?.event._tag === "IntegratorCandidateCleanupObserved" ? observed.event.observation : undefined
+      return {
+        key,
+        recordKey: integratorCandidateCleanupAbsenceConfirmedRecordKey(authorization.operationId, event.ordinal),
+        cause: event.cause,
+        identityMatches: event.observation.locator === authorization.locator,
+        observationMatches:
+          observedObservation !== undefined && candidateObservationEqual(event.observation, observedObservation)
       }
-      continue
-    }
-    if (event._tag === "IntegratorCandidateCleanupContradicted") {
-      if (
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.predecessor.plannedAttempt.runId,
-          integratorCandidateCleanupContradictedRecordKey(authorization.operationId)
-        ) ||
-        !integratorCandidateCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.observation.locator !== authorization.locator
-      ) {
-        return invalid("candidate contradiction has a foreign key, authorization, or locator")
-      }
-      continue
-    }
-    if (event._tag === "IntegratorCandidateCleanupSettled") {
-      const absence = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position &&
-            candidate.event._tag === "IntegratorCandidateCleanupAbsenceConfirmed"
-        )
-      const latestMutationResult = [...family]
-        .reverse()
-        .find(
-          (candidate) =>
-            candidate.position < record.position &&
-            candidate.event._tag === "IntegratorCandidateCleanupMutationResultRecorded"
-        )
-      if (
-        absence === undefined ||
-        (mutations.size > 0 &&
-          (latestMutationResult === undefined || absence.position <= latestMutationResult.position)) ||
-        !recordHasExactRunAndKey(
-          record,
-          authorization.disposition.predecessor.plannedAttempt.runId,
-          integratorCandidateCleanupSettledRecordKey(authorization.operationId)
-        ) ||
-        !integratorCandidateCleanupAuthorizationEquals(event.authorization, authorization) ||
-        event.result.locator !== authorization.locator ||
-        event.result.sessionId !== authorization.owner.sessionId
-      ) {
-        return invalid("candidate settlement lacks the exact preceding absence and result identity")
-      }
-      settledPosition = record.position
-    }
+    },
+    contradiction: (event) =>
+      event._tag === "IntegratorCandidateCleanupContradicted"
+        ? {
+            recordKey: integratorCandidateCleanupContradictedRecordKey(authorization.operationId),
+            identityMatches: event.observation.locator === authorization.locator
+          }
+        : undefined,
+    settled: (event) =>
+      event._tag === "IntegratorCandidateCleanupSettled"
+        ? {
+            recordKey: integratorCandidateCleanupSettledRecordKey(authorization.operationId),
+            identityMatches:
+              event.result.locator === authorization.locator && event.result.sessionId === authorization.owner.sessionId
+          }
+        : undefined,
+    isPresentObservation: (event) =>
+      event._tag === "IntegratorCandidateCleanupObserved" && event.observation._tag === "Present",
+    isAbsentObservation: (event) =>
+      event._tag === "IntegratorCandidateCleanupObserved" && event.observation._tag === "Absent"
   }
-  return valid("candidate cleanup history preserves the exact authorization and chronological subject prefix")
-}
+})
 
-/** The branch gate consumes this exact W1 settlement and its fresh absence proof. */
+/** Reconstructs one operation-scoped candidate cleanup prefix before a retry. */
+export const validateIntegratorCandidateCleanupHistory = (
+  records: ReadonlyArray<JournalRecord>,
+  authorization: IntegratorCandidateCleanupAuthorization
+): CleanupProvenanceValidation => validateCleanupHistory(records, candidateHistoryDescriptor(authorization))
 export const validateSettledWorktreeForBranch = (
   records: ReadonlyArray<JournalRecord>,
   authorization: BranchCleanupAuthorization
@@ -1130,6 +1136,9 @@ export const validateSettledWorktreeForBranch = (
       record.event._tag === "WorktreeCleanupSettled" &&
       record.event.authorization.operationId === authorization.worktreeCleanupOperationId
   )
+  if (candidates.length !== 1) {
+    return invalid("branch cleanup requires one exact settled worktree record")
+  }
   const settled = candidates[0]
   if (settled?.event._tag !== "WorktreeCleanupSettled") {
     return invalid("branch cleanup cannot begin before the exact worktree settlement")
@@ -1147,5 +1156,12 @@ export const validateSettledWorktreeForBranch = (
   const provenance = validateWorktreeCleanupProvenance(records, worktreeAuthorization)
   if (provenance._tag === "Invalid") return invalid(provenance.detail)
   const history = validateWorktreeCleanupHistory(records, settled.event.authorization)
-  return history._tag === "Valid" ? history : invalid(history.detail)
+  if (history._tag === "Invalid") return invalid(history.detail)
+  const branchEvents = records.filter((record) => {
+    const branchAuthorization = branchAuthorizationOf(record.event)
+    return branchAuthorization?.operationId === authorization.operationId
+  })
+  return branchEvents.every((record) => record.position > settled.position)
+    ? history
+    : invalid("branch cleanup authorization or event precedes exact worktree settlement")
 }

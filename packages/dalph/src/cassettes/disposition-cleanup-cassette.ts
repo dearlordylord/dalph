@@ -47,9 +47,11 @@ import {
   WorktreeCleanupObservation,
   WorktreeCleanupOwner,
   appendCandidateProvenance,
+  appendCurrentQuarantineProvenance,
   appendReplacementProvenance,
   branchCleanupTestLayer,
   integratorCandidateCleanupTestLayer,
+  isCleanupEligibleDisposition,
   memoryJournalTestLayer,
   runBranchCleanup,
   runIntegratorCandidateCleanup,
@@ -218,7 +220,7 @@ export type DispositionCleanupCassetteRun = typeof DispositionCleanupCassetteRun
 const issue69RunId = RunId.make("issue-69-maintained-cassette-run")
 const issue69ShaLength = 40
 const issue69EvidenceDigestLength = 64
-const issue69DispositionPosition = 5
+const issue69DispositionPosition = 9
 const issue69CandidateDispositionPosition = 9
 const issue69AuthorityObservationPosition = 3
 const issue69DirectionPosition = 10
@@ -345,6 +347,12 @@ const candidatePresent = IntegratorCandidateCleanupObservation.cases.Present.mak
 const boundaryCallsFor = (calls: ReadonlyArray<{ readonly _tag: "Observe" | "Remove" }>, resource: string) =>
   calls.map((call) => `${call._tag === "Observe" ? "observe" : "remove"} ${resource}`)
 
+const upstreamRecords = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalRecord> =>
+  records.filter(({ event }) => !event._tag.includes("Cleanup"))
+
+const recordsAreUnchanged = (before: ReadonlyArray<JournalRecord>, after: ReadonlyArray<JournalRecord>): boolean =>
+  JSON.stringify(upstreamRecords(before)) === JSON.stringify(upstreamRecords(after))
+
 /** Runs one authored cleanup chronology through all applicable production protocol boundaries. */
 export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCassette.run")(function* (
   cassette: DispositionCleanupCassette
@@ -430,11 +438,13 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
       FixtureTarget.make("issue-69-maintained-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
+    let upstreamBeforeCleanup: ReadonlyArray<JournalRecord> = []
     if (
       cassette.scenario === "SupersededWorktreeAndBranch" ||
       cassette.scenario === "ChangedGitFactsPreserveResources"
     ) {
       yield* appendReplacementProvenance(issue69Attempt, issue69Successor)
+      upstreamBeforeCleanup = yield* journal.read(issue69RunId)
     }
     let terminalResult: string
     if (cassette.scenario === "SupersededWorktreeAndBranch") {
@@ -450,10 +460,17 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
       terminalResult = "Preserved with a typed contradiction"
     } else if (cassette.scenario === "FullRerunPredecessorCandidate") {
       yield* appendCandidateProvenance(issue69Predecessor, issue69SuccessorSession, "issue-69-maintained-full-rerun")
+      upstreamBeforeCleanup = yield* journal.read(issue69RunId)
       const candidate = yield* runIntegratorCandidateCleanup(issue69CandidateAuthorization)
       if (candidate._tag !== "Settled") return yield* Effect.die("FullRerun cassette did not settle predecessor C1")
       terminalResult = "C1 settled; S1 history and C2 preserved"
     } else {
+      yield* appendCurrentQuarantineProvenance(issue69Predecessor)
+      upstreamBeforeCleanup = yield* journal.read(issue69RunId)
+      const selected = { _tag: "CurrentQuarantine", sessionId: issue69Predecessor.sessionId }
+      if (isCleanupEligibleDisposition(selected)) {
+        return yield* Effect.die("current quarantine was incorrectly selected for cleanup")
+      }
       terminalResult = "No cleanup responsibility"
     }
     const records = yield* journal.read(issue69RunId)
@@ -474,6 +491,22 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
       return yield* Effect.die(
         `cleanup cassette terminal mismatch: expected ${cassette.terminalResult}, received ${terminalResult}`
       )
+    }
+    if (!recordsAreUnchanged(upstreamBeforeCleanup, records)) {
+      return yield* Effect.die("cleanup cassette changed an upstream P2/S1/C2, history, or evidence sentinel")
+    }
+    const forbiddenSatisfied =
+      cassette.scenario === "SupersededWorktreeAndBranch"
+        ? boundaryCalls.every((call) => !call.includes("P2"))
+        : cassette.scenario === "ChangedGitFactsPreserveResources"
+          ? boundaryCalls.every((call) => !call.startsWith("remove") && !call.includes("branch")) &&
+            records.some(({ event }) => event._tag === "WorktreeCleanupContradicted")
+          : cassette.scenario === "FullRerunPredecessorCandidate"
+            ? boundaryCalls.every((call) => !call.includes("S1") && !call.includes("C2")) &&
+              records.some(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
+            : boundaryCalls.length === 0 && records.every(({ event }) => !event._tag.includes("Cleanup"))
+    if (!forbiddenSatisfied) {
+      return yield* Effect.die(`cleanup cassette forbidden result violated: ${cassette.forbiddenResult}`)
     }
     return DispositionCleanupCassetteRun.make({
       boundaryCalls,

@@ -172,6 +172,43 @@ it.effect("deletes a planned branch only after the exact worktree settlement", (
   )
 )
 
+it.effect("replays a settled branch twice without a boundary call or journal write", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const first = yield* runBranchCleanup(branchAuthorization)
+    const journal = yield* JournalStore
+    const afterFirst = yield* journal.read(runId)
+    const second = yield* runBranchCleanup(branchAuthorization)
+    const afterSecond = yield* journal.read(runId)
+    const third = yield* runBranchCleanup(branchAuthorization)
+    const afterThird = yield* journal.read(runId)
+    const calls = yield* (yield* TestBranchCleanupBoundary).calls()
+    expect([first, second, third].map((result) => result._tag)).toEqual(["Settled", "Settled", "Settled"])
+    expect(afterSecond).toEqual(afterFirst)
+    expect(afterThird).toEqual(afterFirst)
+    expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          present,
+          BranchCleanupObservation.cases.Absent.make({
+            branch: attempt.branch,
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          BranchCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
 it.effect("does not read or mutate a branch before worktree cleanup settles", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore

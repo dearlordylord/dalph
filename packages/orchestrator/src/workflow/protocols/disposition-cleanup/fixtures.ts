@@ -19,7 +19,7 @@ import {
 } from "./disposition.js"
 import { replacementPredecessorsFor, replacementWorktreeObservationOperationIdFor } from "./provenance-fixtures.js"
 
-const dispositionPosition = 5
+const dispositionPosition = 9
 const authorizationObservationPosition = 3
 
 export const runId = RunId.make("issue-69-worktree-run")

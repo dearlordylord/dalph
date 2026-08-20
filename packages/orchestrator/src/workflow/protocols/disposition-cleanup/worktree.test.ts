@@ -3,7 +3,10 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
+  GitRepositoryLocator,
   GitCommitSha,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -27,7 +30,6 @@ import {
 } from "../../../workflow-journal/record-key.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
-import { IntegrationTarget, IntegrationTargetRef, GitRepositoryLocator } from "@dalph/contracts"
 import {
   CleanupObservationOrdinal,
   isCleanupEligibleDisposition,
@@ -71,7 +73,7 @@ const successor = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
-  dispositionAt: JournalPosition.make(5),
+  dispositionAt: JournalPosition.make(9),
   plannedAttempt: attempt,
   successorAttempt: successor
 })
@@ -137,6 +139,49 @@ it.effect("removes the exact superseded worktree after fresh matching facts", ()
         expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
       })
     )
+  )
+)
+
+it.effect("replays a settled worktree twice without a boundary call or journal write", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-worktree-settled-replay"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendReplacementProvenance(attempt, successor)
+    const first = yield* runWorktreeCleanup(authorization)
+    const afterFirst = yield* journal.read(runId)
+    const second = yield* runWorktreeCleanup(authorization)
+    const afterSecond = yield* journal.read(runId)
+    const third = yield* runWorktreeCleanup(authorization)
+    const afterThird = yield* journal.read(runId)
+    const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
+    expect([first, second, third].map((result) => result._tag)).toEqual(["Settled", "Settled", "Settled"])
+    expect(afterSecond).toEqual(afterFirst)
+    expect(afterThird).toEqual(afterFirst)
+    expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          present,
+          WorktreeCleanupObservation.cases.Absent.make({
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          WorktreeCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            locator: attempt.worktree,
+            revision: WorktreeCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
   )
 )
 

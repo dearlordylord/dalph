@@ -40,7 +40,6 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
   IntegratorSessionId,
-  JournalRecord,
   WorktreeCleanupAuthorization,
   WorktreeCleanupEvidenceRevision,
   WorktreeCleanupMutationResult,
@@ -56,14 +55,13 @@ import {
   runIntegratorCandidateCleanup,
   memoryJournalTestLayer,
   runWorktreeCleanup,
-  worktreeCleanupTestLayer
-} from "@dalph/orchestrator"
-import {
+  worktreeCleanupTestLayer,
   appendCandidateProvenance,
   appendReplacementProvenance,
   replacementPredecessorsFor,
   replacementWorktreeObservationOperationIdFor
 } from "@dalph/orchestrator"
+import type { JournalRecord } from "@dalph/orchestrator"
 import {
   expectedRecoveryPrefix,
   prefixThrough,
@@ -95,7 +93,7 @@ const successor = PlannedTaskAttempt.make({
 const authorization = WorktreeCleanupAuthorization.make({
   causalPredecessors: replacementPredecessorsFor(attempt),
   disposition: PlannedAttemptCleanupDisposition.cases.Superseded.make({
-    dispositionAt: JournalPosition.make(5),
+    dispositionAt: JournalPosition.make(9),
     plannedAttempt: attempt,
     successorAttempt: successor
   }),
@@ -295,7 +293,9 @@ const expectedFamilyTagsAfterResume = (
   if (prefix.cut === "P5") {
     return [...retained, tag("ObservationIntended"), tag("Observed"), tag("AbsenceConfirmed"), tag("Settled")]
   }
-  return [...retained, tag("ObservationIntended"), tag("Observed")]
+  // P6 already contains the exact accepted terminal fact. A replay returns
+  // that durable answer without a new boundary read or journal event.
+  return retained
 }
 
 const resumeCleanupAfter =
@@ -410,7 +410,7 @@ it.effect("reopens every cleanup P0-P6 prefix through memory and SQLite", () =>
         ])
         expect(evidence.mutationAttempts, `${prefix.cut}/${lane} mutation ordinals`).toEqual([1])
         expect(evidence.observationIntentKeys, `${prefix.cut}/${lane} observation identities`).toHaveLength(
-          prefix.cut === "P5" || prefix.cut === "P6" ? 3 : 2
+          prefix.cut === "P5" ? 3 : 2
         )
         expect(new Set(evidence.observationIntentKeys).size, `${prefix.cut}/${lane} duplicate observation intent`).toBe(
           evidence.observationIntentKeys.length
@@ -423,7 +423,7 @@ it.effect("reopens every cleanup P0-P6 prefix through memory and SQLite", () =>
         expect(evidence.mutationIntentCount, `${prefix.cut}/${lane} mutation intents`).toBe(1)
         expect(evidence.settlementCount, `${prefix.cut}/${lane} settlements`).toBe(1)
         expect(evidence.observationCalls, `${prefix.cut}/${lane} fresh reads`).toBe(
-          prefix.cut === "P0" || prefix.cut === "P1" ? 2 : 1
+          prefix.cut === "P6" ? 0 : prefix.cut === "P0" || prefix.cut === "P1" ? 2 : 1
         )
         expect(evidence.mutationCalls, `${prefix.cut}/${lane} delete calls`).toBe(
           prefix.cut === "P0" || prefix.cut === "P1" ? 1 : 0
@@ -682,7 +682,7 @@ const assertCleanupRecoveryFamily = (
         ])
         expect(evidence.mutationAttempts, `${prefix.cut}/${lane} mutation ordinals`).toEqual([1])
         expect(evidence.observationIntentKeys, `${prefix.cut}/${lane} observation identities`).toHaveLength(
-          prefix.cut === "P5" || prefix.cut === "P6" ? 3 : 2
+          prefix.cut === "P5" ? 3 : 2
         )
         expect(new Set(evidence.observationIntentKeys).size, `${prefix.cut}/${lane} duplicate observation intent`).toBe(
           evidence.observationIntentKeys.length
@@ -695,7 +695,7 @@ const assertCleanupRecoveryFamily = (
         expect(evidence.mutationIntentCount, `${prefix.cut}/${lane} mutation intents`).toBe(1)
         expect(evidence.settlementCount, `${prefix.cut}/${lane} settlements`).toBe(1)
         expect(evidence.observationCalls, `${prefix.cut}/${lane} fresh reads`).toBe(
-          prefix.cut === "P0" || prefix.cut === "P1" ? 2 : 1
+          prefix.cut === "P6" ? 0 : prefix.cut === "P0" || prefix.cut === "P1" ? 2 : 1
         )
         expect(evidence.mutationCalls, `${prefix.cut}/${lane} delete calls`).toBe(
           prefix.cut === "P0" || prefix.cut === "P1" ? 1 : 0
