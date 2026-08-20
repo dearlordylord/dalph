@@ -30,9 +30,13 @@ so restart and failure claims remain explicitly source-inferred.
 ## Executable verification research
 
 - [Verification bake-off](./verification-bakeoff/README.md)
+- [Issue #221 verification and timing report](./coverage-suite-timing-report.md)
 
 The bake-off remains because its Markdown explains maintained executable
 models, generated mappings, negative controls, and proof-tool comparisons.
+The issue #221 report is current implementation evidence for the journal-prefix
+performance work; once that issue's conclusion is captured elsewhere, the
+report may return to Git history under the maintenance rule below.
 
 ## Maintenance rule
 
