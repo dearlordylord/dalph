@@ -39,7 +39,12 @@ import {
   initialRunPolicyRevision,
   FixtureTarget
 } from "@dalph/orchestrator"
-import type { GitWorktreeService } from "../../../packages/orchestrator/dist/src/authorities/git/worktree.js"
+import type { CoordinatorOwnershipError } from "../../../packages/orchestrator/dist/src/authorities/coordinator-ownership/ownership.js"
+import type {
+  GitWorktreeCreateFailure,
+  GitWorktreeObservationError,
+  GitWorktreeService
+} from "../../../packages/orchestrator/dist/src/authorities/git/worktree.js"
 import type { ResponsibilityFreshFacts } from "../../../packages/orchestrator/dist/src/coordination/frontier/fresh-facts.js"
 import type { ReconstructedRunState } from "../../../packages/orchestrator/dist/src/coordination/reconstruction/state.js"
 import { Effect, Layer, Schema, SubscriptionRef } from "effect"
@@ -71,14 +76,12 @@ import {
   runControlledGitWorktreeReconciliation
 } from "./controlled-git-worktree.ts"
 import {
-  changeFactsDuringDowntime,
   loadActivityEvidence,
   loadExecutorBoundaryContacts,
   recordActivityResultAvailable,
   recordDecisionEvidence,
   recordProposalObservation,
-  recordResponsibilityProjection,
-  readControlledWorld
+  recordResponsibilityProjection
 } from "./controlled-world.ts"
 import {
   activityResultFor,
@@ -201,32 +204,35 @@ const operationAllocation = OperationIdAllocator.of({
   allocate: () => Effect.die("the accepted worktree proposal must not allocate a new OperationId")
 })
 
+type WorktreeActivityCause = CoordinatorOwnershipError | GitWorktreeCreateFailure | GitWorktreeObservationError
+
+const unreachableActivityCause = (cause: never): never => {
+  throw new Error(`unreachable controlled Git Activity failure: ${String(cause)}`)
+}
+
 export const mapWorktreeActivityFailure = (
-  cause: unknown,
+  cause: WorktreeActivityCause,
   worktree: WorktreeLocator
 ): WorktreeActivityError => {
-  const tag =
-    cause !== null && typeof cause === "object" && "_tag" in cause && typeof cause._tag === "string"
-      ? cause._tag
-      : undefined
-  const knownReasons: ReadonlySet<WorktreeActivityFailureReason> = new Set([
-    "CompetingWorktreeRegistrations",
-    "ConflictingWorktreeRegistration",
-    "ContradictoryWorktreeState",
-    "CoordinatorLockObservationContradiction",
-    "CoordinatorOwnershipLost",
-    "ForeignWorktreeRegistration",
-    "GitWorktreeCreateFailure",
-    "GitWorktreeReadFailure",
-    "UntrackedWorktreePath",
-    "WorktreeBaseMismatch"
-  ])
-  const reason: WorktreeActivityFailureReason =
-    tag !== undefined && knownReasons.has(tag as WorktreeActivityFailureReason)
-      ? (tag as WorktreeActivityFailureReason)
-      : "UnknownActivityFailure"
+  const reason: WorktreeActivityFailureReason = (() => {
+    switch (cause._tag) {
+      case "CompetingWorktreeRegistrations":
+      case "ConflictingWorktreeRegistration":
+      case "ContradictoryWorktreeState":
+      case "ForeignWorktreeRegistration":
+      case "UntrackedWorktreePath":
+      case "WorktreeBaseMismatch":
+      case "GitWorktreeReadFailure":
+      case "CoordinatorLockObservationContradiction":
+      case "CoordinatorOwnershipLost":
+      case "GitWorktreeCreateFailure":
+        return cause._tag
+      default:
+        return unreachableActivityCause(cause)
+    }
+  })()
   return WorktreeActivityError.make({
-    detail: cause instanceof Error ? cause.message : String(cause),
+    detail: cause.message,
     reason,
     worktree
   })
@@ -406,11 +412,7 @@ export const runWorkflowReconciliation = async (
         const graph = yield* graphStateFor.pipe(Effect.orDie)
         const current = yield* SubscriptionRef.make(bundleFor(graph, initialHistory))
         const initialDisposition = initialHistory.responsibility.disposition._tag
-        if (
-          initialDisposition !== "Ready" &&
-          initialDisposition !== "Settled" &&
-          initialDisposition !== "WorkflowOperationTaskClaimConstraint"
-        ) {
+        if (initialDisposition !== "Ready" && initialDisposition !== "Settled") {
           return yield* Effect.die(
             `unexpected initial responsibility disposition: ${initialDisposition}`
           )
@@ -560,7 +562,3 @@ export const runWorkflowReconciliation = async (
     )
   )
 }
-
-export const mutateDowntimeFacts = changeFactsDuringDowntime
-
-export const controlledWorldAtEnd = (workspace: string) => readControlledWorld(workspace)

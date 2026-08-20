@@ -27,9 +27,9 @@ named boundary and starts the same Workflow idempotency key again.
 
 | Case | Controlled Git ledger | Activity/Journal ledger | Current decision |
 | --- | --- | --- | --- |
-| Unstored Activity result | `read absent → create applied → restart read ready → current read ready`; one create | First child reaches `AfterCreateBeforeActivityStorage` with `{code:null, signal:SIGKILL}`; successor stores the result and appends one `TaskWorktreeReady`; production responsibility projection is pending → `Settled` before proposal removal | Continue only after Journal publication and a fresh read |
+| Unstored Activity result | `read absent → create applied → restart read ready → current read ready`; one create | First child reaches `AfterCreateBeforeActivityStorage` with `{code:null, signal:SIGKILL}`; successor stores the result and appends one `TaskWorktreeReady`; production responsibility projection is `Ready` → `Settled` before proposal removal | Continue only after Journal publication and a fresh read |
 | Stored result before Journal | `read absent → create applied → read ready`; no successor adapter call | First child reaches `AfterActivityStorageBeforeJournal` with `{code:null, signal:SIGKILL}`; successor replays the stored result and appends one idempotent outcome; projection becomes `Settled` before proposal removal | No post-replay Git decision is made in this cut; Journal publication removes the proposal |
-| Facts changed during downtime | Same first-child ledger; downtime changes the controlled observation to absent; successor makes one fresh read absent | Historical result is replayed and one Journal outcome is published; projection is pending → `Settled`; executor-boundary contact probe remains empty | Wait/fail closed from the fresh controlled read; no executor admission |
+| Facts changed during downtime | Same first-child ledger; downtime changes the controlled observation to absent; successor makes one fresh read absent | Historical result is replayed and one Journal outcome is published; projection is `Ready` → `Settled`; executor-boundary contact probe remains empty | Wait/fail closed from the fresh controlled read; no executor admission |
 | Blind retry (negative control) | Second Activity sends a second create | Successor exits normally, but the two-create ledger fails the one-create rule | Negative control fails |
 | Suppressed Journal (negative control) | No successor adapter call | Journal outcome is suppressed; successor is killed with `{code:null, signal:SIGKILL}`; proposal remains present | No delivery advancement |
 | Historical readiness (negative control) | Two Activity reads only; successor makes no current read | Replayed result is deliberately recorded as current | Incorrectly Continue; this is the forbidden authority substitution |
@@ -40,14 +40,15 @@ The durable ledgers are deliberately separated:
   rows are inventoried individually as Workflow invocations, Activity replies,
   or runtime migrations; it is not Run chronology or delivery state.
 - `journal.sqlite` is the local Dalph Journal. It contains the begun Run, the
-  exact planned Attempt, `TaskWorktreeReconciliationIntended`, and at most one
-  idempotent `TaskWorktreeReady` outcome.
+  exact acquired claim and focused current-claim observation that authorize the
+  planned Attempt, `TaskWorktreeReconciliationIntended`, and at most one
+  idempotent `TaskWorktreeReady` outcome. That claim precondition is why the
+  production responsibility projection is `Ready` before Workflow entry.
 - `controlled-git-world.json` is the controlled adapter's current outside-world
   observation and exact planned resource fixture.
 - The `*.ndjson` files are append-only test evidence for controlled Git calls,
   Activity result-storage/replay boundaries, proposal visibility, production
-  responsibility projection (the production pending
-  `WorkflowOperationTaskClaimConstraint`/`Settled` dispositions), executor-boundary contacts,
+  responsibility projection (the production `Ready`/`Settled` dispositions), executor-boundary contacts,
   and decision evidence. They are not reconstructed application state.
 
 The harness inspects the workspace before cleanup. Its allowed durable
@@ -60,7 +61,9 @@ rows and has an empty forbidden-category scan. SQLite string, integer, and Blob
 cells are decoded for the forbidden-marker scan; SQLite `-wal`/`-shm` sidecars
 left by a killed process are classified as their owning store but are not
 treated as row stores. Journal rows are separately classified as RunLifecycle,
-TaskPlan, TaskWorktreeIntent, or TaskWorktreeOutcome; no unknown Journal row is
+TaskClaimIntent, TaskClaimOutcome, TaskClaimObservationIntent,
+TaskClaimObservationOutcome, TaskPlan, TaskWorktreeIntent, or
+TaskWorktreeOutcome; no unknown Journal row is
 accepted. No proposal/frontier/current-signal/task-work-position/live-owner/
 physical-resource/UI state, real repository, Git command, GitHub call, or
 executor process is persisted or started. The only child processes are the
@@ -124,7 +127,7 @@ remove the existing restart procedure.
 
 ## Verification ledger
 
-Focused results after the reviewer correction:
+Focused results after the round-3 standards correction:
 
 ```text
 pnpm --filter @dalph/workflow-worktree-reconciliation-prototype typecheck  PASS

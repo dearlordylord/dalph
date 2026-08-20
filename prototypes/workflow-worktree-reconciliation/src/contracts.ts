@@ -119,7 +119,6 @@ export const WorktreeActivityFailureReason = Schema.Literals([
   "GitWorktreeCreateFailure",
   "GitWorktreeReadFailure",
   "UntrackedWorktreePath",
-  "UnknownActivityFailure",
   "WorktreeBaseMismatch"
 ])
 export type WorktreeActivityFailureReason = typeof WorktreeActivityFailureReason.Type
@@ -161,7 +160,7 @@ export type DecisionEvidence = typeof DecisionEvidence.Type
 
 /** The ordinary production Journal projection changed its exact operation from pending to settled. */
 export const ResponsibilityProjectionEvidence = Schema.Struct({
-  disposition: Schema.Literals(["Ready", "Settled", "WorkflowOperationTaskClaimConstraint"]),
+  disposition: Schema.Literals(["Ready", "Settled"]),
   operationId: WorktreeOperationId,
   position: JournalPosition,
   processInstance: WorktreeProcessInstance,
@@ -218,14 +217,3 @@ export const activityResultFor = (
   payload: Pick<WorktreeActivityResult, "attemptId" | "operationId" | "runId">,
   proof: PlannedWorktreeReady
 ): WorktreeActivityResult => WorktreeActivityResult.make({ ...payload, proof })
-
-export const faultFor = (scenario: WorktreeScenario): FaultName | undefined =>
-  scenario === "UnstoredActivityResult"
-    ? "AfterCreateBeforeActivityStorage"
-    : scenario === "StoredResultBeforeJournal" ||
-        scenario === "FactsChangedDuringDowntime" ||
-        scenario === "ReplayHistoricalRead"
-      ? "AfterActivityStorageBeforeJournal"
-      : scenario === "BlindRetry"
-        ? "AfterCreateBeforeActivityStorage"
-      : undefined
