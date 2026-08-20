@@ -250,7 +250,7 @@ await scenario("drives Reducer Lab durable history, graph, and causal navigation
   assert(traceHistories.length === result.journalRecordCount, "The Lab must materialize one production view for every committed journal position")
   assert(
     traceHistories.every((history, index) =>
-      history.version === 1
+      history.version === 2
       && history.cursor.runId === result.runId
       && history.cursor.position === index + 1
       && history.items.every(({ identity }) => identity.runId === result.runId)
@@ -258,6 +258,10 @@ await scenario("drives Reducer Lab durable history, graph, and causal navigation
     "Trace views must retain the schema version and exact (RunId, JournalPosition) identity for every commit"
   )
   assert(result.traceHistories.some(({ graph }) => graph !== null), "The Lab must consume a production graph-at-history view")
+  assert(
+    result.traceHistories.every(({ facets }) => facets.recovery.observationGaps !== undefined && facets.integration.facts !== undefined),
+    "The Lab must consume the shared recovery and integration facets"
+  )
   assert(
     result.traceHistories.some(({ relationships }) => relationships.workflowCausalEdges.length > 0),
     "The Lab must consume production-proven workflow-causal predecessors"

@@ -1,6 +1,6 @@
 /* eslint-disable import/no-nodejs-modules -- Source assertion guards the public console presentation seam. */
 import { it } from "@effect/vitest"
-import { RunId } from "@dalph/contracts"
+import { AttemptId, RunId } from "@dalph/contracts"
 import {
   FixtureTarget,
   InitialControlPolicy,
@@ -13,6 +13,7 @@ import {
   TraceCursor,
   TraceDerivedTaskOrder,
   TraceHistoryItem,
+  TraceHistoricalFacets,
   TraceOutput,
   TracePositionIdentity,
   TraceReaderLayer,
@@ -93,6 +94,16 @@ const traceAtCursor = TraceAtCursor.make({
     taskGraphEdges: [],
     workflowCausalEdges: []
   }),
+  facets: TraceHistoricalFacets.make({
+    integration: { facts: [] },
+    recovery: {
+      observationGaps: [
+        { _tag: "ExecutorReport", action: historyItem.identity, attemptId: AttemptId.make("console-attempt") }
+      ],
+      preservationDispositions: [],
+      retainedResponsibilities: []
+    }
+  }),
   version: traceReaderSchemaVersion
 })
 
@@ -158,6 +169,7 @@ it.effect("reads one exact production cursor through TraceReader and writes its 
     expect(view.items[0]?.identity).toEqual({ position: JournalPosition.make(2), runId })
     expect(view.items[0]?.occurrence._tag).toBe("TaskTrackerReadInitiated")
     expect(encoded).toEqual(view)
+    expect(encoded.facets).toEqual(view.facets)
     expect(historyAfterPresentation).toEqual(historyBeforePresentation)
     expect(presentationLayerOutput).toBe(true)
   })

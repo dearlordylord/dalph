@@ -186,6 +186,8 @@ try {
   const tracePanel = workbench.locator('[data-role="trace-history"]')
   assert.equal(await tracePanel.count(), 1)
   assert.match(await tracePanel.textContent() ?? "", /production TraceReader/u)
+  assert.equal(await tracePanel.locator('[data-role="trace-historical-facets"]').count(), 1)
+  assert.match(await tracePanel.textContent() ?? "", /Historical recovery and integration facets/u)
   const traceSelector = tracePanel.locator('[data-role="trace-cursor-selector"]')
   const traceOptionCount = await traceSelector.locator("option").count()
   assert.ok(traceOptionCount > 1)

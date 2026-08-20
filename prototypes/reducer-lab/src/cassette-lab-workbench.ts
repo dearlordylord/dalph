@@ -937,6 +937,8 @@ const renderProductionTraceHistory = (
   causalHost.dataset.role = "trace-causal-edges"
   const itemsHost = document.createElement("section")
   itemsHost.dataset.role = "trace-history-items"
+  const facetsHost = document.createElement("section")
+  facetsHost.dataset.role = "trace-historical-facets"
   const auxiliaryHost = document.createElement("details")
   auxiliaryHost.dataset.role = "trace-auxiliary-chronology"
   appendText(auxiliaryHost, "summary", "Authored story and runtime-owner chronology (auxiliary)")
@@ -957,7 +959,7 @@ const renderProductionTraceHistory = (
   }
   if (model.auxiliary.length === 0) appendText(auxiliaryList, "li", "No authored story or runtime-owner moments were captured.")
   auxiliaryHost.append(auxiliaryList)
-  section.append(graphHost, causalHost, itemsHost, auxiliaryHost)
+  section.append(graphHost, causalHost, itemsHost, facetsHost, auxiliaryHost)
   let causalNavigationError: string | null = null
 
   const renderSelected = (): void => {
@@ -988,6 +990,7 @@ const renderProductionTraceHistory = (
       graphHost.replaceChildren()
       causalHost.replaceChildren()
       itemsHost.replaceChildren()
+      facetsHost.replaceChildren()
       return
     }
     cursor.textContent = `Selected production cursor: Run ${projection.cursor.runId} · JournalPosition ${projection.cursor.position}`
@@ -997,6 +1000,7 @@ const renderProductionTraceHistory = (
     graphHost.replaceChildren()
     causalHost.replaceChildren()
     itemsHost.replaceChildren()
+    facetsHost.replaceChildren()
     if (history === undefined) {
       appendText(graphHost, "p", "The selected exact production cursor has no returned trace view.")
       return
@@ -1081,6 +1085,29 @@ const renderProductionTraceHistory = (
     }
     if (history.items.length === 0) appendText(itemList, "li", "No projected workflow occurrence is visible at this cursor.")
     itemsHost.append(itemList)
+
+    appendText(facetsHost, "h5", "Historical recovery and integration facets")
+    appendText(
+      facetsHost,
+      "p",
+      `Shared TraceAtCursor envelope · observation gaps ${history.facets.recovery.observationGaps.length} · retained responsibilities ${history.facets.recovery.retainedResponsibilities.length} · preservation dispositions ${history.facets.recovery.preservationDispositions.length} · integration facts ${history.facets.integration.facts.length}.`
+    )
+    const facetList = document.createElement("ul")
+    facetList.dataset.role = "trace-facet-list"
+    for (const gap of history.facets.recovery.observationGaps) {
+      appendText(facetList, "li", `Recovery gap · ${gap._tag} · source journal ${gap.action.position}`)
+    }
+    for (const retained of history.facets.recovery.retainedResponsibilities) {
+      appendText(facetList, "li", `Retained responsibility · ${retained._tag} · source journal ${retained.source.position}`)
+    }
+    for (const disposition of history.facets.recovery.preservationDispositions) {
+      appendText(facetList, "li", `Preservation disposition · ${disposition._tag} · source journal ${disposition.source.position}`)
+    }
+    for (const fact of history.facets.integration.facts) {
+      appendText(facetList, "li", `Integration fact · ${fact._tag} · source journal ${fact.source.position}`)
+    }
+    if (facetList.childElementCount === 0) appendText(facetList, "li", "No recovery or integration facet is visible at this cursor.")
+    facetsHost.append(facetList)
   }
 
   const dispatch = (message: Parameters<typeof updateTraceCursorSelection>[1]): void => {

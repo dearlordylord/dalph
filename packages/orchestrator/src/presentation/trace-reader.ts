@@ -1,6 +1,15 @@
 /* eslint-disable functional/immutable-data, max-lines -- Prefix validation and relationship indexes are private read-side scratch. */
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { IntegrationTarget, TaskId, RunId } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  AttemptId,
+  GitCommitSha,
+  IntegrationTarget,
+  PlannedTaskAttempt,
+  RunId,
+  TaskId,
+  plannedTaskAttemptEquivalence
+} from "@dalph/contracts"
 import { TaskDagWire } from "../authorities/task-tracker/graph.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tracker/target.js"
 import { JournalPosition } from "../workflow-journal/identity.js"
@@ -18,6 +27,33 @@ import {
   WorkflowOccurrence,
   type WorkflowOccurrence as WorkflowOccurrenceValue
 } from "../workflow/registry/occurrence-projection.js"
+import {
+  IntegratorCandidateText,
+  IntegratorGitObservation,
+  IntegratorResult,
+  IntegratorRunCorrelation,
+  IntegratorSessionCorrelation
+} from "../workflow/protocols/integrator/events.js"
+import { acceptedResultEquivalence } from "../workflow/protocols/integration-admission/responsibility.js"
+import {
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineDirectionFingerprint
+} from "../workflow/protocols/integration-quarantine/events.js"
+import { IntegrationFinalityJournalEvent } from "../workflow/protocols/integration-finality/events.js"
+import {
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionCorrelation,
+  TargetPromotionNonConvergenceObservation,
+  TargetPromotionStaleObservation,
+  TargetPromotionSuccessObservation,
+  TargetPromotionTerminalBasis,
+  targetPromotionCorrelationEquals
+} from "../workflow/protocols/target-promotion/events.js"
+import { AttemptRestartAuthorityReadFailure } from "../workflow/protocols/attempt-choice/replacement-events.js"
+import { AttemptChoiceSubject } from "../workflow/protocols/attempt-choice/events.js"
+import { ActiveTaskClaim } from "../authorities/task-tracker/claim-mutation.js"
+import { PlannedAttemptWorktreeObservation } from "../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
+import { PlannedWorktreeReady } from "../authorities/git/worktree.js"
 import type {
   CompleteTaskTrackerFactsObserved,
   TaskTrackerFactsObservation,
@@ -27,7 +63,10 @@ import { reconstructedTaskGraphFor } from "../coordination/reconstruction/graph-
 import type { CurrentSignal } from "../coordination/delivery/relations.js"
 
 /** Version of the immutable production trace contract consumed by presentation. */
-export const traceReaderSchemaVersion = 1 as const
+export const traceReaderSchemaVersion = 2 as const // eslint-disable-line no-magic-numbers
+
+const exactCandidateParentCount = 2 // eslint-disable-line no-magic-numbers
+const latestSameTargetResponsibilityIndex = -1 // eslint-disable-line no-magic-numbers
 
 /**
  * Identifies one exact committed journal position in one Run. Cursors and
@@ -100,6 +139,139 @@ export const TraceTaskGraph = Schema.Struct({
   snapshot: TaskDagWire
 })
 export type TraceTaskGraph = typeof TraceTaskGraph.Type
+
+/** A committed action whose owning boundary observation is absent at a cursor. */
+export const TraceObservationGap = Schema.TaggedUnion({
+  CandidateQualification: {
+    action: TraceItemIdentity,
+    candidateText: IntegratorCandidateText,
+    run: IntegratorRunCorrelation
+  },
+  ExecutorReport: { action: TraceItemIdentity, attemptId: AttemptId },
+  GitObservation: {
+    action: TraceItemIdentity,
+    operationId: OperationId,
+    required: Schema.Literals(["PlannedAttemptWorktreeObserved", "TargetLineageObserved"]),
+    taskIds: Schema.Array(TaskId)
+  },
+  IntegratorResult: { action: TraceItemIdentity, run: IntegratorRunCorrelation },
+  PromotionResult: {
+    action: TraceItemIdentity,
+    attemptOrdinal: TargetPromotionAttemptOrdinal,
+    correlation: TargetPromotionCorrelation
+  },
+  TrackerObservation: {
+    action: TraceItemIdentity,
+    operationId: OperationId,
+    required: Schema.Literals(["TaskClaimAcquired", "TaskClaimReleased", "TaskTrackerFactsObserved"]),
+    taskIds: Schema.Array(TaskId)
+  }
+})
+export type TraceObservationGap = typeof TraceObservationGap.Type
+
+/** One exact responsibility still retained by the committed prefix. */
+export const TraceRetainedResponsibility = Schema.TaggedUnion({
+  ExecutorWork: { plannedAttempt: PlannedTaskAttempt, source: TraceItemIdentity },
+  TaskClaim: { claim: ActiveTaskClaim, source: TraceItemIdentity },
+  TaskAttempt: { plannedAttempt: PlannedTaskAttempt, source: TraceItemIdentity },
+  Worktree: { plannedAttempt: PlannedTaskAttempt, proof: PlannedWorktreeReady, source: TraceItemIdentity }
+})
+export type TraceRetainedResponsibility = typeof TraceRetainedResponsibility.Type
+
+/** A concrete historical preservation disposition, never a generic archive state. */
+export const TracePreservationDisposition = Schema.TaggedUnion({
+  IntegrationQuarantined: {
+    basis: IntegrationQuarantineBasis,
+    correlation: IntegratorSessionCorrelation,
+    source: TraceItemIdentity
+  },
+  NonConvergentPromotion: {
+    correlation: TargetPromotionCorrelation,
+    lastObservation: TargetPromotionNonConvergenceObservation,
+    source: TraceItemIdentity
+  },
+  ReplacementPending: { choice: AttemptChoiceSubject, source: TraceItemIdentity },
+  TaskAuthorityConflict: {
+    failure: AttemptRestartAuthorityReadFailure,
+    source: TraceItemIdentity,
+    subject: AttemptChoiceSubject
+  },
+  WorktreeLost: {
+    observation: PlannedAttemptWorktreeObservation,
+    plannedAttempt: PlannedTaskAttempt,
+    source: TraceItemIdentity
+  }
+})
+export type TracePreservationDisposition = typeof TracePreservationDisposition.Type
+
+/** Generic recovery explanation derived from one validated immutable prefix. */
+export const TraceRecoveryFacet = Schema.Struct({
+  observationGaps: Schema.Array(TraceObservationGap),
+  preservationDispositions: Schema.Array(TracePreservationDisposition),
+  retainedResponsibilities: Schema.Array(TraceRetainedResponsibility)
+})
+export type TraceRecoveryFacet = typeof TraceRecoveryFacet.Type
+
+/** Integration facts retain the exact source identity for every presentation claim. */
+export const TraceIntegrationFact = Schema.TaggedUnion({
+  AcceptedResult: { acceptedResult: AcceptedResult, plannedAttempt: PlannedTaskAttempt, source: TraceItemIdentity },
+  CandidateObserved: {
+    candidateText: IntegratorCandidateText,
+    observation: IntegratorGitObservation,
+    run: IntegratorRunCorrelation,
+    source: TraceItemIdentity
+  },
+  CandidateQualification: {
+    candidateCommit: GitCommitSha,
+    candidateText: IntegratorCandidateText,
+    directParents: Schema.Tuple([GitCommitSha, GitCommitSha]),
+    run: IntegratorRunCorrelation,
+    source: TraceItemIdentity
+  },
+  Completion: { event: IntegrationFinalityJournalEvent, source: TraceItemIdentity },
+  IntegratorResult: { result: IntegratorResult, run: IntegratorRunCorrelation, source: TraceItemIdentity },
+  Quarantine: {
+    basis: IntegrationQuarantineBasis,
+    correlation: IntegratorSessionCorrelation,
+    source: TraceItemIdentity
+  },
+  Responsibility: {
+    acceptedResult: AcceptedResult,
+    plannedAttempt: PlannedTaskAttempt,
+    sameTargetPredecessor: Schema.NullOr(TraceItemIdentity),
+    source: TraceItemIdentity,
+    target: IntegrationTarget
+  },
+  Session: { correlation: IntegratorSessionCorrelation, source: TraceItemIdentity },
+  SessionStarted: { responsibility: TraceItemIdentity, source: TraceItemIdentity, target: IntegrationTarget },
+  Promotion: {
+    basis: TargetPromotionTerminalBasis,
+    correlation: TargetPromotionCorrelation,
+    kind: Schema.Literals(["Attempt", "NonConvergent", "Requested", "Stale", "Succeeded"]),
+    observation: Schema.NullOr(
+      Schema.Union([
+        TargetPromotionSuccessObservation,
+        TargetPromotionStaleObservation,
+        TargetPromotionNonConvergenceObservation
+      ])
+    ),
+    source: TraceItemIdentity
+  },
+  ProviderActivityAbsent: {
+    correlation: IntegratorSessionCorrelation,
+    run: IntegratorRunCorrelation,
+    source: TraceItemIdentity
+  },
+  QuarantineDirection: { fingerprint: IntegrationQuarantineDirectionFingerprint, source: TraceItemIdentity }
+})
+export type TraceIntegrationFact = typeof TraceIntegrationFact.Type
+
+/** One shared versioned envelope consumed by console and Reducer Lab. */
+export const TraceHistoricalFacets = Schema.Struct({
+  integration: Schema.Struct({ facts: Schema.Array(TraceIntegrationFact) }),
+  recovery: TraceRecoveryFacet
+})
+export type TraceHistoricalFacets = typeof TraceHistoricalFacets.Type
 
 const occurrenceRunId = (occurrence: WorkflowOccurrenceValue): RunId =>
   occurrence._tag === "AppliedControlDirection"
@@ -307,19 +479,48 @@ const traceRelationshipIssue = (view: {
   return undefined
 }
 
+const traceHistoricalFacetsIssue = (view: {
+  readonly cursor: TraceCursor
+  readonly items: ReadonlyArray<TraceHistoryItem>
+  readonly facets: TraceHistoricalFacets
+}): string | undefined => {
+  const identities: ReadonlyArray<TraceItemIdentity> = [
+    ...view.facets.recovery.observationGaps.map(({ action }) => action),
+    ...view.facets.recovery.preservationDispositions.map(({ source }) => source),
+    ...view.facets.recovery.retainedResponsibilities.map(({ source }) => source),
+    ...view.facets.integration.facts.flatMap((fact) =>
+      fact._tag === "SessionStarted"
+        ? [fact.source, fact.responsibility]
+        : fact._tag === "Responsibility" && fact.sameTargetPredecessor !== null
+          ? [fact.source, fact.sameTargetPredecessor]
+          : [fact.source]
+    )
+  ]
+  const invalid = identities.find(
+    (identity) => identityOutsideCursor(identity, view.cursor) || historyItemAt(view.items, identity) === undefined
+  )
+  if (invalid !== undefined) return "Every historical facet source must resolve to an item in the cursor prefix"
+  const invalidFact = view.facets.integration.facts.find(
+    (fact) => traceHistoricalFactIssue(fact, view.items) !== undefined
+  )
+  return invalidFact === undefined ? undefined : traceHistoricalFactIssue(invalidFact, view.items)
+}
+
 const traceAtCursorInvariant = (view: {
   readonly cursor: TraceCursor
   readonly derivedTaskOrder: TraceDerivedTaskOrder
   readonly graph: TraceTaskGraph | null
   readonly items: ReadonlyArray<TraceHistoryItem>
   readonly relationships: TraceRelationships
+  readonly facets: TraceHistoricalFacets
 }): string | undefined =>
   traceItemsIssue(view.items, view.cursor.runId, view.cursor.position) ??
   traceGraphObservationIssue(view.graph, view.cursor, view.items) ??
   traceGraphEdgesIssue(view.graph) ??
   traceDerivedTaskOrderIssue(view.derivedTaskOrder, view.graph) ??
   traceTaskGraphRelationshipIssue(view.graph, view.relationships.taskGraphEdges) ??
-  traceRelationshipIssue(view)
+  traceRelationshipIssue(view) ??
+  traceHistoricalFacetsIssue(view)
 
 /** A fixed historical cursor view. Current status is intentionally not stored here. */
 export const TraceAtCursor = Schema.Struct({
@@ -328,6 +529,7 @@ export const TraceAtCursor = Schema.Struct({
   graph: Schema.NullOr(TraceTaskGraph),
   items: Schema.Array(TraceHistoryItem),
   relationships: TraceRelationships,
+  facets: TraceHistoricalFacets,
   version: Schema.Literal(traceReaderSchemaVersion)
 }).check(Schema.makeFilter(traceAtCursorInvariant))
 export type TraceAtCursor = typeof TraceAtCursor.Type
@@ -433,14 +635,35 @@ const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): Readonly
     return [workflowOperationId(occurrence.operation)]
   }
   if (
+    occurrence._tag === "TaskClaimAcquisitionInitiated" ||
+    occurrence._tag === "TaskClaimReleaseInitiated" ||
+    occurrence._tag === "TaskAttemptPlanned" ||
+    occurrence._tag === "TaskWorktreeReady"
+  ) {
+    return [workflowOperationId(occurrence.operation)]
+  }
+  if (
     occurrence._tag === "TaskTrackerFactsObserved" ||
     occurrence._tag === "PlannedAttemptWorktreeObserved" ||
     occurrence._tag === "TargetLineageObserved" ||
-    occurrence._tag === "AttemptRestartAuthorityReadFailed"
+    occurrence._tag === "AttemptRestartAuthorityReadFailed" ||
+    occurrence._tag === "TaskClaimAcquired" ||
+    occurrence._tag === "TaskClaimReleased" ||
+    occurrence._tag === "StoppedAttemptClaimPreserved"
   ) {
-    return [occurrence.originatingActionOperationId]
+    return [
+      occurrence._tag === "StoppedAttemptClaimPreserved"
+        ? occurrence.observationOperationId
+        : occurrence.originatingActionOperationId
+    ]
   }
-  return occurrence._tag === "PlannedAttemptReplaced" ? [workflowOperationId(occurrence.successorPlan)] : []
+  if (occurrence._tag === "PlannedAttemptReplaced") return [workflowOperationId(occurrence.successorPlan)]
+  if (occurrence._tag === "IntegrationFinalityOccurred") {
+    const event = occurrence.event
+    if ("operationId" in event) return [event.operationId]
+    return []
+  }
+  return []
 }
 
 const taskIdsOfObservation = (observation: TaskTrackerFactsObservation): ReadonlyArray<TaskId> => {
@@ -498,8 +721,68 @@ const taskIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray
     taskIdsOfDirectPlannedAttemptOccurrence(occurrence),
     taskIdsOfSubjectPlannedAttemptOccurrence(occurrence),
     taskIdsOfWorktreeObservation(occurrence),
-    taskIdsOfControlOccurrence(occurrence)
+    taskIdsOfControlOccurrence(occurrence),
+    taskIdsOfHistoricalOccurrence(occurrence)
   ].find((taskIds): taskIds is ReadonlyArray<TaskId> => taskIds !== undefined) ?? []
+
+const taskIdsOfHistoricalOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
+  if (occurrence._tag === "TaskClaimAcquisitionInitiated" || occurrence._tag === "TaskClaimReleaseInitiated")
+    return [
+      occurrence.operation._tag === "AcquireTaskClaim"
+        ? occurrence.operation.acquisition.taskId
+        : occurrence.operation.release.claim.taskId
+    ]
+  if (occurrence._tag === "TaskClaimAcquired") return [occurrence.claim.taskId]
+  if (occurrence._tag === "TaskClaimReleased") return [occurrence.release.claim.taskId]
+  if (
+    occurrence._tag === "TaskAttemptPlanned" ||
+    occurrence._tag === "TaskWorktreeReady" ||
+    occurrence._tag === "AttemptStoppageIntended" ||
+    occurrence._tag === "AttemptImplementationAbandoned" ||
+    occurrence._tag === "StoppedAttemptClaimPreserved"
+  )
+    return [
+      occurrence._tag === "TaskWorktreeReady"
+        ? occurrence.operation.plannedAttempt.taskId
+        : occurrence._tag === "TaskAttemptPlanned"
+          ? occurrence.plannedAttempt.taskId
+          : occurrence.subject.plannedAttempt.taskId
+    ]
+  if (
+    occurrence._tag === "IntegratorSessionFixed" ||
+    occurrence._tag === "IntegratorSuccessorSessionFixed" ||
+    occurrence._tag === "IntegratorRunStarted" ||
+    occurrence._tag === "IntegratorRunResultRecorded" ||
+    occurrence._tag === "IntegratorCandidateQualificationInitiated" ||
+    occurrence._tag === "IntegratorCandidateQualificationObserved"
+  ) {
+    if (occurrence._tag === "IntegratorSuccessorSessionFixed") return [occurrence.successor.plannedAttempt.taskId]
+    if (occurrence._tag === "IntegratorSessionFixed") return [occurrence.correlation.plannedAttempt.taskId]
+    if (occurrence._tag === "IntegratorCandidateQualificationObserved") {
+      return [occurrence.originatingActionRun.session.plannedAttempt.taskId]
+    }
+    return [occurrence.run.session.plannedAttempt.taskId]
+  }
+  if (
+    occurrence._tag === "TargetPromotionRequested" ||
+    occurrence._tag === "TargetPromotionAttemptRequested" ||
+    occurrence._tag === "TargetPromotionSucceeded" ||
+    occurrence._tag === "TargetPromotionStale" ||
+    occurrence._tag === "TargetPromotionNonConvergent"
+  )
+    return [occurrence.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId]
+  if (occurrence._tag === "IntegrationQuarantined" || occurrence._tag === "IntegrationProviderRunActivityAbsent")
+    return [occurrence.correlation.plannedAttempt.taskId]
+  if (occurrence._tag === "IntegrationQuarantineDirectionApplied") return undefined
+  if (occurrence._tag === "IntegrationFinalityOccurred") {
+    const event = occurrence.event
+    if ("claim" in event) return [event.claim.plannedAttempt.taskId]
+    if ("request" in event && "claim" in event.request) return [event.request.claim.plannedAttempt.taskId]
+    if ("authorization" in event) return [event.authorization.claim.plannedAttempt.taskId]
+    return []
+  }
+  return undefined
+}
 
 const itemFromOccurrence = (runId: RunId, occurrence: WorkflowOccurrenceValue): TraceHistoryItem =>
   TraceHistoryItem.make({
@@ -716,6 +999,567 @@ const relationshipsAt = (
   workflowCausalEdges: workflowCausalEdgesOf(operationIndex)
 })
 
+const traceItemAt = (
+  items: ReadonlyArray<TraceHistoryItem>,
+  position: JournalPosition
+): TraceItemIdentity | undefined => items.find(({ identity }) => identity.position === position)?.identity
+
+const itemForOccurrence = (
+  items: ReadonlyArray<TraceHistoryItem>,
+  predicate: (occurrence: WorkflowOccurrenceValue) => boolean
+): TraceHistoryItem | undefined => items.find(({ occurrence }) => predicate(occurrence))
+
+const sameIntegratorRun = (left: IntegratorRunCorrelation, right: IntegratorRunCorrelation): boolean =>
+  Schema.toEquivalence(IntegratorRunCorrelation)(left, right)
+
+const samePromotion = targetPromotionCorrelationEquals
+
+const sameIntegrationTarget = (left: IntegrationTarget, right: IntegrationTarget): boolean =>
+  left.repository === right.repository && left.ref === right.ref
+
+const sameJson = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right)
+
+const traceHistoricalFactIssue = (
+  fact: TraceIntegrationFact,
+  items: ReadonlyArray<TraceHistoryItem>
+): string | undefined => {
+  const sourceItem = historyItemAt(items, fact.source)
+  if (sourceItem === undefined) return "Every integration fact source must resolve to a history item"
+  const source = sourceItem.occurrence
+  if (fact._tag === "AcceptedResult") {
+    return source._tag === "PlannedAttemptExecutorWorkReported" &&
+      source.report._tag === "Terminal" &&
+      source.report.result._tag === "Accepted" &&
+      (fact.plannedAttempt.attemptId !== source.report.correlation.attemptId ||
+        fact.plannedAttempt.runId !== source.report.correlation.runId)
+      ? "Accepted result fact must retain the source executor report's planned attempt"
+      : source._tag !== "PlannedAttemptExecutorWorkReported" ||
+          source.report._tag !== "Terminal" ||
+          source.report.result._tag !== "Accepted" ||
+          !acceptedResultEquivalence(fact.acceptedResult, source.report.result.acceptedResult)
+        ? "Accepted result fact must identify one exact terminal executor report"
+        : undefined
+  }
+  if (fact._tag === "Responsibility") {
+    if (
+      source._tag !== "IntegrationResponsibilityBegan" ||
+      !acceptedResultEquivalence(fact.acceptedResult, source.acceptedResult) ||
+      !plannedTaskAttemptEquivalence(fact.plannedAttempt, source.plannedAttempt) ||
+      !sameIntegrationTarget(fact.target, source.integrationTarget)
+    ) {
+      return "Integration responsibility fact must identify its exact source occurrence"
+    }
+    if (fact.sameTargetPredecessor === null) return undefined
+    const predecessor = historyItemAt(items, fact.sameTargetPredecessor)
+    return predecessor?.occurrence._tag === "IntegrationResponsibilityBegan" &&
+      predecessor.occurrence.recordedAt < source.recordedAt &&
+      sameIntegrationTarget(predecessor.occurrence.integrationTarget, source.integrationTarget)
+      ? undefined
+      : "Same-target responsibility order must point to one earlier responsibility for that target"
+  }
+  if (fact._tag === "SessionStarted") {
+    const responsibility = historyItemAt(items, fact.responsibility)
+    return source._tag === "IntegrationStarted" &&
+      source.responsibilityBeganAt === fact.responsibility.position &&
+      responsibility?.occurrence._tag === "IntegrationResponsibilityBegan" &&
+      responsibility.occurrence.recordedAt < source.recordedAt &&
+      sameIntegrationTarget(responsibility.occurrence.integrationTarget, source.integrationTarget)
+      ? undefined
+      : "Integration session start must point to its exact earlier responsibility occurrence"
+  }
+  if (fact._tag === "Session") {
+    return source._tag === "IntegratorSessionFixed" &&
+      Schema.toEquivalence(IntegratorSessionCorrelation)(fact.correlation, source.correlation)
+      ? undefined
+      : "Integrator session fact must identify its exact fixed-session occurrence"
+  }
+  if (fact._tag === "IntegratorResult") {
+    return source._tag === "IntegratorRunResultRecorded" &&
+      sameIntegratorRun(fact.run, source.run) &&
+      sameJson(fact.result, source.result)
+      ? undefined
+      : "Integrator result fact must identify its exact outer result occurrence"
+  }
+  if (fact._tag === "CandidateObserved") {
+    return source._tag === "IntegratorCandidateQualificationObserved" &&
+      source.candidateText === fact.candidateText &&
+      sameIntegratorRun(source.originatingActionRun, fact.run) &&
+      sameJson(source.observation, fact.observation)
+      ? undefined
+      : "Candidate observation fact must identify its exact Git observation occurrence"
+  }
+  if (fact._tag === "CandidateQualification") {
+    return source._tag === "IntegratorCandidateQualificationObserved" &&
+      source.observation._tag === "Commit" &&
+      source.candidateText === fact.candidateText &&
+      source.observation.commit === fact.candidateCommit &&
+      sameJson(source.observation.directParents, fact.directParents) &&
+      source.observation.directParents[0] === source.originatingActionRun.session.expectedTargetHead &&
+      source.observation.directParents[1] === source.originatingActionRun.session.acceptedResult.commit &&
+      sameIntegratorRun(source.originatingActionRun, fact.run)
+      ? undefined
+      : "Candidate qualification fact must preserve the exact ordered Git parents [H, C]"
+  }
+  if (fact._tag === "Promotion") {
+    if (source._tag === "TargetPromotionRequested" && fact.kind === "Requested") {
+      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
+        fact.basis._tag === "BeforeFirstAttempt" &&
+        fact.observation === null
+        ? undefined
+        : "Promotion request fact must identify its exact request occurrence"
+    }
+    if (source._tag === "TargetPromotionAttemptRequested" && fact.kind === "Attempt") {
+      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
+        fact.basis._tag === "AfterAttempt" &&
+        fact.basis.attemptOrdinal === source.attemptOrdinal &&
+        fact.observation === null
+        ? undefined
+        : "Promotion attempt fact must identify its exact numbered attempt occurrence"
+    }
+    if (source._tag === "TargetPromotionSucceeded" && fact.kind === "Succeeded") {
+      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
+        sameJson(source.basis, fact.basis) &&
+        sameJson(source.observation, fact.observation)
+        ? undefined
+        : "Promotion success fact must identify its exact Git success occurrence"
+    }
+    if (source._tag === "TargetPromotionStale" && fact.kind === "Stale") {
+      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
+        sameJson(source.basis, fact.basis) &&
+        sameJson(source.observation, fact.observation)
+        ? undefined
+        : "Promotion stale fact must identify its exact Git stale occurrence"
+    }
+    if (source._tag === "TargetPromotionNonConvergent" && fact.kind === "NonConvergent") {
+      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
+        sameJson(source.lastObservation, fact.observation) &&
+        fact.basis._tag === "AfterAttempt" &&
+        fact.basis.attemptOrdinal === source.attemptOrdinal
+        ? undefined
+        : "Promotion non-convergence fact must identify its exact terminal occurrence"
+    }
+    return "Promotion fact kind must identify the matching source occurrence"
+  }
+  if (fact._tag === "Quarantine") {
+    return source._tag === "IntegrationQuarantined" &&
+      Schema.toEquivalence(IntegratorSessionCorrelation)(fact.correlation, source.correlation) &&
+      sameJson(fact.basis, source.basis)
+      ? undefined
+      : "Quarantine fact must identify its exact preservation occurrence"
+  }
+  if (fact._tag === "ProviderActivityAbsent") {
+    return source._tag === "IntegrationProviderRunActivityAbsent" &&
+      sameIntegratorRun(fact.run, source.run) &&
+      Schema.toEquivalence(IntegratorSessionCorrelation)(fact.correlation, source.correlation)
+      ? undefined
+      : "Provider-activity fact must identify its exact observation occurrence"
+  }
+  if (fact._tag === "QuarantineDirection") {
+    return source._tag === "IntegrationQuarantineDirectionApplied" && sameJson(fact.fingerprint, source.fingerprint)
+      ? undefined
+      : "Quarantine direction fact must identify its exact operator occurrence"
+  }
+  return source._tag === "IntegrationFinalityOccurred" && sameJson(fact.event, source.event)
+    ? undefined
+    : "Finality fact must identify its exact stored finality occurrence"
+}
+
+const traceHistoricalFacetsAt = (items: ReadonlyArray<TraceHistoryItem>): TraceHistoricalFacets => {
+  const observationGaps: Array<TraceObservationGap> = []
+  const retainedResponsibilities: Array<TraceRetainedResponsibility> = []
+  const preservationDispositions: Array<TracePreservationDisposition> = []
+  const integrationFacts: Array<TraceIntegrationFact> = []
+  const hasObservationFor = (operationId: OperationId, tags: ReadonlyArray<string>): boolean =>
+    items.some(
+      ({ occurrence }) => tags.includes(occurrence._tag) && operationIdsOfOccurrence(occurrence).includes(operationId)
+    )
+  const taskIdsOfTrackerOperation = (
+    operation: Extract<WorkflowOccurrenceValue, { readonly _tag: "TaskTrackerReadInitiated" }>["operation"]
+  ): ReadonlyArray<TaskId> => {
+    if (operation._tag === "ReadTrackerGraph") return operation.readShape.explicitlyCoveredTaskIds
+    return operation._tag === "ReadCompletionTaskFacts" ? [operation.request.taskId] : [operation.taskId]
+  }
+
+  for (const item of items) {
+    const occurrence = item.occurrence
+    if (occurrence._tag === "TaskTrackerReadInitiated") {
+      if (
+        !hasObservationFor(workflowOperationId(occurrence.operation), [
+          "TaskTrackerFactsObserved",
+          "AttemptRestartAuthorityReadFailed"
+        ])
+      ) {
+        observationGaps.push(
+          TraceObservationGap.cases.TrackerObservation.make({
+            action: item.identity,
+            operationId: workflowOperationId(occurrence.operation),
+            required: "TaskTrackerFactsObserved",
+            taskIds: taskIdsOfTrackerOperation(occurrence.operation)
+          })
+        )
+      }
+    }
+    if (occurrence._tag === "GitReadInitiated") {
+      const operationId = workflowOperationId(occurrence.operation)
+      if (
+        !hasObservationFor(operationId, [
+          "PlannedAttemptWorktreeObserved",
+          "TargetLineageObserved",
+          "AttemptRestartAuthorityReadFailed"
+        ])
+      ) {
+        observationGaps.push(
+          TraceObservationGap.cases.GitObservation.make({
+            action: item.identity,
+            operationId,
+            required:
+              occurrence.operation._tag === "ReadTaskWorktree"
+                ? "PlannedAttemptWorktreeObserved"
+                : "TargetLineageObserved",
+            taskIds: [occurrence.operation.plannedAttempt.taskId]
+          })
+        )
+      }
+    }
+    if (occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+      const report = itemForOccurrence(
+        items,
+        (candidate) =>
+          candidate._tag === "PlannedAttemptExecutorWorkReported" &&
+          candidate.report.correlation.attemptId === occurrence.plannedAttempt.attemptId
+      )
+      if (report === undefined) {
+        observationGaps.push(
+          TraceObservationGap.cases.ExecutorReport.make({
+            action: item.identity,
+            attemptId: occurrence.plannedAttempt.attemptId
+          })
+        )
+        retainedResponsibilities.push(
+          TraceRetainedResponsibility.cases.ExecutorWork.make({
+            plannedAttempt: occurrence.plannedAttempt,
+            source: item.identity
+          })
+        )
+      }
+    }
+    if (occurrence._tag === "TaskClaimAcquisitionInitiated") {
+      const operationId = occurrence.operation.acquisition.operationId
+      if (!hasObservationFor(operationId, ["TaskClaimAcquired"])) {
+        observationGaps.push(
+          TraceObservationGap.cases.TrackerObservation.make({
+            action: item.identity,
+            operationId,
+            required: "TaskClaimAcquired",
+            taskIds: [occurrence.operation.acquisition.taskId]
+          })
+        )
+      }
+    }
+    if (occurrence._tag === "TaskClaimReleaseInitiated") {
+      const operationId = occurrence.operation.release.operationId
+      if (!hasObservationFor(operationId, ["TaskClaimReleased"])) {
+        observationGaps.push(
+          TraceObservationGap.cases.TrackerObservation.make({
+            action: item.identity,
+            operationId,
+            required: "TaskClaimReleased",
+            taskIds: [occurrence.operation.release.claim.taskId]
+          })
+        )
+      }
+    }
+    if (occurrence._tag === "TaskAttemptPlanned") {
+      retainedResponsibilities.push(
+        TraceRetainedResponsibility.cases.TaskAttempt.make({
+          plannedAttempt: occurrence.plannedAttempt,
+          source: item.identity
+        })
+      )
+    }
+    if (occurrence._tag === "TaskClaimAcquired") {
+      retainedResponsibilities.push(
+        TraceRetainedResponsibility.cases.TaskClaim.make({ claim: occurrence.claim, source: item.identity })
+      )
+    }
+    if (occurrence._tag === "TaskWorktreeReady") {
+      retainedResponsibilities.push(
+        TraceRetainedResponsibility.cases.Worktree.make({
+          plannedAttempt: occurrence.operation.plannedAttempt,
+          proof: occurrence.proof,
+          source: item.identity
+        })
+      )
+    }
+    if (occurrence._tag === "PlannedAttemptWorktreeObserved" && occurrence.observation._tag === "AttemptWorktreeLost") {
+      preservationDispositions.push(
+        TracePreservationDisposition.cases.WorktreeLost.make({
+          observation: occurrence.observation,
+          plannedAttempt: occurrence.observation.plannedAttempt,
+          source: item.identity
+        })
+      )
+    }
+    if (occurrence._tag === "AttemptRestartAuthorityReadFailed") {
+      preservationDispositions.push(
+        TracePreservationDisposition.cases.TaskAuthorityConflict.make({
+          failure: occurrence.failure,
+          source: item.identity,
+          subject: occurrence.subject
+        })
+      )
+    }
+    if (occurrence._tag === "AppliedAttemptChoice" && occurrence.choice === "RestartTaskImplementation") {
+      const replacement = itemForOccurrence(
+        items,
+        (candidate) =>
+          candidate._tag === "PlannedAttemptReplaced" && candidate.requestId.nonce === occurrence.requestId.nonce
+      )
+      if (replacement === undefined) {
+        preservationDispositions.push(
+          TracePreservationDisposition.cases.ReplacementPending.make({
+            choice: occurrence.subject,
+            source: item.identity
+          })
+        )
+      }
+    }
+    if (occurrence._tag === "IntegrationQuarantined") {
+      preservationDispositions.push(
+        TracePreservationDisposition.cases.IntegrationQuarantined.make({
+          basis: occurrence.basis,
+          correlation: occurrence.correlation,
+          source: item.identity
+        })
+      )
+    }
+    if (occurrence._tag === "TargetPromotionNonConvergent") {
+      preservationDispositions.push(
+        TracePreservationDisposition.cases.NonConvergentPromotion.make({
+          correlation: occurrence.correlation,
+          lastObservation: occurrence.lastObservation,
+          source: item.identity
+        })
+      )
+    }
+    if (
+      occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+      occurrence.report._tag === "Terminal" &&
+      occurrence.report.result._tag === "Accepted"
+    ) {
+      const responsibility = itemForOccurrence(
+        items,
+        (candidate) =>
+          candidate._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          candidate.plannedAttempt.attemptId === occurrence.report.correlation.attemptId
+      )
+      if (responsibility?.occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+        integrationFacts.push(
+          TraceIntegrationFact.cases.AcceptedResult.make({
+            acceptedResult: occurrence.report.result.acceptedResult,
+            plannedAttempt: responsibility.occurrence.plannedAttempt,
+            source: item.identity
+          })
+        )
+      }
+    }
+    if (occurrence._tag === "IntegrationResponsibilityBegan") {
+      const sameTargetPredecessor = items
+        .filter(
+          ({ occurrence: candidate }) =>
+            candidate._tag === "IntegrationResponsibilityBegan" &&
+            candidate.recordedAt < occurrence.recordedAt &&
+            sameIntegrationTarget(candidate.integrationTarget, occurrence.integrationTarget)
+        )
+        .at(latestSameTargetResponsibilityIndex)
+      integrationFacts.push(
+        TraceIntegrationFact.cases.Responsibility.make({
+          acceptedResult: occurrence.acceptedResult,
+          plannedAttempt: occurrence.plannedAttempt,
+          sameTargetPredecessor: sameTargetPredecessor?.identity ?? null,
+          source: item.identity,
+          target: occurrence.integrationTarget
+        })
+      )
+    }
+    if (occurrence._tag === "IntegrationStarted") {
+      const responsibility = traceItemAt(items, occurrence.responsibilityBeganAt)
+      if (responsibility !== undefined)
+        integrationFacts.push(
+          TraceIntegrationFact.cases.SessionStarted.make({
+            responsibility,
+            source: item.identity,
+            target: occurrence.integrationTarget
+          })
+        )
+    }
+    if (occurrence._tag === "IntegratorSessionFixed") {
+      integrationFacts.push(
+        TraceIntegrationFact.cases.Session.make({ correlation: occurrence.correlation, source: item.identity })
+      )
+    }
+    if (occurrence._tag === "IntegratorRunStarted") {
+      const result = itemForOccurrence(
+        items,
+        (candidate) =>
+          candidate._tag === "IntegratorRunResultRecorded" && sameIntegratorRun(candidate.run, occurrence.run)
+      )
+      if (result === undefined)
+        observationGaps.push(
+          TraceObservationGap.cases.IntegratorResult.make({ action: item.identity, run: occurrence.run })
+        )
+    }
+    if (occurrence._tag === "IntegratorRunResultRecorded") {
+      integrationFacts.push(
+        TraceIntegrationFact.cases.IntegratorResult.make({
+          result: occurrence.result,
+          run: occurrence.run,
+          source: item.identity
+        })
+      )
+    }
+    if (occurrence._tag === "IntegratorCandidateQualificationInitiated") {
+      const observed = itemForOccurrence(
+        items,
+        (candidate) =>
+          candidate._tag === "IntegratorCandidateQualificationObserved" &&
+          candidate.candidateText === occurrence.candidateText &&
+          sameIntegratorRun(candidate.originatingActionRun, occurrence.run)
+      )
+      if (observed === undefined)
+        observationGaps.push(
+          TraceObservationGap.cases.CandidateQualification.make({
+            action: item.identity,
+            candidateText: occurrence.candidateText,
+            run: occurrence.run
+          })
+        )
+    }
+    if (occurrence._tag === "IntegratorCandidateQualificationObserved") {
+      integrationFacts.push(
+        TraceIntegrationFact.cases.CandidateObserved.make({
+          candidateText: occurrence.candidateText,
+          observation: occurrence.observation,
+          run: occurrence.originatingActionRun,
+          source: item.identity
+        })
+      )
+      if (
+        occurrence.observation._tag === "Commit" &&
+        occurrence.observation.directParents.length === exactCandidateParentCount &&
+        occurrence.observation.directParents[0] === occurrence.originatingActionRun.session.expectedTargetHead &&
+        occurrence.observation.directParents[1] === occurrence.originatingActionRun.session.acceptedResult.commit
+      ) {
+        const first = occurrence.observation.directParents[0]
+        const second = occurrence.observation.directParents[1]
+        integrationFacts.push(
+          TraceIntegrationFact.cases.CandidateQualification.make({
+            candidateCommit: occurrence.observation.commit,
+            candidateText: occurrence.candidateText,
+            directParents: [first, second],
+            run: occurrence.originatingActionRun,
+            source: item.identity
+          })
+        )
+      }
+    }
+    if (occurrence._tag === "TargetPromotionRequested")
+      integrationFacts.push(
+        TraceIntegrationFact.cases.Promotion.make({
+          basis: { _tag: "BeforeFirstAttempt" },
+          correlation: occurrence.correlation,
+          kind: "Requested",
+          observation: null,
+          source: item.identity
+        })
+      )
+    if (occurrence._tag === "TargetPromotionAttemptRequested") {
+      const terminal = items.find(
+        ({ occurrence: candidate }) =>
+          (candidate._tag === "TargetPromotionSucceeded" ||
+            candidate._tag === "TargetPromotionStale" ||
+            candidate._tag === "TargetPromotionNonConvergent") &&
+          samePromotion(candidate.correlation, occurrence.correlation)
+      )
+      if (terminal === undefined)
+        observationGaps.push(
+          TraceObservationGap.cases.PromotionResult.make({
+            action: item.identity,
+            attemptOrdinal: occurrence.attemptOrdinal,
+            correlation: occurrence.correlation
+          })
+        )
+      integrationFacts.push(
+        TraceIntegrationFact.cases.Promotion.make({
+          basis: { _tag: "AfterAttempt", attemptOrdinal: occurrence.attemptOrdinal },
+          correlation: occurrence.correlation,
+          kind: "Attempt",
+          observation: null,
+          source: item.identity
+        })
+      )
+    }
+    if (
+      occurrence._tag === "TargetPromotionSucceeded" ||
+      occurrence._tag === "TargetPromotionStale" ||
+      occurrence._tag === "TargetPromotionNonConvergent"
+    ) {
+      const kind =
+        occurrence._tag === "TargetPromotionSucceeded"
+          ? "Succeeded"
+          : occurrence._tag === "TargetPromotionStale"
+            ? "Stale"
+            : "NonConvergent"
+      const basis =
+        occurrence._tag === "TargetPromotionNonConvergent"
+          ? TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal: occurrence.attemptOrdinal })
+          : occurrence.basis
+      const observation =
+        occurrence._tag === "TargetPromotionNonConvergent" ? occurrence.lastObservation : occurrence.observation
+      integrationFacts.push(
+        TraceIntegrationFact.cases.Promotion.make({
+          basis,
+          correlation: occurrence.correlation,
+          kind,
+          observation,
+          source: item.identity
+        })
+      )
+    }
+    if (occurrence._tag === "IntegrationQuarantined")
+      integrationFacts.push(
+        TraceIntegrationFact.cases.Quarantine.make({
+          basis: occurrence.basis,
+          correlation: occurrence.correlation,
+          source: item.identity
+        })
+      )
+    if (occurrence._tag === "IntegrationProviderRunActivityAbsent")
+      integrationFacts.push(
+        TraceIntegrationFact.cases.ProviderActivityAbsent.make({
+          correlation: occurrence.correlation,
+          run: occurrence.run,
+          source: item.identity
+        })
+      )
+    if (occurrence._tag === "IntegrationQuarantineDirectionApplied")
+      integrationFacts.push(
+        TraceIntegrationFact.cases.QuarantineDirection.make({
+          fingerprint: occurrence.fingerprint,
+          source: item.identity
+        })
+      )
+    if (occurrence._tag === "IntegrationFinalityOccurred")
+      integrationFacts.push(
+        TraceIntegrationFact.cases.Completion.make({ event: occurrence.event, source: item.identity })
+      )
+  }
+  return TraceHistoricalFacets.make({
+    integration: { facts: integrationFacts },
+    recovery: { observationGaps, preservationDispositions, retainedResponsibilities }
+  })
+}
+
 const cursorPrefixOf = (
   cursor: TraceCursor,
   records: ReadonlyArray<JournalRecord>
@@ -760,6 +1604,7 @@ const atCursorFromRecords = Effect.fn("TraceReader.atCursorFromRecords")(functio
   const target = beginning.target
   const graph = taskGraphAt(prefix, target)
   const relationships = relationshipsAt(prefix, items, graph, operationIndex)
+  const facets = traceHistoricalFacetsAt(items)
   const taskIds = graph?.snapshot.tasks.flatMap(({ id }) => [id]) ?? []
   return TraceAtCursor.make({
     cursor,
@@ -770,6 +1615,7 @@ const atCursorFromRecords = Effect.fn("TraceReader.atCursorFromRecords")(functio
     graph,
     items,
     relationships,
+    facets,
     version: traceReaderSchemaVersion
   })
 })

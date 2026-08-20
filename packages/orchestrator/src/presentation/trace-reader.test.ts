@@ -21,6 +21,13 @@ import { GitCommand } from "../authorities/git/command.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { TrackerMutation } from "../authorities/task-tracker/claim-mutation.js"
+import { IntegrationTargetSelection } from "../workflow/protocols/integration-admission/protocol.js"
+import { IntegrationQuarantineDirectionControl } from "../workflow/protocols/integration-quarantine/control.js"
+import { CompletionClaimBoundary } from "../workflow/protocols/integration-finality/completion-claim.js"
+import { CompletionTaskBoundary } from "../workflow/protocols/integration-finality/events.js"
+import { EvidenceStore } from "../workflow/protocols/evidence-store.js"
+import { Integrator, IntegratorGit } from "../workflow/protocols/integrator/protocol.js"
+import { TargetPromotionGit } from "../workflow/protocols/target-promotion/events.js"
 import { TrackerAdapterReadFailureReason } from "../authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../authorities/task-tracker/graph.js"
 import { type TrackerTarget } from "../authorities/task-tracker/target.js"
@@ -58,7 +65,6 @@ import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task
 import {
   TraceCausalPredecessorMissing,
   TraceCausalPredecessorContradiction,
-  TraceCausalPredecessorNotProjected,
   TraceAtCursor,
   TraceCursor,
   TraceCursorNotCommitted,
@@ -206,6 +212,14 @@ it.effect("keeps the composed trace reader context read-only", () =>
     expect(Context.getOption(context, RunLifecycleJournal)).toSatisfy(Option.isNone)
     expect(Context.getOption(context, TrackerMutation)).toSatisfy(Option.isNone)
     expect(Context.getOption(context, GitCommand)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, Integrator)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, IntegratorGit)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, TargetPromotionGit)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, CompletionTaskBoundary)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, CompletionClaimBoundary)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, EvidenceStore)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, IntegrationTargetSelection)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, IntegrationQuarantineDirectionControl)).toSatisfy(Option.isNone)
   })
 )
 
@@ -257,19 +271,13 @@ it.effect(
       expect(afterIncomplete.graph?.observation.recordedAt).toEqual(JournalPosition.make(7))
       expect(afterIncomplete.items.map(({ identity }) => Number(identity.position))).toEqual([2, 3, 4, 5, 6, 7, 8, 9])
 
-      const notProjected = yield* Effect.flip(
-        reader.causalPredecessor(
-          TraceCursor.make({ position: JournalPosition.make(12), runId }),
-          successorOfUnprojected,
-          unprojectedOperation.acquisition.operationId
-        )
+      const historicalPredecessor = yield* reader.causalPredecessor(
+        TraceCursor.make({ position: JournalPosition.make(12), runId }),
+        successorOfUnprojected,
+        unprojectedOperation.acquisition.operationId
       )
-      expect(notProjected).toBeInstanceOf(TraceCausalPredecessorNotProjected)
-      expect(notProjected).toMatchObject({
-        predecessorOperationId: unprojectedOperation.acquisition.operationId,
-        successorOperationId: successorOfUnprojected,
-        runId
-      })
+      expect(historicalPredecessor.occurrence._tag).toBe("TaskClaimAcquisitionInitiated")
+      expect(historicalPredecessor.identity).toEqual({ position: JournalPosition.make(10), runId })
 
       const predecessor = yield* reader.causalPredecessor(
         TraceCursor.make({ position: JournalPosition.make(7), runId }),
@@ -703,23 +711,28 @@ it.effect("replays a committed occurrence at its original Run and JournalPositio
           yield* appendGraphObservation(journal, OperationId.make("memory-replay"))
           const reader = yield* TraceReader
           const first = yield* reader.read(runId)
+          const cursorView = yield* reader.readAt(TraceCursor.make({ position: JournalPosition.make(3), runId }))
           const replayed = yield* reader.read(runId)
-          return { first, replayed }
+          return { cursorView, first, replayed }
         }).pipe(Effect.provide(readerLayer))
       )
       expect(inMemoryReplay.replayed).toEqual(inMemoryReplay.first)
       expect(inMemoryReplay.replayed.items.map(({ identity }) => identity)).toEqual(
         inMemoryReplay.first.items.map(({ identity }) => identity)
       )
+      expect(inMemoryReplay.cursorView.facets.integration.facts).toEqual([])
+      expect(inMemoryReplay.cursorView.facets.recovery.observationGaps).toEqual([])
 
       const firstRead = yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
           yield* journal.beginRun(runId, target, initialPolicy)
           yield* appendGraphObservation(journal, OperationId.make("sqlite-replay"))
-          const history = yield* (yield* TraceReader).read(runId)
+          const reader = yield* TraceReader
+          const history = yield* reader.read(runId)
+          const cursorView = yield* reader.readAt(TraceCursor.make({ position: JournalPosition.make(3), runId }))
           const records = yield* journal.read(runId)
-          return { history, records }
+          return { cursorView, history, records }
         }).pipe(Effect.provide(sqliteReaderLayer(filename)))
       )
       const sink = yield* Ref.make(new Map<string, (typeof firstRead.history.items)[number]>())
@@ -739,13 +752,16 @@ it.effect("replays a committed occurrence at its original Run and JournalPositio
       const restartedRead = yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          const history = yield* (yield* TraceReader).read(runId)
+          const reader = yield* TraceReader
+          const history = yield* reader.read(runId)
+          const cursorView = yield* reader.readAt(TraceCursor.make({ position: JournalPosition.make(3), runId }))
           const records = yield* journal.read(runId)
-          return { history, records }
+          return { cursorView, history, records }
         }).pipe(Effect.provide(sqliteReaderLayer(filename)))
       )
 
       expect(restartedRead.history).toEqual(firstRead.history)
+      expect(restartedRead.cursorView).toEqual(firstRead.cursorView)
       const redelivered = restartedRead.history.items.find(
         ({ identity }) =>
           identity.runId === firstItem.identity.runId && identity.position === firstItem.identity.position
