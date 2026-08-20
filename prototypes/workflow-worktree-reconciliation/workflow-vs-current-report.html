@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Effect Workflow vs Dalph recovery — issue #234 decision report</title>
+  <style>
+    :root {
+      --paper: #f6f7f4;
+      --surface: #ffffff;
+      --surface-2: #eef1ed;
+      --ink: #18201d;
+      --muted: #58635e;
+      --line: #cbd2cd;
+      --line-strong: #8e9993;
+      --accent: #145f53;
+      --accent-soft: #dcebe6;
+      --danger: #8b2d2d;
+      --danger-soft: #f5dddd;
+      --warn: #76520a;
+      --warn-soft: #f5e9c8;
+      --good: #235f38;
+      --good-soft: #dcecdf;
+      --info: #294f7c;
+      --info-soft: #dde8f4;
+      --shadow: 0 8px 30px rgba(20, 30, 26, .08);
+      --max: 1180px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 5.4rem; }
+    body { margin: 0; color: var(--ink); background: var(--paper); line-height: 1.55; }
+    a { color: var(--accent); text-underline-offset: .18em; }
+    a:hover { text-decoration-thickness: 2px; }
+    :focus-visible { outline: 3px solid #d28a12; outline-offset: 3px; border-radius: 3px; }
+    .skip { position: fixed; z-index: 100; top: .6rem; left: .6rem; padding: .7rem 1rem; background: var(--ink); color: var(--surface); transform: translateY(-180%); }
+    .skip:focus { transform: none; }
+    .topbar { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 92%, transparent); backdrop-filter: blur(14px); }
+    .topbar-inner { max-width: var(--max); margin: auto; display: flex; align-items: center; gap: 1rem; min-height: 4.3rem; padding: .65rem 1.25rem; }
+    .brand { flex: 0 0 auto; font-weight: 780; letter-spacing: -.02em; }
+    .brand small { display: block; font-size: .68rem; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+    nav { display: flex; gap: .2rem; overflow-x: auto; scrollbar-width: thin; margin-left: auto; }
+    nav a { flex: 0 0 auto; padding: .45rem .65rem; color: var(--muted); text-decoration: none; font-size: .83rem; border-radius: .35rem; }
+    nav a:hover, nav a[aria-current="location"] { color: var(--ink); background: var(--surface-2); }
+    main { max-width: var(--max); margin: auto; padding: 1.5rem 1.25rem 5rem; }
+    section { margin-top: 4.5rem; }
+    .hero { margin-top: 1rem; padding: clamp(1.5rem, 4vw, 3.5rem); border: 1px solid var(--line-strong); border-top: 8px solid var(--danger); background: var(--surface); box-shadow: var(--shadow); }
+    .eyebrow { margin: 0 0 .45rem; color: var(--muted); font-size: .76rem; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+    h1, h2, h3 { line-height: 1.15; letter-spacing: -.025em; }
+    h1 { max-width: 900px; margin: 0; font-size: clamp(2.05rem, 6vw, 4.2rem); }
+    h2 { margin: 0 0 .7rem; font-size: clamp(1.6rem, 3.2vw, 2.45rem); }
+    h3 { font-size: 1.1rem; }
+    .verdict { display: inline-flex; align-items: center; gap: .45rem; margin: 1.5rem 0 .8rem; padding: .42rem .7rem; border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line)); background: var(--danger-soft); color: var(--danger); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .lede { max-width: 850px; margin: .4rem 0; font-size: clamp(1.08rem, 2vw, 1.35rem); }
+    .hero-grid, .grid-2, .grid-3 { display: grid; gap: 1rem; }
+    .hero-grid { grid-template-columns: repeat(3, 1fr); margin-top: 2rem; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { border: 1px solid var(--line); background: var(--surface); padding: 1.15rem; }
+    .card > :first-child { margin-top: 0; }
+    .card > :last-child { margin-bottom: 0; }
+    .hero-card { border-left: 4px solid var(--line-strong); }
+    .hero-card.good { border-left-color: var(--good); }
+    .hero-card.bad { border-left-color: var(--danger); }
+    .hero-card.next { border-left-color: var(--info); }
+    .kicker { display: block; color: var(--muted); font-size: .72rem; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; }
+    .section-head { max-width: 780px; margin-bottom: 1.5rem; }
+    .section-head p { color: var(--muted); font-size: 1.03rem; }
+    .callout { padding: 1rem 1.15rem; border-left: 5px solid var(--info); background: var(--info-soft); }
+    .callout.warning { border-left-color: var(--warn); background: var(--warn-soft); }
+    .callout.danger { border-left-color: var(--danger); background: var(--danger-soft); }
+    .callout strong { display: block; margin-bottom: .2rem; }
+    .evidence { display: inline-flex; align-items: center; white-space: nowrap; margin: .1rem .18rem; padding: .14rem .38rem; border: 1px solid var(--line); border-radius: 999px; font-size: .68rem; font-weight: 720; letter-spacing: .025em; vertical-align: .05em; }
+    .e-test { color: var(--good); background: var(--good-soft); }
+    .e-source { color: var(--info); background: var(--info-soft); }
+    .e-infer { color: var(--warn); background: var(--warn-soft); }
+    .e-judge { color: var(--danger); background: var(--danger-soft); }
+    .reading-path { counter-reset: path; }
+    .reading-path .card { position: relative; padding-left: 3.3rem; }
+    .reading-path .card::before { counter-increment: path; content: counter(path); position: absolute; left: 1rem; top: 1rem; width: 1.65rem; height: 1.65rem; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--accent); font-weight: 800; }
+    .filterbar { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; padding: .75rem; border: 1px solid var(--line); background: var(--surface-2); }
+    button.filter { appearance: none; padding: .5rem .75rem; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--ink); background: var(--surface); font: inherit; font-size: .84rem; cursor: pointer; }
+    button.filter[aria-pressed="true"] { border-color: var(--accent); color: white; background: var(--accent); }
+    .scenario-list { display: grid; gap: 1rem; }
+    .scenario { border: 1px solid var(--line); background: var(--surface); }
+    .scenario[hidden] { display: none; }
+    .scenario-head { display: grid; grid-template-columns: auto 1fr auto; gap: .9rem; align-items: start; padding: 1rem 1.15rem; border-bottom: 1px solid var(--line); }
+    .scenario-no { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; background: var(--ink); color: var(--surface); font-weight: 800; }
+    .scenario h3 { margin: .1rem 0; }
+    .scenario-body { padding: 1.1rem; }
+    .timeline { list-style: none; margin: .5rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(6, 1fr); }
+    .timeline li { position: relative; padding: 1.65rem .5rem .35rem; min-width: 0; font-size: .76rem; text-align: center; overflow-wrap: anywhere; }
+    .timeline li::before { content: ""; position: absolute; top: .64rem; left: 50%; width: .7rem; height: .7rem; border-radius: 50%; transform: translateX(-50%); background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .timeline li::after { content: ""; position: absolute; top: .95rem; left: calc(50% + .35rem); right: calc(-50% + .35rem); height: 2px; background: var(--line-strong); }
+    .timeline li:last-child::after { display: none; }
+    .timeline .crash::before { border-radius: 2px; background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); transform: translateX(-50%) rotate(45deg); }
+    .timeline .gate::before { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+    .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin-top: 1rem; border: 1px solid var(--line); background: var(--line); }
+    .compare > div { padding: .9rem; background: var(--surface); }
+    .compare h4 { margin: 0 0 .35rem; }
+    table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); background: var(--surface); font-size: .9rem; }
+    th, td { padding: .75rem .8rem; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--surface-2); font-size: .76rem; letter-spacing: .035em; text-transform: uppercase; }
+    tbody tr:hover { background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface)); }
+    .table-wrap { position: relative; overflow-x: auto; scrollbar-gutter: stable; }
+    .table-wrap:focus-visible { outline: 3px solid #d28a12; outline-offset: 3px; }
+    .scroll-cue { display: none; margin: 0 0 .35rem; color: var(--muted); font-size: .75rem; }
+    .owner-map td:nth-child(2), .owner-map td:nth-child(3) { min-width: 220px; }
+    .yes, .partial, .no, .neutral { display: inline-block; padding: .16rem .42rem; border-radius: .25rem; font-size: .72rem; font-weight: 800; text-transform: uppercase; }
+    .yes { color: var(--good); background: var(--good-soft); }
+    .partial { color: var(--warn); background: var(--warn-soft); }
+    .no { color: var(--danger); background: var(--danger-soft); }
+    .neutral { color: var(--info); background: var(--info-soft); }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: .75rem; align-items: stretch; margin: 1rem 0; padding: 0; list-style: none; }
+    .flow-step { position: relative; padding: .85rem; border: 1px solid var(--line-strong); background: var(--surface); min-height: 7.2rem; }
+    .flow-step:not(:last-child)::after { content: "→"; position: absolute; z-index: 2; right: -.72rem; top: 43%; width: 1.4rem; height: 1.4rem; display: grid; place-items: center; border-radius: 50%; color: var(--accent); background: var(--paper); font-weight: 900; }
+    .flow-step strong { display: block; margin-bottom: .3rem; }
+    .flow-step small { color: var(--muted); }
+    .delta-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .8rem; }
+    .delta { padding: 1rem; border-top: 4px solid var(--line-strong); background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+    .delta.removed { border-top-color: var(--good); }
+    .delta.retained { border-top-color: var(--info); }
+    .delta.added { border-top-color: var(--warn); }
+    .delta.duplicated { border-top-color: var(--danger); }
+    .delta ul { padding-left: 1.1rem; font-size: .88rem; }
+    .score-table td:last-child { width: 12rem; }
+    details { border: 1px solid var(--line); background: var(--surface); }
+    details + details { margin-top: .65rem; }
+    summary { cursor: pointer; padding: .85rem 1rem; font-weight: 720; }
+    details > div { padding: 0 1rem 1rem; }
+    code { padding: .08rem .25rem; background: var(--surface-2); border-radius: .18rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; overflow-wrap: anywhere; }
+    .refs { columns: 2; column-gap: 2rem; padding-left: 1.4rem; }
+    .refs li { break-inside: avoid; margin-bottom: .65rem; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+    .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+    footer { max-width: var(--max); margin: 0 auto; padding: 2rem 1.25rem 4rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .84rem; }
+    .print-only { display: none; }
+    @media (max-width: 900px) {
+      .hero-grid, .grid-3, .delta-grid { grid-template-columns: 1fr 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .flow-step { min-height: 0; }
+      .flow-step:not(:last-child)::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -.75rem; }
+      .timeline { grid-template-columns: 1fr; margin-left: .5rem; }
+      .timeline li { min-height: 3.4rem; padding: .5rem .5rem .5rem 2rem; text-align: left; }
+      .timeline li::before { top: .85rem; left: .45rem; }
+      .timeline li::after { top: 1.2rem; left: .45rem; right: auto; width: 2px; height: calc(100% + .15rem); }
+    }
+    @media (max-width: 650px) {
+      .topbar-inner { align-items: flex-start; flex-direction: column; gap: .35rem; }
+      nav { width: 100%; margin-left: 0; }
+      main { padding-inline: .8rem; }
+      .hero { padding: 1.25rem; }
+      .hero-grid, .grid-2, .grid-3, .delta-grid, .compare { grid-template-columns: 1fr; }
+      .scenario-head { grid-template-columns: auto 1fr; }
+      .scenario-head .evidence { grid-column: 2; justify-self: start; }
+      .refs { columns: 1; }
+      .scroll-cue { display: block; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+    @media print {
+      :root { --paper: white; --surface: white; --surface-2: #f0f0f0; --ink: black; --muted: #333; --line: #aaa; }
+      body { font-size: 10pt; }
+      .topbar, .filterbar, .skip { display: none !important; }
+      main { max-width: none; padding: 0; }
+      section { margin-top: 2rem; break-before: auto; }
+      .hero { box-shadow: none; }
+      .card, .scenario, .delta, details { break-inside: avoid; box-shadow: none; }
+      .scenario[hidden], [data-scenario][hidden] { display: block !important; }
+      details:not([open]) > *:not(summary) { display: block; }
+      .table-wrap { overflow: visible !important; max-width: none !important; }
+      table { width: 100% !important; min-width: 0 !important; table-layout: fixed; font-size: 7.6pt; break-inside: auto; }
+      thead { display: table-header-group; }
+      tr { break-inside: avoid; break-after: auto; }
+      th, td { min-width: 0 !important; width: auto !important; padding: .35rem .4rem; overflow-wrap: anywhere; word-break: normal; }
+      .owner-map td:nth-child(2), .owner-map td:nth-child(3), .score-table td:last-child { min-width: 0 !important; width: auto !important; }
+      caption { font-size: 8.5pt; text-align: left; margin-bottom: .2rem; }
+      a { color: black; text-decoration: none; }
+      a[href]::after { content: " [" attr(href) "]"; font-size: .72em; color: #444; overflow-wrap: anywhere; }
+      .print-only { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to report</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">Dalph / #234 <small>decision evidence</small></div>
+      <nav aria-label="Report sections">
+        <a href="#decision">Decision</a><a href="#read">How to read</a><a href="#scenarios">Scenarios</a><a href="#authority">Ownership</a><a href="#comparison">Comparison</a><a href="#deletion">Deletion test</a><a href="#evidence">Evidence</a><a href="#appendix">Appendix</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section class="hero" id="decision" aria-labelledby="report-title">
+      <p class="eyebrow">Effect Workflow vs current Dalph worktree recovery · disposable experiment</p>
+      <h1 id="report-title">Workflow replays a result.<br>Dalph still owns recovery.</h1>
+      <div class="verdict" aria-label="Decision: no-go">● No-go</div>
+      <p class="lede"><strong>Do not adopt Effect Workflow for worktree reconciliation, and stop further Workflow evaluation.</strong> The prototype preserved the required recovery behavior, but it did not make Dalph’s existing restart procedure deletable. It added a second durable store and more identity, schema, fault, inventory, and test machinery around responsibilities that remain necessary.</p>
+      <p><span class="evidence e-test">Observed test</span><span class="evidence e-source">Source inspected</span><span class="evidence e-judge">Decision judgment</span></p>
+
+      <div class="hero-grid" aria-label="Decision summary">
+        <article class="card hero-card good">
+          <span class="kicker">Workflow helped</span>
+          <h3>Stored Activity result replay</h3>
+          <p>After the result was durably stored, restart returned it without another controlled Git call. That is real leverage, demonstrated under <code>SIGKILL</code>.</p>
+        </article>
+        <article class="card hero-card bad">
+          <span class="kicker">Workflow did not replace</span>
+          <h3>Authority and restart procedure</h3>
+          <p>Git still resolves ambiguous creation and supplies current truth. The Journal still accepts Run chronology. Outer Dalph code still rereads, publishes, folds, and gates the next decision.</p>
+        </article>
+        <article class="card hero-card next">
+          <span class="kicker">Action</span>
+          <h3>Retain the current design</h3>
+          <p>Keep <code>recoverTaskWorktreeOperation</code>, the controlled read/create/reread protocol, Journal intent/outcome publication, and process-local runtime. Do not prototype promotion or integration as a successor.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="read" aria-labelledby="read-title">
+      <div class="section-head">
+        <p class="eyebrow">How to read this report</p>
+        <h2 id="read-title">Three depths, one conclusion</h2>
+        <p>The conclusion is not hidden behind interaction. Filters narrow evidence; they never change the verdict.</p>
+      </div>
+      <div class="grid-3 reading-path">
+        <article class="card"><h3>60 seconds</h3><p>Read the decision above, then the <a href="#scorecard">decision scorecard</a>. It answers whether Workflow crossed the deletion bar.</p></article>
+        <article class="card"><h3>5 minutes</h3><p>Read the <a href="#scenarios">three crash chronologies</a>, <a href="#authority">ownership map</a>, and <a href="#deletion">deletion ledger</a>.</p></article>
+        <article class="card"><h3>Deep evidence</h3><p>Use the source-linked <a href="#evidence">test matrix</a>, durable inventory, limitations, glossary, and appendix.</p></article>
+      </div>
+      <div class="callout" style="margin-top:1rem">
+        <strong>Evidence labels</strong>
+        <span class="evidence e-test">Observed test</span> happened in the controlled executable experiment.
+        <span class="evidence e-source">Source inspected</span> is directly visible in repository code or documentation.
+        <span class="evidence e-infer">Architectural inference</span> follows from combining those sources.
+        <span class="evidence e-judge">Decision judgment</span> applies issue #234’s accepted go/no-go rule.
+      </div>
+    </section>
+
+    <section id="scenarios" aria-labelledby="scenario-title">
+      <div class="section-head">
+        <p class="eyebrow">Concrete chronology before terminology</p>
+        <h2 id="scenario-title">What happened at each crash boundary</h2>
+        <p>No person or live provider acted. A parent harness killed a real Node child; a controlled Git adapter represented outside facts. The same Run, Attempt, operation, Base SHA, branch, locator, Workflow execution, and Activity identity crossed restart.</p>
+      </div>
+      <div class="filterbar" role="group" aria-label="Filter scenario cards">
+        <button class="filter" type="button" data-filter="all" aria-pressed="true" aria-controls="scenario-list">All scenarios</button>
+        <button class="filter" type="button" data-filter="unstored" aria-pressed="false" aria-controls="scenario-list">Unstored result</button>
+        <button class="filter" type="button" data-filter="stored" aria-pressed="false" aria-controls="scenario-list">Stored result</button>
+        <button class="filter" type="button" data-filter="changed" aria-pressed="false" aria-controls="scenario-list">Facts changed</button>
+        <button class="filter" type="button" data-filter="negative" aria-pressed="false" aria-controls="scenario-list">Controls</button>
+      </div>
+      <p id="scenario-status" class="sr-only" role="status" aria-live="polite">All four scenario groups shown.</p>
+
+      <div class="scenario-list" id="scenario-list" aria-describedby="scenario-status">
+        <article class="scenario" data-scenario="unstored">
+          <header class="scenario-head"><span class="scenario-no" aria-hidden="true">1</span><div><h3>Creation applied; Activity result was not stored</h3><p class="eyebrow">Ambiguous external effect</p></div><span class="evidence e-test">Observed test</span></header>
+          <div class="scenario-body">
+            <ol class="timeline" aria-label="Scenario 1 chronology">
+              <li>Journal already has exact intent</li><li>Git read: absent</li><li>Create applied once</li><li class="crash">SIGKILL before result storage</li><li>Restart rereads Git: ready</li><li class="gate">Journal records one ready outcome</li>
+            </ol>
+            <div class="compare">
+              <div><h4>Current Dalph responsibility</h4><p>Read the retained intent, invoke the existing reconciliation protocol, and let Git settle ambiguity by rereading before another create.</p></div>
+              <div><h4>Workflow candidate contribution</h4><p>The Activity restarted because no result was stored. It still had to call the same Git reconciliation protocol. Workflow alone did not prevent duplication.</p></div>
+            </div>
+            <p><strong>Visible evidence:</strong> one create, three reads, one intent, one ready outcome, no executor contact, no physical worktree. The blind-retry control created twice. <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test, lines 25–94</a>.</p>
+          </div>
+        </article>
+
+        <article class="scenario" data-scenario="stored">
+          <header class="scenario-head"><span class="scenario-no" aria-hidden="true">2</span><div><h3>Activity result stored; Journal outcome not published</h3><p class="eyebrow">Durable replay leverage</p></div><span class="evidence e-test">Observed test</span></header>
+          <div class="scenario-body">
+            <ol class="timeline" aria-label="Scenario 2 chronology">
+              <li>Git read: absent</li><li>Create then reread: ready</li><li>Workflow stores Activity result</li><li class="crash">SIGKILL before Journal append</li><li>Restart replays; no Git call</li><li class="gate">Journal append removes proposal</li>
+            </ol>
+            <div class="compare">
+              <div><h4>Current Dalph responsibility</h4><p>Recover the acknowledged intent, execute the named protocol, and append the outcome through the ordinary Journal path. Idempotent Journal keys prevent duplicate accepted outcomes.</p></div>
+              <div><h4>Workflow candidate contribution</h4><p>Replayed the stored result without repeating the controlled Git Activity. Outer Dalph code still appended, reread, reduced, and published the Journal state.</p></div>
+            </div>
+            <p><strong>Critical distinction:</strong> the Workflow record proved a past Activity return. Only Journal publication advanced delivery. Suppressing that append left the proposal present. <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test, lines 96–129 and 173–194</a>.</p>
+          </div>
+        </article>
+
+        <article class="scenario" data-scenario="changed">
+          <header class="scenario-head"><span class="scenario-no" aria-hidden="true">3</span><div><h3>Controlled Git facts changed during downtime</h3><p class="eyebrow">Historical proof is not current authority</p></div><span class="evidence e-test">Observed test</span></header>
+          <div class="scenario-body">
+            <ol class="timeline" aria-label="Scenario 3 chronology">
+              <li>Activity stored ready result</li><li class="crash">SIGKILL before Journal</li><li>Downtime: Git becomes absent</li><li>Workflow replays past ready</li><li>Journal accepts past occurrence</li><li class="gate">Fresh Git read says wait</li>
+            </ol>
+            <div class="compare">
+              <div><h4>Current Dalph responsibility</h4><p>Before executor admission, read Git again. The owner of worktree facts reported absent, so Dalph waited/fail-closed and made zero executor calls.</p></div>
+              <div><h4>Workflow candidate contribution</h4><p>Correctly replayed history, but could not authorize the present decision. The negative control that treated replay as current truth incorrectly continued.</p></div>
+            </div>
+            <p><strong>Result:</strong> the authority rule survives unchanged: copied external facts do not become current authority. <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test, lines 131–154 and 196–214</a>.</p>
+          </div>
+        </article>
+
+        <article class="scenario" data-scenario="negative">
+          <header class="scenario-head"><span class="scenario-no" aria-hidden="true">×</span><div><h3>Controls show why each boundary remains</h3><p class="eyebrow">Three issue mutation controls plus one additional fail-closed control</p></div><span class="evidence e-test">Observed test</span></header>
+          <div class="scenario-body grid-3">
+            <div class="card"><h4>Blind Activity retry</h4><p>Bypassing reread-before-create produced <strong>two create calls</strong>. Workflow retry does not provide external idempotency.</p></div>
+            <div class="card"><h4>Suppressed Journal</h4><p>Replaying without publishing <code>TaskWorktreeReady</code> left the proposal present. Workflow storage is not Run acceptance.</p></div>
+            <div class="card"><h4>Historical result as current</h4><p>Using replayed readiness after Git changed produced an incorrect Continue. Workflow history is not Git authority.</p></div>
+            <div class="card"><h4>Contradictory facts <span class="neutral">Additional control</span></h4><p>One controlled read returned typed <code>ContradictoryWorktreeState</code>; no create, no <code>TaskWorktreeReady</code>, and no current decision followed. <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Exact test, lines 216–253</a>.</p></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="authority" aria-labelledby="authority-title">
+      <div class="section-head">
+        <p class="eyebrow">Apples-to-apples ownership map</p>
+        <h2 id="authority-title">Workflow adds durability; it does not inherit authority</h2>
+        <p>The comparison is only meaningful when “who owns the fact?” is separated from “who remembers an execution result?”</p>
+      </div>
+      <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Authority ownership comparison">
+        <table class="owner-map">
+          <caption>Authority and responsibility boundaries in current Dalph and the Workflow candidate</caption>
+          <thead><tr><th scope="col">Owner / layer</th><th scope="col">Current Dalph solution</th><th scope="col">Workflow candidate</th><th scope="col">Decision impact</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Task tracker<br><small>Task identity, lifecycle, dependencies, grouping, claims</small></th><td>Journaled observations plus fresh process-local projections.</td><td>No new tracker call or authority. The accepted fixture deliberately lacked claim acquisition/focused tracker observation.</td><td><span class="no">Mismatch remains</span><br>The production projection entered Workflow claim-constrained, not Ready.</td></tr>
+            <tr><th scope="row">Git<br><small>Commits, refs, lineage, worktrees</small></th><td>Exact plan plus read/create/reread reconciliation; fresh read after ambiguous outcome or downtime.</td><td>Activity calls the same protocol. Replayed result records history, never current worktree truth.</td><td><span class="partial">Retained</span><br>No Git recovery responsibility deleted.</td></tr>
+            <tr><th scope="row">Dalph Journal<br><small>Only accepted Run chronology</small></th><td>Intent before effect; outcome after observation; full history reduction republishes ordinary delivery input.</td><td>Kept outside the Workflow handler. Outer executor code appends and folds after Workflow returns.</td><td><span class="partial">Retained</span><br>Correct architecture, but no deletion.</td></tr>
+            <tr><th scope="row">Process-local runtime<br><small>Planning, admission, live ownership, signals</small></th><td>Rebuilt from Journal plus current authority facts; never persisted as authority.</td><td>Still builds delivery signal, invokes <code>DeliveryActionExecutor</code>, gates current decision, and owns Application Exit.</td><td><span class="partial">Retained</span><br>Workflow remains below the seam.</td></tr>
+            <tr><th scope="row">Effect Workflow store<br><small>Execution and Activity reply durability</small></th><td>Does not exist.</td><td>Adds Workflow invocation/reply/migration rows and stable execution/Activity identities.</td><td><span class="yes">Real benefit</span><br>Replays a stored Activity result without a second call.</td></tr>
+            <tr><th scope="row">Execution substrate / executor<br><small>Process/session observations and planned-attempt work</small></th><td>Executor is injected; current normalized reports cross the accepted boundary.</td><td>No executor was started. A trap proved zero boundary contacts. Application Exit stayed outside the Run Workflow.</td><td><span class="neutral">Scope preserved</span><br>No executor or Exit responsibility moved.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="callout warning"><strong>The decisive authority mismatch</strong>The issue’s accepted starting facts include an acknowledged worktree plan but no claim acquisition or focused tracker read. Production reconstruction therefore remains <code>WorkflowOperationTaskClaimConstraint</code> before Workflow entry. The prototype correctly refuses to invent authority—but that means Workflow is wrapping a proposal it cannot itself make current or admissible. <span class="evidence e-source">Source inspected</span> <a href="README.md">Prototype README, lines 76–87 and 124–129</a>; <a href="../../packages/orchestrator/src/coordination/run/recovery-activation.ts">production projection, lines 889–929</a>.</p>
+    </section>
+
+    <section id="comparison" aria-labelledby="comparison-title">
+      <div class="section-head">
+        <p class="eyebrow">Recovery-state comparison</p>
+        <h2 id="comparison-title">Same safety protocol, one extra replay layer</h2>
+        <p>Follow one action from accepted intent through ambiguity, restart, Journal acceptance, and the next current decision.</p>
+      </div>
+
+      <ol class="flow" aria-label="Required recovery chain">
+        <li class="flow-step"><span class="kicker">1 · Before effect</span><strong>Journal intent</strong><small>Exact operation and planned worktree already acknowledged.</small></li>
+        <li class="flow-step"><span class="kicker">2 · Boundary</span><strong>Git protocol</strong><small>Read → create if absent → reread exact state.</small></li>
+        <li class="flow-step"><span class="kicker">3 · Restart</span><strong>Resolve ambiguity</strong><small>Reread Git, or replay stored Activity result.</small></li>
+        <li class="flow-step"><span class="kicker">4 · Acceptance</span><strong>Journal outcome</strong><small>Idempotent append; reduce and republish ordinary inputs.</small></li>
+        <li class="flow-step"><span class="kicker">5 · Current gate</span><strong>Fresh Git read</strong><small>Only present authority can permit later executor admission.</small></li>
+      </ol>
+
+      <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Recovery state comparison">
+        <table>
+          <caption>Recovery behavior before the effect, after ambiguity, at restart, at Journal acceptance, and at the current-decision gate</caption>
+          <thead><tr><th scope="col">Recovery moment</th><th scope="col">Current solution</th><th scope="col">Workflow candidate</th><th scope="col">Net change</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Before ambiguity-crossing effect</th><td>Journal records exact <code>TaskWorktreeReconciliationIntended</code>.</td><td>Same intent remains required before Workflow Activity.</td><td><span class="neutral">No change</span></td></tr>
+            <tr><th scope="row">Create applies, response/result is lost</th><td>Restart dispatcher finds retained intent and manually invokes reconciliation; Git reread prevents a second create.</td><td>Activity may rerun; it must invoke the same Git reread protocol to prevent a second create.</td><td><span class="no">Duplicated recovery</span></td></tr>
+            <tr><th scope="row">Activity result durably stored</th><td>No separate Workflow-style intermediate result store is present in this production path; recovery proceeds from intent plus Git authority.</td><td>Workflow replays the exact stored result without another Activity call.</td><td><span class="yes">Workflow advantage</span></td></tr>
+            <tr><th scope="row">Append accepted Run outcome</th><td>Ordinary Journal path records <code>TaskWorktreeReady</code>; publication advances delivery.</td><td>Still performed outside Workflow. Suppression must leave proposal pending.</td><td><span class="neutral">No change</span></td></tr>
+            <tr><th scope="row">Decide from current worktree state</th><td>Fresh Git read; wait/fail closed on absent or contradiction.</td><td>Still fresh Git read. Replayed result cannot authorize.</td><td><span class="neutral">No change</span></td></tr>
+            <tr><th scope="row">Graceful Application Exit</th><td>Process-wide lifecycle outside every Run workflow.</td><td>Constructed outside the Run Workflow; only admission capability reaches runtime.</td><td><span class="neutral">Preserved, not replaced</span><br><a href="src/workflow-reconciliation.ts">Prototype composition:362–369</a>; <a href="../../docs/ARCHITECTURE.md">architecture:205–235</a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="deletion" aria-labelledby="deletion-title">
+      <div class="section-head">
+        <p class="eyebrow">Issue #234 deletion test</p>
+        <h2 id="deletion-title">The candidate adds more recovery surface than it removes</h2>
+        <p>This ledger counts responsibilities and concepts, not raw lines. The question is whether a production recovery duty becomes demonstrably deletable.</p>
+      </div>
+
+      <div class="delta-grid">
+        <article class="delta removed"><span class="kicker">Removed inside handler</span><h3>Workflow kept narrow</h3><ul><li>Proposal construction</li><li>Graph/relation construction</li><li>Journal append</li><li>Current-decision read</li><li>Signal update</li></ul><p>These were excluded from the Workflow handler, not deleted from Dalph overall.</p></article>
+        <article class="delta retained"><span class="kicker">Retained</span><h3>Core recovery duties</h3><ul><li>Restart dispatcher and intent lookup</li><li>Git read/create/reread</li><li>Journal intent/outcome</li><li>Exact resource qualification</li><li>Fresh-current-fact gate</li><li>Runtime and Application Exit</li></ul></article>
+        <article class="delta added"><span class="kicker">Added</span><h3>Workflow machinery</h3><ul><li>Execution SQLite store</li><li>Payload/result schemas</li><li>Stable Workflow/Activity identity</li><li>Typed error transport</li><li>Runner and fault hooks</li><li>Row-level inventory and ledgers</li></ul></article>
+        <article class="delta duplicated"><span class="kicker">Duplicated</span><h3>Recovery vocabulary</h3><ul><li>Worktree recovery in Activity and outer seam</li><li>Journal reconstruction around replay</li><li>Exact identity across two histories</li><li>Evidence around production projection</li></ul></article>
+      </div>
+
+      <div class="grid-2" style="margin-top:1rem">
+        <article class="card"><h3>Code shape</h3><p><strong>Current:</strong> recovered route → <code>recoverTaskWorktreeOperation</code> → retained intent lookup → interpreter → Git protocol → Journal trace/publication.</p><p><strong>Candidate:</strong> ordinary planning → <code>DeliveryActionExecutor</code> → exact Workflow execution → Activity → same Git protocol → return to outer executor → Journal append/reduce → fresh Git decision.</p></article>
+        <article class="card"><h3>Locality and test surface</h3><p>The candidate’s adapter is injectable, but identity, fault hooks, replay evidence, Journal folding, projection evidence, storage inventory, and current-decision evidence cross seven prototype modules. Nine focused tests and multiple extra ledgers are necessary to prove the new boundary did not become a second authority.</p></article>
+      </div>
+
+      <h3 style="margin-top:1.5rem">Candidate deletion targets, audited individually</h3>
+      <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Candidate deletion target audit">
+        <table>
+          <caption>Issue #234’s three candidate deletion targets and the prototype evidence for each</caption>
+          <thead><tr><th scope="col">Candidate target</th><th scope="col">Production location / duty</th><th scope="col">Prototype result</th><th scope="col">Deletion finding</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Explicit <code>recoverTaskWorktreeOperation</code> restart dispatcher</th><td>Recovered <code>ReconcileTaskWorktree</code> routes dispatch to the named function. <a href="../../packages/orchestrator/src/coordination/delivery/recovered-delivery-action-adapter.ts">recovered adapter:38–45</a>.</td><td>The candidate adds Workflow below <code>DeliveryActionExecutor</code>; it does not replace recovered-route selection or show an alternate production route.</td><td><span class="no">Not demonstrably deletable</span><br>Production was intentionally not edited, so the finding is about missing supersession evidence—not a failed deletion patch.</td></tr>
+            <tr><th scope="row">Retained-intent lookup and manual reinvocation</th><td>The dispatcher reads the Journal, finds the exact <code>TaskWorktreeReconciliationIntended</code>, then calls the interpreter. <a href="../../packages/orchestrator/src/coordination/frontier/recovery.ts">recovery.ts:30–47</a>.</td><td>When no Activity result was stored, the Activity again invokes the existing read/create/reread protocol. The same intent, exact identities, and outer Journal work remain.</td><td><span class="no">Not demonstrably deletable</span><br>Workflow retry did not establish external outcome; Git reread still did.</td></tr>
+            <tr><th scope="row">Route-specific interruptible-result recovery state</th><td>The recovered route still receives the execution lease, records exact intent, and crosses the named interruptible boundary. <a href="../../packages/orchestrator/src/coordination/frontier/recovery.ts">recovery.ts:6–8, 30–45</a>.</td><td>The prototype records intent at the executor seam and does not exercise or remove production route-specific interruption state. It only demonstrates Workflow result replay below that seam.</td><td><span class="no">Not demonstrably deletable</span><br>No production state was edited, and the experiment provides no evidence that this lease/boundary responsibility is superseded.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="callout"><strong>Explicit non-targets</strong>The Git read/create/reread protocol; Journal intent and outcome facts; exact Run/Attempt/operation/Base/branch/locator qualification; fresh-current-fact rules; process-local admission; and process-wide Application Exit were excluded from deletion by issue #234. Retaining them is correct, but cannot count as Workflow deletion leverage. <a href="https://github.com/dearlordylord/dalph/issues/234">Accepted deletion rule and target list</a>.</p>
+
+      <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+      <div id="scorecard" class="table-wrap" role="region" tabindex="0" aria-label="Workflow adoption decision scorecard" style="margin-top:1.5rem">
+        <table class="score-table">
+          <caption>Qualitative application of issue #234’s accepted go/no-go criteria</caption>
+          <thead><tr><th scope="col">Decision criterion</th><th scope="col">Accepted bar</th><th scope="col">Finding</th><th scope="col">Result</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Delete restart responsibility</th><td>Remove dispatcher, retained-intent lookup/manual reinvocation, or route-specific recovery state.</td><td>Dispatcher remains; Activity reuses the existing reconciliation protocol and outer code finishes publication.</td><td><span class="no">Fails bar</span></td></tr>
+            <tr><th scope="row">One accepted Run chronology</th><td>Journal alone advances delivery; Workflow must not mint authority.</td><td>Preserved. Workflow stores only execution/result data; Journal publication remains decisive.</td><td><span class="yes">Passes</span></td></tr>
+            <tr><th scope="row">No durable derived state</th><td>No proposal, frontier, signal, task-work position, owner, physical resource, or UI state in Workflow storage.</td><td>Row/file/cell inventory and source guard found none of the forbidden categories.</td><td><span class="yes">Passes</span></td></tr>
+            <tr><th scope="row">Keep Workflow below the seam</th><td>Delivery → planning → process-local runtime → <code>DeliveryActionExecutor</code> remains production-shaped.</td><td>Preserved in the prototype; Application Exit remains process-wide and outside Workflow.</td><td><span class="yes">Passes</span></td></tr>
+            <tr><th scope="row">Net concept reduction</th><td>Less identity/schema/version/storage machinery and a smaller test surface.</td><td>Workflow adds its store, identities, schemas, runtime configuration, failure transport, inventory, and recovery tests while core duties remain.</td><td><span class="no">Fails bar</span></td></tr>
+            <tr><th scope="row">Authority fit</th><td>Candidate may execute accepted work without fabricating claim or current Git authority.</td><td>Correctly refuses fabrication, but accepted starting facts leave production responsibility claim-constrained before entry.</td><td><span class="no">Fails leverage case</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="callout danger"><strong>Decision rule applied</strong>Issue #234 requires <em>no-go and stop</em> if the existing restart procedure must remain, the Activity reimplements it, both histories reconstruct progress, or Workflow adds more identity/schema/version/storage machinery than it removes. More than one of those conditions is true. No numeric weighting is needed or defensible. <span class="evidence e-judge">Decision judgment</span> <a href="https://github.com/dearlordylord/dalph/issues/234">Accepted issue rule</a>; <a href="README.md">prototype deletion report, lines 101–134</a>.</p>
+    </section>
+
+    <section id="evidence" aria-labelledby="evidence-title">
+      <div class="section-head">
+        <p class="eyebrow">Traceability and evidence quality</p>
+        <h2 id="evidence-title">What was proved—and what was not</h2>
+        <p>The tests demonstrate controlled recovery structure. They are not provider-integration or production-performance evidence.</p>
+      </div>
+
+      <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Claim evidence and limitations">
+        <table>
+          <caption>Claim-by-claim evidence strength, source anchor, and scope limitation</caption>
+          <thead><tr><th scope="col">Claim</th><th scope="col">Evidence</th><th scope="col">Quality</th><th scope="col">Local anchor</th><th scope="col">Does not prove / scope</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Unstored result restart rereads Git and creates only once.</th><td>Real child <code>SIGKILL</code>; one create, three reads, exact identities, one Journal outcome.</td><td><span class="evidence e-test">Observed test</span></td><td><a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test:25–94</a></td><td>Controlled adapter behavior only; not live Git or provider integration.</td></tr>
+            <tr><th scope="row">Stored Activity result replays without another controlled Git call.</th><td>Real child <code>SIGKILL</code> after result storage; successor replays and Journal appends once.</td><td><span class="evidence e-test">Observed test</span></td><td><a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test:96–129</a></td><td>Does not prove replay is current Git authority or that Journal publication is unnecessary.</td></tr>
+            <tr><th scope="row">Current decision rereads Git after downtime.</th><td>Fixture changes to absent; next decision waits; executor contact ledger remains empty.</td><td><span class="evidence e-test">Observed test</span></td><td><a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test:131–154</a></td><td>Does not exercise a live executor or remote Git race.</td></tr>
+            <tr><th scope="row">Workflow retry alone cannot prevent duplicate creation.</th><td>Mutation bypasses reconciliation and produces two controlled create calls.</td><td><span class="evidence e-test">Negative control</span></td><td><a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test:156–171</a></td><td>Shows this blind implementation is unsafe; not that every possible idempotent provider operation is unsafe.</td></tr>
+            <tr><th scope="row">Journal, not Workflow, advances delivery in the candidate.</th><td>Suppressed append leaves proposal present; normal append folds responsibility to Settled.</td><td><span class="evidence e-test">Negative control</span></td><td><a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test:173–194</a></td><td>Proves the accepted candidate architecture, not all possible Workflow architectures.</td></tr>
+            <tr><th scope="row">Contradictory worktree facts fail closed.</th><td>One typed <code>ContradictoryWorktreeState</code>; one read; no create, ready outcome, or decision.</td><td><span class="evidence e-test">Additional control</span></td><td><a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test:216–253</a></td><td>Direct controlled-protocol test; it does not cross the two-child Workflow replay seam.</td></tr>
+            <tr><th scope="row">No forbidden derived/runtime state was persisted.</th><td>All files, SQLite tables, Workflow rows, Journal rows, cells, and evidence content were classified and scanned.</td><td><span class="evidence e-test">Observed test</span></td><td><a href="src/inventory.ts">inventory.ts:7–260</a>; <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">test:255–287</a></td><td>Marker/category scan of this version’s scratch workspace; not a general audit of future schemas.</td></tr>
+            <tr><th scope="row">Authored candidate action modules use no real provider or executor process boundary.</th><td>The exact module manifest rejects Git/GitHub/process-provider imports and calls; the harness observes no physical marker and zero calls to the injected executor trap.</td><td><span class="evidence e-test">Support tests</span></td><td><a href="test/workflow-worktree-reconciliation.acceptance.test.ts">guard test:289–309</a>; <a href="src/executor-trap.ts">executor-trap.ts:13–63</a>; <a href="src/harness.ts">harness.ts:43–78, 126–149</a></td><td>Declared authored action-module manifest only. The parent harness is allowed to spawn the two Node children. This is not a universal repository scan or live-provider trial.</td></tr>
+            <tr><th scope="row">Current production uses retained-intent lookup/manual reinvocation.</th><td><code>recoverTaskWorktreeOperation</code> reads the Journal, finds the exact intent, and invokes the interpreter.</td><td><span class="evidence e-source">Source inspected</span></td><td><a href="../../packages/orchestrator/src/coordination/frontier/recovery.ts">recovery.ts:30–47</a></td><td>Code-shape evidence; the prototype deliberately did not edit production.</td></tr>
+            <tr><th scope="row">Starting facts remain claim-constrained before Workflow entry.</th><td>README records the omitted claim/focused tracker fact; production projection maps non-exact claim authority to <code>WorkflowOperationTaskClaimConstraint</code>.</td><td><span class="evidence e-source">Source inspected</span></td><td><a href="README.md">README:124–129</a>; <a href="../../packages/orchestrator/src/coordination/run/recovery-activation.ts">projection:889–929</a></td><td>This fixture-specific mismatch does not prove every future Workflow input would be claim-constrained.</td></tr>
+            <tr><th scope="row">Candidate keeps Workflow below <code>DeliveryActionExecutor</code>.</th><td>Ordinary runtime materializes accepted action; executor invokes exact Workflow; outer code publishes the Journal.</td><td><span class="evidence e-source">Source inspected</span></td><td><a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:407–515</a></td><td>Prototype composition evidence; production composition was not changed.</td></tr>
+            <tr><th scope="row">Application Exit remains outside Run Workflow.</th><td>The application lifecycle is constructed before the Workflow handler/runtime; architecture defines Exit facts outside every Run journal.</td><td><span class="evidence e-source">Source inspected</span></td><td><a href="src/workflow-reconciliation.ts">prototype:362–369</a>; <a href="../../docs/ARCHITECTURE.md">architecture:205–235</a></td><td>No live Exit request or five-second drain was exercised by this experiment.</td></tr>
+            <tr><th scope="row">Workflow is not deletion-positive under #234’s rule.</th><td>All three named deletion targets lack supersession evidence; execution storage, schema, identity, and tests are added.</td><td><span class="evidence e-judge">Decision judgment</span></td><td><a href="https://github.com/dearlordylord/dalph/issues/234">Accepted issue decision rule</a>; <a href="README.md">deletion report:101–134</a></td><td>Decision is scoped to worktree reconciliation and this accepted rule; no production performance or provider trial was run.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid-2" style="margin-top:1rem">
+        <div class="callout"><strong>Scope controls</strong>No real Git command, GitHub call, target repository, physical worktree, or executor process was used. Only throwaway Node harness children were spawned and killed. The action-module source guard rejects provider/process imports and calls.</div>
+        <div class="callout warning"><strong>Evidence limitations</strong>This experiment does not measure production latency, throughput, operational burden, schema migration longevity, multi-node runner behavior, live provider failure modes, or version-upgrade compatibility. It intentionally cannot justify adoption on those axes.</div>
+      </div>
+
+      <details open>
+        <summary>Scenario-to-test mapping</summary>
+        <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+        <div class="table-wrap" role="region" tabindex="0" aria-label="Operational scenario to acceptance test mapping"><table><caption>The three accepted operational scenarios and their exact acceptance tests</caption><thead><tr><th scope="col">Operational scenario</th><th scope="col">Concrete result</th><th scope="col">Acceptance test</th></tr></thead><tbody>
+          <tr><th scope="row">Creation applies before Activity result storage</th><td>Restart rereads controlled Git, observes exact ready state, sends no second create.</td><td><code>reconciles the controlled worktree after an unstored Activity result without creating twice</code></td></tr>
+          <tr><th scope="row">Activity result stored before Journal outcome</th><td>Restart reuses stored result, makes no Git call, appends once, advances only through Journal.</td><td><code>replays the stored worktree result into the Journal without another controlled Git call</code></td></tr>
+          <tr><th scope="row">Controlled facts change during downtime</th><td>Fresh Git read supplies next decision; replay cannot authorize executor admission.</td><td><code>reads controlled Git again before using replayed worktree readiness for a current decision</code></td></tr>
+        </tbody></table></div>
+      </details>
+      <details open>
+        <summary>Control-to-exact-test mapping</summary>
+        <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+        <div class="table-wrap" role="region" tabindex="0" aria-label="Control to exact test mapping"><table><caption>The issue’s three mutation controls and the additional contradictory-facts fail-closed control</caption><thead><tr><th scope="col">Control</th><th scope="col">Failure or fail-closed result</th><th scope="col">Exact test</th></tr></thead><tbody>
+          <tr><th scope="row">Blind Activity retry</th><td>Repeats the controlled create after the ambiguous cut.</td><td><code>proves that a blind Activity retry repeats controlled create as a negative control</code></td></tr>
+          <tr><th scope="row">Suppressed Journal publication</th><td>Leaves the proposal present despite stored Workflow result.</td><td><code>proves that suppressed Journal publication retains the proposal as a negative control</code></td></tr>
+          <tr><th scope="row">Historical replay used as current authority</th><td>Incorrectly authorizes Continue after current Git facts changed.</td><td><code>proves that replayed historical readiness would incorrectly authorize a current decision as a negative control</code></td></tr>
+          <tr><th scope="row">Contradictory controlled facts <span class="neutral">Additional</span></th><td>Returns typed contradiction; no create, ready outcome, or current decision.</td><td><code>fails closed on contradictory controlled facts with the exact Activity reason</code></td></tr>
+        </tbody></table></div>
+      </details>
+      <details open>
+        <summary>Boundary-absence support-test mapping</summary>
+        <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+        <div class="table-wrap" role="region" tabindex="0" aria-label="Boundary absence support test mapping"><table><caption>Exact support tests for durable inventory and absence of real provider or executor boundaries</caption><thead><tr><th scope="col">Support concern</th><th scope="col">Exact test</th><th scope="col">Concrete proof</th><th scope="col">Scope limit</th></tr></thead><tbody>
+          <tr><th scope="row">Durable inventory</th><td><code>enumerates only the declared durable evidence and workflow stores</code></td><td>Every file, SQLite table, Workflow row, and Journal event is classified; the forbidden-state result is empty. <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">test:255–287</a>.</td><td>This prototype’s scratch workspace and declared categories only.</td></tr>
+          <tr><th scope="row">Real provider and process boundaries</th><td><code>guards Workflow and controlled adapter action modules from real providers and process boundaries</code></td><td>The declared authored action modules contain no real Git/GitHub/process-provider seam; <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">test:289–309</a>. Scenario assertions also require no physical marker and zero executor contacts; <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">test:90–92, 127–128, 145–148</a>.</td><td>The parent <a href="src/harness.ts">harness:43–78</a> intentionally uses <code>spawn(process.execPath, …)</code> for two disposable Node children. No claim is made about every repository file or a live provider.</td></tr>
+        </tbody></table></div>
+      </details>
+      <details>
+        <summary>Durable inventory at the experiment boundary</summary>
+        <div><p><strong>Workflow store:</strong> <code>cluster_messages</code>, <code>cluster_replies</code>, and <code>cluster_migrations</code>, with every row classified as invocation, Activity reply, or runtime migration.</p><p><strong>Journal store:</strong> Run lifecycle, planned Attempt, worktree intent, and at most one worktree outcome.</p><p><strong>Controlled evidence:</strong> current Git observation plus append-only call, Activity, proposal, responsibility-projection, executor-contact, and decision ledgers. These are test evidence, not application state.</p><p><strong>Forbidden inventory:</strong> empty for proposal/frontier/current signal/task-work position/live owner/physical resource/UI state markers.</p></div>
+      </details>
+      <details>
+        <summary>Verification and provenance ledger</summary>
+        <div><ul><li>Focused typecheck: PASS.</li><li>Focused acceptance tests: PASS, 9/9.</li><li><code>pnpm check:all</code>: PASS; 193 files passed, 1 skipped; 1,789 tests passed, 2 skipped; no leaks.</li><li><code>pnpm check:quint</code>: PASS in 280.60 seconds; maintained models found no violations and negative controls found counterexamples.</li></ul><p>These durable gate results are recorded in the <a href="README.md">prototype README</a>. Review-loop status belongs to the current report-authoring session and is intentionally not presented as repository evidence.</p></div>
+      </details>
+    </section>
+
+    <section id="appendix" aria-labelledby="appendix-title">
+      <div class="section-head">
+        <p class="eyebrow">Deep evidence appendix</p>
+        <h2 id="appendix-title">Definitions, source map, and provenance</h2>
+      </div>
+
+      <h3>Exact provenance and identity ledger</h3>
+      <p>The stable fixture identities below are reused rather than reallocated across the recovery seams. The Workflow execution/idempotency identity is intentionally shown as an observed invariant, not a fabricated hard-coded value.</p>
+      <p class="scroll-cue" aria-hidden="true">Scroll horizontally to compare all columns →</p>
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Exact provenance and identity ledger">
+        <table>
+          <caption>Prototype isolation, exact recovery identities, and where each value is established</caption>
+          <thead><tr><th scope="col">Field</th><th scope="col">Exact value or invariant</th><th scope="col">Evidence origin</th><th scope="col">Scope note</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Prototype branch</th><td><code>prototype/issue-234-workflow-deletion-leverage</code></td><td>Current <code>git branch --show-current</code> observation; <a href="README.md">README starting point</a>.</td><td>Dedicated disposable branch; not an adoption branch.</td></tr>
+            <tr><th scope="row">Prototype worktree</th><td><code>/workspace/typescript/dalph-worktrees/issue-234-workflow-deletion-leverage</code></td><td>Current <code>git worktree list --porcelain</code> observation.</td><td><strong>Environment-specific and not portable.</strong> It identifies this evidence checkout only.</td></tr>
+            <tr><th scope="row">Exact experiment base</th><td><code>b0b4a15d3a4c1e75b129c0c620042a64c2178692</code></td><td><code>git merge-base</code> observation; <a href="README.md">README</a>; <a href="https://github.com/dearlordylord/dalph/issues/234">accepted issue</a>.</td><td>Production files and #233 were intentionally not edited; see <a href="README.md">isolation statement</a> and the issue acceptance criteria.</td></tr>
+            <tr><th scope="row">Run</th><td><code>run-234-worktree-0001</code></td><td><a href="src/contracts.ts">contracts.ts:190–202</a></td><td>Branded once, carried through both children and durable seams.</td></tr>
+            <tr><th scope="row">Attempt</th><td><code>attempt-234-worktree-0001</code></td><td><a href="src/contracts.ts">contracts.ts:190–213</a></td><td>Exact planned Attempt correlation.</td></tr>
+            <tr><th scope="row">Operation</th><td><code>operation-234-worktree-0001</code></td><td><a href="src/contracts.ts">contracts.ts:15–17, 190–202</a></td><td>Exact branded <code>OperationId</code>; no retry allocation.</td></tr>
+            <tr><th scope="row">Task branch</th><td><code>refs/heads/dalph/issue-234-worktree-0001</code></td><td><a href="src/contracts.ts">contracts.ts:190–213</a></td><td>Controlled planned-resource identity; no real ref was created.</td></tr>
+            <tr><th scope="row">Worktree locator</th><td><code>/controlled/prototype/worktrees/issue-234-worktree-0001</code></td><td><a href="src/contracts.ts">contracts.ts:190–213</a></td><td>Controlled locator only; distinct from the environment checkout path above.</td></tr>
+            <tr><th scope="row">Activity</th><td><code>ReconcileTaskWorktree/operation-234-worktree-0001</code></td><td><a href="src/contracts.ts">contracts.ts:190–202</a>; <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">test:35–46</a></td><td>Stable exact Activity name across retry/replay.</td></tr>
+            <tr><th scope="row">Workflow execution / idempotency identity</th><td><strong>One non-empty Workflow-generated execution ID observed identically from both children and Activity evidence.</strong></td><td><a href="src/harness.ts">harness.ts:92–118, 179–197</a>; <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">test:28–46, 99–115</a></td><td>The report does not invent or hard-code the runtime-generated value. The Workflow key is derived from exact Run in <a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:185–201</a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Identity path across the recovery seams</h3>
+      <ol>
+        <li><strong>Parent harness → first and second child:</strong> the parent passes the exact Run and controlled workspace, then rejects any <code>ChildReady</code> message whose Run, Operation, Attempt, Base, branch, locator, or Activity differs. <a href="src/harness.ts">harness.ts:43–78, 97–118, 151–197</a>.</li>
+        <li><strong>Both children → Workflow payload:</strong> the exact Run, Attempt, Operation, Base, branch, locator, and scenario form the typed payload; the Run supplies the idempotency key. <a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:185–201, 458–466</a>.</li>
+        <li><strong>Workflow payload → Activity evidence:</strong> Activity evidence stores those exact identities plus the Workflow-generated execution ID. <a href="src/contracts.ts">contracts.ts:87–109</a>.</li>
+        <li><strong>Activity → controlled Git ledger:</strong> every read/create entry carries Run, Attempt, Operation, Base, branch, locator, and child process instance. <a href="src/contracts.ts">contracts.ts:62–85</a>.</li>
+        <li><strong>Workflow result → Journal event:</strong> outer executor code appends the exact Operation and controlled proof as one <code>TaskWorktreeReady</code>, then folds the Journal before publication. <a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:485–513</a>; <a href="test/workflow-worktree-reconciliation.acceptance.test.ts">test:58–69</a>.</li>
+      </ol>
+
+      <div class="grid-2">
+        <article class="card"><h3>Glossary</h3><dl>
+          <dt><strong>Activity result</strong></dt><dd>The typed result Effect Workflow stores and may replay. It describes what the controlled adapter returned at an earlier time.</dd>
+          <dt><strong>Current authority</strong></dt><dd>A fresh fact from the system that owns it. For worktree readiness, that system is Git—not Workflow or the Journal.</dd>
+          <dt><strong>Dalph Journal</strong></dt><dd>The sole accepted, ordered Run chronology. Publication changes ordinary delivery inputs.</dd>
+          <dt><strong>Reconciliation</strong></dt><dd>After ambiguity, reread the owning system before deciding whether an earlier request may be continued or repeated.</dd>
+          <dt><strong>Deletion leverage</strong></dt><dd>Recovery responsibility and conceptual/test surface that can actually be removed because Workflow supersedes it.</dd>
+          <dt><strong>Process-local runtime</strong></dt><dd>Planning, admission, live ownership, and current signals rebuilt from accepted history and current facts; never durable authority.</dd>
+        </dl></article>
+        <article class="card"><h3>Decision provenance</h3><p><strong>Issue:</strong> <a href="https://github.com/dearlordylord/dalph/issues/234">GitHub #234, “test Workflow deletion leverage through controlled worktree reconciliation”</a>.</p><p><strong>Exact base:</strong> <span class="mono">b0b4a15d3a4c1e75b129c0c620042a64c2178692</span>.</p><p><strong>Final prototype evidence commit:</strong> <span class="mono">5b31129f3</span>.</p><p><strong>Dependencies:</strong> Effect, <code>@effect/platform-node</code>, and <code>@effect/sql-sqlite-node</code> <span class="mono">4.0.0-beta.106</span>; Vitest <span class="mono">4.1.10</span>.</p><p><strong>Isolation:</strong> dedicated branch/worktree; production and predecessor #233 were unchanged; no adoption or integration occurred.</p></article>
+      </div>
+
+      <h3 style="margin-top:2rem">Local source map</h3>
+      <ol class="refs">
+        <li><a href="README.md">Prototype README</a> — chronological evidence, deletion ledger, verdict, and final gates.</li>
+        <li><a href="package.json">Prototype package.json:10–19</a> — exact Effect and test dependency versions.</li>
+        <li><a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:185–251</a> — narrow Workflow payload, execution identity, typed result/error, and Activity protocol.</li>
+        <li><a href="src/workflow-reconciliation.ts">workflow-reconciliation.ts:362–515</a> — Application Exit boundary, ordinary runtime, executor seam, Workflow execution, Journal publication.</li>
+        <li><a href="src/controlled-git-worktree.ts">controlled-git-worktree.ts:32–112</a> — exact controlled adapter, blind-retry mutation, production-shaped reconciliation.</li>
+        <li><a href="src/journal.ts">journal.ts:78–92</a> — sole candidate outcome append and persistent Journal read.</li>
+        <li><a href="src/inventory.ts">inventory.ts:7–260</a> — durable categories, row classification, forbidden-state scan.</li>
+        <li><a href="test/workflow-worktree-reconciliation.acceptance.test.ts">Acceptance test suite</a> — all three scenarios, four controls, inventory, and source guard.</li>
+        <li><a href="../../packages/orchestrator/src/coordination/frontier/recovery.ts">Production recovery.ts:30–47</a> — retained intent lookup and manual worktree reinvocation.</li>
+        <li><a href="../../packages/orchestrator/src/coordination/delivery/recovered-delivery-action-adapter.ts">Recovered adapter:38–45</a> — recovered route dispatch.</li>
+        <li><a href="../../packages/orchestrator/src/coordination/delivery/fresh-delivery-action-adapter.ts">Fresh adapter:53–72</a> — fresh worktree action through interpreter and Journal trace.</li>
+        <li><a href="../../packages/orchestrator/src/coordination/delivery/live-delivery-action-executor.ts">Live executor:104–123</a> — production action seam and accepted-fact publication wait.</li>
+        <li><a href="../../packages/orchestrator/src/workflow/protocols/worktree-reconciliation/protocol.ts">Worktree protocol:7–36</a> — fresh Git proof and the explicit limit of Journal history.</li>
+        <li><a href="../../docs/ARCHITECTURE.md">Architecture:39–48</a> — description/planning/runtime/action separation and Journal publication.</li>
+        <li><a href="../../docs/ARCHITECTURE.md">Architecture:134–180</a> — authority ownership, no copied authority, process-local derived state, reconstruction.</li>
+        <li><a href="../../docs/OPERATIONAL-SCENARIOS.md">Operational scenarios</a> — required chronological scenario and handoff evidence format.</li>
+      </ol>
+      <p class="print-only">This print view expands all scenarios and details. Interactive filtering is intentionally omitted.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p><strong>Decision-grade prototype report · issue #234.</strong> Generated from repository evidence at final prototype evidence commit <span class="mono">5b31129f3</span>, based on <span class="mono">b0b4a15d3a4c1e75b129c0c620042a64c2178692</span>.</p>
+    <p>This artifact is self-contained: no scripts, fonts, styles, images, analytics, or other assets are fetched from the network. Local evidence links are relative so the report works when opened with <code>file://</code>. The external issue link is optional provenance.</p>
+  </footer>
+
+  <script>
+    (() => {
+      const buttons = Array.from(document.querySelectorAll('[data-filter]'));
+      const cards = Array.from(document.querySelectorAll('[data-scenario]'));
+      buttons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const selected = button.getAttribute('data-filter') || 'all';
+          buttons.forEach((candidate) => candidate.setAttribute('aria-pressed', String(candidate === button)));
+          cards.forEach((card) => { card.hidden = selected !== 'all' && card.getAttribute('data-scenario') !== selected; });
+          const shown = cards.filter((card) => !card.hidden).length;
+          const status = document.querySelector('#scenario-status');
+          if (status) status.textContent = selected === 'all' ? 'All four scenario groups shown.' : `${shown} scenario group shown: ${button.textContent?.trim() || selected}.`;
+        });
+      });
+
+      const links = Array.from(document.querySelectorAll('nav a'));
+      const sections = links.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+          if (!visible) return;
+          links.forEach((link) => link.removeAttribute('aria-current'));
+          document.querySelector(`nav a[href="#${visible.target.id}"]`)?.setAttribute('aria-current', 'location');
+        }, { rootMargin: '-20% 0px -65%', threshold: [0, .2, .5] });
+        sections.forEach((section) => observer.observe(section));
+      }
+
+      let printDetailState = [];
+      let printScenarioHiddenState = [];
+      window.addEventListener('beforeprint', () => {
+        const detailElements = Array.from(document.querySelectorAll('details'));
+        const scenarioElements = Array.from(document.querySelectorAll('[data-scenario]'));
+        printDetailState = detailElements.map((detail) => detail.open);
+        printScenarioHiddenState = scenarioElements.map((scenario) => scenario.hidden);
+        detailElements.forEach((detail) => { detail.open = true; });
+        scenarioElements.forEach((scenario) => { scenario.hidden = false; });
+      });
+      window.addEventListener('afterprint', () => {
+        Array.from(document.querySelectorAll('details')).forEach((detail, index) => {
+          detail.open = printDetailState[index] ?? detail.open;
+        });
+        Array.from(document.querySelectorAll('[data-scenario]')).forEach((scenario, index) => {
+          scenario.hidden = printScenarioHiddenState[index] ?? scenario.hidden;
+        });
+        printDetailState = [];
+        printScenarioHiddenState = [];
+      });
+    })();
+  </script>
+</body>
+</html>
