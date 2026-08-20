@@ -275,3 +275,152 @@ four verdicts, and the scenario-to-test mapping.
 
 Do not integrate this prototype or delete Journal code from this issue. Step 4
 remains the project owner's continue/revise/adopt/retain decision.
+
+## Issue #233 closed-loop extension — 2026-08-20
+
+The extension started at exact prototype commit
+`5cea6629ef9dc4f02cda04bc69cab85b845dd2a7` and remains on
+`prototype/issue-232-durable-computation`. Pinned candidate and storage
+revisions remain `effect@4.0.0-beta.106`,
+`@effect/sql-sqlite-node@4.0.0-beta.106`, and
+`@effect/platform-node@4.0.0-beta.106`.
+
+### Scenario-to-test results
+
+| Scenario | Maintainer-visible result | Passing acceptance evidence |
+| --- | --- | --- |
+| Stored action result is republished after a crash. | Process 1 crosses `GitHub.ReadTrackerGraph` once for `delivery-operation-233-0001`; the parent sends `SIGKILL` after Workflow stores the Activity result and before accepted-fact publication. Process 2 reports the same Workflow execution, makes no tracker-graph call, republishes the matching result, and the actual planned proposal becomes absent. No task attempt is established. | `reuses the stored action result after restart, republishes its accepted fact, and does not call the boundary twice` |
+| Current facts are read after replayed publication. | The parent changes controlled target membership during downtime. The republished action result still carries tracker revision 1; the next current-state decision calls `GitHub.ReadCurrentTaskFacts` in process 2 and sees revision 2, `Open:OutsideTarget`. | `reads current facts after replayed publication before the next current-state decision` |
+| Two exact actions remain distinct. | Operation 1 crosses the boundary in process 1; operation 2 crosses it in process 2; process 3 replays both without another tracker-graph call. Every publication correlates the materialized `OperationId` with the same decoded accepted `OperationId`. | `keeps two delivery actions distinct through Workflow and republishes each matching result` |
+| Journal and Workflow project the same domain consequences. | Both arms use unchanged `delivery`, ordinary action planning, process-local runtime admission, and `DeliveryActionExecutor`. Both end with the same two action/result correlations, an absent proposal, and revision-2 current facts. Their storage and boundary histories are intentionally unequal. | `projects the same delivery consequences through the Journal baseline and Workflow adapter` |
+| Domain description remains engine-free. | The production exact-source test still guards the seven statements. The focused planning guard finds no Activity, Workflow engine, SQL client, or Journal store vocabulary in `delivery-action-planning.ts`. | Production exact-source guard; `keeps Workflow and storage vocabulary out of delivery action planning` |
+
+Focused result: `11` tests passed across
+`delivery-loop.acceptance.test.ts` and `domain-colors.test.ts`. Aggregate counts
+are supplementary; the rows above are the acceptance evidence.
+
+### Chronological ledgers
+
+For the one-action Workflow chronology:
+
+```text
+P1: proposal present → ReadTrackerGraph(op-0001, revision 1) → Activity result stored → SIGKILL
+downtime: target membership changes; tracker revision becomes 2
+P2: same execution → proposal present → stored op-0001 result republished
+    → proposal absent → ReadCurrentTaskFacts(Open:OutsideTarget, revision 2)
+```
+
+For two Workflow actions, process 1 stores operation 1 and dies; process 2
+replays/publishes operation 1, stores operation 2, and dies; process 3
+replays/publishes both. The tracker-graph ledger contains exactly two entries,
+one for each operation. This uses two restarts because actions are sequential;
+it makes no concurrency claim.
+
+The Journal baseline deliberately differs after a crash. Reconstruction
+restores historical graph knowledge but leaves current graph state
+`GraphNotEstablished`. The baseline therefore performs the safe tracker read
+again before publishing current input. Workflow replay republishes its stored
+read result. Both then perform the separate revision-2 current-facts read.
+This difference is infrastructure history, not a difference in the compared
+visible delivery consequences.
+
+### Negative-control evidence
+
+- `publicationMode: Suppress` replays the stored Activity result but never
+  publishes it into the ordinary current input. The real proposal remains and
+  the successor is killed at the bounded eight-second recovery deadline. The
+  accepted one-action test would fail its required absent-proposal result.
+- `activityIdentityMode: Generic` names both Activities `ReadTrackerGraph`.
+  Effect reuses operation 1's result for operation 2, performs only one
+  boundary call, and publishes `acceptedOperationId = op-0001` for materialized
+  `operationId = op-0002`. The identity-separation assertions fail.
+
+Both mutations are exercised by passing tests that assert the concrete broken
+result before the correct implementation is restored for the acceptance rows.
+
+### Durable-evidence inventory
+
+| Record | Classification | Used to drive continuation? |
+| --- | --- | --- |
+| `delivery-loop-workflow.sqlite` cluster messages/replies/migrations | Effect Workflow replay infrastructure. Activity results are historical accepted read results, never current tracker authority. | Yes, only by Effect Workflow replay. |
+| `delivery-loop-journal.sqlite` journal records/migrations | Independently required Dalph domain evidence in the comparison arm. | Yes, only by the Journal baseline. |
+| `outside-world.json` | Controlled task-tracker authority for the experiment. | Yes, by explicit boundary reads. |
+| `delivery-boundary-calls.ndjson` | Maintainer-visible controlled-provider ledger. | No. Adapters never read it. |
+| `delivery-publications.ndjson` | Maintainer-visible evidence of decoded fact publication and action/result correlation. | No. |
+| `delivery-proposal-observations.ndjson` | Maintainer-visible evidence sampled through the real planning/runtime signal. | No. |
+| `provider-calls.ndjson` | Maintainer-visible fresh current-facts ledger. | No. |
+
+No durable record contains a proposal, frontier, current signal, admission
+position, fiber, live owner, claim ownership, worktree ownership, executor
+ownership, resource ownership, or UI state. The Workflow arm uses a
+process-local in-memory Journal only to mint the existing privately branded
+accepted graph observation required by the ordinary input type; none of those
+records survive process exit.
+
+That in-memory translation is important evidence, not a clean-fit claim. The
+Activity result is schema-decoded, but the current delivery input accepts a
+Journal-branded graph observation. A production adoption would need a
+provider-neutral accepted tracker-observation boundary (with the Journal and
+Workflow adapters both able to construct it), or it would retain custom
+Journal-shaped publication machinery beneath Workflow.
+
+### Code-shape accounting
+
+The extension adds a disposable child protocol, parent harness, controlled
+ledgers, and one production-shaped evaluator. It retains all process-local
+admission and owner logic in Dalph. Effect owns execution identity, Activity
+result persistence, and replay. Dalph still owns:
+
+- exact `OperationId` allocation before the durable boundary;
+- the one-way `OperationId` → Activity name mapping;
+- schema decoding of the Activity result;
+- publication into ordinary current domain input;
+- fresh tracker reads for later current-state decisions;
+- process-local admission, live ownership, quiescence, and cleanup; and
+- the adapter from accepted tracker results to the current privately branded
+  graph-observation input.
+
+Workflow could make the Journal baseline's continuation-specific intent/result
+records deletable for this tracker-read family. It does not make the current
+domain evidence, action planning, runtime ownership, authority refresh, or
+semantic explanation responsibilities deletable. The current private
+Journal-observation brand is duplicated conceptually by the candidate's
+translation and is the principal adjustment exposed by this experiment.
+
+Effect Workflow did not lack a necessary replay or Activity-identity pattern
+for these scenarios, so no minimal engine counterexample was produced and the
+conditional Restate/DBOS comparison was not triggered.
+
+### Updated four-way verdict
+
+1. **Preserve `delivery`; Workflow fits cleanly:** not supported. The closed
+   loop works, but accepted-fact publication currently requires custom
+   Journal-shaped translation.
+2. **Preserve `delivery` with named architectural adjustments:** strongest
+   supported verdict. Introduce a provider-neutral accepted-observation input,
+   retain exact per-action identities, and keep fresh authority reads outside
+   replayed results.
+3. **Workflow cannot fit the coloured architecture:** rejected for the tested
+   tracker-read family. The unchanged description, planning, runtime, and
+   executor seam completed the crash/replay loop.
+4. **Workflow can and should substitute `delivery` with its own readable
+   model:** remains valid but least preferred. Nothing in this experiment
+   requires re-expressing Dalph's description, admission, ownership,
+   quiescence, or stabilization model inside Workflow.
+
+No verdict authorizes adoption, production changes, integration into `master`,
+or modification of parent issue #232.
+
+### Final verification
+
+- Focused prototype suite: 3 files, 28 tests passed.
+- `pnpm typecheck`: passed.
+- `pnpm typecheck:effect`: 517 files checked, zero errors or warnings.
+- `pnpm lint:code`: passed.
+- `pnpm check:all`: passed; 1,789 tests passed, 2 skipped, coverage
+  verification passed, and no secrets were found.
+- Final `pnpm check:quint`: passed in 358.74 seconds, including deterministic,
+  negative-control, sampled, temporal, and exhaustive checks.
+
+The Quint gate is aggregate formal evidence for unchanged governed behavior;
+the named issue #233 acceptance tests above remain the scenario-specific proof.

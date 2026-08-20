@@ -165,9 +165,9 @@ machinery than the rewrite duplicates.
 
 | Verdict | Evidence required | Current result |
 | --- | --- | --- |
-| Preserve `delivery`; Workflow fits cleanly below existing ports. | The full action set obtains stable durable identities/results without changing protected compositions or duplicating continuation. | Supported by the claim tracer bullet, not yet proven for every action family. |
-| Preserve `delivery` with named architectural adjustments. | A small Workflow-backed action/establishment adapter is needed, while descriptions, planning, and live ownership remain intact. | Best fit to current evidence. Stable action naming and replay publication are explicit adjustments. |
-| Workflow cannot fit the coloured architecture. | An accepted behavior requires Workflow/storage concepts in description or requires Dalph to rebuild a durable engine around Workflow. | Not observed in the tracer bullet. |
+| Preserve `delivery`; Workflow fits cleanly below existing ports. | The full action set obtains stable durable identities/results without changing protected compositions or duplicating continuation. | Not supported by the issue #233 closed loop: the current input requires a privately Journal-branded graph observation, so the candidate retains custom translation machinery. |
+| Preserve `delivery` with named architectural adjustments. | A small Workflow-backed action/establishment adapter is needed, while descriptions, planning, and live ownership remain intact. | Best fit to current evidence. Stable action naming, provider-neutral accepted-observation input, and replay publication are explicit adjustments. |
+| Workflow cannot fit the coloured architecture. | An accepted behavior requires Workflow/storage concepts in description or requires Dalph to rebuild a durable engine around Workflow. | Rejected for the tested tracker-read family: unchanged description and planning completed the real runtime loop. |
 | Workflow can and should replace `delivery` with its own readable model. | A Workflow-native composition expresses the same description, planning, concurrency, ownership, Exit, and stabilization meaning more clearly and deletes more machinery than it recreates. | Valid fallback, but current evidence shows a substantially larger architectural fork and no necessity for it. |
 
 ## Scenario-to-test mapping
@@ -180,3 +180,45 @@ machinery than the rewrite duplicates.
 | A foreign or absent exact claim stops before the current-decision read. | `waits without refreshing task facts when the exact claim cannot be reconciled` |
 | The protected seven-line description remains outside Workflow; production's existing exact source guard continues to own its body. | `keeps Workflow vocabulary out of the seven-line delivery description`; `keeps quiescence probes out of action planning and former scheduler runtime code` |
 | Repeated durable actions cannot share one generic Activity name. | `requires one stable Activity name per durable domain action` |
+
+## Issue #233 real runtime result
+
+The production-shaped extension closes Shape A through the actual seam rather
+than the miniature recovered-decision composition:
+
+```text
+controlled tracker facts
+  → unchanged delivery
+  → ordinary delivery-action planning
+  → process-local admission and ownership
+  → DeliveryActionExecutor
+  → exact OperationId-named Activity
+  → schema-decoded accepted tracker result
+  → ordinary current delivery input
+  → proposal disappears or advances
+```
+
+The Workflow handler encloses the ordinary delivery program. That placement
+lets `DeliveryActionExecutor.execute` yield the durable Activity inside the
+same exact Workflow execution. Two sequential actions therefore exercise the
+known collision domain directly; they are not hidden behind one Workflow per
+action.
+
+The only custom continuation/publication machinery exposed by the loop is the
+translation from a schema-decoded Activity result to the current
+`JournaledTrackerGraphObservation` input. The experiment constructs that brand
+through a process-local in-memory Journal. This persists no duplicate state,
+but it is architectural duplication: a Workflow adapter should not have to
+pretend its accepted result was journaled. A provider-neutral accepted
+tracker-observation type would let both Journal and Workflow adapters publish
+the same domain fact without weakening authority or persisting a derived
+frontier.
+
+| Concrete issue #233 outcome | Test |
+| --- | --- |
+| A killed child resumes one execution, reuses one stored Activity result, republishes it, and removes the real proposal without a second boundary read. | `reuses the stored action result after restart, republishes its accepted fact, and does not call the boundary twice` |
+| A fact changed during downtime is learned from the controlled tracker after replayed publication. | `reads current facts after replayed publication before the next current-state decision` |
+| Two exact materialized operation identities survive separate crash cuts and never reuse each other's result. | `keeps two delivery actions distinct through Workflow and republishes each matching result` |
+| Journal and Workflow histories differ while accepted action/result correlations, final proposal state, and current-facts decision agree. | `projects the same delivery consequences through the Journal baseline and Workflow adapter` |
+| Suppressing publication leaves the proposal present; a generic Activity identity correlates operation 2 with operation 1's result. | `records the suppressed replay-publication negative control`; `records the generic Activity-identity negative control` |
+| Workflow and storage terms remain absent from the exact description and action planning. | Existing seven-statement source guard; `keeps Workflow and storage vocabulary out of delivery action planning` |

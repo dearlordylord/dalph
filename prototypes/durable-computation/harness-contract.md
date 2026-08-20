@@ -165,3 +165,28 @@ For each arm, the final evidence records:
 
 The experiment stops after publishing this evidence. Selecting or rejecting a
 runtime remains the project owner's decision.
+
+## Issue #233 production-shaped closed loop
+
+The public seam for the extension is
+`delivery-loop.acceptance.test.ts` → parent harness → real child process. The
+child reconstructs only process-local proposals and owners. It evaluates the
+literal production `delivery`, runs ordinary action planning and admission,
+and supplies a controlled `DeliveryActionExecutor` implementation. No proposal,
+frontier, signal, fiber, live owner, claim, worktree, or executor ownership is
+read from durable storage.
+
+| Scenario | Chronological cut and visible result | Acceptance test |
+| --- | --- | --- |
+| Stored action result is republished after a crash. | Process 1 reads the controlled tracker once through an exact materialized `OperationId`; Workflow stores the Activity result; the parent kills process 1 before current-input publication. Process 2 resumes the same Workflow execution, performs no second boundary read, republishes the result, and the real planned proposal disappears. | `reuses the stored action result after restart, republishes its accepted fact, and does not call the boundary twice` |
+| A later decision needs current tracker state. | During the stop, the parent changes target membership from revision 1 to revision 2. Process 2 first republishes the stored revision-1 action result, then separately reads current task facts and observes revision 2/outside-target. | `reads current facts after replayed publication before the next current-state decision` |
+| Two actions must remain distinct. | Process 1 stores operation 1 and dies. Process 2 replays operation 1, advances through the ordinary input to operation 2, stores operation 2, and dies. Process 3 replays both. Each operation invokes its matching boundary only once and publishes its own decoded result. | `keeps two delivery actions distinct through Workflow and republishes each matching result` |
+| Current Journal comparison. | The Journal arm uses the same delivery/runtime/executor chain. On restart it reconstructs historical graph knowledge but, correctly, does not call it current graph state; it safely reads the controlled tracker again. Both arms end with the same accepted action/result correlations, empty proposal frontier, and current-facts decision. | `projects the same delivery consequences through the Journal baseline and Workflow adapter` |
+| Domain colours remain protected. | The exact seven-statement `delivery` body remains guarded by its production test; the focused prototype guard rejects Workflow, Activity, SQL, or Journal vocabulary in delivery description and action planning. | Existing exact-source guard plus `keeps Workflow and storage vocabulary out of delivery action planning` |
+
+The two-action scenario uses two crashes because the actions are deliberately
+admitted sequentially. That is the smallest restart sequence that proves both
+stored identities replay independently without adding a concurrency claim.
+Git and executor calls do not apply: both actions are tracker reads with no
+task-work position, worktree, or executor attempt. Application Exit is
+unchanged; issue #232 remains the evidence owner for that process-wide cutoff.

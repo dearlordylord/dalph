@@ -82,3 +82,21 @@ file counts are not a substitute for the concrete responsibility.
    and the external evaluation ledger.
 6. The current-Journal-around-Workflow arm is diagnostic only and is not part
    of the authorized step-3 minimum unless needed to isolate an engine defect.
+
+## Issue #233 closed-loop responsibility refinement
+
+The real delivery loop sharpens the split without changing production code:
+
+| Concrete responsibility | Owner in the Workflow arm | Durable disposition |
+| --- | --- | --- |
+| Describe the current graph, plan exact next actions, admit bounded work, own fibers/resources, and decide quiescence. | Existing Dalph delivery composition and process-local runtime. | Never persisted by the experiment. Rebuilt after every child start. |
+| Identify the exact ambiguity-crossing action. | Dalph materializes `OperationId` before calling `DeliveryActionExecutor`; the adapter derives the Activity name one way from it. | Activity request/result is Workflow replay infrastructure. |
+| Perform and schema-decode the controlled tracker read. | Workflow-backed `DeliveryActionExecutor`. | Stored Activity result is historical accepted read evidence, not current tracker authority. |
+| Publish the accepted read into the current delivery input. | Dalph adapter beneath the executor result. | Publication itself is process-local. The current private Journal observation brand forces temporary Journal-shaped translation. |
+| Learn a fact that changed while Dalph was stopped. | Controlled task-tracker boundary. | Read fresh after replayed publication; never answered from Workflow history. |
+| Explain what the maintainer observed. | Parent-owned ledgers and canonical projection. | Evaluation evidence only; no ledger drives adapter continuation. |
+
+This refinement leaves verdict 2 strongest: preserve `delivery` with a
+provider-neutral accepted-observation input and exact durable action identity.
+It supplies no authority to adopt Workflow or delete Journal evidence for
+untested action families.

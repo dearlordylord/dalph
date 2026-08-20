@@ -45,6 +45,7 @@ export const ProviderRequest = Schema.Literals([
   "GitHub.ReadClaim",
   "GitHub.CreateClaim",
   "GitHub.ReadCurrentTaskFacts",
+  "GitHub.ReadTrackerGraph",
   "Git.ReadPlannedBase",
   "Executor.ObservePlannedAttempt",
   "ApplicationExit.CutoffObserved"
@@ -61,6 +62,77 @@ export const ProviderCall = Schema.Struct({
   trackerRevision: Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)))
 })
 export type ProviderCall = typeof ProviderCall.Type
+
+export const DeliveryLoopBoundaryCall = Schema.Struct({
+  operationId: Schema.NonEmptyString,
+  ordinal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  processInstance: Schema.NonEmptyString,
+  target: Schema.NonEmptyString,
+  trackerRevision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
+})
+export type DeliveryLoopBoundaryCall = typeof DeliveryLoopBoundaryCall.Type
+
+export const DeliveryLoopPublication = Schema.Struct({
+  acceptedOperationId: Schema.NonEmptyString,
+  operationId: Schema.NonEmptyString,
+  processInstance: Schema.NonEmptyString,
+  target: Schema.NonEmptyString,
+  trackerRevision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
+})
+export type DeliveryLoopPublication = typeof DeliveryLoopPublication.Type
+
+export const DeliveryLoopProposalObservation = Schema.Literals([
+  "PresentBeforeCrash",
+  "PresentAfterRestartBeforePublication",
+  "AbsentAfterAcceptedFactPublication"
+])
+export type DeliveryLoopProposalObservation = typeof DeliveryLoopProposalObservation.Type
+
+export const DeliveryLoopChildMessage = Schema.TaggedUnion({
+  DeliveryLoopChildReady: {
+    attemptIds: Schema.Array(Schema.NonEmptyString),
+    executionId: Schema.NonEmptyString,
+    plannedBaseSha: Schema.NonEmptyString,
+    runId: Schema.NonEmptyString
+  },
+  DeliveryLoopCompleted: { runId: Schema.NonEmptyString },
+  DeliveryLoopFaultReached: { runId: Schema.NonEmptyString },
+  DeliveryLoopProtocolFailure: { detail: Schema.NonEmptyString }
+})
+export type DeliveryLoopChildMessage = typeof DeliveryLoopChildMessage.Type
+
+export interface DeliveryLoopScenarioRequest {
+  readonly actionCount: 1 | 2
+  readonly adapter: "effect-workflow-v1" | "journal-baseline"
+  readonly activityIdentityMode?: "ExactOperationId" | "Generic"
+  readonly publicationMode?: "Publish" | "Suppress"
+}
+
+export interface DeliveryLoopScenarioResult {
+  readonly attemptIds: ReadonlyArray<string>
+  readonly boundaryCalls: ReadonlyArray<DeliveryLoopBoundaryCall>
+  readonly canonicalTrace: ReadonlyArray<CanonicalDeliveryLoopEvent>
+  readonly executionIds: ReadonlyArray<string>
+  readonly proposalObservations: ReadonlyArray<DeliveryLoopProposalObservation>
+  readonly providerCalls: ReadonlyArray<ProviderCall>
+  readonly publications: ReadonlyArray<DeliveryLoopPublication>
+  readonly recoveryTimedOut: boolean
+}
+
+export type CanonicalDeliveryLoopEvent =
+  | { readonly _tag: "DeliveryProposalPresent" }
+  | {
+      readonly _tag: "DeliveryActionAccepted"
+      readonly acceptedOperationId: string
+      readonly operationId: string
+      readonly target: string
+    }
+  | { readonly _tag: "DeliveryProposalAbsent" }
+  | {
+      readonly _tag: "CurrentTaskFactsObserved"
+      readonly result: string
+      readonly trackerRevision: number
+    }
 
 export const ChildMessage = Schema.TaggedUnion({
   ChildProtocolFailure: { detail: Schema.NonEmptyString },

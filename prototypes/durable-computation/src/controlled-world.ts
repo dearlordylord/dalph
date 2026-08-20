@@ -3,6 +3,9 @@ import { join } from "node:path"
 import { Schema } from "effect"
 import {
   type AdapterName,
+  DeliveryLoopBoundaryCall,
+  type DeliveryLoopProposalObservation,
+  DeliveryLoopPublication,
   type ExactClaim,
   OutsideWorld,
   ProviderCall,
@@ -12,6 +15,10 @@ import {
 
 const outsideWorldPath = (workspace: string): string => join(workspace, "outside-world.json")
 const providerLedgerPath = (workspace: string): string => join(workspace, "provider-calls.ndjson")
+const deliveryBoundaryLedgerPath = (workspace: string): string => join(workspace, "delivery-boundary-calls.ndjson")
+const deliveryPublicationLedgerPath = (workspace: string): string => join(workspace, "delivery-publications.ndjson")
+const deliveryProposalObservationPath = (workspace: string): string =>
+  join(workspace, "delivery-proposal-observations.ndjson")
 
 const writeDurably = async (path: string, contents: string): Promise<void> => {
   const temporaryPath = `${path}.${process.pid}.tmp`
@@ -56,6 +63,30 @@ const readProviderCalls = async (workspace: string): Promise<ReadonlyArray<Provi
 }
 
 export const loadProviderCalls = readProviderCalls
+
+const readLines = async <A>(
+  path: string,
+  decode: (input: unknown) => A
+): Promise<ReadonlyArray<A>> => {
+  const contents = await readFile(path, "utf8").catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return ""
+    throw error
+  })
+  return contents
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => decode(JSON.parse(line)))
+}
+
+const appendLine = async (path: string, value: unknown): Promise<void> => {
+  const file = await open(path, "a")
+  try {
+    await file.appendFile(`${JSON.stringify(value)}\n`, "utf8")
+    await file.sync()
+  } finally {
+    await file.close()
+  }
+}
 
 interface CallContext {
   readonly adapter: AdapterName
@@ -169,3 +200,60 @@ export const reopenApplicationAdmission = async (workspace: string): Promise<voi
     `${JSON.stringify(OutsideWorld.make({ ...world, applicationExitAdmission: "Open" }))}\n`
   )
 }
+
+interface DeliveryLoopCallContext {
+  readonly operationId: string
+  readonly processInstance: string
+  readonly target: string
+  readonly workspace: string
+}
+
+export const readTrackerGraphForDelivery = async (
+  context: DeliveryLoopCallContext
+): Promise<DeliveryLoopBoundaryCall> => {
+  const world = await readOutsideWorld(context.workspace)
+  const existing = await readLines(
+    deliveryBoundaryLedgerPath(context.workspace),
+    Schema.decodeUnknownSync(DeliveryLoopBoundaryCall)
+  )
+  const call = DeliveryLoopBoundaryCall.make({
+    operationId: context.operationId,
+    ordinal: existing.length + 1,
+    processInstance: context.processInstance,
+    target: context.target,
+    trackerRevision: world.trackerRevision
+  })
+  await appendLine(deliveryBoundaryLedgerPath(context.workspace), call)
+  return call
+}
+
+export const loadDeliveryBoundaryCalls = (workspace: string): Promise<ReadonlyArray<DeliveryLoopBoundaryCall>> =>
+  readLines(deliveryBoundaryLedgerPath(workspace), Schema.decodeUnknownSync(DeliveryLoopBoundaryCall))
+
+export const recordDeliveryPublication = async (
+  workspace: string,
+  publication: DeliveryLoopPublication
+): Promise<void> => appendLine(deliveryPublicationLedgerPath(workspace), publication)
+
+export const loadDeliveryPublications = (workspace: string): Promise<ReadonlyArray<DeliveryLoopPublication>> =>
+  readLines(deliveryPublicationLedgerPath(workspace), Schema.decodeUnknownSync(DeliveryLoopPublication))
+
+export const recordDeliveryProposalObservation = async (
+  workspace: string,
+  observation: DeliveryLoopProposalObservation
+): Promise<void> => appendLine(deliveryProposalObservationPath(workspace), observation)
+
+export const loadDeliveryProposalObservations = (
+  workspace: string
+): Promise<ReadonlyArray<DeliveryLoopProposalObservation>> =>
+  readLines(deliveryProposalObservationPath(workspace), Schema.decodeUnknownSync(Schema.String)).then((observations) =>
+    observations.map((observation) =>
+      Schema.decodeUnknownSync(
+        Schema.Literals([
+          "PresentBeforeCrash",
+          "PresentAfterRestartBeforePublication",
+          "AbsentAfterAcceptedFactPublication"
+        ])
+      )(observation)
+    )
+  )

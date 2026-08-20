@@ -21,6 +21,22 @@ describe("Effect Workflow placement beneath Dalph domain colours", () => {
     expect(deliverySource).not.toMatch(/effect\/unstable\/workflow|\b(?:Activity|WorkflowEngine)\b/)
   })
 
+  it("keeps Workflow and storage vocabulary out of delivery action planning", async () => {
+    const planningSource = await readFile(
+      fileURLToPath(
+        new URL(
+          "../../../packages/orchestrator/src/coordination/delivery/delivery-action-planning.ts",
+          import.meta.url
+        )
+      ),
+      "utf8"
+    )
+
+    expect(planningSource).not.toMatch(
+      /effect\/unstable\/workflow|@effect\/sql|\b(?:Activity|WorkflowEngine|SqliteClient|JournalStore)\b/
+    )
+  })
+
   it("expresses the recovered decision without Workflow or storage vocabulary", async () => {
     const calls: Array<string> = []
     const result = await Effect.runPromise(

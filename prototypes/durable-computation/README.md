@@ -21,3 +21,13 @@ repository, or an executor.
 Passing the experiment supplies evidence for the project owner's step-4
 decision. It does not authorize merging this branch, changing Dalph's stable
 architecture, removing the Journal, or adopting Effect Workflow.
+
+Issue #233 continues this experiment from exact prototype commit
+`5cea6629ef9dc4f02cda04bc69cab85b845dd2a7`. Its child-process harness now
+passes one or two tracker-graph read actions through the unchanged production
+`delivery` description, ordinary delivery-action planning, the process-local
+runtime, and `DeliveryActionExecutor`. The Workflow arm stores each result
+under an Activity identity derived from the exact `OperationId`, then
+republishes the decoded result into the ordinary current delivery input after
+restart. This remains disposable evaluation code in the dedicated worktree;
+it is not a production rewrite or an adoption change.
