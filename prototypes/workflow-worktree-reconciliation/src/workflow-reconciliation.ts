@@ -15,6 +15,7 @@ import {
   type DeliveryActionExecutorService,
   deliveryRuntime,
   deterministicPlannedTaskAttemptLayer,
+  GitWorktree,
   JournalDatabaseLocator,
   JournalPosition,
   JournalStore,
@@ -36,15 +37,10 @@ import {
   taskTrackerReadIntent,
   workflowJournalEventVersion,
   initialRunPolicyRevision,
-  FixtureTarget,
-  RunLifecycleJournal
+  FixtureTarget
 } from "@dalph/orchestrator"
-import {
-  Effect,
-  Layer,
-  Schema,
-  SubscriptionRef
-} from "effect"
+import type { GitWorktreeService } from "../../../packages/orchestrator/dist/src/authorities/git/worktree.js"
+import { Effect, Layer, Schema, SubscriptionRef } from "effect"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import { Activity, Workflow, WorkflowEngine } from "effect/unstable/workflow"
 import { runDeliveryRuntime } from "@dalph/orchestrator"
@@ -52,9 +48,7 @@ import {
   deterministicDeliveryRuntimeSupport,
   makeDeliveryRelationsLayer
 } from "../../../packages/orchestrator/dist/src/coordination/delivery/in-memory-relations.js"
-import type {
-  DeliveryRelationInputBundle,
-} from "@dalph/orchestrator"
+import type { DeliveryRelationInputBundle } from "@dalph/orchestrator"
 import type { TrackerGraphState } from "../../../packages/orchestrator/dist/src/coordination/delivery/relations.js"
 import type {
   DeliveryActionExecutionError,
@@ -66,26 +60,34 @@ import { deliveryRuntimeResourcesLayer } from "../../../packages/orchestrator/di
 import { reduceWorkflowJournalHistory } from "../../../packages/orchestrator/dist/src/coordination/reconstruction/history.js"
 import { intentRecordKey, outcomeRecordKey } from "../../../packages/orchestrator/dist/src/workflow-journal/record-key.js"
 import { makeJournal } from "../../../packages/orchestrator/dist/src/coordination/delivery/journal.js"
+import { appendReady, hasReadyOutcome, loadJournalRecords } from "./journal.ts"
 import {
-  appendReady
-} from "./journal.ts"
+  controlledGitWorktreeLayer,
+  runBlindControlledGitRetry,
+  runControlledGitWorktreeReconciliation
+} from "./controlled-git-worktree.ts"
 import {
   changeFactsDuringDowntime,
-  createPlannedWorktree,
-  readPlannedWorktree,
-  readControlledWorld,
+  loadActivityEvidence,
+  loadExecutorAdmissionContacts,
   recordActivityResultAvailable,
   recordDecisionEvidence,
-  recordProposalObservation
+  recordProposalObservation,
+  readControlledWorld
 } from "./controlled-world.ts"
 import {
+  activityResultFor,
   FaultName,
   fixture,
-  type WorktreeDecision,
+  plannedAttempt,
+  WorktreeActivityError,
+  WorktreeActivityResult,
+  WorktreeDecision,
+  type WorktreeDecision as WorktreeDecisionType,
+  WorktreeScenario,
   type WorktreeProcessInstance,
-  type WorktreeScenario
+  type WorktreeScenario as WorktreeScenarioType
 } from "./contracts.ts"
-import type { ControlledWorktreeObservation } from "./contracts.ts"
 
 interface WorkflowReconciliationInput {
   readonly onReady: (executionId: string) => Promise<void>
@@ -93,7 +95,7 @@ interface WorkflowReconciliationInput {
   readonly onPublicationSuppressed: () => Promise<never>
   readonly processInstance: WorktreeProcessInstance
   readonly publicationMode: "Publish" | "Suppress"
-  readonly scenario: WorktreeScenario
+  readonly scenario: WorktreeScenarioType
   readonly workspace: string
 }
 
@@ -103,6 +105,7 @@ const policy = RunControlPolicy.make({
 })
 const graphTarget = FixtureTarget.make("issue-234-controlled-graph")
 
+/** The ordinary planning graph is rebuilt in every process from controlled Journal facts. */
 const graphStateFor = Effect.gen(function* () {
   const snapshotResult = TaskDagSnapshot.project(
     TrackerSnapshot.make({
@@ -153,8 +156,8 @@ const graphStateFor = Effect.gen(function* () {
 
 const workflowRuntimeLayer = (
   databasePath: string,
-  handler: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine | JournalStore>,
-  journalLayer: Layer.Layer<JournalStore | RunLifecycleJournal, never, never>
+  handler: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine | GitWorktree>,
+  gitLayer: Layer.Layer<GitWorktree, never, never>
 ) => {
   const sql = SqliteClient.layer({ filename: databasePath })
   const cluster = SingleRunner.layer({
@@ -167,79 +170,105 @@ const workflowRuntimeLayer = (
       simulateRemoteSerialization: true
     }
   }).pipe(Layer.provide([sql, NodeCrypto.layer]))
-  return handler.pipe(
-    Layer.provide(journalLayer),
-    Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster)))
-  )
+  const engine = ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster))
+  return handler.pipe(Layer.provide(gitLayer), Layer.provideMerge(engine))
 }
 
+/** Workflow serializes only the exact Activity result; planning and Journal publication stay outside it. */
+const WorktreeWorkflowPayload = Schema.Struct({
+  attemptId: AttemptId,
+  baseSha: GitCommitSha,
+  branch: TaskBranchRef,
+  operationId: OperationId,
+  runId: RunId,
+  scenario: WorktreeScenario,
+  worktree: WorktreeLocator
+})
+
 const WorktreeWorkflow = Workflow.make("DalphWorktreeReconciliation234", {
-  error: Schema.Never,
+  error: WorktreeActivityError,
   idempotencyKey: ({ runId }) => runId,
-  payload: {
-    attemptId: AttemptId,
-    baseSha: GitCommitSha,
-    branch: TaskBranchRef,
-    operationId: OperationId,
-    runId: RunId,
-    scenario: Schema.Literals([
-      "UnstoredActivityResult",
-      "StoredResultBeforeJournal",
-      "FactsChangedDuringDowntime",
-      "BlindRetry",
-      "ReplayHistoricalRead"
-    ]),
-    worktree: WorktreeLocator
-  },
-  success: Schema.Literals(["ContinueWorktreeReady", "WaitWorktreeNotReady"])
+  payload: WorktreeWorkflowPayload.fields,
+  success: Schema.Struct({
+    activity: WorktreeActivityResult,
+    historicalDecision: WorktreeDecision
+  })
 })
 
 const operationAllocation = OperationIdAllocator.of({
   allocate: () => Effect.die("the accepted worktree proposal must not allocate a new OperationId")
 })
 
-const currentDecision = async (
-  workspace: string,
-  processInstance: WorktreeProcessInstance
-): Promise<WorktreeDecision> => {
-  const observation = await readPlannedWorktree({
-    operationId: fixture.operationId,
-    processInstance,
-    workspace
+const activityErrorOf = (cause: unknown, worktree: WorktreeLocator): WorktreeActivityError => {
+  const tag =
+    cause !== null && typeof cause === "object" && "_tag" in cause && typeof cause._tag === "string"
+      ? cause._tag
+      : ""
+  const reason =
+    tag === "ContradictoryWorktreeState"
+      ? "ContradictoryWorktreeState"
+      : tag === "GitWorktreeCreateFailure" || tag === "CoordinatorOwnershipError"
+        ? "GitWorktreeCreateFailure"
+        : "GitWorktreeReadFailure"
+  return WorktreeActivityError.make({
+    detail: cause instanceof Error ? cause.message : String(cause),
+    reason,
+    worktree
   })
-  const decision =
-    observation._tag === "PlannedWorktreeReady" &&
-    observation.baseSha === fixture.baseSha &&
-    observation.branch === fixture.branch &&
-    observation.worktree === fixture.worktree
-      ? "ContinueWorktreeReady"
-      : "WaitWorktreeNotReady"
-  await recordDecisionEvidence(workspace, processInstance, decision)
-  return decision
 }
 
-const asReadyProof = (observation: ControlledWorktreeObservation) => {
-  if (observation._tag !== "PlannedWorktreeReady") throw new Error(`controlled Git did not prove readiness: ${observation._tag}`)
-  if (
-    observation.baseSha !== fixture.baseSha ||
-    observation.branch !== fixture.branch ||
-    observation.worktree !== fixture.worktree
-  ) {
-    throw new Error("controlled Git returned a proof for a different planned resource")
+type WorktreeWorkflowPayloadType = typeof WorktreeWorkflowPayload.Type
+
+const activityFor = (payload: WorktreeWorkflowPayloadType, git: GitWorktreeService) => {
+  const proof =
+    payload.scenario === "BlindRetry"
+      ? runBlindControlledGitRetry(git, plannedAttempt)
+      : runControlledGitWorktreeReconciliation(git, plannedAttempt)
+  return proof.pipe(
+    Effect.map((ready) => activityResultFor(payload, ready)),
+    Effect.mapError((cause) => activityErrorOf(cause, payload.worktree))
+  )
+}
+
+interface FoldedJournal {
+  readonly accepted: boolean
+  readonly acceptedAt: JournalPosition
+}
+
+const foldedJournalOf = (records: Awaited<ReturnType<typeof loadJournalRecords>>): FoldedJournal => {
+  const reduced = reduceWorkflowJournalHistory(fixture.runId, records)
+  if (reduced._tag === "InvalidWorkflowJournalHistory") {
+    throw new Error(`controlled Journal history is invalid: ${String(reduced)}`)
   }
-  return observation
+  const ready = records.find(({ event }) => event._tag === "TaskWorktreeReady")
+  const intended = records.find(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")
+  const accepted = hasReadyOutcome(records)
+  const acceptedAt = ready?.position ?? intended?.position
+  if (acceptedAt === undefined) throw new Error("controlled Journal has no reconciliation intent")
+  return { accepted, acceptedAt }
 }
 
-const bundleFor = (
-  graph: TrackerGraphState,
-  contributions: ReturnType<typeof deliveryProposalsOf>,
-  acceptedAt: JournalPosition
-): DeliveryRelationInputBundle => ({
+const transition = RunnableFrontierTransition.ReconcileTaskWorktree({
+  operationId: fixture.operationId,
+  taskId: fixture.taskId
+})
+
+/** Ordinary planning derives proposal presence from the reread-and-folded Journal, never from a local shortcut. */
+const proposalContributionsFor = (history: FoldedJournal): ReturnType<typeof deliveryProposalsOf> =>
+  deliveryProposalsOf({
+    acceptedAt: history.acceptedAt,
+    acceptedOperationIds: new Set([fixture.operationId]),
+    fresh: [],
+    runId: fixture.runId,
+    transitions: history.accepted ? [] : [transition]
+  })
+
+const bundleFor = (graph: TrackerGraphState, history: FoldedJournal): DeliveryRelationInputBundle => ({
   actionInputs: {
-    proposalContributions: contributions,
+    proposalContributions: proposalContributionsFor(history),
     reflectionProposals: [],
     runtimeFacts: {
-      acceptedAt,
+      acceptedAt: history.acceptedAt,
       pauseCoverage: {
         _tag: "PauseCoverageGraphNotEstablished",
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
@@ -252,216 +281,205 @@ const bundleFor = (
   publication: { exactEvidence: [], graph, policy }
 })
 
-const emptyContributions = (): ReturnType<typeof deliveryProposalsOf> => ({
-  deliverySettlement: [],
-  issues: [],
-  ticketDelivery: []
-})
+const currentDecision = (
+  git: GitWorktreeService,
+  input: WorkflowReconciliationInput
+): Effect.Effect<WorktreeDecisionType> =>
+  git.readPlannedWorktree(plannedAttempt).pipe(
+    Effect.map((observation): WorktreeDecisionType =>
+      observation._tag === "PlannedWorktreeReady" &&
+          observation.baseSha === fixture.baseSha &&
+          observation.branch === fixture.branch &&
+          observation.worktree === fixture.worktree
+        ? "ContinueWorktreeReady"
+        : "WaitWorktreeNotReady"
+    ),
+    Effect.orElseSucceed(() => "WaitWorktreeNotReady" as const),
+    Effect.tap((decision) =>
+      Effect.promise(async () => {
+        const contacts = await loadExecutorAdmissionContacts(input.workspace)
+        await recordDecisionEvidence(
+          input.workspace,
+          input.processInstance,
+          decision,
+          "ControlledGitFreshRead",
+          contacts.length
+        )
+      })
+    )
+  )
 
 export const runWorkflowReconciliation = async (
   input: WorkflowReconciliationInput
-): Promise<WorktreeDecision> => {
-  // Application Exit is process-wide and is constructed by the child shell,
-  // outside the Run Workflow handler. The handler receives only its admission
-  // capability through the local runtime resource layer.
+): Promise<WorktreeDecisionType> => {
+  // Application Exit is process-wide and is constructed by the ordinary child
+  // program, outside both Run Workflow and the Workflow handler.
   const applicationExitAdmission = await Effect.runPromise(
     makeApplicationExitLifecycle().pipe(Effect.map(({ admission }) => admission))
   )
+  const priorActivityEvidence = await loadActivityEvidence(input.workspace)
+  const priorExecutionId = priorActivityEvidence.at(-1)?.executionId
+  let executionIdSeen: string | undefined
   const journalLayer = Layer.orDie(
     sqliteJournalStoreLayer({
       filename: JournalDatabaseLocator.make(join(input.workspace, "journal.sqlite"))
     })
   )
+  const afterCreate =
+    input.processInstance === "process-1" &&
+    (input.scenario === "UnstoredActivityResult" || input.scenario === "BlindRetry")
+      ? () => input.onFault("AfterCreateBeforeActivityStorage")
+      : undefined
+  const gitLayer = controlledGitWorktreeLayer({
+    ...(afterCreate === undefined ? {} : { afterCreate }),
+    processInstance: input.processInstance,
+    workspace: input.workspace
+  })
   const handler = WorktreeWorkflow.toLayer((payload, executionId) =>
     Effect.gen(function* () {
-      const journal = yield* JournalStore
-      const graph = yield* graphStateFor.pipe(Effect.orDie)
-      const transition = RunnableFrontierTransition.ReconcileTaskWorktree({
-        operationId: fixture.operationId,
-        taskId: fixture.taskId
-      })
-      const contributions = deliveryProposalsOf({
-        acceptedAt: JournalPosition.make(3),
-        acceptedOperationIds: new Set([fixture.operationId]),
-        fresh: [],
-        runId: fixture.runId,
-        transitions: [transition]
-      })
-      const current = yield* SubscriptionRef.make(bundleFor(graph, contributions, JournalPosition.make(3)))
-      yield* Effect.promise(() => input.onReady(executionId))
-      yield* Effect.promise(() =>
-        recordProposalObservation(
-          input.workspace,
-          input.processInstance === "process-1"
-            ? { _tag: "PresentBeforeActivity", processInstance: input.processInstance }
-            : { _tag: "PresentAfterRestartBeforeJournal", processInstance: input.processInstance }
-        )
-      )
-      const coherent = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(current))
-      const relations = makeDeliveryRelationsLayer({
-        ...deterministicDeliveryRuntimeSupport(policy),
-        coherent
-      })
+      const git = yield* GitWorktree
       const workflowContext = yield* Effect.context<WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance>()
-      const executor: DeliveryActionExecutorService = {
-        execute: (action, lease): Effect.Effect<DeliveryActionResult, DeliveryActionExecutionError> =>
-          Effect.gen(function* () {
-            if (
-              action._tag !== "AcceptedOperationAction" ||
-              action.proposal.route._tag !== "AcceptedWorkflowRoute" ||
-              action.proposal.route.transition._tag !== "ReconcileTaskWorktree"
-            ) {
-              return yield* Effect.die("delivery proposed a non-worktree action")
-            }
-            yield* lease.recordIntent(fixture.operationId)
-            const activity = Activity.make({
-              error: Schema.Never,
-              execute: Effect.promise(async () => {
-                const context = {
-                  operationId: fixture.operationId,
-                  processInstance: input.processInstance,
-                  workspace: input.workspace
-                }
-                if (payload.scenario === "BlindRetry") {
-                  await createPlannedWorktree(
-                    context,
-                    payload.scenario === "BlindRetry" && input.processInstance === "process-1"
-                      ? () => input.onFault("AfterCreateBeforeActivityStorage")
-                      : undefined
-                  )
-                  const ready = asReadyProof(await readPlannedWorktree(context))
-                  return {
-                    attemptId: payload.attemptId,
-                    baseSha: ready.baseSha,
-                    branch: ready.branch,
-                    headSha: ready.headSha,
-                    operationId: payload.operationId,
-                    runId: payload.runId,
-                    worktree: ready.worktree
-                  }
-                }
-                const observed = await readPlannedWorktree(context)
-                if (observed._tag === "PlannedWorktreeReady") {
-                  const ready = asReadyProof(observed)
-                  return {
-                    attemptId: payload.attemptId,
-                    baseSha: ready.baseSha,
-                    branch: ready.branch,
-                    headSha: ready.headSha,
-                    operationId: payload.operationId,
-                    runId: payload.runId,
-                    worktree: ready.worktree
-                  }
-                }
-                if (observed._tag !== "PlannedWorktreeAbsent") {
-                  throw new Error(`controlled Git refused reconciliation: ${observed.detail}`)
-                }
-                await createPlannedWorktree(
-                  context,
-                  input.processInstance === "process-1" && payload.scenario === "UnstoredActivityResult"
-                    ? () => input.onFault("AfterCreateBeforeActivityStorage")
-                    : undefined
-                )
-                const ready = asReadyProof(await readPlannedWorktree(context))
-                return {
-                  attemptId: payload.attemptId,
-                  baseSha: ready.baseSha,
-                  branch: ready.branch,
-                  headSha: ready.headSha,
-                  operationId: payload.operationId,
-                  runId: payload.runId,
-                  worktree: ready.worktree
-                }
-              }),
-              name: fixture.activityName,
-              success: Schema.Struct({
-                attemptId: AttemptId,
-                baseSha: GitCommitSha,
-                branch: TaskBranchRef,
-                headSha: GitCommitSha,
-                operationId: OperationId,
-                runId: RunId,
-                worktree: WorktreeLocator
-              })
+      // This callback reports execution identity only; ordinary proposal planning remains below the handler.
+      executionIdSeen = executionId
+      yield* Effect.promise(() => input.onReady(executionId))
+      const activity = Activity.make({
+        error: WorktreeActivityError,
+        execute: activityFor(payload, git),
+        name: fixture.activityName,
+        success: WorktreeActivityResult
+      })
+      const activityResult = yield* activity.pipe(Effect.provide(workflowContext))
+      const historicalDecision: WorktreeDecisionType = "ContinueWorktreeReady"
+      return { activity: activityResult, historicalDecision }
+    })
+  )
+  const runtime = workflowRuntimeLayer(join(input.workspace, "workflow.sqlite"), handler, gitLayer)
+  const fullRuntime = Layer.mergeAll(runtime, journalLayer, gitLayer)
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const initialRecords = yield* journal.read(fixture.runId)
+        const initialHistory = foldedJournalOf(initialRecords)
+        const graph = yield* graphStateFor.pipe(Effect.orDie)
+        const current = yield* SubscriptionRef.make(bundleFor(graph, initialHistory))
+        if (!initialHistory.accepted) {
+          yield* Effect.promise(() =>
+            recordProposalObservation(input.workspace, {
+              _tag:
+                input.processInstance === "process-1"
+                  ? "PresentBeforeActivity"
+                  : "PresentAfterRestartBeforeJournal",
+              processInstance: input.processInstance
             })
-            const activityResult = yield* activity.pipe(Effect.provide(workflowContext))
-            const proof = {
-              baseSha: activityResult.baseSha,
-              branch: activityResult.branch,
-              headSha: activityResult.headSha,
-              worktree: activityResult.worktree
-            }
-            yield* Effect.promise(() => recordActivityResultAvailable(input.workspace, input.processInstance))
-            if (
-              input.processInstance === "process-1" &&
-              (payload.scenario === "StoredResultBeforeJournal" ||
-                payload.scenario === "FactsChangedDuringDowntime" ||
-                payload.scenario === "ReplayHistoricalRead")
-            ) {
-              return yield* Effect.promise(() => input.onFault("AfterActivityStorageBeforeJournal"))
-            }
-            if (input.publicationMode === "Suppress") {
-              return yield* Effect.promise(input.onPublicationSuppressed)
-            }
-            const outcome = yield* appendReady(journal, {
-              operationId: fixture.operationId,
-              proof,
-              version: workflowJournalEventVersion
-            }).pipe(Effect.orDie)
-            yield* SubscriptionRef.set(current, bundleFor(graph, emptyContributions(), outcome.position))
-            if (payload.scenario === "ReplayHistoricalRead") {
+          )
+        }
+        const coherent = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(current))
+        const relations = makeDeliveryRelationsLayer({
+          ...deterministicDeliveryRuntimeSupport(policy),
+          coherent
+        })
+        const workflowContext = yield* Effect.context<WorkflowEngine.WorkflowEngine>()
+        const executor: DeliveryActionExecutorService = {
+          execute: (action, lease): Effect.Effect<DeliveryActionResult, DeliveryActionExecutionError> =>
+            Effect.gen(function* () {
+              if (
+                action._tag !== "AcceptedOperationAction" ||
+                action.proposal.route._tag !== "AcceptedWorkflowRoute" ||
+                action.proposal.route.transition._tag !== "ReconcileTaskWorktree"
+              ) {
+                return yield* Effect.die("delivery proposed a non-worktree action")
+              }
+              yield* lease.recordIntent(fixture.operationId)
+              const workflowResult = yield* WorktreeWorkflow.execute({
+                attemptId: fixture.attemptId,
+                baseSha: fixture.baseSha,
+                branch: fixture.branch,
+                operationId: fixture.operationId,
+                runId: fixture.runId,
+                scenario: input.scenario,
+                worktree: fixture.worktree
+              }).pipe(Effect.provide(workflowContext))
+              const executionId = executionIdSeen ?? priorExecutionId
+              if (executionId === undefined) return yield* Effect.die("Workflow completed without an execution identity")
+              if (executionIdSeen === undefined) yield* Effect.promise(() => input.onReady(executionId))
               yield* Effect.promise(() =>
-                recordDecisionEvidence(
-                  input.workspace,
-                  input.processInstance,
-                  "ContinueWorktreeReady",
-                  "ReplayedWorkflowResult"
-                )
+                recordActivityResultAvailable(input.workspace, input.processInstance, executionId)
               )
-            } else {
+              if (
+                input.processInstance === "process-1" &&
+                (input.scenario === "StoredResultBeforeJournal" ||
+                  input.scenario === "FactsChangedDuringDowntime" ||
+                  input.scenario === "ReplayHistoricalRead")
+              ) {
+                return yield* Effect.promise(() => input.onFault("AfterActivityStorageBeforeJournal"))
+              }
+              if (input.publicationMode === "Suppress") {
+                return yield* Effect.promise(input.onPublicationSuppressed)
+              }
+
+              // Ordinary executor code appends through the persistent Journal and
+              // then folds that Journal again before changing its process-local signal.
+              const beforeAppend = yield* journal.read(fixture.runId)
+              if (!hasReadyOutcome(beforeAppend)) {
+                yield* appendReady(journal, {
+                  operationId: fixture.operationId,
+                  proof: workflowResult.activity.proof,
+                  version: workflowJournalEventVersion
+                }).pipe(Effect.orDie)
+              }
+              const publishedRecords = yield* journal.read(fixture.runId)
+              const publishedHistory = foldedJournalOf(publishedRecords)
+              if (!publishedHistory.accepted) return yield* Effect.die("Journal publication did not fold as accepted")
+              yield* SubscriptionRef.set(current, bundleFor(graph, publishedHistory))
               yield* Effect.promise(() =>
                 recordProposalObservation(input.workspace, {
                   _tag: "AbsentAfterJournalPublication",
                   processInstance: input.processInstance
                 })
               )
-            }
-            return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
-          }).pipe(Effect.orDie)
-      }
-      const runtimeDependencies = Layer.mergeAll(
-        deliveryRuntimeResourcesLayer(applicationExitAdmission),
-        plannedAttemptProtocolControllerLayer,
-        deterministicPlannedTaskAttemptLayer({
-          baseSha: fixture.baseSha,
-          executor: fixture.executor,
-          runId: fixture.runId,
-          worktreeRoot: fixture.worktree
-        }),
-        Layer.succeed(OperationIdAllocator, operationAllocation),
-        Layer.succeed(DeliveryActionExecutor, DeliveryActionExecutor.of(executor))
-      )
-      yield* runDeliveryRuntime(yield* deliveryRuntime.pipe(Effect.provide(relations))).pipe(
-        Effect.provide(runtimeDependencies),
-        Effect.orDie
-      )
-      if (payload.scenario === "ReplayHistoricalRead" || payload.scenario === "StoredResultBeforeJournal") {
-        return "ContinueWorktreeReady"
-      }
-      return yield* Effect.promise(() => currentDecision(input.workspace, input.processInstance))
-    })
-  )
-  const runtime = workflowRuntimeLayer(join(input.workspace, "workflow.sqlite"), handler, journalLayer)
-  return Effect.runPromise(
-    WorktreeWorkflow.execute({
-      attemptId: fixture.attemptId,
-      baseSha: fixture.baseSha,
-      branch: fixture.branch,
-      operationId: fixture.operationId,
-      runId: fixture.runId,
-      scenario: input.scenario,
-      worktree: fixture.worktree
-    }).pipe(Effect.provide(runtime), Effect.scoped)
+              if (input.scenario === "ReplayHistoricalRead") {
+                const contacts = yield* Effect.promise(() => loadExecutorAdmissionContacts(input.workspace))
+                yield* Effect.promise(() =>
+                  recordDecisionEvidence(
+                    input.workspace,
+                    input.processInstance,
+                    workflowResult.historicalDecision,
+                    "ReplayedWorkflowResult",
+                    contacts.length
+                  )
+                )
+              }
+              return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+            }).pipe(Effect.orDie)
+        }
+        const runtimeDependencies = Layer.mergeAll(
+          deliveryRuntimeResourcesLayer(applicationExitAdmission),
+          plannedAttemptProtocolControllerLayer,
+          deterministicPlannedTaskAttemptLayer({
+            baseSha: fixture.baseSha,
+            executor: fixture.executor,
+            runId: fixture.runId,
+            worktreeRoot: fixture.worktree
+          }),
+          Layer.succeed(OperationIdAllocator, operationAllocation),
+          Layer.succeed(DeliveryActionExecutor, DeliveryActionExecutor.of(executor))
+        )
+        yield* runDeliveryRuntime(yield* deliveryRuntime.pipe(Effect.provide(relations))).pipe(
+          Effect.provide(runtimeDependencies),
+          Effect.orDie
+        )
+        if (
+          input.scenario === "ReplayHistoricalRead" ||
+          input.scenario === "StoredResultBeforeJournal" ||
+          input.scenario === "BlindRetry"
+        ) {
+          return "ContinueWorktreeReady" as const
+        }
+        const git = yield* GitWorktree
+        return yield* currentDecision(git, input)
+      }).pipe(Effect.provide(fullRuntime))
+    )
   )
 }
 

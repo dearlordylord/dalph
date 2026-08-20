@@ -8,6 +8,7 @@ import { Schema } from "effect"
 import {
   type ActivityEvidence,
   ChildMessage,
+  type ExecutorAdmissionContact,
   fixture,
   type ChildMessage as ChildMessageType,
   type ControlledGitCall,
@@ -21,9 +22,11 @@ import {
   initializeControlledWorld,
   loadActivityEvidence,
   loadDecisionEvidence,
+  loadExecutorAdmissionContacts,
   loadGitCalls,
   loadProposalObservations
 } from "./controlled-world.ts"
+import { inspectDurableInventory, type DurableInventory } from "./inventory.ts"
 import { loadJournalRecords } from "./journal.ts"
 
 interface RunningChild {
@@ -73,10 +76,15 @@ const startChild = (
   return { child, messages, stderr }
 }
 
-const childExit = (running: RunningChild): Promise<number | null> =>
+export interface ChildExit {
+  readonly code: number | null
+  readonly signal: NodeJS.Signals | null
+}
+
+const childExit = (running: RunningChild): Promise<ChildExit> =>
   new Promise((resolve, reject) => {
     running.child.once("error", reject)
-    running.child.once("exit", resolve)
+    running.child.once("exit", (code, signal) => resolve({ code, signal }))
   })
 
 interface FirstProcessObservation {
@@ -117,14 +125,18 @@ export interface WorkflowReconciliationResult {
   readonly activityEvidence: ReadonlyArray<ActivityEvidence>
   readonly childMessages: ReadonlyArray<ChildMessageType>
   readonly decisionEvidence: ReadonlyArray<DecisionEvidence>
+  readonly executorContacts: ReadonlyArray<ExecutorAdmissionContact>
   readonly executionIds: ReadonlyArray<string>
+  readonly firstExit: ChildExit
   readonly gitCalls: ReadonlyArray<ControlledGitCall>
+  readonly inventory: DurableInventory
   readonly journalRecords: Awaited<ReturnType<typeof loadJournalRecords>>
   readonly journalEventTags: ReadonlyArray<string>
   readonly physicalWorktreeCreated: boolean
   readonly proposalObservations: ReadonlyArray<ProposalObservation>
   readonly scenario: WorktreeScenario
   readonly stderr: ReadonlyArray<string>
+  readonly secondExit: ChildExit
   readonly terminalDecision: WorktreeDecision | undefined
 }
 
@@ -145,7 +157,7 @@ export const runWorkflowReconciliationScenario = async (input: {
   try {
     await initializeControlledWorld(workspace)
     const first = startChild(input.scenario, "Publish", workspace, "process-1")
-    const firstExit = childExit(first)
+    const firstExitPromise = childExit(first)
     const firstWatchdog = setTimeout(() => first.child.kill("SIGKILL"), watchdogMilliseconds)
     try {
       await observeUntil(first, "Fault", observation)
@@ -155,7 +167,7 @@ export const runWorkflowReconciliationScenario = async (input: {
     allMessages.push(...observation.messages)
     allStderr.push(...first.stderr)
     first.child.kill("SIGKILL")
-    await firstExit
+    const firstExit = await firstExitPromise
 
     if (input.scenario === "FactsChangedDuringDowntime" || input.scenario === "ReplayHistoricalRead") {
       await changeFactsDuringDowntime(workspace)
@@ -174,34 +186,48 @@ export const runWorkflowReconciliationScenario = async (input: {
     allMessages.push(...secondObservation.messages)
     allStderr.push(...second.stderr)
     if (publicationMode === "Suppress") second.child.kill("SIGKILL")
-    const secondExitCode = await secondExit
-    if (publicationMode === "Publish" && secondExitCode !== 0) {
-      throw new Error(`successor child exited ${secondExitCode}: ${second.stderr.join("")}`)
+    const secondExitInfo = await secondExit
+    if (publicationMode === "Publish" && (secondExitInfo.code !== 0 || secondExitInfo.signal !== null)) {
+      throw new Error(`successor child exited ${JSON.stringify(secondExitInfo)}: ${second.stderr.join("")}`)
     }
     observation.executionIds.push(...secondObservation.executionIds)
 
-    const [gitCalls, activityEvidence, proposalObservations, decisionEvidence, journalRecords, physicalWorktreeCreated] =
+    const [
+      gitCalls,
+      activityEvidence,
+      proposalObservations,
+      decisionEvidence,
+      executorContacts,
+      journalRecords,
+      physicalWorktreeCreated
+    ] =
       await Promise.all([
         loadGitCalls(workspace),
         loadActivityEvidence(workspace),
         loadProposalObservations(workspace),
         loadDecisionEvidence(workspace),
+        loadExecutorAdmissionContacts(workspace),
         loadJournalRecords(workspace),
         physicalWorktreeWasCreated(workspace)
       ])
+    const inventory = await inspectDurableInventory(workspace, journalRecords)
     const terminalDecision = allMessages.findLast((message) => message._tag === "Completed")
     return {
       activityEvidence,
       childMessages: allMessages,
       decisionEvidence,
+      executorContacts,
       executionIds: observation.executionIds,
+      firstExit,
       gitCalls,
+      inventory,
       journalRecords,
       journalEventTags: journalRecords.map(({ event }) => event._tag),
       physicalWorktreeCreated,
       proposalObservations,
       scenario: input.scenario,
       stderr: allStderr,
+      secondExit: secondExitInfo,
       terminalDecision: terminalDecision?._tag === "Completed" ? terminalDecision.decision : undefined
     }
   } finally {

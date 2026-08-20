@@ -7,6 +7,7 @@ import {
   ControlledWorld,
   ControlledWorktreeObservation,
   DecisionEvidence,
+  ExecutorAdmissionContact,
   fixture,
   plannedAttempt,
   ProposalObservation,
@@ -19,6 +20,7 @@ const gitLedgerPath = (workspace: string): string => join(workspace, "controlled
 const activityLedgerPath = (workspace: string): string => join(workspace, "activity-evidence.ndjson")
 const proposalLedgerPath = (workspace: string): string => join(workspace, "proposal-observations.ndjson")
 const decisionLedgerPath = (workspace: string): string => join(workspace, "decision-evidence.ndjson")
+const executorAdmissionLedgerPath = (workspace: string): string => join(workspace, "executor-admission-contacts.ndjson")
 
 const writeDurably = async (path: string, contents: string): Promise<void> => {
   const temporaryPath = `${path}.${process.pid}.tmp`
@@ -53,8 +55,8 @@ const appendLine = async (path: string, value: unknown): Promise<void> => {
   }
 }
 
-export const initializeControlledWorld = async (workspace: string): Promise<void> =>
-  writeDurably(
+export const initializeControlledWorld = async (workspace: string): Promise<void> => {
+  await writeDurably(
     outsideWorldPath(workspace),
     `${JSON.stringify(
       ControlledWorld.make({
@@ -64,6 +66,8 @@ export const initializeControlledWorld = async (workspace: string): Promise<void
       })
     )}\n`
   )
+  await writeDurably(executorAdmissionLedgerPath(workspace), "")
+}
 
 export const readControlledWorld = async (workspace: string): Promise<ControlledWorld> =>
   Schema.decodeUnknownSync(ControlledWorld)(JSON.parse(await readFile(outsideWorldPath(workspace), "utf8")))
@@ -78,8 +82,11 @@ export const loadProposalObservations = (workspace: string): Promise<ReadonlyArr
   readLines(proposalLedgerPath(workspace), Schema.decodeUnknownSync(ProposalObservation))
 export const loadDecisionEvidence = (workspace: string): Promise<ReadonlyArray<DecisionEvidence>> =>
   readLines(decisionLedgerPath(workspace), Schema.decodeUnknownSync(DecisionEvidence))
+export const loadExecutorAdmissionContacts = (workspace: string): Promise<ReadonlyArray<ExecutorAdmissionContact>> =>
+  readLines(executorAdmissionLedgerPath(workspace), Schema.decodeUnknownSync(ExecutorAdmissionContact))
 
-interface BoundaryContext {
+/** The controlled boundary identity carried into each fake Git observation. */
+export interface BoundaryContext {
   readonly operationId: typeof fixture.operationId
   readonly processInstance: WorktreeProcessInstance
   readonly workspace: string
@@ -173,7 +180,8 @@ export const changeFactsDuringDowntime = async (workspace: string): Promise<void
 
 export const recordActivityResultAvailable = async (
   workspace: string,
-  processInstance: WorktreeProcessInstance
+  processInstance: WorktreeProcessInstance,
+  executionId: string
 ): Promise<void> =>
   appendLine(
     activityLedgerPath(workspace),
@@ -183,6 +191,7 @@ export const recordActivityResultAvailable = async (
       attemptId: fixture.attemptId,
       baseSha: fixture.baseSha,
       branch: fixture.branch,
+      executionId,
       headSha: fixture.baseSha,
       operationId: fixture.operationId,
       processInstance,
@@ -200,19 +209,26 @@ export const recordDecisionEvidence = async (
   workspace: string,
   processInstance: WorktreeProcessInstance,
   decision: WorktreeDecision,
-  source: "ControlledGitFreshRead" | "ReplayedWorkflowResult" = "ControlledGitFreshRead"
+  source: "ControlledGitFreshRead" | "ReplayedWorkflowResult",
+  executorAdmissions: number
 ): Promise<void> =>
   appendLine(
     decisionLedgerPath(workspace),
     DecisionEvidence.make({
       decision,
-      executorAdmissions: 0,
+      executorAdmissions,
       operationId: fixture.operationId,
       processInstance,
       runId: fixture.runId,
       source
     })
   )
+
+/** Records an actual contact only if a future prototype branch crosses the executor boundary. */
+export const recordExecutorAdmissionContact = async (
+  workspace: string,
+  contact: ExecutorAdmissionContact
+): Promise<void> => appendLine(executorAdmissionLedgerPath(workspace), contact)
 
 export const setControlledObservation = async (
   workspace: string,

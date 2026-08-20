@@ -9,7 +9,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { OperationId } from "@dalph/orchestrator"
+import { OperationId, PlannedWorktreeReady } from "@dalph/orchestrator"
 import { Schema } from "effect"
 
 /** The one exact reconciliation operation used by every child and durable seam. */
@@ -90,6 +90,7 @@ export const ActivityEvidence = Schema.TaggedStruct("ActivityResultAvailable", {
   attemptId: AttemptId,
   baseSha: GitCommitSha,
   branch: TaskBranchRef,
+  executionId: Schema.NonEmptyString,
   headSha: GitCommitSha,
   operationId: WorktreeOperationId,
   processInstance: WorktreeProcessInstance,
@@ -97,6 +98,30 @@ export const ActivityEvidence = Schema.TaggedStruct("ActivityResultAvailable", {
   worktree: WorktreeLocator
 })
 export type ActivityEvidence = typeof ActivityEvidence.Type
+
+/** The only value a Workflow Activity may return: exact identities plus a controlled Git proof. */
+export const WorktreeActivityResult = Schema.Struct({
+  attemptId: AttemptId,
+  operationId: WorktreeOperationId,
+  proof: PlannedWorktreeReady,
+  runId: RunId
+})
+export type WorktreeActivityResult = typeof WorktreeActivityResult.Type
+
+/** Typed Activity failure; contradictory controlled Git facts cannot become a defect or an absent result. */
+export class WorktreeActivityError extends Schema.TaggedError<WorktreeActivityError>()("WorktreeActivityError", {
+  detail: Schema.String,
+  reason: Schema.Literals(["ContradictoryWorktreeState", "GitWorktreeReadFailure", "GitWorktreeCreateFailure"]),
+  worktree: WorktreeLocator
+}) {}
+
+/** An observation of the real executor boundary; this experiment must produce none. */
+export const ExecutorAdmissionContact = Schema.Struct({
+  operationId: WorktreeOperationId,
+  processInstance: WorktreeProcessInstance,
+  runId: RunId
+})
+export type ExecutorAdmissionContact = typeof ExecutorAdmissionContact.Type
 
 /** Process-local proposal visibility evidence; no proposal is persisted as authority. */
 export const ProposalObservation = Schema.TaggedUnion({
@@ -160,6 +185,12 @@ export const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: fixture.taskRevision,
   worktree: fixture.worktree
 })
+
+/** Builds the exact Activity result once, so every retry uses the same identity/proof shape. */
+export const activityResultFor = (
+  payload: Pick<WorktreeActivityResult, "attemptId" | "operationId" | "runId">,
+  proof: PlannedWorktreeReady
+): WorktreeActivityResult => WorktreeActivityResult.make({ ...payload, proof })
 
 export const faultFor = (scenario: WorktreeScenario): FaultName | undefined =>
   scenario === "UnstoredActivityResult"
