@@ -268,6 +268,7 @@ interface FoldedJournal {
   readonly runState: ReconstructedRunState
 }
 
+/** Folds the production Journal; only the exact TaskWorktreeReady outcome settles this responsibility. */
 const foldedJournalOf = (records: Awaited<ReturnType<typeof loadJournalRecords>>): FoldedJournal => {
   const reduced = reduceWorkflowJournalHistory(fixture.runId, records)
   if (reduced._tag === "InvalidWorkflowJournalHistory") {
@@ -297,19 +298,19 @@ const foldedJournalOf = (records: Awaited<ReturnType<typeof loadJournalRecords>>
   }
 }
 
-const transition = RunnableFrontierTransition.ReconcileTaskWorktree({
+/** Ordinary planning already acknowledged this proposal; Journal folding only removes it after settlement. */
+const acknowledgedProposal = RunnableFrontierTransition.ReconcileTaskWorktree({
   operationId: fixture.operationId,
   taskId: fixture.taskId
 })
 
-/** Ordinary planning derives proposal presence from the reread-and-folded Journal, never from a local shortcut. */
 const proposalContributionsFor = (history: FoldedJournal): ReturnType<typeof deliveryProposalsOf> =>
   deliveryProposalsOf({
     acceptedAt: history.position,
     acceptedOperationIds: new Set([fixture.operationId]),
     fresh: [],
     runId: fixture.runId,
-    transitions: history.accepted ? [] : [transition]
+    transitions: history.accepted ? [] : [acknowledgedProposal]
   })
 
 const bundleFor = (graph: TrackerGraphState, history: FoldedJournal): DeliveryRelationInputBundle => ({
@@ -412,7 +413,7 @@ export const runWorkflowReconciliation = async (
         const graph = yield* graphStateFor.pipe(Effect.orDie)
         const current = yield* SubscriptionRef.make(bundleFor(graph, initialHistory))
         const initialDisposition = initialHistory.responsibility.disposition._tag
-        if (initialDisposition !== "Ready" && initialDisposition !== "Settled") {
+        if (initialDisposition !== "WorkflowOperationTaskClaimConstraint" && initialDisposition !== "Settled") {
           return yield* Effect.die(
             `unexpected initial responsibility disposition: ${initialDisposition}`
           )

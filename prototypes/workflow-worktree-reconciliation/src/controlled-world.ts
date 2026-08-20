@@ -72,7 +72,7 @@ export const initializeControlledWorld = async (workspace: string): Promise<void
   await writeDurably(executorBoundaryLedgerPath(workspace), "")
 }
 
-export const readControlledWorld = async (workspace: string): Promise<ControlledWorld> =>
+const readControlledWorld = async (workspace: string): Promise<ControlledWorld> =>
   Schema.decodeUnknownSync(ControlledWorld)(JSON.parse(await readFile(outsideWorldPath(workspace), "utf8")))
 
 const readGitCalls = async (workspace: string): Promise<ReadonlyArray<ControlledGitCall>> =>

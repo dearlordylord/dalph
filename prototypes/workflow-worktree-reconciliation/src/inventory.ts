@@ -63,10 +63,6 @@ export type DurableWorkflowRecord = typeof DurableWorkflowRecord.Type
 /** Journal content is classified by accepted chronology, not by process-local projections. */
 export const DurableJournalRecordCategory = Schema.Literals([
   "RunLifecycle",
-  "TaskClaimIntent",
-  "TaskClaimObservationIntent",
-  "TaskClaimObservationOutcome",
-  "TaskClaimOutcome",
   "TaskPlan",
   "TaskWorktreeIntent",
   "TaskWorktreeOutcome",
@@ -148,10 +144,6 @@ const workflowRecordCategoryFor = (table: string): DurableWorkflowRecordCategory
 
 const journalRecordCategoryFor = (eventTag: string): DurableJournalRecordCategory => {
   if (eventTag === "WorkflowRunBegan" || eventTag === "WorkflowRunTerminated") return "RunLifecycle"
-  if (eventTag === "TaskClaimAcquisitionIntended") return "TaskClaimIntent"
-  if (eventTag === "TaskClaimAcquired") return "TaskClaimOutcome"
-  if (eventTag === "TaskTrackerReadIntentRecorded") return "TaskClaimObservationIntent"
-  if (eventTag === "TaskTrackerFactsObserved") return "TaskClaimObservationOutcome"
   if (eventTag === "TaskAttemptPlanned") return "TaskPlan"
   if (eventTag === "TaskWorktreeReconciliationIntended") return "TaskWorktreeIntent"
   if (eventTag === "TaskWorktreeReady") return "TaskWorktreeOutcome"

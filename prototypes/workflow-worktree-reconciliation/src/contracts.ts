@@ -158,9 +158,9 @@ export const DecisionEvidence = Schema.Struct({
 })
 export type DecisionEvidence = typeof DecisionEvidence.Type
 
-/** The ordinary production Journal projection changed its exact operation from pending to settled. */
+/** The production projection records the acknowledged proposal's claim constraint until its exact worktree outcome settles. */
 export const ResponsibilityProjectionEvidence = Schema.Struct({
-  disposition: Schema.Literals(["Ready", "Settled"]),
+  disposition: Schema.Literals(["WorkflowOperationTaskClaimConstraint", "Settled"]),
   operationId: WorktreeOperationId,
   position: JournalPosition,
   processInstance: WorktreeProcessInstance,

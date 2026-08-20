@@ -1,23 +1,16 @@
 import { join } from "node:path"
 import { Effect } from "effect"
 import {
-  ActiveTaskClaim,
-  ClaimOwner,
-  ClaimToken,
   InitialControlPolicy,
   JournalDatabaseLocator,
   JournalStore,
-  makeTaskClaimObservationOperation,
   type JournalRecord,
   OperationId,
-  TaskClaimAcquiredEvent,
-  TaskClaimAcquisitionIntendedEvent,
   TaskWorkCapacity,
   workflowJournalEventVersion,
   sqliteJournalStoreLayer
 } from "@dalph/orchestrator"
 import type { JournalStoreService } from "../../../packages/orchestrator/dist/src/workflow-journal/store.js"
-import { makeFocusedTaskClaimFactsObserved } from "../../../packages/orchestrator/dist/src/workflow/task-tracker-facts/observation.js"
 import { FixtureTarget } from "../../../packages/orchestrator/dist/src/authorities/task-tracker/fixture/target.js"
 import {
   TaskAttemptPlannedEvent,
@@ -26,36 +19,18 @@ import {
 } from "@dalph/orchestrator"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../../packages/orchestrator/dist/src/workflow-journal/record-key.js"
 import {
-  makeTaskClaimAcquisitionOperation,
   makeTaskAttemptPlanOperation,
   makeTaskWorktreeReconciliationOperation
 } from "@dalph/orchestrator"
-import { taskTrackerFactsObservedEvent, taskTrackerReadIntent } from "@dalph/orchestrator"
 import { fixture, plannedAttempt } from "./contracts.ts"
 
 const target = FixtureTarget.make("issue-234-controlled-worktree")
-const claim = ActiveTaskClaim.make({
-  operationId: OperationId.make("operation-234-task-claim-0001"),
-  owner: ClaimOwner.make("owner-234-worktree-reconciliation"),
-  taskId: fixture.taskId,
-  token: ClaimToken.make("token-234-worktree-reconciliation")
-})
-const claimOperation = makeTaskClaimAcquisitionOperation({
-  acquisition: claim,
-  predecessorOperationIds: []
-})
-const claimObservationOperation = makeTaskClaimObservationOperation(
-  OperationId.make("operation-234-task-claim-read-0001"),
-  target,
-  fixture.taskId,
-  [claim.operationId]
-)
 const planOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("operation-234-plan-0001"),
   plannedAttempt,
-  predecessorOperationIds: [claimObservationOperation.operationId]
+  predecessorOperationIds: []
 })
-export const reconciliationOperation = makeTaskWorktreeReconciliationOperation({
+const reconciliationOperation = makeTaskWorktreeReconciliationOperation({
   operationId: fixture.operationId,
   plannedAttempt,
   predecessorOperationIds: [planOperation.operationId]
@@ -78,29 +53,6 @@ export const establishJournal = (workspace: string) =>
         )
         yield* journal.append(
           fixture.runId,
-          intentRecordKey(claim.operationId),
-          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
-        )
-        yield* journal.append(
-          fixture.runId,
-          outcomeRecordKey(claim.operationId),
-          TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
-        )
-        yield* journal.append(
-          fixture.runId,
-          intentRecordKey(claimObservationOperation.operationId),
-          taskTrackerReadIntent(claimObservationOperation)
-        )
-        yield* journal.append(
-          fixture.runId,
-          outcomeRecordKey(claimObservationOperation.operationId),
-          taskTrackerFactsObservedEvent(
-            claimObservationOperation.operationId,
-            makeFocusedTaskClaimFactsObserved(claimObservationOperation, claim)
-          )
-        )
-        yield* journal.append(
-          fixture.runId,
           attemptPlanRecordKey(plannedAttempt.attemptId),
           TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
         )
@@ -120,7 +72,7 @@ export const establishJournal = (workspace: string) =>
     }).pipe(Effect.provide(journalLayerFor(workspace)))
   )
 
-export const runJournalEffect = <A, E, R>(workspace: string, effect: Effect.Effect<A, E, R>) =>
+const runJournalEffect = <A, E, R>(workspace: string, effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.provide(journalLayerFor(workspace)))
 
 /** The only accepted Journal outcome written by the candidate. */

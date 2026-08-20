@@ -67,43 +67,22 @@ describe("Effect Workflow deletion-leverage worktree prototype", () => {
     expect(result.gitCalls.filter(({ _tag }) => _tag === "ReadPlannedWorktree")).toHaveLength(3)
     expect(result.journalEventTags.filter((tag) => tag === "TaskWorktreeReconciliationIntended")).toHaveLength(1)
     expect(result.journalEventTags.filter((tag) => tag === "TaskWorktreeReady")).toHaveLength(1)
-    expect(result.journalEventTags).toEqual(
-      expect.arrayContaining(["TaskClaimAcquisitionIntended", "TaskClaimAcquired", "TaskAttemptPlanned"])
+    expect(result.journalEventTags.slice(0, 3)).toEqual([
+      "WorkflowRunBegan",
+      "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended"
+    ])
+    expect(result.journalEventTags).not.toEqual(
+      expect.arrayContaining(["TaskClaimAcquisitionIntended", "TaskClaimAcquired", "TaskTrackerFactsObserved"])
     )
-    expect(result.journalRecords.find(({ event }) => event._tag === "TaskClaimAcquired")?.event).toMatchObject({
-      claim: {
-        operationId: "operation-234-task-claim-0001",
-        owner: "owner-234-worktree-reconciliation",
-        taskId: "task-234-worktree-0001",
-        token: "token-234-worktree-reconciliation"
-      }
-    })
-    expect(result.journalRecords.find(({ event }) => event._tag === "TaskTrackerFactsObserved")?.event).toMatchObject({
-      operationId: "operation-234-task-claim-read-0001",
-      observation: {
-        _tag: "FocusedTaskClaimFacts",
-        observation: {
-          _tag: "ActiveTaskClaim",
-          operationId: "operation-234-task-claim-0001",
-          owner: "owner-234-worktree-reconciliation",
-          taskId: "task-234-worktree-0001",
-          token: "token-234-worktree-reconciliation"
-        }
-      }
-    })
-    expect(result.journalRecords.find(({ event }) => event._tag === "TaskAttemptPlanned")?.event).toMatchObject({
-      operation: {
-        predecessorOperationIds: expect.arrayContaining(["operation-234-task-claim-read-0001"])
-      }
-    })
     expect(result.proposalObservations.map(({ _tag }) => _tag)).toEqual([
       "PresentBeforeActivity",
       "PresentAfterRestartBeforeJournal",
       "AbsentAfterJournalPublication"
     ])
     expect(result.responsibilityProjections.map(({ disposition }) => disposition)).toEqual([
-      "Ready",
-      "Ready",
+      "WorkflowOperationTaskClaimConstraint",
+      "WorkflowOperationTaskClaimConstraint",
       "Settled"
     ])
     expect(result.decisionEvidence.at(-1)?.decision).toBe("ContinueWorktreeReady")
@@ -139,8 +118,8 @@ describe("Effect Workflow deletion-leverage worktree prototype", () => {
     expect(result.journalEventTags.filter((tag) => tag === "TaskWorktreeReady")).toHaveLength(1)
     expect(result.proposalObservations.at(-1)?._tag).toBe("AbsentAfterJournalPublication")
     expect(result.responsibilityProjections.map(({ disposition }) => disposition)).toEqual([
-      "Ready",
-      "Ready",
+      "WorkflowOperationTaskClaimConstraint",
+      "WorkflowOperationTaskClaimConstraint",
       "Settled"
     ])
     expect(result.decisionEvidence).toHaveLength(0)
@@ -168,8 +147,8 @@ describe("Effect Workflow deletion-leverage worktree prototype", () => {
     expect(result.physicalWorktreeCreated).toBe(false)
     expect(result.executorBoundaryContacts).toHaveLength(0)
     expect(result.responsibilityProjections.map(({ disposition }) => disposition)).toEqual([
-      "Ready",
-      "Ready",
+      "WorkflowOperationTaskClaimConstraint",
+      "WorkflowOperationTaskClaimConstraint",
       "Settled"
     ])
   })
@@ -185,8 +164,8 @@ describe("Effect Workflow deletion-leverage worktree prototype", () => {
     expect(result.gitCalls.filter(({ _tag }) => _tag === "CreatePlannedWorktree")).toHaveLength(2)
     expect(result.gitCalls.filter(({ _tag }) => _tag === "ReadPlannedWorktree")).toHaveLength(1)
     expect(result.responsibilityProjections.map(({ disposition }) => disposition)).toEqual([
-      "Ready",
-      "Ready",
+      "WorkflowOperationTaskClaimConstraint",
+      "WorkflowOperationTaskClaimConstraint",
       "Settled"
     ])
   })
@@ -208,8 +187,8 @@ describe("Effect Workflow deletion-leverage worktree prototype", () => {
       "PresentAfterRestartBeforeJournal"
     ])
     expect(result.responsibilityProjections.map(({ disposition }) => disposition)).toEqual([
-      "Ready",
-      "Ready"
+      "WorkflowOperationTaskClaimConstraint",
+      "WorkflowOperationTaskClaimConstraint"
     ])
     expect(result.childMessages.some(({ _tag }) => _tag === "PublicationSuppressed")).toBe(true)
   })
@@ -228,8 +207,8 @@ describe("Effect Workflow deletion-leverage worktree prototype", () => {
     ])
     expect(result.terminalDecision).toBe("ContinueWorktreeReady")
     expect(result.responsibilityProjections.map(({ disposition }) => disposition)).toEqual([
-      "Ready",
-      "Ready",
+      "WorkflowOperationTaskClaimConstraint",
+      "WorkflowOperationTaskClaimConstraint",
       "Settled"
     ])
   })
