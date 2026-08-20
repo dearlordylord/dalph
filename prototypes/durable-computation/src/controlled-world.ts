@@ -4,8 +4,10 @@ import { Schema } from "effect"
 import {
   type AdapterName,
   DeliveryLoopBoundaryCall,
-  type DeliveryLoopProposalObservation,
+  DeliveryLoopBoundaryOrdinal,
+  DeliveryLoopProposalObservation,
   DeliveryLoopPublication,
+  DeliveryLoopTrackerRevision,
   type ExactClaim,
   OutsideWorld,
   ProviderCall,
@@ -202,9 +204,9 @@ export const reopenApplicationAdmission = async (workspace: string): Promise<voi
 }
 
 interface DeliveryLoopCallContext {
-  readonly operationId: string
-  readonly processInstance: string
-  readonly target: string
+  readonly operationId: DeliveryLoopBoundaryCall["operationId"]
+  readonly processInstance: DeliveryLoopBoundaryCall["processInstance"]
+  readonly target: DeliveryLoopBoundaryCall["target"]
   readonly workspace: string
 }
 
@@ -218,10 +220,10 @@ export const readTrackerGraphForDelivery = async (
   )
   const call = DeliveryLoopBoundaryCall.make({
     operationId: context.operationId,
-    ordinal: existing.length + 1,
+    ordinal: DeliveryLoopBoundaryOrdinal.make(existing.length + 1),
     processInstance: context.processInstance,
     target: context.target,
-    trackerRevision: world.trackerRevision
+    trackerRevision: DeliveryLoopTrackerRevision.make(world.trackerRevision)
   })
   await appendLine(deliveryBoundaryLedgerPath(context.workspace), call)
   return call
@@ -246,14 +248,4 @@ export const recordDeliveryProposalObservation = async (
 export const loadDeliveryProposalObservations = (
   workspace: string
 ): Promise<ReadonlyArray<DeliveryLoopProposalObservation>> =>
-  readLines(deliveryProposalObservationPath(workspace), Schema.decodeUnknownSync(Schema.String)).then((observations) =>
-    observations.map((observation) =>
-      Schema.decodeUnknownSync(
-        Schema.Literals([
-          "PresentBeforeCrash",
-          "PresentAfterRestartBeforePublication",
-          "AbsentAfterAcceptedFactPublication"
-        ])
-      )(observation)
-    )
-  )
+  readLines(deliveryProposalObservationPath(workspace), Schema.decodeUnknownSync(DeliveryLoopProposalObservation))

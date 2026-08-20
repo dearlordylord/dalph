@@ -10,6 +10,7 @@ describe("production-shaped durable delivery loop", () => {
 
     expect(result.executionIds).toHaveLength(1)
     expect(result.attemptIds).toEqual([])
+    expect(result.reservedAttemptIds).toEqual(["attempt-232-ambiguity-0001"])
     expect(result.boundaryCalls).toEqual([
       expect.objectContaining({
         operationId: "delivery-operation-233-0001",
@@ -43,6 +44,7 @@ describe("production-shaped durable delivery loop", () => {
       })
     ])
     expect(result.publications[0]?.trackerRevision).toBe(1)
+    expect(result.currentTaskDecisions).toEqual(["StopOutsideTarget"])
   })
 
   it("keeps two delivery actions distinct through Workflow and republishes each matching result", async () => {
@@ -74,7 +76,7 @@ describe("production-shaped durable delivery loop", () => {
       publicationMode: "Suppress"
     })
 
-    expect(result.recoveryTimedOut).toBe(true)
+    expect(result.publicationSuppressed).toBe(true)
     expect(result.publications).toEqual([])
     expect(result.proposalObservations).not.toContain("AbsentAfterAcceptedFactPublication")
   })

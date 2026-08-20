@@ -1,4 +1,10 @@
-import { DeliveryLoopChildMessage } from "./contracts.ts"
+import {
+  DeliveryLoopChildMessage,
+  DeliveryLoopExecutionId,
+  DeliveryLoopProcessInstance,
+  deliveryLoopFixture,
+  fixture
+} from "./contracts.ts"
 import { runEffectWorkflowDeliveryLoop, runJournalDeliveryLoop } from "./delivery-loop.ts"
 
 const argumentValue = (name: string): string => {
@@ -25,15 +31,15 @@ const main = async (): Promise<void> => {
   if (publicationMode !== "Publish" && publicationMode !== "Suppress") {
     throw new Error(`unsupported publication mode ${publicationMode}`)
   }
-  const processInstance = argumentValue("--process-instance")
+  const processInstance = DeliveryLoopProcessInstance.make(argumentValue("--process-instance"))
   const adapter = argumentValue("--adapter")
   if (adapter !== "effect-workflow-v1" && adapter !== "journal-baseline") {
     throw new Error(`unsupported delivery-loop adapter ${adapter}`)
   }
   const workspace = argumentValue("--workspace")
-  const runId = "run-233-delivery-loop-0001"
+  const runId = deliveryLoopFixture.runId
   const run = adapter === "journal-baseline" ? runJournalDeliveryLoop : runEffectWorkflowDeliveryLoop
-  await run({
+  const currentTaskDecision = await run({
     actionCount,
     adapter,
     activityIdentityMode,
@@ -41,8 +47,9 @@ const main = async (): Promise<void> => {
       emit(
         DeliveryLoopChildMessage.cases.DeliveryLoopChildReady.make({
           attemptIds: [],
-          executionId,
-          plannedBaseSha: "d4128e475ddfdda6970ac7951ce7696d7736685a",
+          executionId: DeliveryLoopExecutionId.make(executionId),
+          plannedBaseSha: deliveryLoopFixture.plannedBaseSha,
+          reservedAttemptId: fixture.attemptId,
           runId
         })
       )
@@ -51,11 +58,15 @@ const main = async (): Promise<void> => {
       emit(DeliveryLoopChildMessage.cases.DeliveryLoopFaultReached.make({ runId }))
       return waitForever()
     },
+    onPublicationSuppressed: async () => {
+      emit(DeliveryLoopChildMessage.cases.DeliveryLoopPublicationSuppressed.make({ runId }))
+      return waitForever()
+    },
     processInstance,
     publicationMode,
     workspace
   })
-  emit(DeliveryLoopChildMessage.cases.DeliveryLoopCompleted.make({ runId }))
+  emit(DeliveryLoopChildMessage.cases.DeliveryLoopCompleted.make({ currentTaskDecision, runId }))
 }
 
 await main().catch((cause: unknown) => {

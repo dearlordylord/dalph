@@ -289,8 +289,8 @@ revisions remain `effect@4.0.0-beta.106`,
 
 | Scenario | Maintainer-visible result | Passing acceptance evidence |
 | --- | --- | --- |
-| Stored action result is republished after a crash. | Process 1 crosses `GitHub.ReadTrackerGraph` once for `delivery-operation-233-0001`; the parent sends `SIGKILL` after Workflow stores the Activity result and before accepted-fact publication. Process 2 reports the same Workflow execution, makes no tracker-graph call, republishes the matching result, and the actual planned proposal becomes absent. No task attempt is established. | `reuses the stored action result after restart, republishes its accepted fact, and does not call the boundary twice` |
-| Current facts are read after replayed publication. | The parent changes controlled target membership during downtime. The republished action result still carries tracker revision 1; the next current-state decision calls `GitHub.ReadCurrentTaskFacts` in process 2 and sees revision 2, `Open:OutsideTarget`. | `reads current facts after replayed publication before the next current-state decision` |
+| Stored action result is republished after a crash. | Process 1 represents reserved `attempt-232-ambiguity-0001` but establishes no attempt, crosses `GitHub.ReadTrackerGraph` once for `delivery-operation-233-0001`, and is killed after Workflow stores the Activity result but before accepted-fact publication. Process 2 reports the same Workflow execution, makes no tracker-graph call, republishes the matching result, and the actual planned proposal becomes absent. | `reuses the stored action result after restart, republishes its accepted fact, and does not call the boundary twice` |
+| Current facts are read after replayed publication. | The parent changes controlled target membership during downtime. The republished action result still carries tracker revision 1; process 2 calls `GitHub.ReadCurrentTaskFacts`, consumes revision 2 `Open:OutsideTarget`, and decides `StopOutsideTarget`. | `reads current facts after replayed publication before the next current-state decision` |
 | Two exact actions remain distinct. | Operation 1 crosses the boundary in process 1; operation 2 crosses it in process 2; process 3 replays both without another tracker-graph call. Every publication correlates the materialized `OperationId` with the same decoded accepted `OperationId`. | `keeps two delivery actions distinct through Workflow and republishes each matching result` |
 | Journal and Workflow project the same domain consequences. | Both arms use unchanged `delivery`, ordinary action planning, process-local runtime admission, and `DeliveryActionExecutor`. Both end with the same two action/result correlations, an absent proposal, and revision-2 current facts. Their storage and boundary histories are intentionally unequal. | `projects the same delivery consequences through the Journal baseline and Workflow adapter` |
 | Domain description remains engine-free. | The production exact-source test still guards the seven statements. The focused planning guard finds no Activity, Workflow engine, SQL client, or Journal store vocabulary in `delivery-action-planning.ts`. | Production exact-source guard; `keeps Workflow and storage vocabulary out of delivery action planning` |
@@ -308,6 +308,7 @@ P1: proposal present → ReadTrackerGraph(op-0001, revision 1) → Activity resu
 downtime: target membership changes; tracker revision becomes 2
 P2: same execution → proposal present → stored op-0001 result republished
     → proposal absent → ReadCurrentTaskFacts(Open:OutsideTarget, revision 2)
+    → StopOutsideTarget
 ```
 
 For two Workflow actions, process 1 stores operation 1 and dies; process 2
@@ -328,7 +329,8 @@ visible delivery consequences.
 
 - `publicationMode: Suppress` replays the stored Activity result but never
   publishes it into the ordinary current input. The real proposal remains and
-  the successor is killed at the bounded eight-second recovery deadline. The
+  the child reports the exact suppression cut and the parent kills it. An
+  unasserted watchdog exists only to fail a broken harness. The
   accepted one-action test would fail its required absent-proposal result.
 - `activityIdentityMode: Generic` names both Activities `ReadTrackerGraph`.
   Effect reuses operation 1's result for operation 2, performs only one
@@ -419,7 +421,7 @@ or modification of parent issue #232.
 - `pnpm lint:code`: passed.
 - `pnpm check:all`: passed; 1,789 tests passed, 2 skipped, coverage
   verification passed, and no secrets were found.
-- Final `pnpm check:quint`: passed in 358.74 seconds, including deterministic,
+- Final `pnpm check:quint`: passed in 300.10 seconds, including deterministic,
   negative-control, sampled, temporal, and exhaustive checks.
 
 The Quint gate is aggregate formal evidence for unchanged governed behavior;

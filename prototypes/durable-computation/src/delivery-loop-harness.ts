@@ -7,9 +7,14 @@ import { createInterface } from "node:readline"
 import { Schema } from "effect"
 import {
   DeliveryLoopChildMessage,
+  type DeliveryLoopExecutionId,
   type CanonicalDeliveryLoopEvent,
+  type CurrentTaskDecision,
+  type DeliveryLoopReservedAttemptId,
   type DeliveryLoopScenarioRequest,
   type DeliveryLoopScenarioResult,
+  DeliveryLoopProcessInstance,
+  DeliveryLoopTrackerRevision,
   fixture
 } from "./contracts.ts"
 import {
@@ -28,7 +33,7 @@ interface RunningChild {
 }
 
 const childPath = join(dirname(fileURLToPath(import.meta.url)), "delivery-loop-child.ts")
-const recoveryLimitMilliseconds = 8_000
+const watchdogMilliseconds = 8_000
 
 const startChild = (
   request: DeliveryLoopScenarioRequest,
@@ -47,7 +52,7 @@ const startChild = (
     "--publication-mode",
     request.publicationMode ?? "Publish",
     "--process-instance",
-    processInstance,
+    DeliveryLoopProcessInstance.make(processInstance),
     "--workspace",
     workspace
   ])
@@ -77,19 +82,30 @@ const childExit = (running: RunningChild): Promise<number | null> =>
 
 const observeUntil = async (
   running: RunningChild,
-  executionIds: Set<string>,
-  expected: "Fault" | "Complete"
+  executionIds: Set<DeliveryLoopExecutionId>,
+  reservedAttemptIds: Set<DeliveryLoopReservedAttemptId>,
+  currentTaskDecisions: Set<CurrentTaskDecision>,
+  expected: "Fault" | "Complete" | "Suppressed"
 ): Promise<void> => {
   for await (const message of running.messages) {
     if (message._tag === "DeliveryLoopProtocolFailure") throw new Error(message.detail)
     if (message._tag === "DeliveryLoopChildReady") {
-      if (message.plannedBaseSha !== fixture.plannedBaseSha || message.attemptIds.length !== 0) {
+      if (
+        message.plannedBaseSha !== fixture.plannedBaseSha ||
+        message.reservedAttemptId !== fixture.attemptId ||
+        message.attemptIds.length !== 0
+      ) {
         throw new Error("delivery-loop child changed immutable facts or established a task attempt")
       }
       executionIds.add(message.executionId)
+      reservedAttemptIds.add(message.reservedAttemptId)
     }
     if (message._tag === "DeliveryLoopFaultReached" && expected === "Fault") return
-    if (message._tag === "DeliveryLoopCompleted" && expected === "Complete") return
+    if (message._tag === "DeliveryLoopCompleted" && expected === "Complete") {
+      currentTaskDecisions.add(message.currentTaskDecision)
+      return
+    }
+    if (message._tag === "DeliveryLoopPublicationSuppressed" && expected === "Suppressed") return
   }
   throw new Error(`delivery-loop child exited before ${expected}: ${running.stderr.join("")}`)
 }
@@ -97,7 +113,8 @@ const observeUntil = async (
 const canonicalTraceOf = (
   publications: DeliveryLoopScenarioResult["publications"],
   proposalObservations: DeliveryLoopScenarioResult["proposalObservations"],
-  providerCalls: DeliveryLoopScenarioResult["providerCalls"]
+  providerCalls: DeliveryLoopScenarioResult["providerCalls"],
+  currentTaskDecisions: DeliveryLoopScenarioResult["currentTaskDecisions"]
 ): ReadonlyArray<CanonicalDeliveryLoopEvent> => {
   const acceptedByOperation = new Map(publications.map((publication) => [publication.operationId, publication]))
   const trace: Array<CanonicalDeliveryLoopEvent> = []
@@ -120,9 +137,10 @@ const canonicalTraceOf = (
     trace.push({
       _tag: "CurrentTaskFactsObserved",
       result: currentFacts.result,
-      trackerRevision: currentFacts.trackerRevision
+      trackerRevision: DeliveryLoopTrackerRevision.make(currentFacts.trackerRevision)
     })
   }
+  for (const decision of currentTaskDecisions) trace.push({ _tag: "CurrentTaskDecisionMade", decision })
   return trace
 }
 
@@ -130,8 +148,10 @@ export const runDeliveryLoopCrashRestartScenario = async (
   request: DeliveryLoopScenarioRequest
 ): Promise<DeliveryLoopScenarioResult> => {
   const workspace = await mkdtemp(join(tmpdir(), "dalph-233-delivery-loop-"))
-  const executionIds = new Set<string>()
-  let recoveryTimedOut = false
+  const executionIds = new Set<DeliveryLoopExecutionId>()
+  const reservedAttemptIds = new Set<DeliveryLoopReservedAttemptId>()
+  const currentTaskDecisions = new Set<CurrentTaskDecision>()
+  let publicationSuppressed = false
   try {
     await initializeOutsideWorld(workspace)
     const processCount = request.actionCount + 1
@@ -139,24 +159,21 @@ export const runDeliveryLoopCrashRestartScenario = async (
       const running = startChild(request, workspace, `process-${ordinal}`)
       const exit = childExit(running)
       const expectsFault = ordinal < processCount
-      const timer = setTimeout(() => {
-        recoveryTimedOut = true
-        running.child.kill("SIGKILL")
-      }, recoveryLimitMilliseconds)
+      const expected = expectsFault ? "Fault" : request.publicationMode === "Suppress" ? "Suppressed" : "Complete"
+      const watchdog = setTimeout(() => running.child.kill("SIGKILL"), watchdogMilliseconds)
       try {
-        await observeUntil(running, executionIds, expectsFault ? "Fault" : "Complete")
-      } catch (cause: unknown) {
-        if (!recoveryTimedOut) throw cause
+        await observeUntil(running, executionIds, reservedAttemptIds, currentTaskDecisions, expected)
       } finally {
-        clearTimeout(timer)
+        clearTimeout(watchdog)
       }
-      if (expectsFault || recoveryTimedOut) running.child.kill("SIGKILL")
+      publicationSuppressed = expected === "Suppressed"
+      if (expectsFault || publicationSuppressed) running.child.kill("SIGKILL")
       const exitCode = await exit
-      if (!expectsFault && !recoveryTimedOut && exitCode !== 0) {
+      if (!expectsFault && !publicationSuppressed && exitCode !== 0) {
         throw new Error(`delivery-loop successor exited ${exitCode}: ${running.stderr.join("")}`)
       }
       if (ordinal === 1 && expectsFault) await moveTaskOutsideTargetDuringDowntime(workspace)
-      if (recoveryTimedOut) break
+      if (publicationSuppressed) break
     }
     const boundaryCalls = await loadDeliveryBoundaryCalls(workspace)
     const proposalObservations = await loadDeliveryProposalObservations(workspace)
@@ -165,12 +182,14 @@ export const runDeliveryLoopCrashRestartScenario = async (
     return {
       attemptIds: [],
       boundaryCalls,
-      canonicalTrace: canonicalTraceOf(publications, proposalObservations, providerCalls),
+      canonicalTrace: canonicalTraceOf(publications, proposalObservations, providerCalls, [...currentTaskDecisions]),
+      currentTaskDecisions: [...currentTaskDecisions],
       executionIds: [...executionIds],
       proposalObservations,
       providerCalls,
       publications,
-      recoveryTimedOut
+      publicationSuppressed,
+      reservedAttemptIds: [...reservedAttemptIds]
     }
   } finally {
     await rm(workspace, { force: true, recursive: true })

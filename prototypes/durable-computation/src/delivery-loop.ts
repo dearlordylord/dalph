@@ -66,8 +66,13 @@ import {
 } from "../../../packages/orchestrator/dist/src/workflow/protocols/task-attempt-planning/plan.js"
 import { plannedAttemptProtocolControllerLayer } from "../../../packages/orchestrator/dist/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import {
+  CurrentTaskDecision,
   DeliveryLoopBoundaryCall,
+  DeliveryLoopProcessInstance,
   DeliveryLoopPublication,
+  DeliveryLoopTarget,
+  DeliveryLoopTrackerRevision,
+  deliveryLoopFixture,
   fixture
 } from "./contracts.ts"
 import {
@@ -83,12 +88,13 @@ interface DeliveryLoopInput {
   readonly activityIdentityMode: "ExactOperationId" | "Generic"
   readonly onExecutionStored: (executionId: string) => Promise<void>
   readonly onFault: () => Promise<never>
-  readonly processInstance: string
+  readonly onPublicationSuppressed: () => Promise<never>
+  readonly processInstance: typeof DeliveryLoopProcessInstance.Type
   readonly publicationMode: "Publish" | "Suppress"
   readonly workspace: string
 }
 
-const deliveryRunId = RunId.make("run-233-delivery-loop-0001")
+const deliveryRunId = deliveryLoopFixture.runId
 const policy = RunControlPolicy.make({
   revision: initialRunPolicyRevision,
   taskExecutionCapacity: TaskWorkCapacity.make(1)
@@ -212,15 +218,46 @@ const workflowRuntimeLayer = (
 const DeliveryLoopWorkflow = Workflow.make("DalphDeliveryLoop233", {
   error: Schema.Never,
   idempotencyKey: ({ runId }) => runId,
-  payload: { runId: Schema.NonEmptyString },
-  success: Schema.Void
+  payload: { runId: RunId },
+  success: CurrentTaskDecision
 })
 
 const shouldFault = (processInstance: string, actionOrdinal: number): boolean =>
   (processInstance === "process-1" && actionOrdinal === 0) ||
   (processInstance === "process-2" && actionOrdinal === 1)
 
-export const runEffectWorkflowDeliveryLoop = async (input: DeliveryLoopInput): Promise<void> => {
+const makeOperationAllocation = Effect.gen(function* () {
+  const state = yield* Ref.make({ nextPosition: 0, positions: new Map<string, number>() })
+  const allocator = OperationIdAllocator.of({
+    allocate: () =>
+      Ref.modify(state, (current) => {
+        const operationId = OperationId.make(
+          `delivery-operation-233-${String(current.nextPosition + 1).padStart(4, "0")}`
+        )
+        const positions = new Map(current.positions).set(operationId, current.nextPosition)
+        return [operationId, { nextPosition: current.nextPosition + 1, positions }]
+      })
+  })
+  const positionOf = (operationId: OperationId) =>
+    Ref.get(state).pipe(
+      Effect.flatMap(({ positions }) => {
+        const position = positions.get(operationId)
+        return position === undefined ? Effect.die(`unallocated delivery operation ${operationId}`) : Effect.succeed(position)
+      })
+    )
+  return { allocator, positionOf } as const
+})
+
+const decideFromCurrentFacts = async (input: DeliveryLoopInput): Promise<CurrentTaskDecision> => {
+  const current = await readCurrentTaskFacts({
+    adapter: input.adapter,
+    processInstance: input.processInstance,
+    workspace: input.workspace
+  })
+  return current.task.lifecycle === "Open" && current.task.targetMember ? "ContinueEligible" : "StopOutsideTarget"
+}
+
+export const runEffectWorkflowDeliveryLoop = async (input: DeliveryLoopInput): Promise<CurrentTaskDecision> => {
   const handler = DeliveryLoopWorkflow.toLayer((_payload, executionId) =>
     Effect.gen(function* () {
       yield* Effect.promise(() => input.onExecutionStored(executionId))
@@ -231,15 +268,7 @@ export const runEffectWorkflowDeliveryLoop = async (input: DeliveryLoopInput): P
         ...deterministicDeliveryRuntimeSupport(policy),
         coherent
       })
-      const nextOperation = yield* Ref.make(0)
-      const allocator = OperationIdAllocator.of({
-        allocate: () =>
-          Ref.getAndUpdate(nextOperation, (ordinal) => ordinal + 1).pipe(
-            Effect.map((ordinal) =>
-              OperationId.make(`delivery-operation-233-${String(ordinal + 1).padStart(4, "0")}`)
-            )
-          )
-      })
+      const allocation = yield* makeOperationAllocation
       const workflowContext = yield* Effect.context<
         WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
       >()
@@ -247,7 +276,7 @@ export const runEffectWorkflowDeliveryLoop = async (input: DeliveryLoopInput): P
         execute: (action) =>
           Effect.gen(function* () {
             if (action._tag !== "FreshOperationAction") return yield* Effect.die("graph read must have an OperationId")
-            const actionOrdinal = Number(String(action.operationId).slice(-4)) - 1
+            const actionOrdinal = yield* allocation.positionOf(action.operationId)
             const target = targets[actionOrdinal] ?? targets[0]
             const activity = Activity.make({
               error: Schema.Never,
@@ -255,7 +284,7 @@ export const runEffectWorkflowDeliveryLoop = async (input: DeliveryLoopInput): P
                 readTrackerGraphForDelivery({
                   operationId: action.operationId,
                   processInstance: input.processInstance,
-                  target,
+                  target: DeliveryLoopTarget.make(target),
                   workspace: input.workspace
                 })
               ),
@@ -269,7 +298,9 @@ export const runEffectWorkflowDeliveryLoop = async (input: DeliveryLoopInput): P
             if (shouldFault(input.processInstance, actionOrdinal)) {
               return yield* Effect.promise(() => input.onFault())
             }
-            if (input.publicationMode === "Suppress") return yield* Effect.never
+            if (input.publicationMode === "Suppress") {
+              return yield* Effect.promise(() => input.onPublicationSuppressed())
+            }
             const graph = yield* graphStateFor(result).pipe(Effect.orDie)
             yield* SubscriptionRef.set(current, bundleFor(graph, actionOrdinal + 1, input.actionCount))
             yield* Effect.promise(() =>
@@ -319,7 +350,7 @@ export const runEffectWorkflowDeliveryLoop = async (input: DeliveryLoopInput): P
           runId: deliveryRunId,
           worktreeRoot: WorktreeLocator.make("/controlled/no-worktree")
         }),
-        Layer.succeed(OperationIdAllocator, allocator),
+        Layer.succeed(OperationIdAllocator, allocation.allocator),
         Layer.succeed(DeliveryActionExecutor, DeliveryActionExecutor.of(executor))
       )
       yield* runDeliveryRuntime(relation).pipe(
@@ -333,28 +364,22 @@ export const runEffectWorkflowDeliveryLoop = async (input: DeliveryLoopInput): P
       yield* Effect.promise(() =>
         recordDeliveryProposalObservation(input.workspace, "AbsentAfterAcceptedFactPublication")
       )
-      yield* Effect.promise(() =>
-        readCurrentTaskFacts({
-          adapter: "effect-workflow-v1",
-          processInstance: input.processInstance,
-          workspace: input.workspace
-        })
-      )
+      return yield* Effect.promise(() => decideFromCurrentFacts(input))
     })
   )
   const runtime = workflowRuntimeLayer(join(input.workspace, "delivery-loop-workflow.sqlite"), handler)
-  await Effect.runPromise(
+  return await Effect.runPromise(
     DeliveryLoopWorkflow.execute({ runId: deliveryRunId }).pipe(Effect.provide(runtime), Effect.scoped)
   )
 }
 
-export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<void> => {
-  const journalRunId = RunId.make("run-233-delivery-loop-journal-0001")
+export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<CurrentTaskDecision> => {
+  const journalRunId = deliveryLoopFixture.journalRunId
   const journalTarget = targets[0]
   const journalLayer = sqliteJournalStoreLayer({
     filename: JournalDatabaseLocator.make(join(input.workspace, "delivery-loop-journal.sqlite"))
   })
-  await Effect.runPromise(
+  return await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         yield* Effect.promise(() => input.onExecutionStored(journalRunId))
@@ -378,22 +403,14 @@ export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<
           ...deterministicDeliveryRuntimeSupport(policy),
           coherent
         })
-        const nextOperation = yield* Ref.make(0)
-        const allocator = OperationIdAllocator.of({
-          allocate: () =>
-            Ref.getAndUpdate(nextOperation, (ordinal) => ordinal + 1).pipe(
-              Effect.map((ordinal) =>
-                OperationId.make(`delivery-operation-233-${String(ordinal + 1).padStart(4, "0")}`)
-              )
-            )
-        })
+        const allocation = yield* makeOperationAllocation
         const executor: DeliveryActionExecutorService = {
           execute: (action) =>
             Effect.gen(function* () {
               if (action._tag !== "FreshOperationAction") {
                 return yield* Effect.die("graph read must have an OperationId")
               }
-              const actionOrdinal = Number(String(action.operationId).slice(-4)) - 1
+              const actionOrdinal = yield* allocation.positionOf(action.operationId)
               const target = targets[actionOrdinal] ?? targets[0]
               const currentRecords = yield* storage.read(journalRunId)
               const outcomeIndex = currentRecords.findIndex(
@@ -409,7 +426,7 @@ export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<
                   readTrackerGraphForDelivery({
                     operationId: action.operationId,
                     processInstance: input.processInstance,
-                    target,
+                    target: DeliveryLoopTarget.make(target),
                     workspace: input.workspace
                   })
                 )
@@ -426,7 +443,7 @@ export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<
                   readTrackerGraphForDelivery({
                     operationId: action.operationId,
                     processInstance: input.processInstance,
-                    target,
+                    target: DeliveryLoopTarget.make(target),
                     workspace: input.workspace
                   })
                 )
@@ -449,7 +466,9 @@ export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<
               if (shouldFault(input.processInstance, actionOrdinal)) {
                 return yield* Effect.promise(() => input.onFault())
               }
-              if (input.publicationMode === "Suppress") return yield* Effect.never
+              if (input.publicationMode === "Suppress") {
+                return yield* Effect.promise(() => input.onPublicationSuppressed())
+              }
               yield* SubscriptionRef.set(current, bundleFor(graph, actionOrdinal + 1, input.actionCount))
               yield* Effect.promise(() =>
                 recordDeliveryPublication(
@@ -458,8 +477,8 @@ export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<
                     acceptedOperationId: action.operationId,
                     operationId: action.operationId,
                     processInstance: input.processInstance,
-                    target,
-                    trackerRevision: publicationRevision
+                    target: DeliveryLoopTarget.make(target),
+                    trackerRevision: DeliveryLoopTrackerRevision.make(publicationRevision)
                   })
                 )
               )
@@ -498,7 +517,7 @@ export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<
             runId: journalRunId,
             worktreeRoot: WorktreeLocator.make("/controlled/no-worktree")
           }),
-          Layer.succeed(OperationIdAllocator, allocator),
+          Layer.succeed(OperationIdAllocator, allocation.allocator),
           Layer.succeed(DeliveryActionExecutor, DeliveryActionExecutor.of(executor))
         )
         yield* runDeliveryRuntime(relation).pipe(Effect.provide(runtimeDependencies), Effect.orDie)
@@ -509,13 +528,7 @@ export const runJournalDeliveryLoop = async (input: DeliveryLoopInput): Promise<
         yield* Effect.promise(() =>
           recordDeliveryProposalObservation(input.workspace, "AbsentAfterAcceptedFactPublication")
         )
-        yield* Effect.promise(() =>
-          readCurrentTaskFacts({
-            adapter: "journal-baseline",
-            processInstance: input.processInstance,
-            workspace: input.workspace
-          })
-        )
+        return yield* Effect.promise(() => decideFromCurrentFacts(input))
       }).pipe(Effect.provide(journalLayer), Effect.orDie)
     )
   )

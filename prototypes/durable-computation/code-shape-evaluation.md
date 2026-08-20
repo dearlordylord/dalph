@@ -214,10 +214,19 @@ tracker-observation type would let both Journal and Workflow adapters publish
 the same domain fact without weakening authority or persisting a derived
 frontier.
 
+The final standards review suggested one shared closed-loop runner for the
+Workflow and Journal arms. This experiment deliberately retains separate
+top-level runners because the comparison includes where each adapter
+reconstructs or rereads facts; hiding those sequences behind one injected
+callback would make that architectural difference harder to inspect. Shared
+identity allocation and the current-facts decision are defined once, while
+adapter-specific chronology remains side by side. This accepted duplication
+is prototype evidence, not a production organization recommendation.
+
 | Concrete issue #233 outcome | Test |
 | --- | --- |
 | A killed child resumes one execution, reuses one stored Activity result, republishes it, and removes the real proposal without a second boundary read. | `reuses the stored action result after restart, republishes its accepted fact, and does not call the boundary twice` |
-| A fact changed during downtime is learned from the controlled tracker after replayed publication. | `reads current facts after replayed publication before the next current-state decision` |
+| A fact changed during downtime is learned from the controlled tracker after replayed publication and supplies the `StopOutsideTarget` decision. | `reads current facts after replayed publication before the next current-state decision` |
 | Two exact materialized operation identities survive separate crash cuts and never reuse each other's result. | `keeps two delivery actions distinct through Workflow and republishes each matching result` |
 | Journal and Workflow histories differ while accepted action/result correlations, final proposal state, and current-facts decision agree. | `projects the same delivery consequences through the Journal baseline and Workflow adapter` |
 | Suppressing publication leaves the proposal present; a generic Activity identity correlates operation 2 with operation 1's result. | `records the suppressed replay-publication negative control`; `records the generic Activity-identity negative control` |
