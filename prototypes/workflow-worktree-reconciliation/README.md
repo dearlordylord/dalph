@@ -131,9 +131,9 @@ pnpm --filter @dalph/workflow-worktree-reconciliation-prototype typecheck  PASS
 pnpm --filter @dalph/workflow-worktree-reconciliation-prototype test       PASS (9/9)
 ```
 
-The final handoff records the exact `pnpm check:all` and one final
-`pnpm check:quint` result after they run. No successor experiment or production
-integration is part of this prototype.
+The repository-wide `pnpm check:all` result is recorded below. The one final
+`pnpm check:quint` run remains a parent-owned pending gate; no successor
+experiment or production integration is part of this prototype.
 
 Final gate results after this reviewer correction:
 
