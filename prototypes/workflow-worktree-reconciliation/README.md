@@ -121,6 +121,13 @@ The candidate therefore demonstrates the required boundaries but does not meet
 the deletion-leverage bar: the existing restart procedure is not deleted and
 the candidate introduces more concepts and test surface than it removes.
 
+Additional no-go evidence is the starting-fact mismatch: the accepted issue
+fixture has no claim acquisition or focused tracker observation, so the
+production projection remains `WorkflowOperationTaskClaimConstraint` before
+Workflow entry. The prototype carries the acknowledged worktree proposal as
+input and uses Journal reduction only to detect `Settled`; it does not invent
+tracker facts to claim current authority.
+
 **Decision: no-go. Stop further Workflow evaluation and do not adopt this
 prototype.** The prototype demonstrates the three recovery boundaries and the
 negative controls, but it does not satisfy the deletion leverage required to
