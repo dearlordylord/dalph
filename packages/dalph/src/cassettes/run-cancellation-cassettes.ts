@@ -7,6 +7,10 @@ import { deliveryFinalitySpineAuthoredCassette, singletonTaskCompletesAuthoredCa
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItemSchema)
 const lastStoryItemOffset = -1
 const missingStoryItemIndex = -1
+const singletonCancellationGraph = {
+  ...singletonTaskCompletesAuthoredCassette.startingFacts.trackerGraph,
+  rootTaskId: "A" as const
+}
 
 /**
  * Alice cancels an idle Run after its first complete graph read.  The graph is
@@ -89,7 +93,9 @@ const singletonRunningExecutorReportAt = singletonTaskCompletesAuthoredCassette.
   (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
 )
 
-const singletonRunningPrefix = singletonTaskCompletesAuthoredCassette.story.slice(0, singletonRunningExecutorReportAt)
+const singletonRunningPrefix = singletonTaskCompletesAuthoredCassette.story
+  .slice(0, singletonRunningExecutorReportAt)
+  .map((item) => (item._tag === "TrackerGraphReadReturned" ? { ...item, graph: singletonCancellationGraph } : item))
 
 /**
  * Alice cancels while A's exact executor attempt is still running.  The
@@ -99,6 +105,7 @@ const singletonRunningPrefix = singletonTaskCompletesAuthoredCassette.story.slic
 export const runningAttemptRunCancellationAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   ...singletonTaskCompletesAuthoredCassette,
   name: "Alice cancels while the exact executor attempt is running",
+  startingFacts: { ...singletonTaskCompletesAuthoredCassette.startingFacts, trackerGraph: singletonCancellationGraph },
   story: [
     ...singletonRunningPrefix,
     { _tag: "OperatorAppliesRunCancellationWhileExecutorRequestInFlight", duringAttemptId: "attempt:A:0" },
@@ -116,7 +123,7 @@ export const runningAttemptRunCancellationAuthoredCassette = Schema.decodeUnknow
     { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
     { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonTaskCompletesAuthoredCassette.startingFacts.trackerGraph },
+    { _tag: "TrackerGraphReadReturned", graph: singletonCancellationGraph },
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
     { _tag: "ExpectedBehavior", orchestration: null, protocol: null, taskWork: { absences: [], results: [] } }
   ]

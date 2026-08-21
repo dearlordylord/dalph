@@ -250,9 +250,8 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
         const facts = mapCurrentSignal(input.coherent, ({ actionInputs }) => actionInputs.runtimeFacts)
-        const current = mapCurrentSignal(zipCurrentSignals(delivery, facts), ([delivery, facts]) => ({
+        const current = mapCurrentSignal(delivery, (delivery) => ({
           _tag: "DeliveryRuntimeSnapshot" as const,
-          cancellationApplied: facts.cancellationApplied,
           reflection: delivery.trackerConsequences,
           settlements: delivery.settlements,
           ticketDeliveries: delivery.ticketDeliveries,
@@ -260,7 +259,10 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         }))
         const makeEvaluation = (
           facts: DeliveryRuntimeFacts,
-          current: Effect.Effect<DeliveryRuntimeEvaluation["current"], E | DeliveryRelationSourceError>,
+          current: Effect.Effect<
+            Omit<DeliveryRuntimeEvaluation["current"], "cancellationApplied" | "runId">,
+            E | DeliveryRelationSourceError
+          >,
           proposedActions: Effect.Effect<DeliveryRuntimeEvaluation["proposedActions"], E | DeliveryRelationSourceError>
         ) =>
           Effect.all({ current, proposedActions }).pipe(

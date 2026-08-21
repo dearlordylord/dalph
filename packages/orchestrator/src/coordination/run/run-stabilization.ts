@@ -12,10 +12,7 @@ import {
   type RunFinalityProof
 } from "../frontier/run-finality.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import {
-  OperationIdAllocator,
-  type OperationIdAllocatorService
-} from "../../workflow/protocols/task-attempt-planning/plan.js"
+import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
@@ -157,18 +154,6 @@ const journaledPredecessorOperationIds = (
 const distinctOperationIds = <OperationId>(operationIds: ReadonlyArray<OperationId>): ReadonlyArray<OperationId> =>
   operationIds.filter((candidate, index, all) => all.indexOf(candidate) === index)
 
-const allocateUnjournaledOperationId = Effect.fn("RunStabilization.allocateUnjournaledOperationId")(function* (
-  allocator: OperationIdAllocatorService,
-  journaledOperationIds: ReadonlyArray<ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"]>
-) {
-  const journaled = new Set(journaledOperationIds)
-  for (let attempt = 0; attempt <= journaled.size; attempt += 1) {
-    const candidate = yield* allocator.allocate()
-    if (!journaled.has(candidate)) return candidate
-  }
-  return yield* Effect.die("operation id allocator repeated only journaled graph-read identities")
-})
-
 /**
  * Runs ordinary delivery actions to quiescence, obtains one later complete
  * tracker observation through the journaled read protocol, then lets the same
@@ -195,18 +180,13 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       if (Option.isNone(owner)) return proofOf(target, firstQuiescence)
 
       const allocator = yield* OperationIdAllocator
+      const operationId = yield* allocator.allocate()
       const currentGraphOperationId = currentGraph.observation.operationId
       const runId = firstQuiescence.current.runId
       const journal = yield* InRunJournal
       const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
       const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
-      const operationId = yield* allocateUnjournaledOperationId(allocator, predecessorOperationIds)
-      const operation = makeTrackerGraphObservationOperation(
-        operationId,
-        target,
-        predecessorOperationIds,
-        currentGraph.observation.snapshot.taskIds()
-      )
+      const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
       const accepted = yield* executeTrackerGraphRead(operation).pipe(
         Effect.andThen(awaitAcceptedObservation(evaluations, operationId, currentGraph.observation.recordedAt)),
         Effect.ensuring(owner.value.release)

@@ -38,7 +38,6 @@ const authoredAdmittedOwner = <Proposal>(proposal: Proposal) => ({ _tag: "Admitt
 
 const singletonGraph = {
   revision: "singleton-revision",
-  rootTaskId: "A",
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 }
 
@@ -124,6 +123,7 @@ const acceptedResultBlockedGraph = {
 
 const blockedPipelineGraph = {
   revision: "pipeline-before-A-completes",
+  rootTaskId: "A",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
     { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["A"] }
@@ -132,6 +132,7 @@ const blockedPipelineGraph = {
 
 const releasedPipelineGraph = {
   revision: "pipeline-after-A-completes",
+  rootTaskId: "A",
   tasks: [
     { id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
     { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["A"] }
@@ -140,6 +141,7 @@ const releasedPipelineGraph = {
 
 const completedPipelineGraph = {
   revision: "pipeline-after-B-completes",
+  rootTaskId: "A",
   tasks: [
     { id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
     { id: "B", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: ["A"] }
@@ -4215,6 +4217,7 @@ const doubleDiamondPrerequisites = {
 
 const doubleDiamondGraph = (revision: string, completed: ReadonlySet<string>, xAdded: boolean) => ({
   revision,
+  rootTaskId: "A" as const,
   tasks: doubleDiamondTaskIds.flatMap((id) =>
     id === "X" && !xAdded
       ? []
@@ -4255,6 +4258,7 @@ const doubleDiamondGraphs = {
 
 type DoubleDiamondGraph = {
   readonly revision: string
+  readonly rootTaskId: "A"
   readonly tasks: ReadonlyArray<{
     readonly id: string
     readonly lifecycle: { readonly _tag: "CompletedSuccessfully" | "Open" }
