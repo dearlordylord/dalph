@@ -250,8 +250,9 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
         const facts = mapCurrentSignal(input.coherent, ({ actionInputs }) => actionInputs.runtimeFacts)
-        const current = mapCurrentSignal(delivery, (delivery) => ({
+        const current = mapCurrentSignal(zipCurrentSignals(delivery, facts), ([delivery, facts]) => ({
           _tag: "DeliveryRuntimeSnapshot" as const,
+          cancellationApplied: facts.cancellationApplied,
           reflection: delivery.trackerConsequences,
           settlements: delivery.settlements,
           ticketDeliveries: delivery.ticketDeliveries,
@@ -267,17 +268,12 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
               ({ current, proposedActions }): DeliveryRuntimeEvaluation => ({
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
-                current:
-                  facts.cancellationApplied === undefined
-                    ? facts.runId === undefined
-                      ? current
-                      : { ...current, runId: facts.runId }
-                    : {
-                        ...current,
-                        cancellationApplied: facts.cancellationApplied,
-                        ...(facts.runId === undefined ? {} : { runId: facts.runId })
-                      },
-                ...(facts.cancellationApplied === undefined ? {} : { cancellationApplied: facts.cancellationApplied }),
+                current: {
+                  ...current,
+                  cancellationApplied: facts.cancellationApplied,
+                  ...(facts.runId === undefined ? {} : { runId: facts.runId })
+                },
+                cancellationApplied: facts.cancellationApplied,
                 ...(facts.runId === undefined ? {} : { runId: facts.runId }),
                 pauseCoverage: facts.pauseCoverage,
                 proposedActions,

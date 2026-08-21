@@ -1201,6 +1201,14 @@ module runActivation {
     state.process.phase == ActivatingRun,
     state.process.quiescent,
     state.process.postQuiescenceReads == 0,
+    // G2 is the fresh observation used for termination. Every retained
+    // responsibility must settle before that observation, so a later
+    // executor report cannot invalidate the proof after it was read.
+    state.trackerFinality.responsibilitiesSettled,
+    state.process.heldPosition == NoTaskPosition,
+    state.process.otherHeldPosition == NoTaskPosition,
+    unfinishedFacts(state.durable.history).retainedAttempt == NoRetainedAttempt,
+    unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt,
     state' = {
       ...state,
       trackerFinality: {

@@ -211,6 +211,7 @@ const baseEvaluation = Effect.gen(function* () {
             reflectionProposals: [],
             runtimeFacts: {
               acceptedAt: null,
+              cancellationApplied: false,
               pauseCoverage: {
                 _tag: "PauseCoverageGraphNotEstablished",
                 applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
@@ -1076,6 +1077,7 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: null,
+          cancellationApplied: false,
           pauseCoverage: {
             _tag: "PauseCoverageGraphNotEstablished",
             applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }

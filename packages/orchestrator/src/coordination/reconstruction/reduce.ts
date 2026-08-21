@@ -166,10 +166,7 @@ export const advanceReconstructedRunState = (
     controlPolicy: appendControlPolicy(prior.controlPolicy, record),
     graphKnowledge: appendGraphKnowledge(prior.graphKnowledge, record),
     pause: appendPauseState(prior.pause, record),
-    cancellation: appendCancellationState(
-      prior.cancellation ?? ReconstructedRunCancellationState.cases.RunCancellationNotApplied.make({}),
-      record
-    ),
+    cancellation: appendCancellationState(prior.cancellation, record),
     responsibility: appendResponsibility(prior.responsibility, record),
     runId: prior.runId,
     workflowHistory: { records }

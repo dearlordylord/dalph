@@ -37,11 +37,6 @@ import {
   TaskWorkCapacityChangedEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
-import {
-  makeCompleteTaskTrackerFactsObserved,
-  taskTrackerFactsObservedEvent
-} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
-import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
 import { CoordinatorOwnership } from "../../../orchestrator/src/authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import type { TrackerTarget } from "../../../orchestrator/src/authorities/task-tracker/target.js"
@@ -55,10 +50,12 @@ import {
   deriveRunFinalityDecision,
   makeRunFinalityEvidence,
   RunFinalityReadShape,
-  type RunFinalityEvidence
+  type RunFinalityEvidence,
+  type RunFinalityProof
 } from "../../../orchestrator/src/coordination/frontier/run-finality.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { deliveryRuntime } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-adapter.js"
+import { DeliveryActionExecutor } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
 import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
@@ -75,8 +72,6 @@ import {
 } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import {
   attemptPlanRecordKey,
-  intentRecordKey,
-  outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
@@ -88,7 +83,12 @@ import {
   RunLifecycleJournal
 } from "../../../orchestrator/src/workflow-journal/store.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
-import { deterministicOperationIdAllocatorLayer } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/plan.js"
+import {
+  deterministicOperationIdAllocatorLayer,
+  deterministicPlannedTaskAttemptLayer,
+  OperationIdAllocator,
+  PlannedTaskAttemptPlanner
+} from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/plan.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTrackerGraphObservationOperation
@@ -102,6 +102,11 @@ import { PlannedAttemptProtocolController } from "../../../orchestrator/src/work
 import { continuePlannedAttemptExecutorWork } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { RunFinalityDecision } from "../../../orchestrator/src/coordination/frontier/frontier.js"
 import { RunCancellationAppliedEvent } from "../../../orchestrator/src/workflow/protocols/run-cancellation/events.js"
+import {
+  executeFreshTrackerGraphRead,
+  executeTrackerGraphRead
+} from "../../../orchestrator/src/coordination/delivery/delivery-action-adapter-common.js"
+import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
 
 const HistoryVariant = Schema.Struct({
   tag: Schema.Literals([
@@ -438,7 +443,7 @@ const makeRunActivationDriverImplementation = () => {
   let cancellationRedeliveries = 0
   let terminalDisposition: TerminalDispositionTag = "NoTerminal"
   let terminationDisposition: TerminalDispositionTag = "NoTerminal"
-  let finalityEvidence: RunFinalityEvidence | undefined
+  let finalityProof: RunFinalityProof | undefined
   let latestCapacity = 1
   let ambiguousExecutorProjectionAvailable = false
   let executorCommandCalls = 0
@@ -571,7 +576,7 @@ const makeRunActivationDriverImplementation = () => {
     readTaskClaim: () => Effect.die("Run activation model does not read a tracker claim"),
     readTaskWorktree: () => Effect.die("Run activation model does not read Git"),
     readTargetLineage: () => Effect.die("Run activation model does not read Git lineage"),
-    readTrackerGraph: () => Effect.die("tracker reads are activation-level facts in this subject model"),
+    readTrackerGraph: () => Effect.succeed(snapshotForGraphOutcome(graphOutcome)),
     readTaskWorkSpecification: () => Effect.die("Run activation model does not read task specifications"),
     reconcileTaskWorktree: () => Effect.die("Run activation model does not reconcile Git"),
     recordTaskAttemptPlan: () => Effect.die("Run activation model does not plan a fresh attempt"),
@@ -602,7 +607,17 @@ const makeRunActivationDriverImplementation = () => {
               journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
             ),
             Layer.provide(controls),
-            Layer.provide(deterministicOperationIdAllocatorLayer(`run-activation:${activeRunId}`)),
+            Layer.provide(
+              deterministicOperationIdAllocatorLayer(`run-activation:${activeRunId}:${activationsStarted}`)
+            ),
+            Layer.provide(
+              deterministicPlannedTaskAttemptLayer({
+                baseSha: GitCommitSha.make("1".repeat(40)),
+                executor: TaskExecutorLocator.make("executor:run-activation-planner"),
+                runId: activeRunId,
+                worktreeRoot: WorktreeLocator.make("/worktrees/run-activation-planner")
+              })
+            ),
             Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
             Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
           )
@@ -647,7 +662,7 @@ const makeRunActivationDriverImplementation = () => {
     initialTrackerObserved = false
     independentTaskAdmitted = false
     terminalDisposition = "NoTerminal"
-    finalityEvidence = undefined
+    finalityProof = undefined
     quiescent = false
     postQuiescenceReads = 0
   }
@@ -762,6 +777,46 @@ const makeRunActivationDriverImplementation = () => {
               integrationTargets,
               (yield* makeApplicationExitLifecycle()).admission
             ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
+            const workflowInterpreter = yield* WorkflowInterpreter
+            const workflowTrace = yield* WorkflowTrace
+            const finalityExecutor = DeliveryActionExecutor.of({
+              execute: (action, lease) => {
+                if (action._tag === "FreshOperationAction" && action.proposal.route._tag === "TrackerGraphReadRoute") {
+                  return executeFreshTrackerGraphRead(action, action.proposal.route, lease).pipe(
+                    Effect.provideService(WorkflowInterpreter, workflowInterpreter),
+                    Effect.provideService(WorkflowTrace, workflowTrace)
+                  )
+                }
+                return Effect.succeed({
+                  _tag: "ActionDeferred" as const,
+                  proposalId: action.proposal.id,
+                  reason: "TrackerGraphReadUnavailable" as const
+                })
+              }
+            })
+            const finalityPlanner = PlannedTaskAttemptPlanner.of({
+              plan: () => Effect.die("activation finality unexpectedly planned new task work")
+            })
+            const readGraphThroughProduction = Effect.fn("RunActivation.readGraphThroughProduction")(function* () {
+              const allocator = yield* OperationIdAllocator
+              const snapshot = snapshotForGraphOutcome(graphOutcome)
+              const operation = makeTrackerGraphObservationOperation(
+                yield* allocator.allocate(),
+                target,
+                [],
+                snapshot.taskIds()
+              )
+              trackerCalls += 1
+              return yield* executeTrackerGraphRead(operation)
+            })
+            const awaitEstablishedGraph = Effect.fn("RunActivation.awaitEstablishedGraph")(function* () {
+              const current = yield* relation.get
+              if (current.current.trackerGraph._tag === "GraphEstablished") return
+              yield* relation.changes.pipe(
+                Stream.filter(({ current }) => current.trackerGraph._tag === "GraphEstablished"),
+                Stream.runHead
+              )
+            })
             yield* Deferred.succeed(ready, undefined)
 
             const appendResponsibilityThroughJournal = (plannedAttempt: PlannedTaskAttempt) =>
@@ -869,8 +924,9 @@ const makeRunActivationDriverImplementation = () => {
                 ),
                 Match.when("ReadInitialTrackerGraph", () =>
                   Effect.gen(function* () {
+                    yield* readGraphThroughProduction()
+                    yield* awaitEstablishedGraph()
                     initialTrackerObserved = true
-                    trackerCalls += 1
                     yield* Deferred.succeed(command.acknowledged, undefined)
                     return undefined
                   })
@@ -959,36 +1015,16 @@ const makeRunActivationDriverImplementation = () => {
                       return yield* Effect.die("one activation cannot perform a second final tracker read")
                     }
                     postQuiescenceReads = 1
-                    trackerCalls += 1
-                    const operation = makeTrackerGraphObservationOperation(
-                      OperationId.make(`run-activation-finality-${trackerCalls}`),
-                      target,
-                      [],
-                      snapshotForGraphOutcome(graphOutcome).taskIds()
+                    const trackerObservationsBefore = records.filter(
+                      ({ event }) => event._tag === "TaskTrackerFactsObserved"
+                    ).length
+                    finalityProof = yield* runStabilizedDelivery(target, relation).pipe(
+                      Effect.provideService(DeliveryActionExecutor, finalityExecutor),
+                      Effect.provideService(PlannedTaskAttemptPlanner, finalityPlanner)
                     )
-                    yield* journal.append(
-                      runId,
-                      intentRecordKey(operation.operationId),
-                      taskTrackerReadIntent(operation)
-                    )
-                    const snapshot = snapshotForGraphOutcome(graphOutcome)
-                    const observation = yield* journal.append(
-                      runId,
-                      outcomeRecordKey(operation.operationId),
-                      taskTrackerFactsObservedEvent(
-                        operation.operationId,
-                        makeCompleteTaskTrackerFactsObserved(operation, snapshot)
-                      )
-                    )
-                    finalityEvidence = makeRunFinalityEvidence({
-                      operationId: operation.operationId,
-                      observedAt: observation.position,
-                      readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: snapshot.taskIds() }),
-                      rootTaskId: taskA,
-                      runId,
-                      snapshot,
-                      target
-                    })
+                    trackerCalls +=
+                      records.filter(({ event }) => event._tag === "TaskTrackerFactsObserved").length -
+                      trackerObservationsBefore
                     yield* Deferred.succeed(command.acknowledged, undefined)
                     return undefined
                   })
@@ -1018,59 +1054,27 @@ const makeRunActivationDriverImplementation = () => {
                 ),
                 Match.when("TerminateRun", () =>
                   Effect.gen(function* () {
-                    const evidence = finalityEvidence
-                    if (evidence === undefined)
-                      return yield* Effect.die("terminal classification lacked graph evidence")
-                    const current = reduceWorkflowJournalHistory(runId, records)
-                    if (current._tag !== "ValidWorkflowJournalHistory") {
-                      return yield* Effect.die("terminal classification saw invalid Run history")
-                    }
-                    const terminalExplanations = records.flatMap(({ event }) => {
-                      if (event._tag !== "PlannedAttemptExecutorWorkReported" || event.report._tag !== "Terminal") {
-                        return []
-                      }
-                      const responsibility = current.runState.responsibility.entries.find(
-                        (entry) =>
-                          entry._tag === "PlannedAttemptExecutorWorkResponsibility" &&
-                          entry.plannedAttempt.attemptId === event.report.correlation.attemptId
-                      )
-                      return responsibility === undefined ||
-                        responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility"
-                        ? []
-                        : [
-                            {
-                              _tag: "PlannedAttemptExecutorWorkTerminal" as const,
-                              report: event.report,
-                              taskId: responsibility.plannedAttempt.taskId
-                            }
-                          ]
-                    })
-                    const decision = deriveRunFinalityDecision(
-                      { explanations: terminalExplanations, transitions: [] },
-                      current.runState.responsibility,
-                      trackerSettled
+                    const proof = finalityProof
+                    if (
+                      proof === undefined ||
+                      proof.decision._tag !== "RunMayTerminate" ||
+                      !("disposition" in proof) ||
+                      !("evidence" in proof) ||
+                      proof.evidence.rootTaskId !== taskA ||
+                      !proof.evidence.rootPresent
                     )
-                    if (decision._tag !== "RunMayTerminate") {
-                      return yield* Effect.die(
-                        `production finality rejected settled model Run: ${JSON.stringify(decision)}`
-                      )
-                    }
-                    const disposition: TerminalDispositionTag =
-                      evidence.graphOutcome === "AllTasksSucceeded"
-                        ? "Completed"
-                        : cancellationApplied
-                          ? "Cancelled"
-                          : evidence.graphOutcome === "Blocked"
-                            ? "Blocked"
-                            : "NoTerminal"
-                    if (disposition === "NoTerminal") {
-                      return yield* Effect.die("unsettled graph cannot be terminally classified")
-                    }
+                      return yield* Effect.die("terminal classification lacked graph evidence")
+                    const disposition = proof.disposition
                     terminalDisposition = disposition
                     terminationDisposition = disposition
                     phase = "ActivationReturned"
                     yield* Deferred.succeed(command.acknowledged, undefined)
-                    return { acceptedAt: evidence.observedAt, decision, disposition, evidence }
+                    return {
+                      acceptedAt: proof.acceptedAt,
+                      decision: proof.decision,
+                      disposition,
+                      evidence: proof.evidence
+                    }
                   })
                 ),
                 Match.exhaustive
@@ -1122,7 +1126,7 @@ const makeRunActivationDriverImplementation = () => {
         cancellationRedeliveries = 0
         terminalDisposition = "NoTerminal"
         terminationDisposition = "NoTerminal"
-        finalityEvidence = undefined
+        finalityProof = undefined
         latestCapacity = 1
         ambiguousExecutorProjectionAvailable = false
         executorCommandCalls = 0

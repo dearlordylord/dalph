@@ -24,6 +24,7 @@ export const idleRunCancellationAuthoredCassette = Schema.decodeUnknownSync(Auth
     taskWorkSpecifications: [],
     trackerGraph: {
       revision: "cancel-idle-before-success",
+      rootTaskId: "A",
       tasks: [
         { id: "A", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] },
         { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: "A", prerequisiteIds: ["A"] }
@@ -48,6 +49,7 @@ export const idleRunCancellationAuthoredCassette = Schema.decodeUnknownSync(Auth
       _tag: "TrackerGraphReadReturned",
       graph: {
         revision: "cancel-idle-before-success",
+        rootTaskId: "A",
         tasks: [
           { id: "A", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] },
           { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: "A", prerequisiteIds: ["A"] }
@@ -60,6 +62,7 @@ export const idleRunCancellationAuthoredCassette = Schema.decodeUnknownSync(Auth
       _tag: "TrackerGraphReadReturned",
       graph: {
         revision: "cancel-idle-before-success",
+        rootTaskId: "A",
         tasks: [
           { id: "A", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] },
           { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: "A", prerequisiteIds: ["A"] }

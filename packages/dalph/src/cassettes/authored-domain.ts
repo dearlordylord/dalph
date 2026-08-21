@@ -54,6 +54,8 @@ const AuthoredTrackerTask = Schema.Struct({
 /** Provider-neutral tracker facts a maintainer can read and author. */
 export const AuthoredTrackerGraph = Schema.Struct({
   revision: TrackerRevision,
+  /** Exact tracker-selected Run root; absent only when the provider returned no root (for example, an empty graph). */
+  rootTaskId: Schema.optionalKey(TaskId),
   tasks: Schema.Array(AuthoredTrackerTask)
 })
 export type AuthoredTrackerGraph = typeof AuthoredTrackerGraph.Type

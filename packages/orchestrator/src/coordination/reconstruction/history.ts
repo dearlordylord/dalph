@@ -19,6 +19,7 @@ import {
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { advanceReconstructedRunState, reconstructValidatedRunState } from "./reduce.js"
 import type { ReconstructedRunState } from "./state.js"
+import { runGraphTaskFactsOutcome } from "../frontier/run-finality.js"
 import {
   invalidTaskTrackerReconfirmationReference,
   makeTaskTrackerReconfirmationIndex,
@@ -2416,34 +2417,17 @@ const terminationGraphFactsFor = (
   readonly blockedTaskIds: ReadonlySet<TaskId>
   readonly graphOutcome: "AllTasksSucceeded" | "Blocked" | "Unsettled"
 } => {
-  const terminalTaskIds = lifecycles.lifecycles
-    .filter(({ lifecycle }) => lifecycle._tag === "TerminalWithoutSuccess")
-    .map(({ taskId }) => taskId)
-    .toSorted()
-  const blockedTaskIds = new Set(terminalTaskIds)
   const prerequisitesByTask = new Map(
     prerequisites.prerequisites.map(({ prerequisiteTaskIds, taskId }) => [taskId, prerequisiteTaskIds] as const)
   )
-  let changed = true
-  while (changed) {
-    changed = false
-    for (const [taskId, prerequisiteTaskIds] of prerequisitesByTask) {
-      if (!blockedTaskIds.has(taskId) && prerequisiteTaskIds.some((id) => blockedTaskIds.has(id))) {
-        blockedTaskIds.add(taskId)
-        changed = true
-      }
-    }
-  }
-  const allSucceeded = lifecycles.lifecycles.every(({ lifecycle }) => lifecycle._tag === "CompletedSuccessfully")
-  const allSettledBySuccessOrBlockage = lifecycles.lifecycles.every(
-    ({ lifecycle, taskId }) => lifecycle._tag === "CompletedSuccessfully" || blockedTaskIds.has(taskId)
+  const graphFacts = runGraphTaskFactsOutcome(
+    lifecycles.lifecycles.map(({ lifecycle, taskId }) => ({
+      id: taskId,
+      lifecycle,
+      prerequisiteIds: prerequisitesByTask.get(taskId) ?? []
+    }))
   )
-  const graphOutcome = allSucceeded
-    ? "AllTasksSucceeded"
-    : terminalTaskIds.length > 0 && allSettledBySuccessOrBlockage
-      ? "Blocked"
-      : "Unsettled"
-  return { terminalTaskIds, blockedTaskIds, graphOutcome }
+  return { ...graphFacts, blockedTaskIds: new Set(graphFacts.blockedTaskIds) }
 }
 
 const validateTerminationGraphFacts = (
@@ -2516,7 +2500,6 @@ const validateCancellationTerminationObservation = (
   termination: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>,
   reject: (detail: string) => void
 ): void => {
-  if (termination.disposition !== "Cancelled") return
   const cancellation = records.findLast(({ event }) => event._tag === "RunCancellationApplied")
   if (cancellation !== undefined && termination.evidence.observedAt <= cancellation.position) {
     reject("cancellation terminal evidence must use a graph observation after RunCancellationApplied")

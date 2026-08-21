@@ -165,6 +165,7 @@ const coverageRunState = (
   controlPolicy: Option.none(),
   graphKnowledge: { taskTrackerFacts: [] },
   pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+  cancellation: { _tag: "RunCancellationNotApplied" },
   responsibility: { entries: responsibility },
   runId,
   workflowHistory: { records }

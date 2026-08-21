@@ -93,6 +93,7 @@ const baseEvaluation = Effect.gen(function* () {
             reflectionProposals: [],
             runtimeFacts: {
               acceptedAt: null,
+              cancellationApplied: false,
               pauseCoverage: {
                 _tag: "PauseCoverageGraphNotEstablished",
                 applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
@@ -118,6 +119,7 @@ const evaluation = (
   _tag: "DeliveryRuntimeEvaluation",
   acceptedAt: trackerGraph._tag === "GraphEstablished" ? trackerGraph.observation.recordedAt : null,
   current: { ...base.current, trackerGraph },
+  cancellationApplied: base.cancellationApplied,
   pauseCoverage: base.pauseCoverage,
   proposedActions,
   quiescence: { _tag: "TrackerReconfirmationAllowed" },
@@ -548,6 +550,50 @@ it.effect("does not request G2 while the Run is paused", () =>
       expect(proof).toEqual({
         acceptedAt: g1.observation.recordedAt,
         decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      })
+    })
+  )
+)
+
+it.effect("does not request G2 when a cancelled passive Run has no accepted G1", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const g1 = graph(
+        "cancelled-without-G1",
+        1,
+        snapshot(
+          "cancelled-without-G1",
+          [{ id: TaskId.make("root"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }],
+          TaskId.make("root")
+        )
+      )
+      const current = withRunFacts(evaluation(base, g1), true)
+      const reads = yield* Ref.make(0)
+      const proof = yield* runStabilizedDelivery(
+        target,
+        currentSignalOf({
+          ...current,
+          acceptedAt: null,
+          quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const }
+        })
+      ).pipe(
+        Effect.provide(support),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("cancelled Run has no executable action") })
+        ),
+        Effect.provide(
+          Layer.mock(WorkflowInterpreter, {
+            readTrackerGraph: () => Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(Effect.die("no G2")))
+          })
+        )
+      )
+
+      expect(yield* Ref.get(reads)).toBe(0)
+      expect(proof).toEqual({
+        acceptedAt: null,
+        decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
       })
     })
   )

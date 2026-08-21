@@ -26,6 +26,7 @@ import {
   taskWorkCapacityPolicyRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  runCancellationAppliedRecordKey,
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey
 } from "../../workflow-journal/record-key.js"
@@ -51,6 +52,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { RunCancellationAppliedEvent } from "../../workflow/protocols/run-cancellation/events.js"
 import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
@@ -189,6 +191,39 @@ it("rejects Run termination without a prior beginning", () => {
   if (reduction._tag !== "InvalidWorkflowJournalHistory") return
   expect(reduction.issues).toContainEqual(
     expect.objectContaining({ detail: "WorkflowRunTerminated requires prior WorkflowRunBegan", position: 1, runId })
+  )
+})
+
+it("rejects stale Completed evidence after durable Run cancellation", () => {
+  const target = FixtureTarget.make("stale-completed-after-cancellation")
+  const completed = completedHistory(target)
+  const cancellation = {
+    event: RunCancellationAppliedEvent.make({
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    key: runCancellationAppliedRecordKey,
+    position: JournalPosition.make(4),
+    runId
+  }
+  const staleTermination = completed[3]
+  expect(staleTermination).toBeDefined()
+  if (staleTermination === undefined) return
+  const reduction = reduceWorkflowJournalHistory(runId, [
+    ...completed.slice(0, 3),
+    cancellation,
+    { ...staleTermination, position: JournalPosition.make(5) }
+  ])
+
+  expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+  if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+  expect(reduction.issues).toContainEqual(
+    expect.objectContaining({
+      detail: "cancellation terminal evidence must use a graph observation after RunCancellationApplied",
+      position: 5,
+      runId
+    })
   )
 })
 

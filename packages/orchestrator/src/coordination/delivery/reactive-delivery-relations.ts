@@ -181,7 +181,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
               taskId
             }))
           },
-          cancellationApplied: journal.reconstructed.cancellation?._tag === "RunCancellationApplied"
+          cancellationApplied: journal.reconstructed.cancellation._tag === "RunCancellationApplied"
         },
         trackerGraphProposals
       },

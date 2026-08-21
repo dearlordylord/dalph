@@ -1855,7 +1855,7 @@ export const filterFrontierForActivePauses = (
   // ControlDirectionApplied event.  Use its durable position only for the
   // pre-boundary intent check below.
   const cancellationPosition =
-    runState.cancellation?._tag === "RunCancellationApplied" ? runState.cancellation.appliedAt : undefined
+    runState.cancellation._tag === "RunCancellationApplied" ? runState.cancellation.appliedAt : undefined
   const runPausePosition = [historicalRunPausePosition, cancellationPosition]
     .filter((position): position is JournalPosition => position !== undefined)
     .reduce<JournalPosition | undefined>(
@@ -2403,7 +2403,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
    * RunCancellationApplied fact remains the only cancellation authority.
    */
   const settlementRunState: ReconstructedRunState =
-    runState.cancellation?._tag === "RunCancellationApplied"
+    runState.cancellation._tag === "RunCancellationApplied"
       ? { ...runState, pause: { ...runState.pause, run: { _tag: "RunPaused" as const } } }
       : runState
   const currentTaskGraph = Option.getOrUndefined(latestReconstructedTaskGraph(settlementRunState.graphKnowledge))

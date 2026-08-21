@@ -38,6 +38,7 @@ const authoredAdmittedOwner = <Proposal>(proposal: Proposal) => ({ _tag: "Admitt
 
 const singletonGraph = {
   revision: "singleton-revision",
+  rootTaskId: "A",
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 }
 
@@ -3590,6 +3591,7 @@ export const postPromotionBlockerRecoveryAuthoredCassette: ScenarioCassette = Sc
 
 const deliveryFinalityStartingGraph = {
   revision: "delivery-story-G0",
+  rootTaskId: "A",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
     ...["B", "C", "D", "E"].map((id) => ({
@@ -3603,6 +3605,7 @@ const deliveryFinalityStartingGraph = {
 
 const deliveryFinalityExpandedGraph = {
   revision: "delivery-story-G5",
+  rootTaskId: "A",
   tasks: [
     ...deliveryFinalityStartingGraph.tasks,
     ...["F", "G"].map((id) => ({
@@ -3616,6 +3619,7 @@ const deliveryFinalityExpandedGraph = {
 
 const deliveryFinalityReleasedGraph = {
   revision: "delivery-story-G6",
+  rootTaskId: "A",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: { _tag: task.id === "B" ? ("Open" as const) : ("CompletedSuccessfully" as const) }
@@ -3624,6 +3628,7 @@ const deliveryFinalityReleasedGraph = {
 
 const deliveryFinalityPrerequisiteCompleteGraph = {
   revision: "delivery-story-prerequisite-complete",
+  rootTaskId: "A",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: { _tag: task.id === "B" ? ("CompletedSuccessfully" as const) : ("Open" as const) },
@@ -3633,6 +3638,7 @@ const deliveryFinalityPrerequisiteCompleteGraph = {
 
 const deliveryFinalityPrerequisiteStartingGraph = {
   revision: "delivery-story-prerequisite-start",
+  rootTaskId: "A",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: task.id === "B" ? { _tag: "CompletedSuccessfully" as const } : task.lifecycle,
@@ -3642,6 +3648,7 @@ const deliveryFinalityPrerequisiteStartingGraph = {
 
 const deliveryFinalityPrerequisiteReopenedGraph = {
   revision: "delivery-story-prerequisite-reopened",
+  rootTaskId: "A",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: { _tag: "Open" as const },
@@ -3651,6 +3658,7 @@ const deliveryFinalityPrerequisiteReopenedGraph = {
 
 const deliveryFinalityPrerequisiteACompleteGraph = {
   revision: "delivery-story-G6",
+  rootTaskId: "A",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: { _tag: task.id === "B" ? ("Open" as const) : ("CompletedSuccessfully" as const) },
@@ -3660,6 +3668,7 @@ const deliveryFinalityPrerequisiteACompleteGraph = {
 
 const deliveryFinalityPrerequisiteCompletedGraph = {
   revision: "delivery-story-prerequisite-completed",
+  rootTaskId: "A",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: { _tag: "CompletedSuccessfully" as const },
@@ -3669,6 +3678,7 @@ const deliveryFinalityPrerequisiteCompletedGraph = {
 
 const deliveryFinalityAdditionalPrerequisiteGraph = {
   revision: "delivery-story-G7",
+  rootTaskId: "A",
   tasks: deliveryFinalityExpandedGraph.tasks.map((task) => ({
     ...task,
     lifecycle: {
@@ -3685,6 +3695,7 @@ const deliveryFinalityAdditionalPrerequisiteGraph = {
 
 const deliveryFinalityAdditionalPrerequisiteSatisfiedGraph = {
   revision: "delivery-story-G8",
+  rootTaskId: "A",
   tasks: deliveryFinalityAdditionalPrerequisiteGraph.tasks.map((task) => ({
     ...task,
     lifecycle: { _tag: task.id === "B" ? ("Open" as const) : ("CompletedSuccessfully" as const) }

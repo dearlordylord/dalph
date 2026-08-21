@@ -490,8 +490,8 @@ export interface DeliveryRuntimeSnapshot {
   readonly ticketDeliveries: TicketDeliveries
   readonly trackerGraph: TrackerGraphState
   readonly runId?: RunId
-  /** Durable cancellation direction, when the reconstructed journal contains one. */
-  readonly cancellationApplied?: boolean
+  /** Durable cancellation direction reconstructed for every production Run. */
+  readonly cancellationApplied: boolean
 }
 
 /** Exact process-local admission facts reconstructed below the descriptive relation. */
@@ -521,8 +521,8 @@ export interface DeliveryRuntimeFacts {
   readonly pauseCoverage: PauseCoverageFacts
   readonly quiescence: DeliveryQuiescenceDisposition
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
-  /** Optional while lower relation fixtures intentionally model pre-cancellation history. */
-  readonly cancellationApplied?: boolean
+  /** Durable cancellation direction reconstructed for every production Run. */
+  readonly cancellationApplied: boolean
   readonly runId?: RunId
 }
 
@@ -559,7 +559,8 @@ export interface DeliveryRuntimeEvaluation {
   readonly proposedActions: DeliveryProposalFrontier
   readonly quiescence: DeliveryQuiescenceDisposition
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
-  readonly cancellationApplied?: boolean
+  /** Durable cancellation direction reconstructed for every production Run. */
+  readonly cancellationApplied: boolean
 }
 
 const trackerGraphOutcome = (graph: TrackerGraphState): "AllTasksSucceeded" | "Blocked" | "Unsettled" => {

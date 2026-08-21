@@ -45,8 +45,12 @@ import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/ta
 import { ActiveTaskClaim, UnclaimedTask } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import type { TrackerTarget } from "../../../orchestrator/src/authorities/task-tracker/target.js"
+import { TrackerReadError } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
-import { makeApplicationExitShell as makeExitShell } from "../../../orchestrator/src/coordination/application-exit/application-shell.js"
+import {
+  type ApplicationExitShell,
+  makeApplicationExitShell as makeExitShell
+} from "../../../orchestrator/src/coordination/application-exit/application-shell.js"
 import { journaledCurrentDeliveryFrameOf } from "../../../orchestrator/src/coordination/run/current-delivery-frame.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
@@ -69,6 +73,7 @@ import {
 } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import {
   AuthoritativeTaskClaimObserved,
+  TaskClaimObservationUnreadable,
   WorkflowInterpreter,
   WorkflowTrace
 } from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
@@ -226,6 +231,7 @@ const SpecProjection = Schema.Struct({
       phase: PhaseVariant,
       requestedRunId: RunIdVariant,
       requestedTarget: TargetVariant,
+      paused: Schema.Boolean,
       admissionOpen: Schema.Boolean,
       exitCutoff: Schema.Boolean,
       executorPositionHeld: Schema.Boolean,
@@ -293,6 +299,7 @@ interface ProcessProjection {
   readonly phase: PhaseTag
   readonly requestedRunId: RunTag
   readonly requestedTarget: TargetTag
+  readonly paused: boolean
   readonly admissionOpen: boolean
   readonly exitCutoff: boolean
   readonly executorPositionHeld: boolean
@@ -322,6 +329,11 @@ type RuntimeCommand =
   | {
       readonly _tag: "PublishGraph"
       readonly completed: Deferred.Deferred<"RunPaused" | "RunUnpaused">
+      readonly operationNumber: number
+    }
+  | {
+      readonly _tag: "PublishUnreadableGraph"
+      readonly completed: Deferred.Deferred<void>
       readonly operationNumber: number
     }
   | { readonly _tag: "SeedRunningAttempt"; readonly completed: Deferred.Deferred<void> }
@@ -422,6 +434,12 @@ const activeClaim = ActiveTaskClaim.make({
   taskId,
   token: ClaimToken.make("run-cancellation-claim-token")
 })
+const foreignClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("run-cancellation-foreign-claim-acquisition"),
+  owner: ClaimOwner.make("other-run-owner"),
+  taskId,
+  token: ClaimToken.make("other-run-claim-token")
+})
 const claimAcquisitionOperation = makeTaskClaimAcquisitionOperation({
   acquisition: {
     operationId: activeClaim.operationId,
@@ -444,6 +462,14 @@ const integrationPlanOperation = makeTaskAttemptPlanOperation({
 const claimReadOperationId = OperationId.make("run-cancellation-claim-read")
 const claimReadOperation = makeTaskClaimObservationOperation(claimReadOperationId, target, taskId, [
   activeClaim.operationId
+])
+const foreignClaimReadOperationId = OperationId.make("run-cancellation-foreign-claim-read")
+const foreignClaimReadOperation = makeTaskClaimObservationOperation(foreignClaimReadOperationId, target, taskId, [
+  claimReadOperationId
+])
+const unreadableClaimReadOperationId = OperationId.make("run-cancellation-unreadable-claim-read")
+const unreadableClaimReadOperation = makeTaskClaimObservationOperation(unreadableClaimReadOperationId, target, taskId, [
+  claimReadOperationId
 ])
 const claimReleaseOperationId = OperationId.make("run-cancellation-claim-release")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
@@ -512,6 +538,7 @@ const makeInitialProcess = (): ProcessProjection => ({
   phase: "Active",
   requestedRunId: "R1",
   requestedTarget: "Target1",
+  paused: false,
   admissionOpen: true,
   exitCutoff: false,
   executorPositionHeld: false,
@@ -526,6 +553,7 @@ const makeInitialProcess = (): ProcessProjection => ({
 const makeRunCancellationActions = {
   init: {},
   selectIdleRun: {},
+  selectAlreadyPausedRun: {},
   selectRunningExecutor: {},
   selectIntegrationOwned: {},
   selectTemporaryWait: {},
@@ -538,6 +566,8 @@ const makeRunCancellationActions = {
   reportExecutorSafe: {},
   recordClaimReleaseIntent: {},
   observeAndReleaseClaim: {},
+  observeForeignClaim: {},
+  markClaimUnreadable: {},
   recordIntegrationIntent: {},
   observePromotedIntegration: {},
   settlePromotedIntegration: {},
@@ -552,6 +582,8 @@ const makeRunCancellationActions = {
   settleAfterIdleCancellation: {},
   markExecutorUnreadable: {},
   markIntegrationUnreadable: {},
+  markIntegrationQuarantined: {},
+  markGraphUnreadable: {},
   rejectCancellationAtExit: {},
   rejectForeignCancellation: {},
   rejectTerminalHistory: {},
@@ -670,13 +702,16 @@ const makeCancellationDriverImplementation = () => {
     (next) => (records = next)
   )
   let bootstrap: JournaledRunBootstrap["Service"] | undefined
+  let applicationExit: ApplicationExitShell["Service"] | undefined
   let runtimeFiber: Fiber.Fiber<unknown, unknown> | undefined
+  let applicationExitFiber: Fiber.Fiber<unknown, unknown> | undefined
   let runtimeCommands: Queue.Queue<RuntimeCommand> | undefined
   let durable = makeInitialDurable()
   let process = makeInitialProcess()
   let effectivePause: "RunPaused" | "RunUnpaused" | undefined
   let executorAuthority: "Running" | "SafelySuspended" = "Running"
   let claimHeld = true
+  let claimObservationMode: "Exact" | "Foreign" | "Unreadable" = "Exact"
   let promotionReadCount = 0
   let integrationFixture: IntegrationFixture | undefined
 
@@ -739,13 +774,23 @@ const makeCancellationDriverImplementation = () => {
     acquireTaskClaim: () => Effect.die("cancellation conformance must not acquire a successor claim"),
     readTaskClaim: () =>
       Effect.succeed(
-        claimHeld
-          ? AuthoritativeTaskClaimObserved.make({ observation: activeClaim })
-          : AuthoritativeTaskClaimObserved.make({ observation: UnclaimedTask.make({ taskId }) })
+        claimObservationMode === "Unreadable"
+          ? TaskClaimObservationUnreadable.make({ attempts: 3, taskId })
+          : claimObservationMode === "Foreign"
+            ? AuthoritativeTaskClaimObserved.make({ observation: foreignClaim })
+            : claimHeld
+              ? AuthoritativeTaskClaimObserved.make({ observation: activeClaim })
+              : AuthoritativeTaskClaimObserved.make({ observation: UnclaimedTask.make({ taskId }) })
       ),
     readTaskWorktree: () => Effect.die("cancellation conformance does not read worktrees"),
     readTargetLineage: () => Effect.die("cancellation conformance does not read target lineage"),
-    readTrackerGraph: () => Effect.die("the cancellation adapter publishes controlled graph facts through Journal"),
+    readTrackerGraph: () =>
+      Effect.fail(
+        new TrackerReadError({
+          operation: "TrackerGraphReader.decode",
+          detail: "controlled cancellation conformance graph response is unreadable"
+        })
+      ),
     readTaskWorkSpecification: () => Effect.succeed(taskSpecification),
     releaseTaskClaim: (operation) =>
       Effect.sync(() => {
@@ -767,20 +812,24 @@ const makeCancellationDriverImplementation = () => {
       Layer.succeed(RunLifecycleJournal, Context.get(journalContext, RunLifecycleJournal)),
       Layer.succeed(CoordinatorOwnership, ownership)
     )
-    const applicationExit = yield* makeExitShell(ownership, { requestEnd: () => Effect.void }).pipe(
+    const exitShell = yield* makeExitShell(ownership, { requestEnd: () => Effect.void }).pipe(
       Effect.provideService(Scope.Scope, scope)
     )
     const context = yield* Layer.build(
       journaledRunBootstrapLayer(
         runId,
         ({ runId: activeRunId }) => runtimeLayer(activeRunId, executorForSettlement, workflowInterpreterForSettlement),
-        applicationExit
+        exitShell
       ).pipe(Layer.provide(dependencies))
     ).pipe(Effect.provideService(Scope.Scope, scope))
+    applicationExit = exitShell
     return Context.get(context, JournaledRunBootstrap)
   })
 
   const stopRuntime = Effect.gen(function* () {
+    const exitFiber = applicationExitFiber
+    applicationExitFiber = undefined
+    if (exitFiber !== undefined) yield* Fiber.interrupt(exitFiber).pipe(Effect.ignore)
     const fiber = runtimeFiber
     runtimeFiber = undefined
     runtimeCommands = undefined
@@ -879,6 +928,16 @@ const makeCancellationDriverImplementation = () => {
           const frame = yield* journaledCurrentDeliveryFrameOf(current)
           effectivePause = frame.pause.run._tag
           yield* Deferred.succeed(command.completed, effectivePause)
+        } else if (command._tag === "PublishUnreadableGraph") {
+          const operation = makeTrackerGraphObservationOperation(
+            OperationId.make(`run-cancellation-unreadable-graph-${command.operationNumber}`),
+            target,
+            [],
+            [TaskId.make("run-cancellation-root")]
+          )
+          const result = yield* Effect.exit((yield* WorkflowInterpreter).readTrackerGraph(operation))
+          if (Exit.isSuccess(result)) return yield* Effect.die("unreadable graph fixture unexpectedly succeeded")
+          yield* Deferred.succeed(command.completed, undefined)
         } else if (command._tag === "ExecutePlannedSettlement") {
           yield* executePlannedAttemptTransition(command.action, command.transition, settlementLease)
           yield* Deferred.succeed(command.completed, undefined)
@@ -1137,6 +1196,15 @@ const makeCancellationDriverImplementation = () => {
       effectivePause = pause
     })
 
+  const publishUnreadableGraph = (operationNumber: number) =>
+    Effect.gen(function* () {
+      const commands = runtimeCommands
+      if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
+      const completed = yield* Deferred.make<void>()
+      yield* Queue.offer(commands, { _tag: "PublishUnreadableGraph", completed, operationNumber })
+      yield* awaitSettlementCommand(completed)
+    })
+
   const awaitSettlementCommand = (completed: Deferred.Deferred<void>) => {
     const fiber = runtimeFiber
     return fiber === undefined
@@ -1253,6 +1321,31 @@ const makeCancellationDriverImplementation = () => {
       return RunnableFrontierTransition.ReleaseCancelledAttemptClaim({ operation, plannedAttempt })
     })
 
+  const observeClaimThroughProduction = (
+    operation: typeof claimReadOperation,
+    operationId: OperationId,
+    mode: "Foreign" | "Unreadable"
+  ) =>
+    Effect.gen(function* () {
+      const transition = RunnableFrontierTransition.ObserveCancelledAttemptClaim({ operation, plannedAttempt })
+      const action = newRecoveredActionOf(transition)
+      if (action === undefined) return yield* Effect.die("production claim observation route was not derived")
+      claimObservationMode = mode
+      yield* executeRecoveredSettlement(action, operationId)
+      claimObservationMode = "Exact"
+      const observed = records.findLast(
+        ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId
+      )
+      if (observed?.event._tag !== "TaskTrackerFactsObserved") {
+        return yield* Effect.die("production claim observation did not persist its focused facts")
+      }
+      const expectedTag = mode === "Foreign" ? "FocusedTaskClaimFacts" : "FocusedTaskClaimFactsUnreadable"
+      if (observed.event.observation._tag !== expectedTag) {
+        return yield* Effect.die(`production claim observation returned ${observed.event.observation._tag}`)
+      }
+      return observed.event.observation
+    })
+
   const resetAfterProcessLoss = () => {
     const outstandingExecutor = durable.executor !== "NoExecutor" && durable.executor !== "SafelySuspended"
     const outstanding = !(
@@ -1264,13 +1357,14 @@ const makeCancellationDriverImplementation = () => {
       phase: "ProcessLost",
       requestedRunId: durable.runId,
       requestedTarget: durable.target,
+      paused: process.paused,
       admissionOpen: false,
       exitCutoff: false,
       executorPositionHeld: outstandingExecutor,
       responsibilitiesSettled: !outstanding,
       graphRead: false,
       graph: "NoGraph",
-      forwardAdmissions: 0,
+      forwardAdmissions: process.forwardAdmissions,
       freshAfterRestart: false,
       cancellationRejected: false
     }
@@ -1287,6 +1381,7 @@ const makeCancellationDriverImplementation = () => {
         effectivePause = undefined
         executorAuthority = "Running"
         claimHeld = true
+        claimObservationMode = "Exact"
         promotionReadCount = 0
         integrationFixture = undefined
         yield* startRuntime
@@ -1294,6 +1389,26 @@ const makeCancellationDriverImplementation = () => {
     selectIdleRun: () =>
       Effect.sync(() => {
         process = { ...process, executorPositionHeld: false, responsibilitiesSettled: true, graph: "NotAllSucceeded" }
+      }),
+    selectAlreadyPausedRun: () =>
+      Effect.gen(function* () {
+        const installed = bootstrap
+        if (installed === undefined) return yield* Effect.die("cancellation bootstrap was not installed")
+        const applied = yield* installed.operatorControl.applyControlDirection({
+          direction: "Pause",
+          subject: { _tag: "Run", runId }
+        })
+        if (applied.event._tag !== "ControlDirectionApplied" || applied.event.direction !== "Pause") {
+          return yield* Effect.die("production pause boundary did not persist the Run Pause direction")
+        }
+        process = {
+          ...process,
+          paused: true,
+          admissionOpen: false,
+          executorPositionHeld: false,
+          responsibilitiesSettled: true,
+          graph: "NotAllSucceeded"
+        }
       }),
     selectRunningExecutor: () =>
       Effect.gen(function* () {
@@ -1308,7 +1423,14 @@ const makeCancellationDriverImplementation = () => {
         process = { ...process, responsibilitiesSettled: false }
       }),
     selectTemporaryWait: () => Effect.sync(() => (process = { ...process, graph: "TemporaryWait" })),
-    selectApplicationExitCutoff: () => Effect.sync(() => (process = { ...process, exitCutoff: true })),
+    selectApplicationExitCutoff: () =>
+      Effect.gen(function* () {
+        const exitShell = applicationExit
+        if (exitShell === undefined) return yield* Effect.die("application Exit shell was not installed")
+        applicationExitFiber = yield* exitShell.requestBoundary.requestExit.pipe(Effect.forkChild)
+        yield* exitShell.awaitExitRequested
+        process = { ...process, exitCutoff: true }
+      }),
     selectForeignRunRequest: () => Effect.sync(() => (process = { ...process, requestedRunId: "R2" })),
     selectTerminalHistory: () =>
       Effect.sync(() => {
@@ -1325,7 +1447,7 @@ const makeCancellationDriverImplementation = () => {
         const current = yield* Effect.succeed(reduceWorkflowJournalHistory(runId, records))
         if (
           current._tag !== "ValidWorkflowJournalHistory" ||
-          current.runState.cancellation?._tag !== "RunCancellationApplied"
+          current.runState.cancellation._tag !== "RunCancellationApplied"
         ) {
           return yield* Effect.die("production cancellation append did not reconstruct")
         }
@@ -1442,9 +1564,46 @@ const makeCancellationDriverImplementation = () => {
           claimReleases: durable.claimReleases + 1
         }
       }),
+    observeForeignClaim: () =>
+      Effect.gen(function* () {
+        const observation = yield* observeClaimThroughProduction(
+          foreignClaimReadOperation,
+          foreignClaimReadOperationId,
+          "Foreign"
+        )
+        if (
+          observation._tag !== "FocusedTaskClaimFacts" ||
+          observation.observation._tag !== "ActiveTaskClaim" ||
+          observation.observation.operationId !== foreignClaim.operationId
+        ) {
+          return yield* Effect.die("production foreign claim observation lost the foreign owner")
+        }
+        durable = { ...durable, claim: "ForeignClaim", claimReleaseObservations: 1 }
+        process = { ...process, responsibilitiesSettled: true }
+      }),
+    markClaimUnreadable: () =>
+      Effect.gen(function* () {
+        const observation = yield* observeClaimThroughProduction(
+          unreadableClaimReadOperation,
+          unreadableClaimReadOperationId,
+          "Unreadable"
+        )
+        if (observation._tag !== "FocusedTaskClaimFactsUnreadable") {
+          return yield* Effect.die("production unreadable claim observation was not retained")
+        }
+        durable = { ...durable, claim: "ClaimUnreadable" }
+        process = { ...process, responsibilitiesSettled: false }
+      }),
     recordIntegrationIntent: () =>
       Effect.gen(function* () {
         yield* executeIntegrationCommand("RunIntegrationPromotion")
+        if (
+          !records.some(
+            ({ event }) => event._tag === "TargetPromotionIntended" || event._tag === "TargetPromotionAttemptIntended"
+          )
+        ) {
+          return yield* Effect.die("production integration promotion did not persist an intent boundary")
+        }
         durable = {
           ...durable,
           integration: "PromotionIntentRecorded",
@@ -1454,6 +1613,9 @@ const makeCancellationDriverImplementation = () => {
     observePromotedIntegration: () =>
       Effect.gen(function* () {
         yield* executeIntegrationCommand("ObserveIntegrationPromotion")
+        if (!records.some(({ event }) => event._tag === "TargetPromotionObservedSuccess")) {
+          return yield* Effect.die("production integration promotion did not persist accepted Git evidence")
+        }
         durable = { ...durable, integration: "PromotionAccepted", promotionAccepted: true }
       }),
     settlePromotedIntegration: () =>
@@ -1493,7 +1655,7 @@ const makeCancellationDriverImplementation = () => {
         const reconstructed = reduceWorkflowJournalHistory(runId, records)
         if (
           reconstructed._tag !== "ValidWorkflowJournalHistory" ||
-          reconstructed.runState.cancellation?._tag !== "RunCancellationApplied"
+          reconstructed.runState.cancellation._tag !== "RunCancellationApplied"
         ) {
           return yield* Effect.die("restart did not reconstruct the applied cancellation")
         }
@@ -1567,24 +1729,60 @@ const makeCancellationDriverImplementation = () => {
         durable = { ...durable, integration: "IntegrationUnreadable" }
         process = { ...process, responsibilitiesSettled: false }
       }),
-    rejectCancellationAtExit: () =>
+    markIntegrationQuarantined: () =>
       Effect.sync(() => {
+        durable = { ...durable, integration: "IntegrationQuarantined" }
+        process = { ...process, responsibilitiesSettled: false }
+      }),
+    markGraphUnreadable: () =>
+      Effect.gen(function* () {
+        yield* publishUnreadableGraph(durable.classificationReads + 1)
+        process = { ...process, graph: "GraphUnreadable" }
+      }),
+    rejectCancellationAtExit: () =>
+      Effect.gen(function* () {
+        const installed = bootstrap
+        if (installed === undefined) return yield* Effect.die("cancellation bootstrap was not installed")
+        const rejection = yield* installed.operatorControl.applyRunCancellation({ runId }).pipe(Effect.flip)
+        if (rejection._tag !== "ApplicationExiting") {
+          return yield* Effect.die(`production Exit race returned ${rejection._tag}`)
+        }
         process = { ...process, phase: "Rejected", cancellationRejected: true }
       }),
     rejectForeignCancellation: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const installed = bootstrap
+        if (installed === undefined) return yield* Effect.die("cancellation bootstrap was not installed")
+        const rejection = yield* installed.operatorControl
+          .applyRunCancellation({ runId: RunId.make("run-cancellation-R2") })
+          .pipe(Effect.flip)
+        if (rejection._tag !== "JournaledRunIdentityMismatch") {
+          return yield* Effect.die(`foreign production cancellation returned ${rejection._tag}`)
+        }
         process = { ...process, phase: "Rejected", cancellationRejected: true }
       }),
     rejectTerminalHistory: () =>
       Effect.sync(() => (process = { ...process, phase: "TerminalHistory", cancellationRejected: true })),
     admitForwardWork: () =>
-      Effect.sync(() => (process = { ...process, forwardAdmissions: process.forwardAdmissions + 1 })),
+      Effect.gen(function* () {
+        yield* seedRunningAttempt
+        durable = { ...durable, executor: "Running", claim: "Held", integration: "NoIntegration" }
+        process = {
+          ...process,
+          executorPositionHeld: true,
+          responsibilitiesSettled: false,
+          forwardAdmissions: process.forwardAdmissions + 1
+        }
+      }),
     getProductionEvidence: () => {
       const reconstructed = reduceWorkflowJournalHistory(runId, records)
       return Effect.succeed({
         eventTags: records.map(({ event }) => event._tag),
+        observationTags: records.flatMap(({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" ? [event.observation._tag] : []
+        ),
         cancellation:
-          reconstructed._tag === "ValidWorkflowJournalHistory" ? reconstructed.runState.cancellation?._tag : "Invalid",
+          reconstructed._tag === "ValidWorkflowJournalHistory" ? reconstructed.runState.cancellation._tag : "Invalid",
         effectivePause
       })
     },
@@ -1648,6 +1846,7 @@ const stateCheckProjection = stateCheck(
               phase: state.process.phase.tag,
               requestedRunId: state.process.requestedRunId.tag,
               requestedTarget: state.process.requestedTarget.tag,
+              paused: state.process.paused,
               admissionOpen: state.process.admissionOpen,
               exitCutoff: state.process.exitCutoff,
               executorPositionHeld: state.process.executorPositionHeld,
@@ -1677,6 +1876,96 @@ it.effect("uses the production cancellation journal boundary and effective Pause
       expect(evidence.eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(1)
       expect(evidence.cancellation).toBe("RunCancellationApplied")
       expect(evidence.effectivePause).toBe("RunPaused")
+    })
+  )
+)
+
+it.effect("cancels an already-paused Run through production Pause, cancellation, and fresh graph boundaries", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectAlreadyPausedRun()
+      yield* driver.applyCancellation()
+      yield* driver.readFreshClassificationGraph()
+      const evidence = yield* driver.getProductionEvidence()
+      expect(evidence.eventTags.filter((tag) => tag === "ControlDirectionApplied")).toHaveLength(1)
+      expect(evidence.eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(1)
+      expect(evidence.eventTags.filter((tag) => tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(0)
+      expect(evidence.effectivePause).toBe("RunPaused")
+    })
+  )
+)
+
+it.effect("orders the production cancellation request behind the real application Exit cutoff", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectApplicationExitCutoff()
+      yield* driver.rejectCancellationAtExit()
+      const evidence = yield* driver.getProductionEvidence()
+      expect(evidence.eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(0)
+      expect(evidence.eventTags.filter((tag) => tag === "ControlDirectionApplied")).toHaveLength(0)
+    })
+  )
+)
+
+it.effect("settles an admitted integration responsibility through the production Git boundary", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectIntegrationOwned()
+      yield* driver.applyCancellation()
+      yield* driver.recordIntegrationIntent()
+      yield* driver.observePromotedIntegration()
+      yield* driver.settlePromotedIntegration()
+      const evidence = yield* driver.getProductionEvidence()
+      expect(evidence.eventTags).toContain("TargetPromotionIntended")
+      expect(evidence.eventTags).toContain("TargetPromotionObservedSuccess")
+      expect(evidence.effectivePause).toBeUndefined()
+    })
+  )
+)
+
+it.effect("observes foreign and unreadable claims without a forbidden release or terminal append", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectRunningExecutor()
+      yield* driver.applyCancellation()
+      yield* driver.recordExecutorStopIntent()
+      yield* driver.reportExecutorSafe()
+      yield* driver.recordClaimReleaseIntent()
+      yield* driver.observeForeignClaim()
+      const foreign = yield* driver.getProductionEvidence()
+      expect(foreign.eventTags.filter((tag) => tag === "TaskClaimReleaseIntended")).toHaveLength(0)
+      expect(foreign.eventTags.filter((tag) => tag === "TaskClaimReleased")).toHaveLength(0)
+      expect(foreign.eventTags.filter((tag) => tag === "WorkflowRunTerminated")).toHaveLength(0)
+
+      yield* driver.init()
+      yield* driver.selectRunningExecutor()
+      yield* driver.applyCancellation()
+      yield* driver.recordExecutorStopIntent()
+      yield* driver.reportExecutorSafe()
+      yield* driver.recordClaimReleaseIntent()
+      yield* driver.markClaimUnreadable()
+      const unreadable = yield* driver.getProductionEvidence()
+      expect(unreadable.eventTags.filter((tag) => tag === "TaskClaimReleaseIntended")).toHaveLength(0)
+      expect(unreadable.eventTags.filter((tag) => tag === "TaskClaimReleased")).toHaveLength(0)
+      expect(unreadable.eventTags.filter((tag) => tag === "WorkflowRunTerminated")).toHaveLength(0)
+    })
+  )
+)
+
+it.effect("retains an unreadable graph read without terminal classification", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectIdleRun()
+      yield* driver.applyCancellation()
+      yield* driver.markGraphUnreadable()
+      const evidence = yield* driver.getProductionEvidence()
+      expect(evidence.observationTags).toContain("TaskTrackerFactsReadFailed")
+      expect(evidence.eventTags.filter((tag) => tag === "WorkflowRunTerminated")).toHaveLength(0)
     })
   )
 )

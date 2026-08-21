@@ -62,7 +62,7 @@ export const journaledCurrentDeliveryFrameOf = (
       // derived work: already-owned responsibilities may settle, but no fresh
       // task work may be selected after the durable direction.
       pause:
-        journal.reconstructed.cancellation?._tag === "RunCancellationApplied"
+        journal.reconstructed.cancellation._tag === "RunCancellationApplied"
           ? { ...journal.reconstructed.pause, run: { _tag: "RunPaused" as const } }
           : journal.reconstructed.pause,
       responsibility: journal.reconstructed.responsibility,

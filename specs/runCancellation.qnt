@@ -83,6 +83,10 @@ module runCancellation {
     phase: ProcessPhase,
     requestedRunId: RunId,
     requestedTarget: TrackerTarget,
+    // A Pause direction is durable before cancellation starts. Cancellation
+    // still performs its required fresh graph read; it does not reopen Run
+    // admission or turn a passive pause into a terminal result.
+    paused: bool,
     admissionOpen: bool,
     exitCutoff: bool,
     executorPositionHeld: bool,
@@ -122,10 +126,11 @@ module runCancellation {
     process.graph != NoGraph,
   }
 
-  pure def resetAfterProcessLoss(durable: DurableState): ProcessState = {
+  pure def resetAfterProcessLoss(durable: DurableState, process: ProcessState): ProcessState = {
     phase: ProcessLost,
     requestedRunId: durable.runId,
     requestedTarget: durable.target,
+    paused: process.paused,
     admissionOpen: false,
     exitCutoff: false,
     executorPositionHeld: durable.executor != NoExecutor
@@ -133,7 +138,9 @@ module runCancellation {
     responsibilitiesSettled: noOutstandingResponsibility(durable),
     graphRead: false,
     graph: NoGraph,
-    forwardAdmissions: 0,
+    // An admitted forward action is a durable responsibility. Process loss
+    // removes only process-local counters; it cannot erase that obligation.
+    forwardAdmissions: process.forwardAdmissions,
     freshAfterRestart: false,
     cancellationRejected: false,
   }
@@ -178,6 +185,7 @@ module runCancellation {
     state.durable.claimReleaseObservations <= 1,
     state.durable.claimReleases <= 1,
     state.durable.claimReleases <= state.durable.claimReleaseIntents,
+    state.durable.claim != ForeignClaim or state.durable.claimReleases == 0,
   }
 
   val integrationSettlementNeverRollsBackPromotion: bool =
@@ -188,16 +196,21 @@ module runCancellation {
   val integrationResourceSettlesOnce: bool = state.durable.integrationSettlements <= 1
 
   val ambiguousExecutorRetainsResponsibility: bool =
-    state.durable.executor != ExecutorUnreadable
-      or and {
+    and {
+      state.process.forwardAdmissions == 0 or state.durable.executor != NoExecutor,
+      state.durable.executor != ExecutorUnreadable
+        or and {
         state.process.executorPositionHeld,
         not(state.process.responsibilitiesSettled),
-      }
+        },
+    }
 
   val ambiguousIntegrationRetainsResponsibility: bool =
-    state.durable.integration != IntegrationUnreadable
-      and state.durable.integration != IntegrationQuarantined
-      or not(state.process.responsibilitiesSettled)
+    and {
+      state.durable.integration != IntegrationUnreadable
+        and state.durable.integration != IntegrationQuarantined
+        or not(state.process.responsibilitiesSettled),
+    }
 
   val restartReusesAppliedCancellation: bool =
     state.process.phase != ProcessLost
@@ -225,7 +238,8 @@ module runCancellation {
     state.process.phase != ReadyForClassification or state.process.graphRead
 
   val temporaryWaitDoesNotClassifyCancellation: bool =
-    state.process.graph != TemporaryWait or state.process.phase != ReadyForClassification
+    (state.process.graph != TemporaryWait and state.process.graph != GraphUnreadable)
+      or state.process.phase != ReadyForClassification
 
   val applicationExitCutoffRejectsCancellation: bool =
     not(state.process.exitCutoff) or not(state.durable.cancellationApplied)
@@ -321,6 +335,7 @@ module runCancellation {
         phase: Active,
         requestedRunId: R1,
         requestedTarget: Target1,
+        paused: false,
         admissionOpen: true,
         exitCutoff: false,
         executorPositionHeld: false,
@@ -348,9 +363,37 @@ module runCancellation {
     },
   }
 
+  // The Run may already be passively paused when Alice submits cancellation.
+  // This action is deliberately durable-state selection, not a new forward
+  // operation: it closes admission and leaves no task responsibility behind.
+  action selectAlreadyPausedRun: bool = all {
+    state.process.phase == Active,
+    state.durable.cancellationAppends == 0,
+    state.durable.executor == NoExecutor,
+    state.durable.claim == NoClaim,
+    state.durable.integration == NoIntegration,
+    state.process.forwardAdmissions == 0,
+    state' = {
+      ...state,
+      process: {
+        ...state.process,
+        paused: true,
+        admissionOpen: false,
+        executorPositionHeld: false,
+        responsibilitiesSettled: true,
+        graph: NotAllSucceeded,
+      },
+    },
+  }
+
   action selectRunningExecutor: bool = all {
     state.process.phase == Active,
     state.durable.cancellationAppends == 0,
+    state.process.admissionOpen,
+    not(state.process.paused),
+    state.durable.executor == NoExecutor,
+    state.durable.claim == NoClaim,
+    state.durable.integration == NoIntegration,
     state' = {
       ...state,
       durable: {
@@ -370,6 +413,11 @@ module runCancellation {
   action selectIntegrationOwned: bool = all {
     state.process.phase == Active,
     state.durable.cancellationAppends == 0,
+    state.process.admissionOpen,
+    not(state.process.paused),
+    state.durable.executor == NoExecutor,
+    state.durable.claim == NoClaim,
+    state.durable.integration == NoIntegration,
     state' = {
       ...state,
       durable: { ...state.durable, integration: IntegrationOwned },
@@ -403,7 +451,7 @@ module runCancellation {
 
   action applyCancellation: bool = all {
     state.process.phase == Active,
-    state.process.admissionOpen,
+    state.process.admissionOpen or state.process.paused,
     not(state.process.exitCutoff),
     state.process.requestedRunId == state.durable.runId,
     state.process.requestedTarget == state.durable.target,
@@ -572,7 +620,7 @@ module runCancellation {
     state' = {
       ...state,
       durable: { ...state.durable, processLosses: state.durable.processLosses + 1 },
-      process: resetAfterProcessLoss(state.durable),
+      process: resetAfterProcessLoss(state.durable, state.process),
     },
   }
 
@@ -655,6 +703,58 @@ module runCancellation {
     },
   }
 
+  // A foreign claim is observed as an external owner. Cancellation may later
+  // classify the Run, but it must never issue the exact-claim release against
+  // that foreign owner.
+  action observeForeignClaim: bool = all {
+    state.process.phase == Cancelling,
+    executorSafeForRelease(state.durable.executor),
+    state.durable.claim == ReleaseIntentRecorded,
+    state.durable.claimReleaseObservations == 0,
+    state.durable.claimReleases == 0,
+    state' = {
+      ...state,
+      durable: { ...state.durable, claim: ForeignClaim, claimReleaseObservations: 1 },
+      process: { ...state.process, responsibilitiesSettled: true },
+    },
+  }
+
+  // An unreadable claim read is not absence. It retains cancellation until a
+  // later owning-boundary observation makes exact release safe.
+  action markClaimUnreadable: bool = all {
+    state.process.phase == Cancelling,
+    executorSafeForRelease(state.durable.executor),
+    state.durable.claim == ReleaseIntentRecorded,
+    state' = {
+      ...state,
+      durable: { ...state.durable, claim: ClaimUnreadable },
+      process: { ...state.process, responsibilitiesSettled: false },
+    },
+  }
+
+  // Quarantine is a retained integration responsibility, not a cancellation
+  // result and not permission to release the target resource.
+  action markIntegrationQuarantined: bool = all {
+    state.process.phase == Cancelling,
+    state.durable.integration == PromotionIntentRecorded,
+    state' = {
+      ...state,
+      durable: { ...state.durable, integration: IntegrationQuarantined },
+      process: { ...state.process, responsibilitiesSettled: false },
+    },
+  }
+
+  // A graph read that cannot be decoded or completed keeps the Run pending;
+  // no terminal classification may be handed to the finality boundary.
+  action markGraphUnreadable: bool = all {
+    state.process.phase == Cancelling,
+    noOutstandingResponsibility(state.durable),
+    state.process.responsibilitiesSettled,
+    state.process.graph == NotAllSucceeded,
+    not(state.process.graphRead),
+    state' = { ...state, process: { ...state.process, graph: GraphUnreadable } },
+  }
+
   action readTemporaryWaitGraph: bool = all {
     state.process.phase == Cancelling,
     noOutstandingResponsibility(state.durable),
@@ -702,16 +802,27 @@ module runCancellation {
   action admitForwardWork: bool = all {
     state.process.phase == Active,
     state.process.admissionOpen,
+    not(state.process.paused),
     not(state.durable.cancellationApplied),
     state.process.forwardAdmissions == 0,
+    state.durable.executor == NoExecutor,
+    state.durable.claim == NoClaim,
+    state.durable.integration == NoIntegration,
     state' = {
       ...state,
-      process: { ...state.process, forwardAdmissions: state.process.forwardAdmissions + 1 },
+      durable: { ...state.durable, executor: Running, claim: Held },
+      process: {
+        ...state.process,
+        executorPositionHeld: true,
+        responsibilitiesSettled: false,
+        forwardAdmissions: state.process.forwardAdmissions + 1,
+      },
     },
   }
 
   action step: bool = any {
     selectIdleRun,
+    selectAlreadyPausedRun,
     selectRunningExecutor,
     selectIntegrationOwned,
     selectTemporaryWait,
@@ -724,6 +835,8 @@ module runCancellation {
     reportExecutorSafe,
     recordClaimReleaseIntent,
     observeAndReleaseClaim,
+    observeForeignClaim,
+    markClaimUnreadable,
     recordIntegrationIntent,
     observePromotedIntegration,
     settlePromotedIntegration,
@@ -738,6 +851,8 @@ module runCancellation {
     settleAfterIdleCancellation,
     markExecutorUnreadable,
     markIntegrationUnreadable,
+    markIntegrationQuarantined,
+    markGraphUnreadable,
     rejectCancellationAtExit,
     rejectForeignCancellation,
     rejectTerminalHistory,

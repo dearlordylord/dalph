@@ -8,7 +8,8 @@ import { WorkflowRunBeganEvent, WorkflowRunTerminatedEvent } from "../workflow/r
 import {
   type RunFinalityEvidence,
   type RunTerminationDisposition,
-  requiredRunFinalityFactFamilies
+  requiredRunFinalityFactFamilies,
+  runGraphTaskFactsOutcome
 } from "../coordination/frontier/run-finality.js"
 import { JournalPosition } from "./identity.js"
 import { workflowRunBeganRecordKey, workflowRunTerminatedRecordKey } from "./record-key.js"
@@ -227,45 +228,17 @@ const freshObservationIssues = (
       : undefined
   ].filter((issue): issue is string => issue !== undefined)
 
-const blockedTaskIdsFor = (
-  observation: CompleteTaskTrackerFactsObserved
-): ReadonlySet<RunFinalityEvidence["blockedTaskIds"][number]> => {
-  const [, lifecycles, prerequisites] = observation.factFamilies
-  const blockedTaskIds = new Set(
-    lifecycles.lifecycles
-      .filter(({ lifecycle }) => lifecycle._tag === "TerminalWithoutSuccess")
-      .map(({ taskId }) => taskId)
-  )
-  let changed = true
-  while (changed) {
-    changed = false
-    for (const { prerequisiteTaskIds, taskId } of prerequisites.prerequisites) {
-      if (!blockedTaskIds.has(taskId) && prerequisiteTaskIds.some((id) => blockedTaskIds.has(id))) {
-        blockedTaskIds.add(taskId)
-        changed = true
-      }
-    }
-  }
-  return blockedTaskIds
-}
-
 const completeFactFamilyIssues = (
   observation: CompleteTaskTrackerFactsObserved,
   evidence: RunFinalityEvidence
 ): ReadonlyArray<string> => {
   const [, , , groupings] = observation.factFamilies
+  // A reconfirmation may widen its explicit closure while retaining the earlier full facts.
+  // freshObservationIssues validates the terminal read's exact target and coverage.
   const rootPresentInGrouping = groupings.groupings.some(({ taskId }) => taskId === evidence.rootTaskId)
   return [
     evidence.requiredFactFamilies.some((family, index) => family !== requiredRunFinalityFactFamilies[index])
       ? "termination evidence must include every complete graph fact family"
-      : undefined,
-    observation.factFamilies.some(
-      ({ coverage }) =>
-        taskTrackerTargetKey(coverage.target) !== taskTrackerTargetKey(evidence.target) ||
-        exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) !==
-          exactTaskIdSetKey(evidence.coverage.explicitlyCoveredTaskIds)
-    )
-      ? "termination evidence must match every fact-family target and coverage"
       : undefined,
     evidence.rootTaskId !== observation.rootTaskId
       ? "termination evidence must retain the exact tracker-selected Run root"
@@ -283,27 +256,23 @@ const completeGraphOutcomeIssues = (
 ): ReadonlyArray<string> => {
   const issues: Array<string> = []
   const [identities, lifecycles] = observation.factFamilies
-  const terminalTaskIds = lifecycles.lifecycles
-    .filter(({ lifecycle }) => lifecycle._tag === "TerminalWithoutSuccess")
-    .map(({ taskId }) => taskId)
-    .toSorted()
-  const blockedTaskIds = blockedTaskIdsFor(observation)
-  const allSucceeded = lifecycles.lifecycles.every(({ lifecycle }) => lifecycle._tag === "CompletedSuccessfully")
-  const allSettledBySuccessOrBlockage = lifecycles.lifecycles.every(
-    ({ lifecycle, taskId }) => lifecycle._tag === "CompletedSuccessfully" || blockedTaskIds.has(taskId)
+  const prerequisitesByTaskId = new Map(
+    observation.factFamilies[2].prerequisites.map(({ prerequisiteTaskIds, taskId }) => [taskId, prerequisiteTaskIds])
   )
-  const graphOutcome = allSucceeded
-    ? "AllTasksSucceeded"
-    : terminalTaskIds.length > 0 && allSettledBySuccessOrBlockage
-      ? "Blocked"
-      : "Unsettled"
-  if (evidence.contentIdentity !== identities.contentIdentity || evidence.graphOutcome !== graphOutcome) {
+  const graphFacts = runGraphTaskFactsOutcome(
+    lifecycles.lifecycles.map(({ lifecycle, taskId }) => ({
+      id: taskId,
+      lifecycle,
+      prerequisiteIds: prerequisitesByTaskId.get(taskId) ?? []
+    }))
+  )
+  if (evidence.contentIdentity !== identities.contentIdentity || evidence.graphOutcome !== graphFacts.graphOutcome) {
     issues.push("termination evidence revision or graph outcome is not current")
   }
-  if (exactTaskIdSetKey(evidence.terminalTaskIds) !== exactTaskIdSetKey(terminalTaskIds)) {
+  if (exactTaskIdSetKey(evidence.terminalTaskIds) !== exactTaskIdSetKey(graphFacts.terminalTaskIds)) {
     issues.push("termination evidence terminal task facts do not match the graph")
   }
-  if (exactTaskIdSetKey(evidence.blockedTaskIds) !== exactTaskIdSetKey([...blockedTaskIds])) {
+  if (exactTaskIdSetKey(evidence.blockedTaskIds) !== exactTaskIdSetKey(graphFacts.blockedTaskIds)) {
     issues.push("termination evidence dependency blockage facts do not match the graph")
   }
   return issues
@@ -338,11 +307,10 @@ const dispositionIssues = (
 
 const cancellationEvidenceIssues = (
   records: ReadonlyArray<JournalRecord>,
-  disposition: RunTerminationDisposition,
   evidence: RunFinalityEvidence
 ): ReadonlyArray<string> => {
   const cancellation = records.findLast(({ event }) => event._tag === "RunCancellationApplied")
-  return disposition === "Cancelled" && cancellation !== undefined && evidence.observedAt <= cancellation.position
+  return cancellation !== undefined && evidence.observedAt <= cancellation.position
     ? ["cancellation terminal evidence must use a graph observation after RunCancellationApplied"]
     : []
 }
@@ -412,7 +380,7 @@ const terminationEvidenceIssues = (
     issues.push("termination evidence must retain the first tracker-selected Run root")
   }
   issues.push(...dispositionIssues(records, disposition, evidence.graphOutcome))
-  issues.push(...cancellationEvidenceIssues(records, disposition, evidence))
+  issues.push(...cancellationEvidenceIssues(records, evidence))
   if (hasLaterCompleteObservation(records, evidence, terminationPosition)) {
     issues.push("termination evidence must use the latest complete graph observation")
   }

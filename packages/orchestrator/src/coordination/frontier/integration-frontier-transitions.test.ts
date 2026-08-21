@@ -79,6 +79,7 @@ import type { ReconstructedRunState } from "../reconstruction/state.js"
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 
 const runId = RunId.make("integration-frontier-retry-run")
+const notAppliedCancellation = { _tag: "RunCancellationNotApplied" as const }
 const taskId = TaskId.make("integration-frontier-retry-task")
 const attemptId = AttemptId.make("integration-frontier-retry-attempt")
 const target = IntegrationTarget.make({
@@ -184,6 +185,7 @@ const unfinishedFirstSessionHistory = () => {
       controlPolicy: Option.none(),
       graphKnowledge: { taskTrackerFacts: [] },
       pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+      cancellation: notAppliedCancellation,
       responsibility: { entries: [] },
       runId,
       workflowHistory: { records }
@@ -372,6 +374,7 @@ const retryHistory = (evidence: RetryEvidence, freshHead?: GitCommitSha) => {
       controlPolicy: Option.none(),
       graphKnowledge: { taskTrackerFacts: [] },
       pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+      cancellation: notAppliedCancellation,
       responsibility: { entries: [] },
       runId,
       workflowHistory: { records }
@@ -438,6 +441,7 @@ it("releases the target before an initial Integrator run when fresh lineage is i
     controlPolicy: Option.none(),
     graphKnowledge: { taskTrackerFacts: [] },
     pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    cancellation: notAppliedCancellation,
     responsibility: { entries: [] },
     runId,
     workflowHistory: { records }

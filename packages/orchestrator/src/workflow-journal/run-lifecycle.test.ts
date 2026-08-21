@@ -151,7 +151,7 @@ it("rejects Cancelled termination evidence observed before cancellation", () => 
   }
 })
 
-it("accepts Completed when cancellation arrives after an all-success observation", () => {
+it("rejects stale Completed evidence when cancellation was applied after the observation", () => {
   const fixture = completedRunFinalityFixture({ runId, target })
   const began = makeWorkflowRunBeganRecord(runId, target, policy)
   const cancellation = {
@@ -180,6 +180,39 @@ it("accepts Completed when cancellation arrives after an all-success observation
         runId
       },
       cancellation
+    ],
+    runId,
+    "Completed",
+    fixture.evidence
+  )
+
+  expect(decision._tag).toBe("LifecycleTransitionRejected")
+  if (decision._tag === "LifecycleTransitionRejected") {
+    expect(decision.failure).toMatchObject({
+      _tag: "WorkflowRunTerminationEvidenceInvalid",
+      detail: expect.stringContaining("after RunCancellationApplied")
+    })
+  }
+})
+
+it("accepts Completed when termination wins before cancellation is applied", () => {
+  const fixture = completedRunFinalityFixture({ runId, target })
+  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const decision = decideWorkflowRunTermination(
+    [
+      began,
+      {
+        event: fixture.intent,
+        key: intentRecordKey(fixture.operation.operationId),
+        position: JournalPosition.make(2),
+        runId
+      },
+      {
+        event: fixture.observation,
+        key: outcomeRecordKey(fixture.operation.operationId),
+        position: JournalPosition.make(3),
+        runId
+      }
     ],
     runId,
     "Completed",

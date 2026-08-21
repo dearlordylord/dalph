@@ -120,8 +120,8 @@ export interface ReconstructedRunState {
   readonly controlPolicy: Option.Option<RunControlPolicy>
   readonly graphKnowledge: BestAvailableDurableGraphKnowledge
   readonly pause: ReconstructedPauseState
-  /** Optional for isolated legacy test fixtures; production reduction always supplies this fact. */
-  readonly cancellation?: ReconstructedRunCancellationState
+  /** Durable cancellation direction reconstructed for every production Run, including NotApplied. */
+  readonly cancellation: ReconstructedRunCancellationState
   readonly responsibility: WorkflowResponsibilityState
   readonly runId: RunId
   readonly workflowHistory: ReconstructedWorkflowHistory

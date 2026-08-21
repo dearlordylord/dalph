@@ -133,8 +133,10 @@ const evaluation = (
   return {
     _tag: "DeliveryRuntimeEvaluation",
     acceptedAt: JournalPosition.make(5),
+    cancellationApplied: false,
     current: {
       _tag: "DeliveryRuntimeSnapshot",
+      cancellationApplied: false,
       reflection: makeDeliveryReflection(settlements),
       settlements,
       ticketDeliveries,

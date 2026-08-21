@@ -9,7 +9,7 @@ import { Data, Schema } from "effect"
 import { workflowResponsibilityOperationId, type WorkflowResponsibilityState } from "../reconstruction/state.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { TrackerRevision } from "../../authorities/task-tracker/task.js"
+import { TrackerRevision, type TrackerTask } from "../../authorities/task-tracker/task.js"
 import { exactTaskIdSetKey, TrackerTarget, taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { CompleteTargetClosureCoverage } from "../../workflow/task-tracker-facts/observation.js"
@@ -126,15 +126,16 @@ const runFinalityEvidenceIssue = (evidence: RunFinalityEvidenceFields): string |
 export const RunFinalityEvidence = RunFinalityEvidenceFields.check(Schema.makeFilter(runFinalityEvidenceIssue))
 export type RunFinalityEvidence = typeof RunFinalityEvidence.Type
 
-/** Classifies one normalized graph and retains the dependency facts supporting blockage. */
-export const runGraphFactsOutcome = (
-  snapshot: TaskDagSnapshot
+export type RunGraphTaskFacts = Pick<TrackerTask, "id" | "lifecycle" | "prerequisiteIds">
+
+/** Classifies normalized lifecycle and prerequisite facts through one shared finality algebra. */
+export const runGraphTaskFactsOutcome = (
+  tasks: ReadonlyArray<RunGraphTaskFacts>
 ): {
   readonly graphOutcome: RunGraphOutcome
   readonly terminalTaskIds: ReadonlyArray<TaskId>
   readonly blockedTaskIds: ReadonlyArray<TaskId>
 } => {
-  const tasks = snapshot.toWire().tasks
   const terminalTaskIds = tasks
     .filter(({ lifecycle }) => lifecycle._tag === "TerminalWithoutSuccess")
     .map(({ id }) => id)
@@ -164,6 +165,9 @@ export const runGraphFactsOutcome = (
     terminalTaskIds
   }
 }
+
+/** Classifies one normalized graph and retains the dependency facts supporting blockage. */
+export const runGraphFactsOutcome = (snapshot: TaskDagSnapshot) => runGraphTaskFactsOutcome(snapshot.toWire().tasks)
 
 /** Builds typed evidence from the accepted normalized graph observation. */
 export const makeRunFinalityEvidence = (input: {

@@ -107,6 +107,7 @@ const makeDeliveryRelationsLayer = (
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: null,
+          cancellationApplied: false,
           pauseCoverage: {
             _tag: "PauseCoverageGraphNotEstablished",
             applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
