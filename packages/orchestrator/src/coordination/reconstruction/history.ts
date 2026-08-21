@@ -2441,16 +2441,9 @@ const validateTerminationFactFamilies = (
   if (evidence.requiredFactFamilies.some((family, index) => family !== observedFamilyTags[index])) {
     reject("termination evidence must retain every required graph fact family in order")
   }
-  if (
-    observation.factFamilies.some(
-      ({ coverage }) =>
-        taskTrackerTargetKey(coverage.target) !== taskTrackerTargetKey(evidence.target) ||
-        exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) !==
-          exactTaskIdSetKey(evidence.coverage.explicitlyCoveredTaskIds)
-    )
-  ) {
-    reject("termination evidence must match every fact-family target and coverage")
-  }
+  // An unchanged read may use a different explicit closure while linking to
+  // an earlier complete observation. The fresh observation above owns exact
+  // target and coverage validation; these retained fact families own content.
   if (evidence.rootTaskId !== observation.rootTaskId) {
     reject("termination evidence must retain the exact tracker-selected Run root")
   }

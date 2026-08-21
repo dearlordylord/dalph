@@ -160,10 +160,11 @@ module runActivation {
   pure val INITIAL_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
   pure val EXACT_ROOT_TASK_ID: TaskId = TaskA
 
-  pure def trackerCoverageFor(outcome: GraphOutcome): Set[TaskId] = match outcome {
-    | GraphBlocked => Set(EXACT_ROOT_TASK_ID, TaskB)
-    | _ => Set(EXACT_ROOT_TASK_ID)
-  }
+  // CompleteTargetClosure covers the target transitively; this set records
+  // only additional task IDs explicitly named by the read operation. The
+  // production G2 read names none, while its tracker result still contains
+  // and validates the exact Run root and complete graph facts.
+  pure def trackerCoverageFor(_outcome: GraphOutcome): Set[TaskId] = Set()
 
   pure def trackerContentIdentityFor(outcome: GraphOutcome): TrackerContentIdentity = match outcome {
     | GraphAllSucceeded => ContentRevisionAllSucceeded
