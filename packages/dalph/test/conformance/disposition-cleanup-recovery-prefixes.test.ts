@@ -285,6 +285,17 @@ const cleanupResumeEvidence = (
   }
 }
 
+/** Canonical operation identities are derived from durable terminal subjects,
+ * never from the authorization row being asserted. */
+const expectedRecoveryAuthorizationOperationId = (
+  family: "Worktree" | "Branch" | "IntegratorCandidate"
+): OperationId =>
+  family === "Worktree"
+    ? OperationId.make(`disposition-cleanup:worktree:${attempt.attemptId}`)
+    : family === "Branch"
+      ? OperationId.make(`disposition-cleanup:branch:${attempt.attemptId}`)
+      : OperationId.make(`disposition-cleanup:integrator-candidate:${candidatePredecessor.sessionId}`)
+
 const expectedFamilyTagsAfterResume = (
   prefix: RecoveryPrefix,
   family: "Worktree" | "Branch" | "IntegratorCandidate"
@@ -453,10 +464,12 @@ it.effect("reopens every cleanup P0-P6 prefix through memory and SQLite", () =>
         expect(evidence.authorizationOperationIds, `${prefix.cut}/${lane} generated authorization count`).toHaveLength(
           1
         )
-        const worktreeOperationId = evidence.authorizationOperationIds[0]
-        if (worktreeOperationId === undefined) continue
+        const expectedOperationId = expectedRecoveryAuthorizationOperationId("Worktree")
+        expect(evidence.authorizationOperationIds, `${prefix.cut}/${lane} canonical operation identity`).toEqual([
+          String(expectedOperationId)
+        ])
         expect(evidence.authorizationKeys, `${prefix.cut}/${lane} exact authorization key`).toEqual([
-          worktreeCleanupAuthorizedRecordKey(OperationId.make(worktreeOperationId))
+          worktreeCleanupAuthorizedRecordKey(expectedOperationId)
         ])
         expect(evidence.familyTags, `${prefix.cut}/${lane} exact worktree event order`).toEqual(
           expectedFamilyTagsAfterResume(prefix, "Worktree")
@@ -768,12 +781,14 @@ const assertCleanupRecoveryFamily = (
         expect(evidence.authorizationOperationIds, `${prefix.cut}/${lane} generated authorization count`).toHaveLength(
           1
         )
-        const authorizationOperationId = evidence.authorizationOperationIds[0]
-        if (authorizationOperationId === undefined) continue
+        const expectedOperationId = expectedRecoveryAuthorizationOperationId(family)
+        expect(evidence.authorizationOperationIds, `${prefix.cut}/${lane} canonical operation identity`).toEqual([
+          String(expectedOperationId)
+        ])
         const expectedAuthorizationKey =
           family === "Branch"
-            ? branchCleanupAuthorizedRecordKey(OperationId.make(authorizationOperationId))
-            : integratorCandidateCleanupAuthorizedRecordKey(OperationId.make(authorizationOperationId))
+            ? branchCleanupAuthorizedRecordKey(expectedOperationId)
+            : integratorCandidateCleanupAuthorizedRecordKey(expectedOperationId)
         expect(evidence.authorizationKeys, `${prefix.cut}/${lane} exact authorization key`).toEqual([
           expectedAuthorizationKey
         ])
