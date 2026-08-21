@@ -7,8 +7,7 @@ import {
   IntegrationTarget,
   PlannedTaskAttempt,
   RunId,
-  TaskId,
-  plannedTaskAttemptEquivalence
+  TaskId
 } from "@dalph/contracts"
 import { TaskDagWire } from "../authorities/task-tracker/graph.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tracker/target.js"
@@ -34,39 +33,73 @@ import {
   IntegratorRunCorrelation,
   IntegratorSessionCorrelation
 } from "../workflow/protocols/integrator/events.js"
-import { acceptedResultEquivalence } from "../workflow/protocols/integration-admission/responsibility.js"
 import {
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint
 } from "../workflow/protocols/integration-quarantine/events.js"
-import { IntegrationFinalityJournalEvent } from "../workflow/protocols/integration-finality/events.js"
+import {
+  CompletionClaimDeletedEvent,
+  CompletionClaimDeletionAttemptIntendedEvent,
+  CompletionClaimDeletionIntendedEvent,
+  CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimReplacedEvent,
+  CompletionClaimReplacementAttemptIntendedEvent,
+  CompletionClaimReplacementIntendedEvent,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskAttemptIntendedEvent,
+  CompletionTaskCandidateAncestryObservedEvent,
+  CompletionTaskCandidateAncestryReadIntendedEvent,
+  CompletionTaskIntendedEvent,
+  CompletionTaskRejectedEvent,
+  CompletionTaskRequestLookupIntendedEvent,
+  CompletionTaskRequestLookupObservedEvent,
+  CompletionTaskResponseLostEvent,
+  IntegrationFinalitySettledEvent
+} from "../workflow/protocols/integration-finality/events.js"
+import type { IntegrationFinalityJournalEvent } from "../workflow/protocols/integration-finality/events.js"
+import type { CompletionSuccessObservation } from "../workflow/protocols/integration-finality/completion-claim.js"
 import {
   TargetPromotionAttemptOrdinal,
+  TargetPromotionAttemptReason,
   TargetPromotionCorrelation,
   TargetPromotionNonConvergenceObservation,
   TargetPromotionStaleObservation,
   TargetPromotionSuccessObservation,
-  TargetPromotionTerminalBasis,
-  targetPromotionCorrelationEquals
+  TargetPromotionTerminalBasis
 } from "../workflow/protocols/target-promotion/events.js"
 import { AttemptRestartAuthorityReadFailure } from "../workflow/protocols/attempt-choice/replacement-events.js"
 import { AttemptChoiceSubject } from "../workflow/protocols/attempt-choice/events.js"
 import { ActiveTaskClaim } from "../authorities/task-tracker/claim-mutation.js"
-import { PlannedAttemptWorktreeObservation } from "../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
-import { PlannedWorktreeReady } from "../authorities/git/worktree.js"
+import {
+  PlannedAttemptWorktreeObservation,
+  PlannedWorktreeReady
+} from "../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import type {
   CompleteTaskTrackerFactsObserved,
   TaskTrackerFactsObservation,
   UnchangedTaskTrackerFactsReconfirmed
 } from "../workflow/task-tracker-facts/observation.js"
+import {
+  CompleteTaskTrackerFactsObserved as CompleteTaskTrackerFactsObservedSchema,
+  UnchangedTaskTrackerFactsReconfirmed as UnchangedTaskTrackerFactsReconfirmedSchema
+} from "../workflow/task-tracker-facts/observation.js"
 import { reconstructedTaskGraphFor } from "../coordination/reconstruction/graph-knowledge.js"
+import {
+  makeIntegrationFinalityHistoryIndexes,
+  validateIntegrationFinalityHistoryRecord
+} from "../workflow/protocols/integration-finality/history.js"
+import { validateIntegrationHistoryRecord } from "../coordination/reconstruction/integration-history-validation.js"
+import { makeIntegrationHistoryIndexes } from "../coordination/reconstruction/integration-history.js"
+import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { CurrentSignal } from "../coordination/delivery/relations.js"
+import {
+  traceHistoricalFacetsAt,
+  traceHistoricalFacetsIssue,
+  type HistoricalFacetFactories
+} from "./trace-reader-historical-facets.js"
 
 /** Version of the immutable production trace contract consumed by presentation. */
 export const traceReaderSchemaVersion = 2 as const // eslint-disable-line no-magic-numbers
-
-const exactCandidateParentCount = 2 // eslint-disable-line no-magic-numbers
-const latestSameTargetResponsibilityIndex = -1 // eslint-disable-line no-magic-numbers
 
 /**
  * Identifies one exact committed journal position in one Run. Cursors and
@@ -228,7 +261,48 @@ export const TraceIntegrationFact = Schema.TaggedUnion({
     run: IntegratorRunCorrelation,
     source: TraceItemIdentity
   },
-  Completion: { event: IntegrationFinalityJournalEvent, source: TraceItemIdentity },
+  FocusedCompletion: {
+    event: Schema.Union([
+      CompletionTaskAcknowledgedEvent,
+      CompletionTaskAttemptIntendedEvent,
+      CompletionTaskCandidateAncestryObservedEvent,
+      CompletionTaskCandidateAncestryReadIntendedEvent,
+      CompletionTaskIntendedEvent,
+      CompletionTaskRejectedEvent,
+      CompletionTaskRequestLookupIntendedEvent,
+      CompletionTaskRequestLookupObservedEvent,
+      CompletionTaskResponseLostEvent
+    ]),
+    source: TraceItemIdentity
+  },
+  ClaimReplacement: {
+    event: Schema.Union([
+      CompletionClaimReplacedEvent,
+      CompletionClaimReplacementAttemptIntendedEvent,
+      CompletionClaimReplacementIntendedEvent
+    ]),
+    source: TraceItemIdentity
+  },
+  ClaimDeletion: {
+    event: Schema.Union([
+      CompletionClaimDeletedEvent,
+      CompletionClaimDeletionAttemptIntendedEvent,
+      CompletionClaimDeletionIntendedEvent,
+      CompletionClaimDeletionReadObservedEvent
+    ]),
+    source: TraceItemIdentity
+  },
+  Settlement: { event: IntegrationFinalitySettledEvent, source: TraceItemIdentity },
+  DependantRelease: {
+    graphObservation: Schema.Union([
+      CompleteTaskTrackerFactsObservedSchema,
+      UnchangedTaskTrackerFactsReconfirmedSchema
+    ]),
+    graphSource: TraceItemIdentity,
+    settlement: IntegrationFinalitySettledEvent,
+    settlementSource: TraceItemIdentity,
+    source: TraceItemIdentity
+  },
   IntegratorResult: { result: IntegratorResult, run: IntegratorRunCorrelation, source: TraceItemIdentity },
   Quarantine: {
     basis: IntegrationQuarantineBasis,
@@ -244,17 +318,34 @@ export const TraceIntegrationFact = Schema.TaggedUnion({
   },
   Session: { correlation: IntegratorSessionCorrelation, source: TraceItemIdentity },
   SessionStarted: { responsibility: TraceItemIdentity, source: TraceItemIdentity, target: IntegrationTarget },
-  Promotion: {
+  PromotionRequested: {
+    basis: Schema.Literal("BeforeFirstAttempt"),
+    correlation: TargetPromotionCorrelation,
+    source: TraceItemIdentity
+  },
+  PromotionAttempt: {
+    attemptOrdinal: TargetPromotionAttemptOrdinal,
+    correlation: TargetPromotionCorrelation,
+    reason: TargetPromotionAttemptReason,
+    source: TraceItemIdentity
+  },
+  PromotionSucceeded: {
     basis: TargetPromotionTerminalBasis,
     correlation: TargetPromotionCorrelation,
-    kind: Schema.Literals(["Attempt", "NonConvergent", "Requested", "Stale", "Succeeded"]),
-    observation: Schema.NullOr(
-      Schema.Union([
-        TargetPromotionSuccessObservation,
-        TargetPromotionStaleObservation,
-        TargetPromotionNonConvergenceObservation
-      ])
-    ),
+    observation: TargetPromotionSuccessObservation,
+    source: TraceItemIdentity
+  },
+  PromotionStale: {
+    basis: TargetPromotionTerminalBasis,
+    correlation: TargetPromotionCorrelation,
+    observation: TargetPromotionStaleObservation,
+    source: TraceItemIdentity
+  },
+  PromotionNonConvergent: {
+    attemptOrdinal: TargetPromotionAttemptOrdinal,
+    basis: Schema.Literal("AfterAttempt"),
+    correlation: TargetPromotionCorrelation,
+    lastObservation: TargetPromotionNonConvergenceObservation,
     source: TraceItemIdentity
   },
   ProviderActivityAbsent: {
@@ -272,6 +363,14 @@ export const TraceHistoricalFacets = Schema.Struct({
   recovery: TraceRecoveryFacet
 })
 export type TraceHistoricalFacets = typeof TraceHistoricalFacets.Type
+
+const historicalFacetFactories = {
+  observationGap: TraceObservationGap.cases,
+  preservationDisposition: TracePreservationDisposition.cases,
+  retainedResponsibility: TraceRetainedResponsibility.cases,
+  integrationFact: TraceIntegrationFact.cases,
+  facets: TraceHistoricalFacets
+} satisfies HistoricalFacetFactories
 
 const occurrenceRunId = (occurrence: WorkflowOccurrenceValue): RunId =>
   occurrence._tag === "AppliedControlDirection"
@@ -479,33 +578,6 @@ const traceRelationshipIssue = (view: {
   return undefined
 }
 
-const traceHistoricalFacetsIssue = (view: {
-  readonly cursor: TraceCursor
-  readonly items: ReadonlyArray<TraceHistoryItem>
-  readonly facets: TraceHistoricalFacets
-}): string | undefined => {
-  const identities: ReadonlyArray<TraceItemIdentity> = [
-    ...view.facets.recovery.observationGaps.map(({ action }) => action),
-    ...view.facets.recovery.preservationDispositions.map(({ source }) => source),
-    ...view.facets.recovery.retainedResponsibilities.map(({ source }) => source),
-    ...view.facets.integration.facts.flatMap((fact) =>
-      fact._tag === "SessionStarted"
-        ? [fact.source, fact.responsibility]
-        : fact._tag === "Responsibility" && fact.sameTargetPredecessor !== null
-          ? [fact.source, fact.sameTargetPredecessor]
-          : [fact.source]
-    )
-  ]
-  const invalid = identities.find(
-    (identity) => identityOutsideCursor(identity, view.cursor) || historyItemAt(view.items, identity) === undefined
-  )
-  if (invalid !== undefined) return "Every historical facet source must resolve to an item in the cursor prefix"
-  const invalidFact = view.facets.integration.facts.find(
-    (fact) => traceHistoricalFactIssue(fact, view.items) !== undefined
-  )
-  return invalidFact === undefined ? undefined : traceHistoricalFactIssue(invalidFact, view.items)
-}
-
 const traceAtCursorInvariant = (view: {
   readonly cursor: TraceCursor
   readonly derivedTaskOrder: TraceDerivedTaskOrder
@@ -520,7 +592,7 @@ const traceAtCursorInvariant = (view: {
   traceDerivedTaskOrderIssue(view.derivedTaskOrder, view.graph) ??
   traceTaskGraphRelationshipIssue(view.graph, view.relationships.taskGraphEdges) ??
   traceRelationshipIssue(view) ??
-  traceHistoricalFacetsIssue(view)
+  traceHistoricalFacetsIssue(view, historicalFacetFactories)
 
 /** A fixed historical cursor view. Current status is intentionally not stored here. */
 export const TraceAtCursor = Schema.Struct({
@@ -630,41 +702,363 @@ const operationOfEvent = (event: WorkflowJournalEvent): WorkflowOperation | unde
   return event._tag === "PlannedAttemptReplaced" ? event.successorPlan : undefined
 }
 
-const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<OperationId> => {
-  if (occurrence._tag === "TaskTrackerReadInitiated" || occurrence._tag === "GitReadInitiated") {
-    return [workflowOperationId(occurrence.operation)]
+const uniqueOperationIds = (operationIds: ReadonlyArray<OperationId>): ReadonlyArray<OperationId> => [
+  ...new Set(operationIds)
+]
+
+type FinalityCompletionTaskAttemptEvent = Extract<
+  IntegrationFinalityJournalEvent,
+  { readonly _tag: "CompletionTaskAttemptIntended" }
+>
+type FinalityCompletionTaskReadEvent = Extract<
+  IntegrationFinalityJournalEvent,
+  {
+    readonly _tag:
+      | "CompletionTaskCandidateAncestryReadIntended"
+      | "CompletionTaskCandidateAncestryObserved"
+      | "CompletionTaskRequestLookupIntended"
+      | "CompletionTaskRequestLookupObserved"
   }
-  if (
-    occurrence._tag === "TaskClaimAcquisitionInitiated" ||
-    occurrence._tag === "TaskClaimReleaseInitiated" ||
-    occurrence._tag === "TaskAttemptPlanned" ||
-    occurrence._tag === "TaskWorktreeReady"
-  ) {
-    return [workflowOperationId(occurrence.operation)]
+>
+type FinalityCompletionTaskOutcomeEvent = Extract<
+  IntegrationFinalityJournalEvent,
+  {
+    readonly _tag:
+      | "CompletionTaskIntended"
+      | "CompletionTaskAcknowledged"
+      | "CompletionTaskResponseLost"
+      | "CompletionTaskRejected"
   }
-  if (
-    occurrence._tag === "TaskTrackerFactsObserved" ||
-    occurrence._tag === "PlannedAttemptWorktreeObserved" ||
-    occurrence._tag === "TargetLineageObserved" ||
-    occurrence._tag === "AttemptRestartAuthorityReadFailed" ||
-    occurrence._tag === "TaskClaimAcquired" ||
-    occurrence._tag === "TaskClaimReleased" ||
-    occurrence._tag === "StoppedAttemptClaimPreserved"
-  ) {
-    return [
-      occurrence._tag === "StoppedAttemptClaimPreserved"
-        ? occurrence.observationOperationId
-        : occurrence.originatingActionOperationId
-    ]
+>
+type FinalityClaimDeletionReadEvent = Extract<
+  IntegrationFinalityJournalEvent,
+  { readonly _tag: "CompletionClaimDeletionReadObserved" }
+>
+type FinalityClaimReplacementEvent = Extract<
+  IntegrationFinalityJournalEvent,
+  {
+    readonly _tag:
+      | "CompletionClaimReplacementIntended"
+      | "CompletionClaimReplacementAttemptIntended"
+      | "CompletionClaimReplaced"
   }
-  if (occurrence._tag === "PlannedAttemptReplaced") return [workflowOperationId(occurrence.successorPlan)]
-  if (occurrence._tag === "IntegrationFinalityOccurred") {
-    const event = occurrence.event
-    if ("operationId" in event) return [event.operationId]
-    return []
+>
+type FinalityClaimDeletionEvent = Extract<
+  IntegrationFinalityJournalEvent,
+  {
+    readonly _tag:
+      | "CompletionClaimDeletionIntended"
+      | "CompletionClaimDeletionAttemptIntended"
+      | "CompletionClaimDeleted"
   }
+>
+type FinalitySettledEvent = Extract<IntegrationFinalityJournalEvent, { readonly _tag: "IntegrationFinalitySettled" }>
+
+const isFinalityCompletionTaskReadEvent = (
+  event: IntegrationFinalityJournalEvent
+): event is FinalityCompletionTaskReadEvent =>
+  event._tag === "CompletionTaskCandidateAncestryReadIntended" ||
+  event._tag === "CompletionTaskCandidateAncestryObserved" ||
+  event._tag === "CompletionTaskRequestLookupIntended" ||
+  event._tag === "CompletionTaskRequestLookupObserved"
+
+const isFinalityCompletionTaskOutcomeEvent = (
+  event: IntegrationFinalityJournalEvent
+): event is FinalityCompletionTaskOutcomeEvent =>
+  event._tag === "CompletionTaskIntended" ||
+  event._tag === "CompletionTaskAcknowledged" ||
+  event._tag === "CompletionTaskResponseLost" ||
+  event._tag === "CompletionTaskRejected"
+
+const isFinalityClaimReplacementEvent = (
+  event: IntegrationFinalityJournalEvent
+): event is FinalityClaimReplacementEvent =>
+  event._tag === "CompletionClaimReplacementIntended" ||
+  event._tag === "CompletionClaimReplacementAttemptIntended" ||
+  event._tag === "CompletionClaimReplaced"
+
+const isFinalityClaimDeletionEvent = (event: IntegrationFinalityJournalEvent): event is FinalityClaimDeletionEvent =>
+  event._tag === "CompletionClaimDeletionIntended" ||
+  event._tag === "CompletionClaimDeletionAttemptIntended" ||
+  event._tag === "CompletionClaimDeleted"
+
+const completionTaskAttemptOperationIds = (event: FinalityCompletionTaskAttemptEvent): ReadonlyArray<OperationId> =>
+  uniqueOperationIds([event.request.operationId, event.focusedFactsOperationId, event.gitReadOperationId])
+
+const completionTaskReadOperationIds = (event: FinalityCompletionTaskReadEvent): ReadonlyArray<OperationId> =>
+  uniqueOperationIds([event.request.operationId, event.operationId])
+
+const completionTaskOutcomeOperationIds = (event: FinalityCompletionTaskOutcomeEvent): ReadonlyArray<OperationId> =>
+  uniqueOperationIds([
+    event.request.operationId,
+    ...(event._tag === "CompletionTaskAcknowledged" ? [event.acknowledgement.operationId] : [])
+  ])
+
+const completionClaimDeletionReadOperationIds = (event: FinalityClaimDeletionReadEvent): ReadonlyArray<OperationId> =>
+  uniqueOperationIds([
+    event.request.operationId,
+    event.request.successObservation.operationId,
+    event.replacementOperationId
+  ])
+
+const completionClaimOperationIds = (
+  event: FinalityClaimReplacementEvent | FinalityClaimDeletionEvent
+): ReadonlyArray<OperationId> =>
+  uniqueOperationIds([
+    event.operationId,
+    ...("successObservation" in event ? [event.successObservation.operationId] : [])
+  ])
+
+const finalitySettledOperationIds = (event: FinalitySettledEvent): ReadonlyArray<OperationId> =>
+  uniqueOperationIds([event.replacementOperationId, event.deletionOperationId, event.successObservation.operationId])
+
+/** Collects every operation identity carried by one finality event, including nested reads and claim-release requests. */
+const operationIdsOfFinalityEvent = (event: IntegrationFinalityJournalEvent): ReadonlyArray<OperationId> => {
+  if (event._tag === "CompletionTaskAttemptIntended") return completionTaskAttemptOperationIds(event)
+  if (isFinalityCompletionTaskReadEvent(event)) return completionTaskReadOperationIds(event)
+  if (isFinalityCompletionTaskOutcomeEvent(event)) return completionTaskOutcomeOperationIds(event)
+  if (event._tag === "CompletionClaimDeletionReadObserved") return completionClaimDeletionReadOperationIds(event)
+  if (isFinalityClaimReplacementEvent(event) || isFinalityClaimDeletionEvent(event)) {
+    return completionClaimOperationIds(event)
+  }
+  if (event._tag === "IntegrationFinalitySettled") return finalitySettledOperationIds(event)
   return []
 }
+
+type NestedOperationReference = { readonly id: OperationId; readonly payload: unknown; readonly role: string }
+
+/** The request/observation shapes share this exact task-completion boundary identity. */
+const completionFocusedOperationPayload = (
+  value: CompletionTaskAttemptIntendedEvent["request"] | CompletionSuccessObservation
+): unknown => ({
+  claim: value.claim,
+  operationId: value.operationId,
+  target:
+    "target" in value
+      ? value.target
+      : value.claim.promotionCorrelation.qualifiedCandidate.run.session.integrationTarget,
+  taskId: value.taskId,
+  taskRevision: value.taskRevision
+})
+
+/** Replacement and deletion retries reuse an operation for one exact claim boundary. */
+const completionClaimOperationPayload = (
+  claim: CompletionClaimDeletionReadObservedEvent["request"]["claim"],
+  operationId: OperationId
+): unknown => ({ claim, operationId })
+
+const completionTaskAttemptReferences = (
+  event: FinalityCompletionTaskAttemptEvent
+): ReadonlyArray<NestedOperationReference> => [
+  {
+    id: event.request.operationId,
+    payload: completionFocusedOperationPayload(event.request),
+    role: "completion.request"
+  },
+  {
+    id: event.focusedFactsOperationId,
+    payload: completionFocusedOperationPayload(event.request),
+    role: "completion.focused-facts-read"
+  },
+  {
+    id: event.gitReadOperationId,
+    payload: completionFocusedOperationPayload(event.request),
+    role: "completion.git-read"
+  }
+]
+
+const completionTaskReadReferences = (
+  event: FinalityCompletionTaskReadEvent
+): ReadonlyArray<NestedOperationReference> => [
+  {
+    id: event.request.operationId,
+    payload: completionFocusedOperationPayload(event.request),
+    role: "completion.request"
+  },
+  {
+    id: event.operationId,
+    payload: completionFocusedOperationPayload(event.request),
+    role:
+      event._tag === "CompletionTaskCandidateAncestryReadIntended" ||
+      event._tag === "CompletionTaskCandidateAncestryObserved"
+        ? "completion.git-read"
+        : "completion.request-lookup-read"
+  }
+]
+
+const completionTaskOutcomeReferences = (
+  event: FinalityCompletionTaskOutcomeEvent
+): ReadonlyArray<NestedOperationReference> => [
+  {
+    id: event.request.operationId,
+    payload: completionFocusedOperationPayload(event.request),
+    role: "completion.request"
+  },
+  ...(event._tag === "CompletionTaskAcknowledged"
+    ? [
+        {
+          id: event.acknowledgement.operationId,
+          payload: completionFocusedOperationPayload(event.request),
+          role: "completion.request"
+        }
+      ]
+    : [])
+]
+
+const completionClaimDeletionReadReferences = (
+  event: FinalityClaimDeletionReadEvent
+): ReadonlyArray<NestedOperationReference> => [
+  {
+    id: event.request.operationId,
+    payload: completionClaimOperationPayload(event.request.claim, event.request.operationId),
+    role: "completion-claim.deletion"
+  },
+  {
+    id: event.request.successObservation.operationId,
+    payload: completionFocusedOperationPayload(event.request.successObservation),
+    role: "completion.focused-facts-read"
+  },
+  {
+    id: event.replacementOperationId,
+    payload: completionClaimOperationPayload(event.request.claim, event.replacementOperationId),
+    role: "completion-claim.replacement"
+  }
+]
+
+const completionClaimReplacementReferences = (
+  event: FinalityClaimReplacementEvent
+): ReadonlyArray<NestedOperationReference> => [
+  {
+    id: event.operationId,
+    payload: completionClaimOperationPayload(event.claim, event.operationId),
+    role: "completion-claim.replacement"
+  }
+]
+
+const completionClaimDeletionReferences = (
+  event: FinalityClaimDeletionEvent
+): ReadonlyArray<NestedOperationReference> => [
+  {
+    id: event.operationId,
+    payload: completionClaimOperationPayload(event.claim, event.operationId),
+    role: "completion-claim.deletion"
+  },
+  {
+    id: event.successObservation.operationId,
+    payload: completionFocusedOperationPayload(event.successObservation),
+    role: "completion.focused-facts-read"
+  }
+]
+
+const finalitySettledReferences = (event: FinalitySettledEvent): ReadonlyArray<NestedOperationReference> => [
+  {
+    id: event.replacementOperationId,
+    payload: completionClaimOperationPayload(event.claim, event.replacementOperationId),
+    role: "completion-claim.replacement"
+  },
+  {
+    id: event.deletionOperationId,
+    payload: completionClaimOperationPayload(event.claim, event.deletionOperationId),
+    role: "completion-claim.deletion"
+  },
+  {
+    id: event.successObservation.operationId,
+    payload: completionFocusedOperationPayload(event.successObservation),
+    role: "completion.focused-facts-read"
+  }
+]
+
+/** Names every nested finality operation so one id cannot silently serve two boundaries. */
+const nestedOperationReferencesOfFinalityEvent = (
+  event: IntegrationFinalityJournalEvent
+): ReadonlyArray<NestedOperationReference> => {
+  if (event._tag === "CompletionTaskAttemptIntended") return completionTaskAttemptReferences(event)
+  if (isFinalityCompletionTaskReadEvent(event)) return completionTaskReadReferences(event)
+  if (isFinalityCompletionTaskOutcomeEvent(event)) return completionTaskOutcomeReferences(event)
+  if (event._tag === "CompletionClaimDeletionReadObserved") return completionClaimDeletionReadReferences(event)
+  if (isFinalityClaimReplacementEvent(event)) return completionClaimReplacementReferences(event)
+  if (isFinalityClaimDeletionEvent(event)) return completionClaimDeletionReferences(event)
+  if (event._tag === "IntegrationFinalitySettled") return finalitySettledReferences(event)
+  return []
+}
+
+const operationOccurrenceKinds = {
+  GitReadInitiated: true,
+  TaskAttemptPlanned: true,
+  TaskClaimAcquisitionInitiated: true,
+  TaskClaimReleaseInitiated: true,
+  TaskTrackerReadInitiated: true,
+  TaskWorktreeReady: true
+} as const
+
+type OperationOccurrence = Extract<WorkflowOccurrenceValue, { readonly _tag: keyof typeof operationOccurrenceKinds }>
+
+const isOperationOccurrence = (occurrence: WorkflowOccurrenceValue): occurrence is OperationOccurrence =>
+  Object.hasOwn(operationOccurrenceKinds, occurrence._tag)
+
+const observedOperationOccurrenceKinds = {
+  AttemptRestartAuthorityReadFailed: true,
+  PlannedAttemptWorktreeObserved: true,
+  StoppedAttemptClaimPreserved: true,
+  TargetLineageObserved: true,
+  TaskClaimAcquired: true,
+  TaskClaimReleased: true,
+  TaskTrackerFactsObserved: true
+} as const
+
+type ObservedOperationOccurrence = Extract<
+  WorkflowOccurrenceValue,
+  { readonly _tag: keyof typeof observedOperationOccurrenceKinds }
+>
+
+const isObservedOperationOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): occurrence is ObservedOperationOccurrence => Object.hasOwn(observedOperationOccurrenceKinds, occurrence._tag)
+
+const finalityOccurrenceKinds = {
+  IntegrationClaimDeletionOccurred: true,
+  IntegrationClaimReplacementOccurred: true,
+  IntegrationFinalitySettledOccurred: true,
+  IntegrationFocusedCompletionOccurred: true
+} as const
+
+type FinalityOccurrence = Extract<WorkflowOccurrenceValue, { readonly _tag: keyof typeof finalityOccurrenceKinds }>
+
+const isFinalityOccurrence = (occurrence: WorkflowOccurrenceValue): occurrence is FinalityOccurrence =>
+  Object.hasOwn(finalityOccurrenceKinds, occurrence._tag)
+
+const operationIdsOfOperationOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined =>
+  isOperationOccurrence(occurrence) ? [workflowOperationId(occurrence.operation)] : undefined
+
+const operationIdsOfObservedOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined => {
+  if (!isObservedOperationOccurrence(occurrence)) return undefined
+  return [
+    occurrence._tag === "StoppedAttemptClaimPreserved"
+      ? occurrence.observationOperationId
+      : occurrence.originatingActionOperationId
+  ]
+}
+
+const operationIdsOfReplacementOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined =>
+  occurrence._tag === "PlannedAttemptReplaced" ? [workflowOperationId(occurrence.successorPlan)] : undefined
+
+const operationIdsOfFinalityOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined =>
+  isFinalityOccurrence(occurrence) ? operationIdsOfFinalityEvent(occurrence.event) : undefined
+
+const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<OperationId> =>
+  operationIdsOfOperationOccurrence(occurrence) ??
+  operationIdsOfObservedOccurrence(occurrence) ??
+  operationIdsOfReplacementOccurrence(occurrence) ??
+  operationIdsOfFinalityOccurrence(occurrence) ??
+  []
 
 const taskIdsOfObservation = (observation: TaskTrackerFactsObservation): ReadonlyArray<TaskId> => {
   switch (observation._tag) {
@@ -725,64 +1119,126 @@ const taskIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray
     taskIdsOfHistoricalOccurrence(occurrence)
   ].find((taskIds): taskIds is ReadonlyArray<TaskId> => taskIds !== undefined) ?? []
 
-const taskIdsOfHistoricalOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
-  if (occurrence._tag === "TaskClaimAcquisitionInitiated" || occurrence._tag === "TaskClaimReleaseInitiated")
+const taskIdsOfHistoricalTaskClaim = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
+  if (occurrence._tag === "TaskClaimAcquisitionInitiated" || occurrence._tag === "TaskClaimReleaseInitiated") {
     return [
       occurrence.operation._tag === "AcquireTaskClaim"
         ? occurrence.operation.acquisition.taskId
         : occurrence.operation.release.claim.taskId
     ]
+  }
   if (occurrence._tag === "TaskClaimAcquired") return [occurrence.claim.taskId]
-  if (occurrence._tag === "TaskClaimReleased") return [occurrence.release.claim.taskId]
-  if (
-    occurrence._tag === "TaskAttemptPlanned" ||
-    occurrence._tag === "TaskWorktreeReady" ||
-    occurrence._tag === "AttemptStoppageIntended" ||
-    occurrence._tag === "AttemptImplementationAbandoned" ||
-    occurrence._tag === "StoppedAttemptClaimPreserved"
-  )
-    return [
-      occurrence._tag === "TaskWorktreeReady"
-        ? occurrence.operation.plannedAttempt.taskId
-        : occurrence._tag === "TaskAttemptPlanned"
-          ? occurrence.plannedAttempt.taskId
-          : occurrence.subject.plannedAttempt.taskId
-    ]
-  if (
-    occurrence._tag === "IntegratorSessionFixed" ||
-    occurrence._tag === "IntegratorSuccessorSessionFixed" ||
-    occurrence._tag === "IntegratorRunStarted" ||
-    occurrence._tag === "IntegratorRunResultRecorded" ||
-    occurrence._tag === "IntegratorCandidateQualificationInitiated" ||
-    occurrence._tag === "IntegratorCandidateQualificationObserved"
-  ) {
-    if (occurrence._tag === "IntegratorSuccessorSessionFixed") return [occurrence.successor.plannedAttempt.taskId]
-    if (occurrence._tag === "IntegratorSessionFixed") return [occurrence.correlation.plannedAttempt.taskId]
-    if (occurrence._tag === "IntegratorCandidateQualificationObserved") {
-      return [occurrence.originatingActionRun.session.plannedAttempt.taskId]
-    }
-    return [occurrence.run.session.plannedAttempt.taskId]
-  }
-  if (
-    occurrence._tag === "TargetPromotionRequested" ||
-    occurrence._tag === "TargetPromotionAttemptRequested" ||
-    occurrence._tag === "TargetPromotionSucceeded" ||
-    occurrence._tag === "TargetPromotionStale" ||
-    occurrence._tag === "TargetPromotionNonConvergent"
-  )
-    return [occurrence.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId]
-  if (occurrence._tag === "IntegrationQuarantined" || occurrence._tag === "IntegrationProviderRunActivityAbsent")
-    return [occurrence.correlation.plannedAttempt.taskId]
-  if (occurrence._tag === "IntegrationQuarantineDirectionApplied") return undefined
-  if (occurrence._tag === "IntegrationFinalityOccurred") {
-    const event = occurrence.event
-    if ("claim" in event) return [event.claim.plannedAttempt.taskId]
-    if ("request" in event && "claim" in event.request) return [event.request.claim.plannedAttempt.taskId]
-    if ("authorization" in event) return [event.authorization.claim.plannedAttempt.taskId]
-    return []
-  }
-  return undefined
+  return occurrence._tag === "TaskClaimReleased" ? [occurrence.release.claim.taskId] : undefined
 }
+
+const taskIdsOfHistoricalAttemptWorktree = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
+  if (
+    occurrence._tag !== "TaskAttemptPlanned" &&
+    occurrence._tag !== "TaskWorktreeReady" &&
+    occurrence._tag !== "AttemptStoppageIntended" &&
+    occurrence._tag !== "AttemptImplementationAbandoned" &&
+    occurrence._tag !== "StoppedAttemptClaimPreserved"
+  ) {
+    return undefined
+  }
+  if (occurrence._tag === "TaskWorktreeReady") return [occurrence.operation.plannedAttempt.taskId]
+  if (occurrence._tag === "TaskAttemptPlanned") return [occurrence.plannedAttempt.taskId]
+  return [occurrence.subject.plannedAttempt.taskId]
+}
+
+const historicalIntegratorOccurrenceKinds = {
+  IntegratorCandidateQualificationInitiated: true,
+  IntegratorCandidateQualificationObserved: true,
+  IntegratorRunResultRecorded: true,
+  IntegratorRunStarted: true,
+  IntegratorSessionFixed: true,
+  IntegratorSuccessorSessionFixed: true
+} as const
+
+type HistoricalIntegratorOccurrence = Extract<
+  WorkflowOccurrenceValue,
+  { readonly _tag: keyof typeof historicalIntegratorOccurrenceKinds }
+>
+
+const isHistoricalIntegratorOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): occurrence is HistoricalIntegratorOccurrence => Object.hasOwn(historicalIntegratorOccurrenceKinds, occurrence._tag)
+
+const taskIdsOfHistoricalIntegrator = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
+  if (!isHistoricalIntegratorOccurrence(occurrence)) return undefined
+  if (occurrence._tag === "IntegratorSuccessorSessionFixed") return [occurrence.successor.plannedAttempt.taskId]
+  if (occurrence._tag === "IntegratorSessionFixed") return [occurrence.correlation.plannedAttempt.taskId]
+  if (occurrence._tag === "IntegratorCandidateQualificationObserved") {
+    return [occurrence.originatingActionRun.session.plannedAttempt.taskId]
+  }
+  return [occurrence.run.session.plannedAttempt.taskId]
+}
+
+const isHistoricalPromotionOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): occurrence is Extract<
+  WorkflowOccurrenceValue,
+  {
+    readonly _tag:
+      | "TargetPromotionRequested"
+      | "TargetPromotionAttemptRequested"
+      | "TargetPromotionSucceeded"
+      | "TargetPromotionStale"
+      | "TargetPromotionNonConvergent"
+  }
+> =>
+  occurrence._tag === "TargetPromotionRequested" ||
+  occurrence._tag === "TargetPromotionAttemptRequested" ||
+  occurrence._tag === "TargetPromotionSucceeded" ||
+  occurrence._tag === "TargetPromotionStale" ||
+  occurrence._tag === "TargetPromotionNonConvergent"
+
+const taskIdsOfHistoricalPromotion = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined =>
+  isHistoricalPromotionOccurrence(occurrence)
+    ? [occurrence.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId]
+    : undefined
+
+const taskIdsOfHistoricalPreservation = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
+  if (occurrence._tag === "IntegrationQuarantined" || occurrence._tag === "IntegrationProviderRunActivityAbsent") {
+    return [occurrence.correlation.plannedAttempt.taskId]
+  }
+  return occurrence._tag === "IntegrationQuarantineDirectionApplied" ? undefined : undefined
+}
+
+const isHistoricalFinalityOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): occurrence is Extract<
+  WorkflowOccurrenceValue,
+  {
+    readonly _tag:
+      | "IntegrationFocusedCompletionOccurred"
+      | "IntegrationClaimReplacementOccurred"
+      | "IntegrationClaimDeletionOccurred"
+      | "IntegrationFinalitySettledOccurred"
+  }
+> =>
+  occurrence._tag === "IntegrationFocusedCompletionOccurred" ||
+  occurrence._tag === "IntegrationClaimReplacementOccurred" ||
+  occurrence._tag === "IntegrationClaimDeletionOccurred" ||
+  occurrence._tag === "IntegrationFinalitySettledOccurred"
+
+const taskIdsOfHistoricalFinality = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
+  if (!isHistoricalFinalityOccurrence(occurrence)) return undefined
+  const event = occurrence.event
+  if ("claim" in event) return [event.claim.plannedAttempt.taskId]
+  if ("request" in event && "claim" in event.request) return [event.request.claim.plannedAttempt.taskId]
+  return []
+}
+
+const taskIdsOfHistoricalOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined =>
+  [
+    taskIdsOfHistoricalTaskClaim(occurrence),
+    taskIdsOfHistoricalAttemptWorktree(occurrence),
+    taskIdsOfHistoricalIntegrator(occurrence),
+    taskIdsOfHistoricalPromotion(occurrence),
+    taskIdsOfHistoricalPreservation(occurrence),
+    taskIdsOfHistoricalFinality(occurrence)
+  ].find((taskIds): taskIds is ReadonlyArray<TaskId> => taskIds !== undefined)
 
 const itemFromOccurrence = (runId: RunId, occurrence: WorkflowOccurrenceValue): TraceHistoryItem =>
   TraceHistoryItem.make({
@@ -826,47 +1282,204 @@ const validateRecords = (
 
 type IndexedOperation = { readonly operation: WorkflowOperation; readonly position: JournalPosition }
 
+const nestedOperationMayBeWorkflowOperation = (role: string): boolean => role === "completion.focused-facts-read"
+
+const indexedFinalityEventKinds = {
+  CompletionClaimDeleted: true,
+  CompletionClaimDeletionAttemptIntended: true,
+  CompletionClaimDeletionIntended: true,
+  CompletionClaimDeletionReadObserved: true,
+  CompletionClaimReplaced: true,
+  CompletionClaimReplacementAttemptIntended: true,
+  CompletionClaimReplacementIntended: true,
+  CompletionTaskAcknowledged: true,
+  CompletionTaskAttemptIntended: true,
+  CompletionTaskCandidateAncestryObserved: true,
+  CompletionTaskCandidateAncestryReadIntended: true,
+  CompletionTaskIntended: true,
+  CompletionTaskRejected: true,
+  CompletionTaskRequestLookupIntended: true,
+  CompletionTaskRequestLookupObserved: true,
+  CompletionTaskResponseLost: true,
+  IntegrationFinalitySettled: true
+} as const
+
+type IndexedFinalityEvent = Extract<WorkflowJournalEvent, { readonly _tag: keyof typeof indexedFinalityEventKinds }>
+
+const isIndexedFinalityEvent = (event: WorkflowJournalEvent): event is IndexedFinalityEvent =>
+  Object.hasOwn(indexedFinalityEventKinds, event._tag)
+
+type TraceCausalIssue = TraceCausalPredecessorContradiction | TraceCausalPredecessorMissing
+
+const duplicateOperationIssue = (runId: RunId, operationId: OperationId): TraceCausalPredecessorContradiction =>
+  new TraceCausalPredecessorContradiction({
+    predecessorOperationId: operationId,
+    reason: "DuplicateOperation",
+    runId,
+    successorOperationId: operationId
+  })
+
+const indexWorkflowOperation = (
+  runId: RunId,
+  record: JournalRecord,
+  index: Map<OperationId, IndexedOperation>,
+  nestedIndex: ReadonlyMap<OperationId, NestedOperationReference>
+): TraceCausalIssue | undefined => {
+  const operation = operationOfEvent(record.event)
+  if (operation === undefined) return undefined
+  const operationId = workflowOperationId(operation)
+  const nested = nestedIndex.get(operationId)
+  if (index.has(operationId) || (nested !== undefined && !nestedOperationMayBeWorkflowOperation(nested.role))) {
+    return duplicateOperationIssue(runId, operationId)
+  }
+  index.set(operationId, { operation, position: record.position })
+  return undefined
+}
+
+const indexFinalityOperations = (
+  runId: RunId,
+  event: IndexedFinalityEvent,
+  index: ReadonlyMap<OperationId, IndexedOperation>,
+  nestedIndex: Map<OperationId, NestedOperationReference>
+): TraceCausalIssue | undefined => {
+  for (const reference of nestedOperationReferencesOfFinalityEvent(event)) {
+    const prior = nestedIndex.get(reference.id)
+    const topLevel = index.get(reference.id)
+    const duplicateTopLevel = topLevel !== undefined && !nestedOperationMayBeWorkflowOperation(reference.role)
+    const duplicateNested =
+      prior !== undefined && (prior.role !== reference.role || !sameJson(prior.payload, reference.payload))
+    if (duplicateTopLevel || duplicateNested) return duplicateOperationIssue(runId, reference.id)
+    nestedIndex.set(reference.id, reference)
+  }
+  return undefined
+}
+
+const indexJournalRecord = (
+  runId: RunId,
+  record: JournalRecord,
+  index: Map<OperationId, IndexedOperation>,
+  nestedIndex: Map<OperationId, NestedOperationReference>
+): TraceCausalIssue | undefined => {
+  const workflowIssue = indexWorkflowOperation(runId, record, index, nestedIndex)
+  if (workflowIssue !== undefined) return workflowIssue
+  if (isIndexedFinalityEvent(record.event)) {
+    return indexFinalityOperations(runId, record.event, index, nestedIndex)
+  }
+  return undefined
+}
+
+const predecessorIssue = (
+  runId: RunId,
+  operation: WorkflowOperation,
+  position: JournalPosition,
+  index: ReadonlyMap<OperationId, IndexedOperation>
+): TraceCausalIssue | undefined => {
+  const successorOperationId = workflowOperationId(operation)
+  for (const predecessorOperationId of operation.predecessorOperationIds) {
+    const predecessor = index.get(predecessorOperationId)
+    if (predecessor === undefined) {
+      return new TraceCausalPredecessorMissing({ predecessorOperationId, runId, successorOperationId })
+    }
+    if (predecessor.position >= position) {
+      return new TraceCausalPredecessorContradiction({
+        predecessorOperationId,
+        reason: "NotEarlier",
+        runId,
+        successorOperationId
+      })
+    }
+  }
+  return undefined
+}
+
+const operationIndexPredecessorIssue = (
+  runId: RunId,
+  index: ReadonlyMap<OperationId, IndexedOperation>
+): TraceCausalIssue | undefined => {
+  for (const { operation, position } of index.values()) {
+    const issue = predecessorIssue(runId, operation, position, index)
+    if (issue !== undefined) return issue
+  }
+  return undefined
+}
+
 const operationIndexOf = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): Effect.Effect<ReadonlyMap<OperationId, IndexedOperation>, TraceReaderError> => {
   const index = new Map<OperationId, IndexedOperation>()
+  const nestedIndex = new Map<OperationId, NestedOperationReference>()
   for (const record of records) {
-    const operation = operationOfEvent(record.event)
-    if (operation === undefined) continue
-    const operationId = workflowOperationId(operation)
-    if (index.has(operationId)) {
-      return Effect.fail(
-        new TraceCausalPredecessorContradiction({
-          predecessorOperationId: operationId,
-          reason: "DuplicateOperation",
-          runId,
-          successorOperationId: operationId
-        })
+    const issue = indexJournalRecord(runId, record, index, nestedIndex)
+    if (issue !== undefined) return Effect.fail(issue)
+  }
+  const predecessorIssueResult = operationIndexPredecessorIssue(runId, index)
+  return predecessorIssueResult === undefined ? Effect.succeed(index) : Effect.fail(predecessorIssueResult)
+}
+
+/** Runs the exact indexed finality validator before exposing any finality facet. */
+const finalityHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+  const indexes = makeIntegrationFinalityHistoryIndexes()
+  for (const record of records) {
+    let issue: string | undefined
+    validateIntegrationFinalityHistoryRecord(
+      record,
+      runId,
+      records,
+      indexes,
+      (detail) => {
+        issue ??= detail
+      },
+      (detail) => {
+        issue ??= detail
+      }
+    )
+    if (issue !== undefined) return issue
+  }
+  return undefined
+}
+
+/** Trace fixtures may use reader-local record keys; canonical validators need event-derived keys. */
+const recordsForCanonicalValidation = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalRecord> =>
+  records.map((record) => ({ ...record, key: describeJournalEvent(record.event).expectedKey }))
+
+const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+  const indexes = makeIntegrationHistoryIndexes()
+  const canonicalRecords = recordsForCanonicalValidation(records)
+  for (const record of canonicalRecords) {
+    let issue: string | undefined
+    validateIntegrationHistoryRecord(
+      record,
+      runId,
+      indexes,
+      (detail) => {
+        issue ??= detail
+      },
+      (detail) => {
+        issue ??= detail
+      },
+      canonicalRecords
+    )
+    if (issue !== undefined) return issue
+    if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+      indexes.executorResponsibilitiesBegan.set(record.event.plannedAttempt.attemptId, {
+        plannedAttempt: record.event.plannedAttempt,
+        position: record.position
+      })
+    }
+    if (
+      record.event._tag === "PlannedAttemptExecutorWorkReported" &&
+      record.event.report._tag === "Terminal" &&
+      record.event.report.result._tag === "Accepted"
+    ) {
+      indexes.acceptedExecutorResults.set(
+        record.event.report.correlation.attemptId,
+        record.event.report.result.acceptedResult
       )
-    }
-    index.set(operationId, { operation, position: record.position })
-  }
-  for (const { operation, position } of index.values()) {
-    const successorOperationId = workflowOperationId(operation)
-    for (const predecessorOperationId of operation.predecessorOperationIds) {
-      const predecessor = index.get(predecessorOperationId)
-      if (predecessor === undefined) {
-        return Effect.fail(new TraceCausalPredecessorMissing({ predecessorOperationId, runId, successorOperationId }))
-      }
-      if (predecessor.position >= position) {
-        return Effect.fail(
-          new TraceCausalPredecessorContradiction({
-            predecessorOperationId,
-            reason: "NotEarlier",
-            runId,
-            successorOperationId
-          })
-        )
-      }
+      indexes.acceptedExecutorResultPositions.set(record.event.report.correlation.attemptId, record.position)
     }
   }
-  return Effect.succeed(index)
+  return undefined
 }
 
 type CompleteGraphObservation = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
@@ -999,567 +1612,7 @@ const relationshipsAt = (
   workflowCausalEdges: workflowCausalEdgesOf(operationIndex)
 })
 
-const traceItemAt = (
-  items: ReadonlyArray<TraceHistoryItem>,
-  position: JournalPosition
-): TraceItemIdentity | undefined => items.find(({ identity }) => identity.position === position)?.identity
-
-const itemForOccurrence = (
-  items: ReadonlyArray<TraceHistoryItem>,
-  predicate: (occurrence: WorkflowOccurrenceValue) => boolean
-): TraceHistoryItem | undefined => items.find(({ occurrence }) => predicate(occurrence))
-
-const sameIntegratorRun = (left: IntegratorRunCorrelation, right: IntegratorRunCorrelation): boolean =>
-  Schema.toEquivalence(IntegratorRunCorrelation)(left, right)
-
-const samePromotion = targetPromotionCorrelationEquals
-
-const sameIntegrationTarget = (left: IntegrationTarget, right: IntegrationTarget): boolean =>
-  left.repository === right.repository && left.ref === right.ref
-
 const sameJson = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right)
-
-const traceHistoricalFactIssue = (
-  fact: TraceIntegrationFact,
-  items: ReadonlyArray<TraceHistoryItem>
-): string | undefined => {
-  const sourceItem = historyItemAt(items, fact.source)
-  if (sourceItem === undefined) return "Every integration fact source must resolve to a history item"
-  const source = sourceItem.occurrence
-  if (fact._tag === "AcceptedResult") {
-    return source._tag === "PlannedAttemptExecutorWorkReported" &&
-      source.report._tag === "Terminal" &&
-      source.report.result._tag === "Accepted" &&
-      (fact.plannedAttempt.attemptId !== source.report.correlation.attemptId ||
-        fact.plannedAttempt.runId !== source.report.correlation.runId)
-      ? "Accepted result fact must retain the source executor report's planned attempt"
-      : source._tag !== "PlannedAttemptExecutorWorkReported" ||
-          source.report._tag !== "Terminal" ||
-          source.report.result._tag !== "Accepted" ||
-          !acceptedResultEquivalence(fact.acceptedResult, source.report.result.acceptedResult)
-        ? "Accepted result fact must identify one exact terminal executor report"
-        : undefined
-  }
-  if (fact._tag === "Responsibility") {
-    if (
-      source._tag !== "IntegrationResponsibilityBegan" ||
-      !acceptedResultEquivalence(fact.acceptedResult, source.acceptedResult) ||
-      !plannedTaskAttemptEquivalence(fact.plannedAttempt, source.plannedAttempt) ||
-      !sameIntegrationTarget(fact.target, source.integrationTarget)
-    ) {
-      return "Integration responsibility fact must identify its exact source occurrence"
-    }
-    if (fact.sameTargetPredecessor === null) return undefined
-    const predecessor = historyItemAt(items, fact.sameTargetPredecessor)
-    return predecessor?.occurrence._tag === "IntegrationResponsibilityBegan" &&
-      predecessor.occurrence.recordedAt < source.recordedAt &&
-      sameIntegrationTarget(predecessor.occurrence.integrationTarget, source.integrationTarget)
-      ? undefined
-      : "Same-target responsibility order must point to one earlier responsibility for that target"
-  }
-  if (fact._tag === "SessionStarted") {
-    const responsibility = historyItemAt(items, fact.responsibility)
-    return source._tag === "IntegrationStarted" &&
-      source.responsibilityBeganAt === fact.responsibility.position &&
-      responsibility?.occurrence._tag === "IntegrationResponsibilityBegan" &&
-      responsibility.occurrence.recordedAt < source.recordedAt &&
-      sameIntegrationTarget(responsibility.occurrence.integrationTarget, source.integrationTarget)
-      ? undefined
-      : "Integration session start must point to its exact earlier responsibility occurrence"
-  }
-  if (fact._tag === "Session") {
-    return source._tag === "IntegratorSessionFixed" &&
-      Schema.toEquivalence(IntegratorSessionCorrelation)(fact.correlation, source.correlation)
-      ? undefined
-      : "Integrator session fact must identify its exact fixed-session occurrence"
-  }
-  if (fact._tag === "IntegratorResult") {
-    return source._tag === "IntegratorRunResultRecorded" &&
-      sameIntegratorRun(fact.run, source.run) &&
-      sameJson(fact.result, source.result)
-      ? undefined
-      : "Integrator result fact must identify its exact outer result occurrence"
-  }
-  if (fact._tag === "CandidateObserved") {
-    return source._tag === "IntegratorCandidateQualificationObserved" &&
-      source.candidateText === fact.candidateText &&
-      sameIntegratorRun(source.originatingActionRun, fact.run) &&
-      sameJson(source.observation, fact.observation)
-      ? undefined
-      : "Candidate observation fact must identify its exact Git observation occurrence"
-  }
-  if (fact._tag === "CandidateQualification") {
-    return source._tag === "IntegratorCandidateQualificationObserved" &&
-      source.observation._tag === "Commit" &&
-      source.candidateText === fact.candidateText &&
-      source.observation.commit === fact.candidateCommit &&
-      sameJson(source.observation.directParents, fact.directParents) &&
-      source.observation.directParents[0] === source.originatingActionRun.session.expectedTargetHead &&
-      source.observation.directParents[1] === source.originatingActionRun.session.acceptedResult.commit &&
-      sameIntegratorRun(source.originatingActionRun, fact.run)
-      ? undefined
-      : "Candidate qualification fact must preserve the exact ordered Git parents [H, C]"
-  }
-  if (fact._tag === "Promotion") {
-    if (source._tag === "TargetPromotionRequested" && fact.kind === "Requested") {
-      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
-        fact.basis._tag === "BeforeFirstAttempt" &&
-        fact.observation === null
-        ? undefined
-        : "Promotion request fact must identify its exact request occurrence"
-    }
-    if (source._tag === "TargetPromotionAttemptRequested" && fact.kind === "Attempt") {
-      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
-        fact.basis._tag === "AfterAttempt" &&
-        fact.basis.attemptOrdinal === source.attemptOrdinal &&
-        fact.observation === null
-        ? undefined
-        : "Promotion attempt fact must identify its exact numbered attempt occurrence"
-    }
-    if (source._tag === "TargetPromotionSucceeded" && fact.kind === "Succeeded") {
-      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
-        sameJson(source.basis, fact.basis) &&
-        sameJson(source.observation, fact.observation)
-        ? undefined
-        : "Promotion success fact must identify its exact Git success occurrence"
-    }
-    if (source._tag === "TargetPromotionStale" && fact.kind === "Stale") {
-      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
-        sameJson(source.basis, fact.basis) &&
-        sameJson(source.observation, fact.observation)
-        ? undefined
-        : "Promotion stale fact must identify its exact Git stale occurrence"
-    }
-    if (source._tag === "TargetPromotionNonConvergent" && fact.kind === "NonConvergent") {
-      return targetPromotionCorrelationEquals(source.correlation, fact.correlation) &&
-        sameJson(source.lastObservation, fact.observation) &&
-        fact.basis._tag === "AfterAttempt" &&
-        fact.basis.attemptOrdinal === source.attemptOrdinal
-        ? undefined
-        : "Promotion non-convergence fact must identify its exact terminal occurrence"
-    }
-    return "Promotion fact kind must identify the matching source occurrence"
-  }
-  if (fact._tag === "Quarantine") {
-    return source._tag === "IntegrationQuarantined" &&
-      Schema.toEquivalence(IntegratorSessionCorrelation)(fact.correlation, source.correlation) &&
-      sameJson(fact.basis, source.basis)
-      ? undefined
-      : "Quarantine fact must identify its exact preservation occurrence"
-  }
-  if (fact._tag === "ProviderActivityAbsent") {
-    return source._tag === "IntegrationProviderRunActivityAbsent" &&
-      sameIntegratorRun(fact.run, source.run) &&
-      Schema.toEquivalence(IntegratorSessionCorrelation)(fact.correlation, source.correlation)
-      ? undefined
-      : "Provider-activity fact must identify its exact observation occurrence"
-  }
-  if (fact._tag === "QuarantineDirection") {
-    return source._tag === "IntegrationQuarantineDirectionApplied" && sameJson(fact.fingerprint, source.fingerprint)
-      ? undefined
-      : "Quarantine direction fact must identify its exact operator occurrence"
-  }
-  return source._tag === "IntegrationFinalityOccurred" && sameJson(fact.event, source.event)
-    ? undefined
-    : "Finality fact must identify its exact stored finality occurrence"
-}
-
-const traceHistoricalFacetsAt = (items: ReadonlyArray<TraceHistoryItem>): TraceHistoricalFacets => {
-  const observationGaps: Array<TraceObservationGap> = []
-  const retainedResponsibilities: Array<TraceRetainedResponsibility> = []
-  const preservationDispositions: Array<TracePreservationDisposition> = []
-  const integrationFacts: Array<TraceIntegrationFact> = []
-  const hasObservationFor = (operationId: OperationId, tags: ReadonlyArray<string>): boolean =>
-    items.some(
-      ({ occurrence }) => tags.includes(occurrence._tag) && operationIdsOfOccurrence(occurrence).includes(operationId)
-    )
-  const taskIdsOfTrackerOperation = (
-    operation: Extract<WorkflowOccurrenceValue, { readonly _tag: "TaskTrackerReadInitiated" }>["operation"]
-  ): ReadonlyArray<TaskId> => {
-    if (operation._tag === "ReadTrackerGraph") return operation.readShape.explicitlyCoveredTaskIds
-    return operation._tag === "ReadCompletionTaskFacts" ? [operation.request.taskId] : [operation.taskId]
-  }
-
-  for (const item of items) {
-    const occurrence = item.occurrence
-    if (occurrence._tag === "TaskTrackerReadInitiated") {
-      if (
-        !hasObservationFor(workflowOperationId(occurrence.operation), [
-          "TaskTrackerFactsObserved",
-          "AttemptRestartAuthorityReadFailed"
-        ])
-      ) {
-        observationGaps.push(
-          TraceObservationGap.cases.TrackerObservation.make({
-            action: item.identity,
-            operationId: workflowOperationId(occurrence.operation),
-            required: "TaskTrackerFactsObserved",
-            taskIds: taskIdsOfTrackerOperation(occurrence.operation)
-          })
-        )
-      }
-    }
-    if (occurrence._tag === "GitReadInitiated") {
-      const operationId = workflowOperationId(occurrence.operation)
-      if (
-        !hasObservationFor(operationId, [
-          "PlannedAttemptWorktreeObserved",
-          "TargetLineageObserved",
-          "AttemptRestartAuthorityReadFailed"
-        ])
-      ) {
-        observationGaps.push(
-          TraceObservationGap.cases.GitObservation.make({
-            action: item.identity,
-            operationId,
-            required:
-              occurrence.operation._tag === "ReadTaskWorktree"
-                ? "PlannedAttemptWorktreeObserved"
-                : "TargetLineageObserved",
-            taskIds: [occurrence.operation.plannedAttempt.taskId]
-          })
-        )
-      }
-    }
-    if (occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-      const report = itemForOccurrence(
-        items,
-        (candidate) =>
-          candidate._tag === "PlannedAttemptExecutorWorkReported" &&
-          candidate.report.correlation.attemptId === occurrence.plannedAttempt.attemptId
-      )
-      if (report === undefined) {
-        observationGaps.push(
-          TraceObservationGap.cases.ExecutorReport.make({
-            action: item.identity,
-            attemptId: occurrence.plannedAttempt.attemptId
-          })
-        )
-        retainedResponsibilities.push(
-          TraceRetainedResponsibility.cases.ExecutorWork.make({
-            plannedAttempt: occurrence.plannedAttempt,
-            source: item.identity
-          })
-        )
-      }
-    }
-    if (occurrence._tag === "TaskClaimAcquisitionInitiated") {
-      const operationId = occurrence.operation.acquisition.operationId
-      if (!hasObservationFor(operationId, ["TaskClaimAcquired"])) {
-        observationGaps.push(
-          TraceObservationGap.cases.TrackerObservation.make({
-            action: item.identity,
-            operationId,
-            required: "TaskClaimAcquired",
-            taskIds: [occurrence.operation.acquisition.taskId]
-          })
-        )
-      }
-    }
-    if (occurrence._tag === "TaskClaimReleaseInitiated") {
-      const operationId = occurrence.operation.release.operationId
-      if (!hasObservationFor(operationId, ["TaskClaimReleased"])) {
-        observationGaps.push(
-          TraceObservationGap.cases.TrackerObservation.make({
-            action: item.identity,
-            operationId,
-            required: "TaskClaimReleased",
-            taskIds: [occurrence.operation.release.claim.taskId]
-          })
-        )
-      }
-    }
-    if (occurrence._tag === "TaskAttemptPlanned") {
-      retainedResponsibilities.push(
-        TraceRetainedResponsibility.cases.TaskAttempt.make({
-          plannedAttempt: occurrence.plannedAttempt,
-          source: item.identity
-        })
-      )
-    }
-    if (occurrence._tag === "TaskClaimAcquired") {
-      retainedResponsibilities.push(
-        TraceRetainedResponsibility.cases.TaskClaim.make({ claim: occurrence.claim, source: item.identity })
-      )
-    }
-    if (occurrence._tag === "TaskWorktreeReady") {
-      retainedResponsibilities.push(
-        TraceRetainedResponsibility.cases.Worktree.make({
-          plannedAttempt: occurrence.operation.plannedAttempt,
-          proof: occurrence.proof,
-          source: item.identity
-        })
-      )
-    }
-    if (occurrence._tag === "PlannedAttemptWorktreeObserved" && occurrence.observation._tag === "AttemptWorktreeLost") {
-      preservationDispositions.push(
-        TracePreservationDisposition.cases.WorktreeLost.make({
-          observation: occurrence.observation,
-          plannedAttempt: occurrence.observation.plannedAttempt,
-          source: item.identity
-        })
-      )
-    }
-    if (occurrence._tag === "AttemptRestartAuthorityReadFailed") {
-      preservationDispositions.push(
-        TracePreservationDisposition.cases.TaskAuthorityConflict.make({
-          failure: occurrence.failure,
-          source: item.identity,
-          subject: occurrence.subject
-        })
-      )
-    }
-    if (occurrence._tag === "AppliedAttemptChoice" && occurrence.choice === "RestartTaskImplementation") {
-      const replacement = itemForOccurrence(
-        items,
-        (candidate) =>
-          candidate._tag === "PlannedAttemptReplaced" && candidate.requestId.nonce === occurrence.requestId.nonce
-      )
-      if (replacement === undefined) {
-        preservationDispositions.push(
-          TracePreservationDisposition.cases.ReplacementPending.make({
-            choice: occurrence.subject,
-            source: item.identity
-          })
-        )
-      }
-    }
-    if (occurrence._tag === "IntegrationQuarantined") {
-      preservationDispositions.push(
-        TracePreservationDisposition.cases.IntegrationQuarantined.make({
-          basis: occurrence.basis,
-          correlation: occurrence.correlation,
-          source: item.identity
-        })
-      )
-    }
-    if (occurrence._tag === "TargetPromotionNonConvergent") {
-      preservationDispositions.push(
-        TracePreservationDisposition.cases.NonConvergentPromotion.make({
-          correlation: occurrence.correlation,
-          lastObservation: occurrence.lastObservation,
-          source: item.identity
-        })
-      )
-    }
-    if (
-      occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
-      occurrence.report._tag === "Terminal" &&
-      occurrence.report.result._tag === "Accepted"
-    ) {
-      const responsibility = itemForOccurrence(
-        items,
-        (candidate) =>
-          candidate._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-          candidate.plannedAttempt.attemptId === occurrence.report.correlation.attemptId
-      )
-      if (responsibility?.occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-        integrationFacts.push(
-          TraceIntegrationFact.cases.AcceptedResult.make({
-            acceptedResult: occurrence.report.result.acceptedResult,
-            plannedAttempt: responsibility.occurrence.plannedAttempt,
-            source: item.identity
-          })
-        )
-      }
-    }
-    if (occurrence._tag === "IntegrationResponsibilityBegan") {
-      const sameTargetPredecessor = items
-        .filter(
-          ({ occurrence: candidate }) =>
-            candidate._tag === "IntegrationResponsibilityBegan" &&
-            candidate.recordedAt < occurrence.recordedAt &&
-            sameIntegrationTarget(candidate.integrationTarget, occurrence.integrationTarget)
-        )
-        .at(latestSameTargetResponsibilityIndex)
-      integrationFacts.push(
-        TraceIntegrationFact.cases.Responsibility.make({
-          acceptedResult: occurrence.acceptedResult,
-          plannedAttempt: occurrence.plannedAttempt,
-          sameTargetPredecessor: sameTargetPredecessor?.identity ?? null,
-          source: item.identity,
-          target: occurrence.integrationTarget
-        })
-      )
-    }
-    if (occurrence._tag === "IntegrationStarted") {
-      const responsibility = traceItemAt(items, occurrence.responsibilityBeganAt)
-      if (responsibility !== undefined)
-        integrationFacts.push(
-          TraceIntegrationFact.cases.SessionStarted.make({
-            responsibility,
-            source: item.identity,
-            target: occurrence.integrationTarget
-          })
-        )
-    }
-    if (occurrence._tag === "IntegratorSessionFixed") {
-      integrationFacts.push(
-        TraceIntegrationFact.cases.Session.make({ correlation: occurrence.correlation, source: item.identity })
-      )
-    }
-    if (occurrence._tag === "IntegratorRunStarted") {
-      const result = itemForOccurrence(
-        items,
-        (candidate) =>
-          candidate._tag === "IntegratorRunResultRecorded" && sameIntegratorRun(candidate.run, occurrence.run)
-      )
-      if (result === undefined)
-        observationGaps.push(
-          TraceObservationGap.cases.IntegratorResult.make({ action: item.identity, run: occurrence.run })
-        )
-    }
-    if (occurrence._tag === "IntegratorRunResultRecorded") {
-      integrationFacts.push(
-        TraceIntegrationFact.cases.IntegratorResult.make({
-          result: occurrence.result,
-          run: occurrence.run,
-          source: item.identity
-        })
-      )
-    }
-    if (occurrence._tag === "IntegratorCandidateQualificationInitiated") {
-      const observed = itemForOccurrence(
-        items,
-        (candidate) =>
-          candidate._tag === "IntegratorCandidateQualificationObserved" &&
-          candidate.candidateText === occurrence.candidateText &&
-          sameIntegratorRun(candidate.originatingActionRun, occurrence.run)
-      )
-      if (observed === undefined)
-        observationGaps.push(
-          TraceObservationGap.cases.CandidateQualification.make({
-            action: item.identity,
-            candidateText: occurrence.candidateText,
-            run: occurrence.run
-          })
-        )
-    }
-    if (occurrence._tag === "IntegratorCandidateQualificationObserved") {
-      integrationFacts.push(
-        TraceIntegrationFact.cases.CandidateObserved.make({
-          candidateText: occurrence.candidateText,
-          observation: occurrence.observation,
-          run: occurrence.originatingActionRun,
-          source: item.identity
-        })
-      )
-      if (
-        occurrence.observation._tag === "Commit" &&
-        occurrence.observation.directParents.length === exactCandidateParentCount &&
-        occurrence.observation.directParents[0] === occurrence.originatingActionRun.session.expectedTargetHead &&
-        occurrence.observation.directParents[1] === occurrence.originatingActionRun.session.acceptedResult.commit
-      ) {
-        const first = occurrence.observation.directParents[0]
-        const second = occurrence.observation.directParents[1]
-        integrationFacts.push(
-          TraceIntegrationFact.cases.CandidateQualification.make({
-            candidateCommit: occurrence.observation.commit,
-            candidateText: occurrence.candidateText,
-            directParents: [first, second],
-            run: occurrence.originatingActionRun,
-            source: item.identity
-          })
-        )
-      }
-    }
-    if (occurrence._tag === "TargetPromotionRequested")
-      integrationFacts.push(
-        TraceIntegrationFact.cases.Promotion.make({
-          basis: { _tag: "BeforeFirstAttempt" },
-          correlation: occurrence.correlation,
-          kind: "Requested",
-          observation: null,
-          source: item.identity
-        })
-      )
-    if (occurrence._tag === "TargetPromotionAttemptRequested") {
-      const terminal = items.find(
-        ({ occurrence: candidate }) =>
-          (candidate._tag === "TargetPromotionSucceeded" ||
-            candidate._tag === "TargetPromotionStale" ||
-            candidate._tag === "TargetPromotionNonConvergent") &&
-          samePromotion(candidate.correlation, occurrence.correlation)
-      )
-      if (terminal === undefined)
-        observationGaps.push(
-          TraceObservationGap.cases.PromotionResult.make({
-            action: item.identity,
-            attemptOrdinal: occurrence.attemptOrdinal,
-            correlation: occurrence.correlation
-          })
-        )
-      integrationFacts.push(
-        TraceIntegrationFact.cases.Promotion.make({
-          basis: { _tag: "AfterAttempt", attemptOrdinal: occurrence.attemptOrdinal },
-          correlation: occurrence.correlation,
-          kind: "Attempt",
-          observation: null,
-          source: item.identity
-        })
-      )
-    }
-    if (
-      occurrence._tag === "TargetPromotionSucceeded" ||
-      occurrence._tag === "TargetPromotionStale" ||
-      occurrence._tag === "TargetPromotionNonConvergent"
-    ) {
-      const kind =
-        occurrence._tag === "TargetPromotionSucceeded"
-          ? "Succeeded"
-          : occurrence._tag === "TargetPromotionStale"
-            ? "Stale"
-            : "NonConvergent"
-      const basis =
-        occurrence._tag === "TargetPromotionNonConvergent"
-          ? TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal: occurrence.attemptOrdinal })
-          : occurrence.basis
-      const observation =
-        occurrence._tag === "TargetPromotionNonConvergent" ? occurrence.lastObservation : occurrence.observation
-      integrationFacts.push(
-        TraceIntegrationFact.cases.Promotion.make({
-          basis,
-          correlation: occurrence.correlation,
-          kind,
-          observation,
-          source: item.identity
-        })
-      )
-    }
-    if (occurrence._tag === "IntegrationQuarantined")
-      integrationFacts.push(
-        TraceIntegrationFact.cases.Quarantine.make({
-          basis: occurrence.basis,
-          correlation: occurrence.correlation,
-          source: item.identity
-        })
-      )
-    if (occurrence._tag === "IntegrationProviderRunActivityAbsent")
-      integrationFacts.push(
-        TraceIntegrationFact.cases.ProviderActivityAbsent.make({
-          correlation: occurrence.correlation,
-          run: occurrence.run,
-          source: item.identity
-        })
-      )
-    if (occurrence._tag === "IntegrationQuarantineDirectionApplied")
-      integrationFacts.push(
-        TraceIntegrationFact.cases.QuarantineDirection.make({
-          fingerprint: occurrence.fingerprint,
-          source: item.identity
-        })
-      )
-    if (occurrence._tag === "IntegrationFinalityOccurred")
-      integrationFacts.push(
-        TraceIntegrationFact.cases.Completion.make({ event: occurrence.event, source: item.identity })
-      )
-  }
-  return TraceHistoricalFacets.make({
-    integration: { facts: integrationFacts },
-    recovery: { observationGaps, preservationDispositions, retainedResponsibilities }
-  })
-}
-
 const cursorPrefixOf = (
   cursor: TraceCursor,
   records: ReadonlyArray<JournalRecord>
@@ -1580,6 +1633,14 @@ const historyFromRecords = Effect.fn("TraceReader.historyFromRecords")(function*
   records: ReadonlyArray<JournalRecord>
 ) {
   yield* validateRecords(runId, records)
+  const integrationIssue = integrationHistoryIssue(runId, records)
+  if (integrationIssue !== undefined) {
+    return yield* new TraceProjectionInvalid({ detail: integrationIssue, runId })
+  }
+  const finalityIssue = finalityHistoryIssue(runId, records)
+  if (finalityIssue !== undefined) {
+    return yield* new TraceProjectionInvalid({ detail: finalityIssue, runId })
+  }
   yield* operationIndexOf(runId, records)
   const projection = yield* projectWorkflowOccurrences(records).pipe(
     Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId }))
@@ -1595,6 +1656,14 @@ const atCursorFromRecords = Effect.fn("TraceReader.atCursorFromRecords")(functio
 ) {
   const prefix = yield* cursorPrefixOf(cursor, records)
   yield* validateRecords(cursor.runId, prefix)
+  const integrationIssue = integrationHistoryIssue(cursor.runId, prefix)
+  if (integrationIssue !== undefined) {
+    return yield* new TraceProjectionInvalid({ detail: integrationIssue, runId: cursor.runId })
+  }
+  const finalityIssue = finalityHistoryIssue(cursor.runId, prefix)
+  if (finalityIssue !== undefined) {
+    return yield* new TraceProjectionInvalid({ detail: finalityIssue, runId: cursor.runId })
+  }
   const operationIndex = yield* operationIndexOf(cursor.runId, prefix)
   const projection = yield* projectWorkflowOccurrences(prefix).pipe(
     Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId: cursor.runId }))
@@ -1604,7 +1673,7 @@ const atCursorFromRecords = Effect.fn("TraceReader.atCursorFromRecords")(functio
   const target = beginning.target
   const graph = taskGraphAt(prefix, target)
   const relationships = relationshipsAt(prefix, items, graph, operationIndex)
-  const facets = traceHistoricalFacetsAt(items)
+  const facets = traceHistoricalFacetsAt(items, historicalFacetFactories)
   const taskIds = graph?.snapshot.tasks.flatMap(({ id }) => [id]) ?? []
   return TraceAtCursor.make({
     cursor,

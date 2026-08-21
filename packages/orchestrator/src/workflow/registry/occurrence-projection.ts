@@ -51,7 +51,10 @@ import {
   AttemptImplementationAbandoned,
   AttemptStoppageIntended,
   HistoricalWorkflowOccurrence,
-  IntegrationFinalityOccurred,
+  IntegrationClaimDeletionOccurred,
+  IntegrationClaimReplacementOccurred,
+  IntegrationFinalitySettledOccurred,
+  IntegrationFocusedCompletionOccurred,
   IntegrationProviderRunActivityAbsent,
   IntegrationQuarantineDirectionApplied,
   IntegrationQuarantined,
@@ -667,14 +670,7 @@ const historicalJournalEventKinds = {
 
 type HistoricalJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: keyof typeof historicalJournalEventKinds }>
 
-const historicalFinalityEventKinds = {
-  CompletionClaimDeleted: true,
-  CompletionClaimDeletionAttemptIntended: true,
-  CompletionClaimDeletionIntended: true,
-  CompletionClaimDeletionReadObserved: true,
-  CompletionClaimReplaced: true,
-  CompletionClaimReplacementAttemptIntended: true,
-  CompletionClaimReplacementIntended: true,
+const historicalFocusedCompletionEventKinds = {
   CompletionTaskAcknowledged: true,
   CompletionTaskAttemptIntended: true,
   CompletionTaskCandidateAncestryObserved: true,
@@ -683,19 +679,46 @@ const historicalFinalityEventKinds = {
   CompletionTaskRejected: true,
   CompletionTaskRequestLookupIntended: true,
   CompletionTaskRequestLookupObserved: true,
-  CompletionTaskResponseLost: true,
-  IntegrationFinalitySettled: true,
-  PostPromotionBlockerCandidateAncestryObserved: true,
-  PostPromotionBlockerCandidateAncestryReadIntended: true
+  CompletionTaskResponseLost: true
 } as const
 
-type HistoricalFinalityJournalEvent = Extract<
+const historicalClaimReplacementEventKinds = {
+  CompletionClaimReplaced: true,
+  CompletionClaimReplacementAttemptIntended: true,
+  CompletionClaimReplacementIntended: true
+} as const
+
+const historicalClaimDeletionEventKinds = {
+  CompletionClaimDeleted: true,
+  CompletionClaimDeletionAttemptIntended: true,
+  CompletionClaimDeletionIntended: true,
+  CompletionClaimDeletionReadObserved: true
+} as const
+
+type HistoricalFocusedCompletionJournalEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: keyof typeof historicalFinalityEventKinds }
+  { readonly _tag: keyof typeof historicalFocusedCompletionEventKinds }
+>
+type HistoricalClaimReplacementJournalEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: keyof typeof historicalClaimReplacementEventKinds }
+>
+type HistoricalClaimDeletionJournalEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: keyof typeof historicalClaimDeletionEventKinds }
 >
 
-const isHistoricalFinalityJournalEvent = (event: WorkflowJournalEvent): event is HistoricalFinalityJournalEvent =>
-  Object.hasOwn(historicalFinalityEventKinds, event._tag)
+const isHistoricalFocusedCompletionJournalEvent = (
+  event: WorkflowJournalEvent
+): event is HistoricalFocusedCompletionJournalEvent => Object.hasOwn(historicalFocusedCompletionEventKinds, event._tag)
+
+const isHistoricalClaimReplacementJournalEvent = (
+  event: WorkflowJournalEvent
+): event is HistoricalClaimReplacementJournalEvent => Object.hasOwn(historicalClaimReplacementEventKinds, event._tag)
+
+const isHistoricalClaimDeletionJournalEvent = (
+  event: WorkflowJournalEvent
+): event is HistoricalClaimDeletionJournalEvent => Object.hasOwn(historicalClaimDeletionEventKinds, event._tag)
 
 const isHistoricalJournalEvent = (event: WorkflowJournalEvent): event is HistoricalJournalEvent =>
   Object.hasOwn(historicalJournalEventKinds, event._tag)
@@ -843,7 +866,6 @@ const projectDirectOccurrence = (
 
 type TaskClaimAcquisitionJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquisitionIntended" }>
 type TaskClaimReleaseJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimReleaseIntended" }>
-type TaskAttemptPlannedJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskAttemptPlanned" }>
 type IntegratorSessionJournalEvent = Extract<
   WorkflowJournalEvent,
   { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
@@ -898,7 +920,6 @@ const targetLineageMatchesSession = (
   occurrence.observation.targetHeadSha === correlation.expectedTargetHead
 
 type HistoricalProjectionContext = ProjectionContext & {
-  readonly taskAttemptPlans: Map<string, TaskAttemptPlannedJournalEvent>
   readonly taskClaimAcquisitionIntents: Map<string, TaskClaimAcquisitionJournalEvent>
   readonly taskClaimReleaseIntents: Map<string, TaskClaimReleaseJournalEvent>
   readonly taskWorktreeIntents: Map<string, typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type>
@@ -909,21 +930,127 @@ type HistoricalProjectionContext = ProjectionContext & {
   readonly promotionAttemptIntents: Map<string, TargetPromotionAttemptIntendedEvent>
 }
 
+const historicalTaskClaimEventKinds = {
+  TaskClaimAcquired: true,
+  TaskClaimAcquisitionIntended: true,
+  TaskClaimReleased: true,
+  TaskClaimReleaseIntended: true
+} as const
+
+const historicalAttemptWorktreeEventKinds = {
+  AttemptImplementationAbandoned: true,
+  AttemptStoppageIntended: true,
+  StoppedAttemptClaimNoReleaseObserved: true,
+  TaskAttemptPlanned: true,
+  TaskWorktreeReady: true,
+  TaskWorktreeReconciliationIntended: true
+} as const
+
+const historicalIntegratorEventKinds = {
+  IntegratorRunCandidateGitObserved: true,
+  IntegratorRunCandidateGitReadIntended: true,
+  IntegratorRunResultRecorded: true,
+  IntegratorRunStarted: true,
+  IntegratorSessionFixed: true,
+  IntegratorSuccessorSessionFixed: true
+} as const
+
+const historicalPromotionEventKinds = {
+  TargetPromotionAttemptIntended: true,
+  TargetPromotionIntended: true,
+  TargetPromotionNonConvergence: true,
+  TargetPromotionObservedSuccess: true,
+  TargetPromotionStale: true
+} as const
+
+const historicalBoundaryEventKinds = {
+  IntegrationProviderRunActivityAbsent: true,
+  IntegrationQuarantineDirectionApplied: true,
+  IntegrationQuarantined: true
+} as const
+
+const historicalFinalityStepEventKinds = {
+  CompletionClaimDeleted: true,
+  CompletionClaimDeletionAttemptIntended: true,
+  CompletionClaimDeletionIntended: true,
+  CompletionClaimDeletionReadObserved: true,
+  CompletionClaimReplaced: true,
+  CompletionClaimReplacementAttemptIntended: true,
+  CompletionClaimReplacementIntended: true,
+  CompletionTaskAcknowledged: true,
+  CompletionTaskAttemptIntended: true,
+  CompletionTaskCandidateAncestryObserved: true,
+  CompletionTaskCandidateAncestryReadIntended: true,
+  CompletionTaskIntended: true,
+  CompletionTaskRejected: true,
+  CompletionTaskRequestLookupIntended: true,
+  CompletionTaskRequestLookupObserved: true,
+  CompletionTaskResponseLost: true,
+  IntegrationFinalitySettled: true
+} as const
+
+type HistoricalTaskClaimEvent = Extract<
+  HistoricalJournalEvent,
+  { readonly _tag: keyof typeof historicalTaskClaimEventKinds }
+>
+type HistoricalAttemptWorktreeEvent = Extract<
+  HistoricalJournalEvent,
+  { readonly _tag: keyof typeof historicalAttemptWorktreeEventKinds }
+>
+type HistoricalIntegratorEvent = Extract<
+  HistoricalJournalEvent,
+  { readonly _tag: keyof typeof historicalIntegratorEventKinds }
+>
+type HistoricalPromotionEvent = Extract<
+  HistoricalJournalEvent,
+  { readonly _tag: keyof typeof historicalPromotionEventKinds }
+>
+type HistoricalBoundaryEvent = Extract<
+  HistoricalJournalEvent,
+  { readonly _tag: keyof typeof historicalBoundaryEventKinds }
+>
+type HistoricalFinalityStepEvent = Extract<
+  HistoricalJournalEvent,
+  { readonly _tag: keyof typeof historicalFinalityStepEventKinds }
+>
+
+const isHistoricalTaskClaimEvent = (event: HistoricalJournalEvent): event is HistoricalTaskClaimEvent =>
+  Object.hasOwn(historicalTaskClaimEventKinds, event._tag)
+
+const isHistoricalAttemptWorktreeEvent = (event: HistoricalJournalEvent): event is HistoricalAttemptWorktreeEvent =>
+  Object.hasOwn(historicalAttemptWorktreeEventKinds, event._tag)
+
+const isHistoricalIntegratorEvent = (event: HistoricalJournalEvent): event is HistoricalIntegratorEvent =>
+  Object.hasOwn(historicalIntegratorEventKinds, event._tag)
+
+const isHistoricalPromotionEvent = (event: HistoricalJournalEvent): event is HistoricalPromotionEvent =>
+  Object.hasOwn(historicalPromotionEventKinds, event._tag)
+
+const isHistoricalBoundaryEvent = (event: HistoricalJournalEvent): event is HistoricalBoundaryEvent =>
+  Object.hasOwn(historicalBoundaryEventKinds, event._tag)
+
+const isHistoricalFinalityStepEvent = (event: HistoricalJournalEvent): event is HistoricalFinalityStepEvent =>
+  Object.hasOwn(historicalFinalityStepEventKinds, event._tag)
+
 /** A historical action/result relation was not provable from the committed prefix. */
 export class HistoricalOutcomeWithoutInitiatingAction extends Schema.TaggedError<HistoricalOutcomeWithoutInitiatingAction>()(
   "HistoricalOutcomeWithoutInitiatingAction",
   { detail: Schema.String, position: JournalPosition, runId: RunId }
 ) {}
 
-const projectHistoricalOccurrence = (
+type HistoricalProjectionResult = Effect.Effect<
+  WorkflowOccurrence | void,
+  TrackerOutcomeWithoutReadIntent | GitOutcomeWithoutReadIntent | HistoricalOutcomeWithoutInitiatingAction
+>
+
+const historicalFailure = (record: JournalRecord, detail: string): HistoricalProjectionResult =>
+  Effect.fail(new HistoricalOutcomeWithoutInitiatingAction({ detail, position: record.position, runId: record.runId }))
+
+const projectHistoricalTaskClaim = (
   record: JournalRecord,
-  event: HistoricalJournalEvent,
+  event: HistoricalTaskClaimEvent,
   context: HistoricalProjectionContext
-): Effect.Effect<WorkflowOccurrence | void, GitOutcomeWithoutReadIntent | HistoricalOutcomeWithoutInitiatingAction> => {
-  const historicalFailure = (detail: string) =>
-    Effect.fail(
-      new HistoricalOutcomeWithoutInitiatingAction({ detail, position: record.position, runId: record.runId })
-    )
+): HistoricalProjectionResult => {
   if (event._tag === "TaskClaimAcquisitionIntended") {
     context.taskClaimAcquisitionIntents.set(
       relationshipKey(record.runId, event.operation.acquisition.operationId),
@@ -943,7 +1070,7 @@ const projectHistoricalOccurrence = (
     const operationId = event.claim.operationId
     if (!context.taskClaimAcquisitionIntents.has(relationshipKey(record.runId, operationId))) {
       return Effect.fail(
-        new GitOutcomeWithoutReadIntent({ operationId, position: record.position, runId: record.runId })
+        new TrackerOutcomeWithoutReadIntent({ operationId, position: record.position, runId: record.runId })
       )
     }
     return Effect.succeed(
@@ -968,25 +1095,29 @@ const projectHistoricalOccurrence = (
       })
     )
   }
-  if (event._tag === "TaskClaimReleased") {
-    const operationId = event.release.operationId
-    if (!context.taskClaimReleaseIntents.has(relationshipKey(record.runId, operationId))) {
-      return Effect.fail(
-        new GitOutcomeWithoutReadIntent({ operationId, position: record.position, runId: record.runId })
-      )
-    }
-    return Effect.succeed(
-      TaskClaimReleased.make({
-        occurrenceClassification: "NonActionOccurrence",
-        originatingActionOperationId: operationId,
-        recordedAt: record.position,
-        release: event.release,
-        runId: record.runId
-      })
+  const operationId = event.release.operationId
+  if (!context.taskClaimReleaseIntents.has(relationshipKey(record.runId, operationId))) {
+    return Effect.fail(
+      new TrackerOutcomeWithoutReadIntent({ operationId, position: record.position, runId: record.runId })
     )
   }
+  return Effect.succeed(
+    TaskClaimReleased.make({
+      occurrenceClassification: "NonActionOccurrence",
+      originatingActionOperationId: operationId,
+      recordedAt: record.position,
+      release: event.release,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalAttemptWorktree = (
+  record: JournalRecord,
+  event: HistoricalAttemptWorktreeEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
   if (event._tag === "TaskAttemptPlanned") {
-    context.taskAttemptPlans.set(relationshipKey(record.runId, event.operation.operationId), event)
     return Effect.succeed(
       TaskAttemptPlanned.make({
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
@@ -1050,283 +1181,439 @@ const projectHistoricalOccurrence = (
       })
     )
   }
-  if (event._tag === "StoppedAttemptClaimNoReleaseObserved") {
-    return Effect.succeed(
-      StoppedAttemptClaimPreserved.make({
-        expectedClaim: event.expectedClaim,
-        observation: event.observation,
-        occurrenceClassification: event.occurrenceClassification,
-        observationOperationId: event.observationOperationId,
-        recordedAt: record.position,
-        requestId: event.requestId,
-        runId: record.runId,
-        subject: event.subject
-      })
+  return Effect.succeed(
+    StoppedAttemptClaimPreserved.make({
+      expectedClaim: event.expectedClaim,
+      observation: event.observation,
+      occurrenceClassification: event.occurrenceClassification,
+      observationOperationId: event.observationOperationId,
+      recordedAt: record.position,
+      requestId: event.requestId,
+      runId: record.runId,
+      subject: event.subject
+    })
+  )
+}
+
+type HistoricalSessionEvent = Extract<
+  HistoricalIntegratorEvent,
+  { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
+>
+type HistoricalRunEvent = Extract<
+  HistoricalIntegratorEvent,
+  { readonly _tag: "IntegratorRunStarted" | "IntegratorRunResultRecorded" }
+>
+type HistoricalCandidateEvent = Extract<
+  HistoricalIntegratorEvent,
+  { readonly _tag: "IntegratorRunCandidateGitReadIntended" | "IntegratorRunCandidateGitObserved" }
+>
+
+const projectHistoricalSessionFixed = (
+  record: JournalRecord,
+  event: Extract<HistoricalSessionEvent, { readonly _tag: "IntegratorSessionFixed" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const hasStart = context.occurrences.some((occurrence) =>
+    integrationStartedMatchesSession(occurrence, event.correlation, record.position)
+  )
+  const hasLineage = context.occurrences.some((occurrence) =>
+    targetLineageMatchesSession(occurrence, event.correlation, record.position)
+  )
+  if (!hasStart || !hasLineage || event.correlation.plannedAttempt.runId !== record.runId) {
+    return historicalFailure(
+      record,
+      "Integrator session " +
+        event.correlation.sessionId +
+        " must identify one exact earlier integration start and target lineage"
     )
   }
-  if (event._tag === "IntegratorSessionFixed") {
-    if (
-      event.correlation.plannedAttempt.runId !== record.runId ||
-      !context.occurrences.some((occurrence) =>
-        integrationStartedMatchesSession(occurrence, event.correlation, record.position)
-      ) ||
-      !context.occurrences.some((occurrence) =>
-        targetLineageMatchesSession(occurrence, event.correlation, record.position)
-      )
-    ) {
-      return historicalFailure(
-        `Integrator session ${event.correlation.sessionId} must identify one exact earlier integration start and target lineage`
-      )
-    }
-    if (context.integratorSessions.has(integratorSessionKey(event.correlation))) {
-      return historicalFailure(`duplicate Integrator session ${event.correlation.sessionId}`)
-    }
-    context.integratorSessions.set(integratorSessionKey(event.correlation), event)
-    return Effect.succeed(
-      IntegratorSessionFixed.make({
-        correlation: event.correlation,
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        recordedAt: record.position,
+  if (context.integratorSessions.has(integratorSessionKey(event.correlation))) {
+    return historicalFailure(record, "duplicate Integrator session " + event.correlation.sessionId)
+  }
+  context.integratorSessions.set(integratorSessionKey(event.correlation), event)
+  return Effect.succeed(
+    IntegratorSessionFixed.make({
+      correlation: event.correlation,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalSuccessorSession = (
+  record: JournalRecord,
+  event: Extract<HistoricalSessionEvent, { readonly _tag: "IntegratorSuccessorSessionFixed" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  if (!context.integratorSessions.has(integratorSessionKey(event.predecessor))) {
+    return historicalFailure(
+      record,
+      "successor session " + event.successor.sessionId + " has no earlier predecessor session"
+    )
+  }
+  const quarantined = context.occurrences.some(
+    (occurrence) => occurrence._tag === "IntegrationQuarantined" && occurrence.recordedAt === event.quarantineAt
+  )
+  if (!quarantined) {
+    return historicalFailure(
+      record,
+      "successor session " + event.successor.sessionId + " has no exact quarantine occurrence"
+    )
+  }
+  if (context.integratorSessions.has(integratorSessionKey(event.successor))) {
+    return historicalFailure(record, "duplicate Integrator successor session " + event.successor.sessionId)
+  }
+  context.integratorSessions.set(integratorSessionKey(event.predecessor), event)
+  context.integratorSessions.set(integratorSessionKey(event.successor), event)
+  return Effect.succeed(
+    IntegratorSuccessorSessionFixed.make({
+      direction: event.direction,
+      directionAppliedAt: event.directionAppliedAt,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      predecessor: event.predecessor,
+      quarantineAt: event.quarantineAt,
+      recordedAt: record.position,
+      runId: record.runId,
+      successor: event.successor,
+      successorGeneration: event.successorGeneration
+    })
+  )
+}
+
+const projectHistoricalRunStarted = (
+  record: JournalRecord,
+  event: Extract<HistoricalRunEvent, { readonly _tag: "IntegratorRunStarted" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const sessionEvent = context.integratorSessions.get(integratorSessionKey(event.run.session))
+  if (
+    sessionEvent === undefined ||
+    !integratorSessionCorrelationsEqual(sessionCorrelationOf(sessionEvent), event.run.session) ||
+    event.run.session.plannedAttempt.runId !== record.runId
+  ) {
+    return historicalFailure(record, "Integrator run " + historicalRunKey(event.run) + " has no fixed session")
+  }
+  const runKey = historicalRunKey(event.run)
+  if (context.integratorRunStarts.has(runKey)) {
+    return historicalFailure(record, "duplicate Integrator run " + runKey)
+  }
+  context.integratorRunStarts.set(runKey, event)
+  return Effect.succeed(
+    IntegratorRunStarted.make({
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      recordedAt: record.position,
+      run: event.run,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalRunResult = (
+  record: JournalRecord,
+  event: Extract<HistoricalRunEvent, { readonly _tag: "IntegratorRunResultRecorded" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const start = context.integratorRunStarts.get(historicalRunKey(event.run))
+  if (start === undefined || !Schema.toEquivalence(IntegratorRunCorrelation)(start.run, event.run)) {
+    return historicalFailure(record, "Integrator result " + historicalRunKey(event.run) + " has no earlier run start")
+  }
+  return Effect.succeed(
+    IntegratorRunResultRecorded.make({
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: record.position,
+      result: event.result,
+      run: event.run,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalCandidateIntent = (
+  record: JournalRecord,
+  event: Extract<HistoricalCandidateEvent, { readonly _tag: "IntegratorRunCandidateGitReadIntended" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const start = context.integratorRunStarts.get(historicalRunKey(event.run))
+  if (start === undefined || !Schema.toEquivalence(IntegratorRunCorrelation)(start.run, event.run)) {
+    return historicalFailure(record, "candidate qualification " + event.candidateText + " has no earlier run start")
+  }
+  const candidateKey = historicalRunKey(event.run) + ":" + event.candidateText
+  if (context.integratorCandidateIntents.has(candidateKey)) {
+    return historicalFailure(record, "duplicate candidate qualification intent " + candidateKey)
+  }
+  context.integratorCandidateIntents.set(candidateKey, event)
+  return Effect.succeed(
+    IntegratorCandidateQualificationInitiated.make({
+      candidateText: event.candidateText,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      recordedAt: record.position,
+      run: event.run,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalCandidateObserved = (
+  record: JournalRecord,
+  event: Extract<HistoricalCandidateEvent, { readonly _tag: "IntegratorRunCandidateGitObserved" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const key = historicalRunKey(event.run) + ":" + event.candidateText
+  const intent = context.integratorCandidateIntents.get(key)
+  if (
+    intent === undefined ||
+    !Schema.toEquivalence(IntegratorRunCorrelation)(intent.run, event.run) ||
+    intent.candidateText !== event.candidateText
+  ) {
+    return Effect.fail(
+      new GitOutcomeWithoutReadIntent({
+        operationId: OperationId.make(key),
+        position: record.position,
         runId: record.runId
       })
     )
   }
-  if (event._tag === "IntegratorSuccessorSessionFixed") {
-    if (!context.integratorSessions.has(integratorSessionKey(event.predecessor))) {
-      return historicalFailure(`successor session ${event.successor.sessionId} has no earlier predecessor session`)
-    }
-    const quarantined = context.occurrences.some(
-      (occurrence) => occurrence._tag === "IntegrationQuarantined" && occurrence.recordedAt === event.quarantineAt
-    )
-    if (!quarantined)
-      return historicalFailure(`successor session ${event.successor.sessionId} has no exact quarantine occurrence`)
-    if (context.integratorSessions.has(integratorSessionKey(event.successor))) {
-      return historicalFailure(`duplicate Integrator successor session ${event.successor.sessionId}`)
-    }
-    context.integratorSessions.set(integratorSessionKey(event.predecessor), event)
-    context.integratorSessions.set(integratorSessionKey(event.successor), event)
-    return Effect.succeed(
-      IntegratorSuccessorSessionFixed.make({
-        direction: event.direction,
-        directionAppliedAt: event.directionAppliedAt,
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        predecessor: event.predecessor,
-        quarantineAt: event.quarantineAt,
-        recordedAt: record.position,
-        runId: record.runId,
-        successor: event.successor,
-        successorGeneration: event.successorGeneration
-      })
-    )
-  }
-  if (event._tag === "IntegratorRunStarted") {
-    const sessionEvent = context.integratorSessions.get(integratorSessionKey(event.run.session))
-    if (
-      sessionEvent === undefined ||
-      !integratorSessionCorrelationsEqual(sessionCorrelationOf(sessionEvent), event.run.session) ||
-      event.run.session.plannedAttempt.runId !== record.runId
-    ) {
-      return historicalFailure(`Integrator run ${historicalRunKey(event.run)} has no fixed session`)
-    }
-    const runKey = historicalRunKey(event.run)
-    if (context.integratorRunStarts.has(runKey)) return historicalFailure(`duplicate Integrator run ${runKey}`)
-    context.integratorRunStarts.set(runKey, event)
-    return Effect.succeed(
-      IntegratorRunStarted.make({
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        recordedAt: record.position,
-        run: event.run,
-        runId: record.runId
-      })
-    )
-  }
-  if (event._tag === "IntegratorRunResultRecorded") {
-    const start = context.integratorRunStarts.get(historicalRunKey(event.run))
-    if (start === undefined || !Schema.toEquivalence(IntegratorRunCorrelation)(start.run, event.run)) {
-      return historicalFailure(`Integrator result ${historicalRunKey(event.run)} has no earlier run start`)
-    }
-    return Effect.succeed(
-      IntegratorRunResultRecorded.make({
-        occurrenceClassification: "NonActionOccurrence",
-        recordedAt: record.position,
-        result: event.result,
-        run: event.run,
-        runId: record.runId
-      })
-    )
-  }
-  if (event._tag === "IntegratorRunCandidateGitReadIntended") {
-    const start = context.integratorRunStarts.get(historicalRunKey(event.run))
-    if (start === undefined || !Schema.toEquivalence(IntegratorRunCorrelation)(start.run, event.run)) {
-      return historicalFailure(`candidate qualification ${event.candidateText} has no earlier run start`)
-    }
-    const candidateKey = `${historicalRunKey(event.run)}:${event.candidateText}`
-    if (context.integratorCandidateIntents.has(candidateKey)) {
-      return historicalFailure(`duplicate candidate qualification intent ${candidateKey}`)
-    }
-    context.integratorCandidateIntents.set(candidateKey, event)
-    return Effect.succeed(
-      IntegratorCandidateQualificationInitiated.make({
-        candidateText: event.candidateText,
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        recordedAt: record.position,
-        run: event.run,
-        runId: record.runId
-      })
+  return Effect.succeed(
+    IntegratorCandidateQualificationObserved.make({
+      candidateText: event.candidateText,
+      observation: event.observation,
+      occurrenceClassification: "NonActionOccurrence",
+      originatingActionRun: event.run,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalIntegrator = (
+  record: JournalRecord,
+  event: HistoricalIntegratorEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  if (event._tag === "IntegratorSessionFixed") return projectHistoricalSessionFixed(record, event, context)
+  if (event._tag === "IntegratorSuccessorSessionFixed") return projectHistoricalSuccessorSession(record, event, context)
+  if (event._tag === "IntegratorRunStarted") return projectHistoricalRunStarted(record, event, context)
+  if (event._tag === "IntegratorRunResultRecorded") return projectHistoricalRunResult(record, event, context)
+  if (event._tag === "IntegratorRunCandidateGitReadIntended")
+    return projectHistoricalCandidateIntent(record, event, context)
+  return projectHistoricalCandidateObserved(record, event, context)
+}
+
+type HistoricalPromotionRequestedEvent = Extract<HistoricalPromotionEvent, { readonly _tag: "TargetPromotionIntended" }>
+type HistoricalPromotionAttemptEvent = Extract<
+  HistoricalPromotionEvent,
+  { readonly _tag: "TargetPromotionAttemptIntended" }
+>
+type HistoricalPromotionSuccessEvent = Extract<
+  HistoricalPromotionEvent,
+  { readonly _tag: "TargetPromotionObservedSuccess" }
+>
+type HistoricalPromotionStaleEvent = Extract<HistoricalPromotionEvent, { readonly _tag: "TargetPromotionStale" }>
+type HistoricalPromotionNonConvergenceEvent = Extract<
+  HistoricalPromotionEvent,
+  { readonly _tag: "TargetPromotionNonConvergence" }
+>
+
+const projectHistoricalPromotionRequested = (
+  record: JournalRecord,
+  event: HistoricalPromotionRequestedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const candidate = event.correlation.qualifiedCandidate
+  const candidateObserved = context.occurrences.some(
+    (occurrence) =>
+      occurrence._tag === "IntegratorCandidateQualificationObserved" &&
+      occurrence.candidateText === candidate.candidateText &&
+      Schema.toEquivalence(IntegratorRunCorrelation)(occurrence.originatingActionRun, candidate.run) &&
+      occurrence.recordedAt < record.position
+  )
+  const preparedResult = context.occurrences.some(
+    (occurrence) =>
+      occurrence._tag === "IntegratorRunResultRecorded" &&
+      occurrence.result._tag === "PreparedCandidate" &&
+      occurrence.result.candidateText === candidate.candidateText &&
+      Schema.toEquivalence(IntegratorRunCorrelation)(occurrence.run, candidate.run) &&
+      occurrence.recordedAt < record.position
+  )
+  if (!candidateObserved || !preparedResult) {
+    return historicalFailure(
+      record,
+      "promotion " + event.correlation.requestId + " has no candidate qualification observation"
     )
   }
-  if (event._tag === "IntegratorRunCandidateGitObserved") {
-    const key = `${historicalRunKey(event.run)}:${event.candidateText}`
-    const intent = context.integratorCandidateIntents.get(key)
-    if (
-      intent === undefined ||
-      !Schema.toEquivalence(IntegratorRunCorrelation)(intent.run, event.run) ||
-      intent.candidateText !== event.candidateText
-    ) {
-      return Effect.fail(
-        new GitOutcomeWithoutReadIntent({
-          operationId: OperationId.make(key),
-          position: record.position,
-          runId: record.runId
-        })
-      )
-    }
-    return Effect.succeed(
-      IntegratorCandidateQualificationObserved.make({
-        candidateText: event.candidateText,
-        observation: event.observation,
-        occurrenceClassification: "NonActionOccurrence",
-        originatingActionRun: event.run,
-        recordedAt: record.position,
-        runId: record.runId
-      })
+  if (context.promotionIntents.has(event.correlation.requestId)) {
+    return historicalFailure(record, "duplicate promotion intent " + event.correlation.requestId)
+  }
+  context.promotionIntents.set(event.correlation.requestId, event)
+  return Effect.succeed(
+    TargetPromotionRequested.make({
+      correlation: event.correlation,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPromotionAttempt = (
+  record: JournalRecord,
+  event: HistoricalPromotionAttemptEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const intent = context.promotionIntents.get(event.correlation.requestId)
+  if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
+    return historicalFailure(
+      record,
+      "promotion attempt " + event.correlation.requestId + " has no exact promotion intent"
     )
   }
-  if (event._tag === "TargetPromotionIntended") {
-    const candidate = event.correlation.qualifiedCandidate
-    const candidateObserved = context.occurrences.some(
-      (occurrence) =>
-        occurrence._tag === "IntegratorCandidateQualificationObserved" &&
-        occurrence.candidateText === candidate.candidateText &&
-        Schema.toEquivalence(IntegratorRunCorrelation)(occurrence.originatingActionRun, candidate.run) &&
-        occurrence.recordedAt < record.position
-    )
-    const preparedResult = context.occurrences.some(
-      (occurrence) =>
-        occurrence._tag === "IntegratorRunResultRecorded" &&
-        occurrence.result._tag === "PreparedCandidate" &&
-        occurrence.result.candidateText === candidate.candidateText &&
-        Schema.toEquivalence(IntegratorRunCorrelation)(occurrence.run, candidate.run) &&
-        occurrence.recordedAt < record.position
-    )
-    if (!candidateObserved || !preparedResult)
-      return historicalFailure(`promotion ${event.correlation.requestId} has no candidate qualification observation`)
-    if (context.promotionIntents.has(event.correlation.requestId)) {
-      return historicalFailure(`duplicate promotion intent ${event.correlation.requestId}`)
-    }
-    context.promotionIntents.set(event.correlation.requestId, event)
-    return Effect.succeed(
-      TargetPromotionRequested.make({
-        correlation: event.correlation,
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        recordedAt: record.position,
-        runId: record.runId
-      })
+  const attemptKey = promotionAttemptKey(event.correlation.requestId, event.attemptOrdinal)
+  if (context.promotionAttemptIntents.has(attemptKey)) {
+    return historicalFailure(record, "duplicate promotion attempt " + attemptKey)
+  }
+  context.promotionAttemptIntents.set(attemptKey, event)
+  return Effect.succeed(
+    TargetPromotionAttemptRequested.make({
+      attemptOrdinal: event.attemptOrdinal,
+      correlation: event.correlation,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      reason: event.reason,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const promotionAttemptIsRecorded = (
+  context: HistoricalProjectionContext,
+  requestId: string,
+  attemptOrdinal: number
+): boolean => context.promotionAttemptIntents.has(promotionAttemptKey(requestId, attemptOrdinal))
+
+const promotionTerminalIntentIsValid = (
+  context: HistoricalProjectionContext,
+  requestId: string,
+  basis: { readonly _tag: "BeforeFirstAttempt" } | { readonly _tag: "AfterAttempt"; readonly attemptOrdinal: number }
+): boolean =>
+  basis._tag === "BeforeFirstAttempt" || promotionAttemptIsRecorded(context, requestId, basis.attemptOrdinal)
+
+const projectHistoricalPromotionSuccess = (
+  record: JournalRecord,
+  event: HistoricalPromotionSuccessEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const intent = context.promotionIntents.get(event.correlation.requestId)
+  if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
+    return historicalFailure(
+      record,
+      "promotion success " + event.correlation.requestId + " has no exact promotion intent"
     )
   }
-  if (event._tag === "TargetPromotionAttemptIntended") {
-    const intent = context.promotionIntents.get(event.correlation.requestId)
-    if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
-      return historicalFailure(`promotion attempt ${event.correlation.requestId} has no exact promotion intent`)
-    }
-    const attemptKey = promotionAttemptKey(event.correlation.requestId, event.attemptOrdinal)
-    if (context.promotionAttemptIntents.has(attemptKey))
-      return historicalFailure(`duplicate promotion attempt ${attemptKey}`)
-    context.promotionAttemptIntents.set(attemptKey, event)
-    return Effect.succeed(
-      TargetPromotionAttemptRequested.make({
-        attemptOrdinal: event.attemptOrdinal,
-        correlation: event.correlation,
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        reason: event.reason,
-        recordedAt: record.position,
-        runId: record.runId
-      })
+  if (!promotionTerminalIntentIsValid(context, event.correlation.requestId, event.basis)) {
+    return historicalFailure(
+      record,
+      "promotion success " + event.correlation.requestId + " has no exact attempt intent"
     )
   }
-  if (event._tag === "TargetPromotionObservedSuccess") {
-    const intent = context.promotionIntents.get(event.correlation.requestId)
-    if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
-      return historicalFailure(`promotion success ${event.correlation.requestId} has no exact promotion intent`)
-    }
-    if (
-      event.basis._tag === "AfterAttempt" &&
-      !context.promotionAttemptIntents.has(promotionAttemptKey(event.correlation.requestId, event.basis.attemptOrdinal))
-    ) {
-      return historicalFailure(`promotion success ${event.correlation.requestId} has no exact attempt intent`)
-    }
-    return Effect.succeed(
-      TargetPromotionSucceeded.make({
-        basis: event.basis,
-        correlation: event.correlation,
-        occurrenceClassification: "NonActionOccurrence",
-        observation: event.observation,
-        recordedAt: record.position,
-        runId: record.runId
-      })
+  return Effect.succeed(
+    TargetPromotionSucceeded.make({
+      basis: event.basis,
+      correlation: event.correlation,
+      occurrenceClassification: "NonActionOccurrence",
+      observation: event.observation,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPromotionStale = (
+  record: JournalRecord,
+  event: HistoricalPromotionStaleEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const intent = context.promotionIntents.get(event.correlation.requestId)
+  if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
+    return historicalFailure(
+      record,
+      "promotion stale result " + event.correlation.requestId + " has no exact promotion intent"
     )
   }
-  if (event._tag === "TargetPromotionStale") {
-    const intent = context.promotionIntents.get(event.correlation.requestId)
-    if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
-      return historicalFailure(`promotion stale result ${event.correlation.requestId} has no exact promotion intent`)
-    }
-    if (
-      event.basis._tag === "AfterAttempt" &&
-      !context.promotionAttemptIntents.has(promotionAttemptKey(event.correlation.requestId, event.basis.attemptOrdinal))
-    ) {
-      return historicalFailure(`promotion stale result ${event.correlation.requestId} has no exact attempt intent`)
-    }
-    return Effect.succeed(
-      TargetPromotionStale.make({
-        basis: event.basis,
-        correlation: event.correlation,
-        occurrenceClassification: "NonActionOccurrence",
-        observation: event.observation,
-        recordedAt: record.position,
-        runId: record.runId
-      })
+  if (!promotionTerminalIntentIsValid(context, event.correlation.requestId, event.basis)) {
+    return historicalFailure(
+      record,
+      "promotion stale result " + event.correlation.requestId + " has no exact attempt intent"
     )
   }
-  if (event._tag === "TargetPromotionNonConvergence") {
-    const intent = context.promotionIntents.get(event.correlation.requestId)
-    if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
-      return historicalFailure(`promotion non-convergence ${event.correlation.requestId} has no exact promotion intent`)
-    }
-    if (
-      event.attemptOrdinal !== event.attemptLimit ||
-      !context.promotionAttemptIntents.has(promotionAttemptKey(event.correlation.requestId, event.attemptOrdinal))
-    ) {
-      return historicalFailure(`promotion non-convergence ${event.correlation.requestId} has no exact attempt intent`)
-    }
-    return Effect.succeed(
-      TargetPromotionNonConvergent.make({
-        attemptLimit: event.attemptLimit,
-        attemptOrdinal: event.attemptOrdinal,
-        correlation: event.correlation,
-        lastObservation: event.lastObservation,
-        occurrenceClassification: "NonActionOccurrence",
-        recordedAt: record.position,
-        runId: record.runId
-      })
+  return Effect.succeed(
+    TargetPromotionStale.make({
+      basis: event.basis,
+      correlation: event.correlation,
+      occurrenceClassification: "NonActionOccurrence",
+      observation: event.observation,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPromotionNonConvergence = (
+  record: JournalRecord,
+  event: HistoricalPromotionNonConvergenceEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const intent = context.promotionIntents.get(event.correlation.requestId)
+  if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
+    return historicalFailure(
+      record,
+      "promotion non-convergence " + event.correlation.requestId + " has no exact promotion intent"
     )
   }
+  if (
+    event.attemptOrdinal !== event.attemptLimit ||
+    !promotionAttemptIsRecorded(context, event.correlation.requestId, event.attemptOrdinal)
+  ) {
+    return historicalFailure(
+      record,
+      "promotion non-convergence " + event.correlation.requestId + " has no exact attempt intent"
+    )
+  }
+  return Effect.succeed(
+    TargetPromotionNonConvergent.make({
+      attemptLimit: event.attemptLimit,
+      attemptOrdinal: event.attemptOrdinal,
+      correlation: event.correlation,
+      lastObservation: event.lastObservation,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPromotion = (
+  record: JournalRecord,
+  event: HistoricalPromotionEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  if (event._tag === "TargetPromotionIntended") return projectHistoricalPromotionRequested(record, event, context)
+  if (event._tag === "TargetPromotionAttemptIntended") return projectHistoricalPromotionAttempt(record, event, context)
+  if (event._tag === "TargetPromotionObservedSuccess") return projectHistoricalPromotionSuccess(record, event, context)
+  if (event._tag === "TargetPromotionStale") return projectHistoricalPromotionStale(record, event, context)
+  return projectHistoricalPromotionNonConvergence(record, event, context)
+}
+
+const projectHistoricalBoundary = (
+  record: JournalRecord,
+  event: HistoricalBoundaryEvent
+): HistoricalProjectionResult => {
   if (event._tag === "IntegrationQuarantined") {
     return Effect.succeed(
       IntegrationQuarantined.make({
@@ -1350,21 +1637,25 @@ const projectHistoricalOccurrence = (
       })
     )
   }
-  if (event._tag === "IntegrationQuarantineDirectionApplied") {
+  return Effect.succeed(
+    IntegrationQuarantineDirectionApplied.make({
+      fingerprint: event.fingerprint,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      requestId: event.requestId,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalFinalityStep = (
+  record: JournalRecord,
+  event: HistoricalFinalityStepEvent
+): HistoricalProjectionResult => {
+  if (isHistoricalFocusedCompletionJournalEvent(event)) {
     return Effect.succeed(
-      IntegrationQuarantineDirectionApplied.make({
-        fingerprint: event.fingerprint,
-        initiatedBy: event.initiatedBy,
-        occurrenceClassification: event.occurrenceClassification,
-        recordedAt: record.position,
-        requestId: event.requestId,
-        runId: record.runId
-      })
-    )
-  }
-  if (isHistoricalFinalityJournalEvent(event)) {
-    return Effect.succeed(
-      IntegrationFinalityOccurred.make({
+      IntegrationFocusedCompletionOccurred.make({
         event,
         occurrenceClassification: "NonActionOccurrence",
         recordedAt: record.position,
@@ -1372,9 +1663,49 @@ const projectHistoricalOccurrence = (
       })
     )
   }
-  return Effect.void
+  if (isHistoricalClaimReplacementJournalEvent(event)) {
+    return Effect.succeed(
+      IntegrationClaimReplacementOccurred.make({
+        event,
+        occurrenceClassification: "NonActionOccurrence",
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
+  }
+  if (isHistoricalClaimDeletionJournalEvent(event)) {
+    return Effect.succeed(
+      IntegrationClaimDeletionOccurred.make({
+        event,
+        occurrenceClassification: "NonActionOccurrence",
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
+  }
+  return Effect.succeed(
+    IntegrationFinalitySettledOccurred.make({
+      event,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
 }
 
+const projectHistoricalOccurrence = (
+  record: JournalRecord,
+  event: HistoricalJournalEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  if (isHistoricalTaskClaimEvent(event)) return projectHistoricalTaskClaim(record, event, context)
+  if (isHistoricalAttemptWorktreeEvent(event)) return projectHistoricalAttemptWorktree(record, event, context)
+  if (isHistoricalIntegratorEvent(event)) return projectHistoricalIntegrator(record, event, context)
+  if (isHistoricalPromotionEvent(event)) return projectHistoricalPromotion(record, event, context)
+  if (isHistoricalBoundaryEvent(event)) return projectHistoricalBoundary(record, event)
+  if (isHistoricalFinalityStepEvent(event)) return projectHistoricalFinalityStep(record, event)
+  return Effect.void
+}
 type TrackerReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerReadIntentRecorded" }>
 type GitReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "GitReadIntentRecorded" }>
 type GitObservationJournalEvent = Extract<
@@ -1657,7 +1988,6 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
     integratorSessions: new Map<string, IntegratorSessionJournalEvent>(),
     promotionAttemptIntents: new Map<string, TargetPromotionAttemptIntendedEvent>(),
     promotionIntents: new Map<string, TargetPromotionIntendedEvent>(),
-    taskAttemptPlans: new Map<string, TaskAttemptPlannedJournalEvent>(),
     taskClaimAcquisitionIntents: new Map<string, TaskClaimAcquisitionJournalEvent>(),
     taskClaimReleaseIntents: new Map<string, TaskClaimReleaseJournalEvent>(),
     taskWorktreeIntents: new Map<string, typeof WorkflowOperation.cases.ReconcileTaskWorktree.Type>()

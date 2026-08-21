@@ -8,6 +8,7 @@ const applicationExitCassette = "application-exit:drainFailure"
 const codexExecutorCassette = "codex-executor:lostTurnResponseReconciled"
 const framedCassette = "authored:dependentTasksCompleteInOneRun"
 const acceptedIntegrationCassette = "authored:acceptedResultRestartsIntoIntegration"
+const targetPromotionCassette = "authored:targetPromotionSuccess"
 const linkedDeliveryStoryCassette = "authored:deliveryInvariantStory"
 
 const selectCassette = async (page, catalogKey) => {
@@ -605,6 +606,41 @@ try {
   assert.ok(narrowInstrument.cells > 0)
   await page.setViewportSize({ width: 1440, height: 900 })
   console.log("✓ shows the accepted result enter and start its journal-derived integration order")
+
+  await page.reload({ waitUntil: "networkidle" })
+  await selectCassette(page, targetPromotionCassette)
+  await page.getByRole("button", { name: /Run selected cassette:/u }).click()
+  await page.waitForFunction(
+    (catalogKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === catalogKey
+      && document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Completed",
+    targetPromotionCassette,
+    { timeout: terminalTimeoutMs }
+  )
+  const targetTracePanel = page.locator('[data-role="trace-history"]')
+  const targetTraceSelector = targetTracePanel.locator('[data-role="trace-cursor-selector"]')
+  const targetTraceCount = await targetTraceSelector.locator("option").count()
+  assert.ok(targetTraceCount > 0, "The target-promotion cassette must expose committed trace cursors")
+  await targetTraceSelector.selectOption(String(targetTraceCount - 1))
+  const exactFacetTexts = await targetTracePanel.locator('[data-role="trace-facet-exact"] pre').allTextContents()
+  assert.ok(
+    exactFacetTexts.some((value) => /"candidateCommit":"[0-9a-f]{40}"/u.test(value) && value.includes('"directParents"')),
+    "The Lab browser surface must render the exact candidate commit and H/C parents"
+  )
+  assert.ok(
+    exactFacetTexts.some((value) => value.includes('"sessionId"')
+      && /"expectedTargetHead":"[0-9a-f]{40}"/u.test(value)
+      && value.includes('"acceptedResult"')),
+    "The Lab browser surface must render exact session, H, and accepted C values"
+  )
+  assert.ok(
+    exactFacetTexts.some((value) => /"requestId":"target-promotion:/u.test(value)),
+    "The Lab browser surface must render the exact promotion correlation"
+  )
+  assert.ok(
+    exactFacetTexts.some((value) => /"source":\{"runId":"[^"]+","position":[0-9]+\}/u.test(value)),
+    "The Lab browser surface must render exact facet source identity"
+  )
+  console.log("✓ renders exact H/C/session/candidate/correlation/source trace facets")
 
   await page.reload({ waitUntil: "networkidle" })
   await selectCassette(page, linkedDeliveryStoryCassette)

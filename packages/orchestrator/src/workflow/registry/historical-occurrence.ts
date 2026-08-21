@@ -37,7 +37,25 @@ import {
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId
 } from "../protocols/integration-quarantine/events.js"
-import { IntegrationFinalityJournalEvent } from "../protocols/integration-finality/events.js"
+import {
+  CompletionClaimDeletedEvent,
+  CompletionClaimDeletionAttemptIntendedEvent,
+  CompletionClaimDeletionIntendedEvent,
+  CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimReplacedEvent,
+  CompletionClaimReplacementAttemptIntendedEvent,
+  CompletionClaimReplacementIntendedEvent,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskAttemptIntendedEvent,
+  CompletionTaskCandidateAncestryObservedEvent,
+  CompletionTaskCandidateAncestryReadIntendedEvent,
+  CompletionTaskIntendedEvent,
+  CompletionTaskRejectedEvent,
+  CompletionTaskRequestLookupIntendedEvent,
+  CompletionTaskRequestLookupObservedEvent,
+  CompletionTaskResponseLostEvent,
+  IntegrationFinalitySettledEvent
+} from "../protocols/integration-finality/events.js"
 
 const successorGeneration = 2 as const // eslint-disable-line no-magic-numbers
 
@@ -297,20 +315,78 @@ export const IntegrationQuarantineDirectionApplied = Schema.TaggedStruct("Integr
 })
 export type IntegrationQuarantineDirectionApplied = typeof IntegrationQuarantineDirectionApplied.Type
 
-/** One exact finality event retained without collapsing completion, cleanup, or settlement. */
-export const IntegrationFinalityOccurred = Schema.TaggedStruct("IntegrationFinalityOccurred", {
-  event: IntegrationFinalityJournalEvent,
+/** One focused task-completion occurrence retained with its own semantic facet. */
+export const IntegrationFocusedCompletionOccurred = Schema.TaggedStruct("IntegrationFocusedCompletionOccurred", {
+  event: Schema.Union([
+    CompletionTaskAcknowledgedEvent,
+    CompletionTaskAttemptIntendedEvent,
+    CompletionTaskCandidateAncestryObservedEvent,
+    CompletionTaskCandidateAncestryReadIntendedEvent,
+    CompletionTaskIntendedEvent,
+    CompletionTaskRejectedEvent,
+    CompletionTaskRequestLookupIntendedEvent,
+    CompletionTaskRequestLookupObservedEvent,
+    CompletionTaskResponseLostEvent
+  ]),
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),
   recordedAt: JournalPosition,
   runId: RunId
 })
+export type IntegrationFocusedCompletionOccurred = typeof IntegrationFocusedCompletionOccurred.Type
+
+/** One exact completion-claim replacement occurrence retained as a replacement step. */
+export const IntegrationClaimReplacementOccurred = Schema.TaggedStruct("IntegrationClaimReplacementOccurred", {
+  event: Schema.Union([
+    CompletionClaimReplacedEvent,
+    CompletionClaimReplacementAttemptIntendedEvent,
+    CompletionClaimReplacementIntendedEvent
+  ]),
+  occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type IntegrationClaimReplacementOccurred = typeof IntegrationClaimReplacementOccurred.Type
+
+/** One exact completion-claim deletion occurrence retained as a deletion step. */
+export const IntegrationClaimDeletionOccurred = Schema.TaggedStruct("IntegrationClaimDeletionOccurred", {
+  event: Schema.Union([
+    CompletionClaimDeletedEvent,
+    CompletionClaimDeletionAttemptIntendedEvent,
+    CompletionClaimDeletionIntendedEvent,
+    CompletionClaimDeletionReadObservedEvent
+  ]),
+  occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type IntegrationClaimDeletionOccurred = typeof IntegrationClaimDeletionOccurred.Type
+
+/** One exact task-integration settlement occurrence retained as settlement evidence. */
+export const IntegrationFinalitySettledOccurred = Schema.TaggedStruct("IntegrationFinalitySettledOccurred", {
+  event: IntegrationFinalitySettledEvent,
+  occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type IntegrationFinalitySettledOccurred = typeof IntegrationFinalitySettledOccurred.Type
+
+/** Every finality occurrence is one of the semantic completion, replacement, deletion, or settlement variants. */
+export const IntegrationFinalityOccurred = Schema.Union([
+  IntegrationClaimDeletionOccurred,
+  IntegrationClaimReplacementOccurred,
+  IntegrationFinalitySettledOccurred,
+  IntegrationFocusedCompletionOccurred
+])
 export type IntegrationFinalityOccurred = typeof IntegrationFinalityOccurred.Type
 
 /** Every historical occurrence added by #81/#82 remains in one closed union. */
 export const HistoricalWorkflowOccurrence = Schema.Union([
   AttemptImplementationAbandoned,
   AttemptStoppageIntended,
-  IntegrationFinalityOccurred,
+  IntegrationClaimDeletionOccurred,
+  IntegrationClaimReplacementOccurred,
+  IntegrationFinalitySettledOccurred,
+  IntegrationFocusedCompletionOccurred,
   IntegrationProviderRunActivityAbsent,
   IntegrationQuarantineDirectionApplied,
   IntegrationQuarantined,

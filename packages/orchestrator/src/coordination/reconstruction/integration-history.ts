@@ -11,7 +11,11 @@ import {
   acceptedResultEquivalence,
   integrationResponsibilityEquivalence
 } from "../../workflow/protocols/integration-admission/responsibility.js"
-import { invalidTargetPromotionHistory, type TargetPromotionHistoryIndexes } from "./target-promotion-history.js"
+import {
+  invalidTargetPromotionHistory,
+  makeTargetPromotionHistoryIndexes,
+  type TargetPromotionHistoryIndexes
+} from "./target-promotion-history.js"
 import { setMapValue } from "./integration-history-run-binding.js"
 import { type IntegratorHistoryIndexes, validateIntegratorHistoryEvent } from "./integrator-history.js"
 import { deriveIntegrationQuarantineState } from "../../workflow/protocols/integration-quarantine/state.js"
@@ -20,7 +24,7 @@ import { validateProviderRunActivityAbsent } from "../../workflow/protocols/inte
 export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
   readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
   readonly acceptedExecutorResultPositions: Map<AttemptId, JournalPosition>
-  readonly executorResponsibilitiesBegan: ReadonlyMap<
+  readonly executorResponsibilitiesBegan: Map<
     AttemptId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >
@@ -35,6 +39,29 @@ export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
   readonly firstRestartChoiceAppliedAt: Map<AttemptId, JournalPosition>
   readonly targetPromotionHistory: TargetPromotionHistoryIndexes
 }
+
+/** Creates one fresh in-memory index for validating a trace prefix. */
+export const makeIntegrationHistoryIndexes = (): IntegrationHistoryIndexes => ({
+  acceptedExecutorResults: new Map(),
+  acceptedExecutorResultPositions: new Map(),
+  executorResponsibilitiesBegan: new Map(),
+  integrationResponsibilitiesBegan: new Map(),
+  integrationStarted: new Map(),
+  firstRestartChoiceAppliedAt: new Map(),
+  targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
+  targetLineageReadIntents: new Map(),
+  targetLineageObservations: new Map(),
+  integratorSessionFixed: new Map(),
+  integratorSessionsByStartedAt: new Map(),
+  integratorSessionsBySessionId: new Map(),
+  integratorSessionsByCandidateResource: new Map(),
+  integratorSuccessorSessionFixed: new Map(),
+  integratorSuccessorSessionsByPredecessor: new Map(),
+  integratorRunStarted: new Map(),
+  integratorRunResults: new Map(),
+  integratorRunCandidateGitReadIntents: new Map(),
+  integratorRunCandidateGitObservations: new Map()
+})
 
 const invalidResponsibilityBeginning = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" }>,

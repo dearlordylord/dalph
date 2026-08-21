@@ -71,6 +71,14 @@ const appendText = <K extends keyof HTMLElementTagNameMap>(
   return element
 }
 
+const appendExactJson = (parent: HTMLElement, label: string, value: unknown, role?: string): void => {
+  const details = document.createElement("details")
+  if (role !== undefined) details.dataset.role = role
+  appendText(details, "summary", label)
+  appendText(details, "pre", JSON.stringify(value, null, 2) ?? String(value))
+  parent.append(details)
+}
+
 const appendSourceMarkup = (parent: HTMLElement, source: string): void => {
   const calls = new Set([
     "Effect.gen",
@@ -1077,11 +1085,14 @@ const renderProductionTraceHistory = (
     appendText(itemsHost, "h5", `Workflow history items · ${history.items.length}`)
     const itemList = document.createElement("ul")
     for (const item of history.items) {
-      appendText(
+      const historyItem = appendText(
         itemList,
         "li",
         `Run ${item.identity.runId} · journal position ${item.identity.position} · ${item.occurrence._tag} · operations ${item.operationIds.length === 0 ? "none" : item.operationIds.join(", ")}`
       )
+      historyItem.dataset.runId = item.identity.runId
+      historyItem.dataset.journalPosition = String(item.identity.position)
+      appendExactJson(historyItem, "Exact projected occurrence", item.occurrence, "trace-history-item-exact")
     }
     if (history.items.length === 0) appendText(itemList, "li", "No projected workflow occurrence is visible at this cursor.")
     itemsHost.append(itemList)
@@ -1095,16 +1106,40 @@ const renderProductionTraceHistory = (
     const facetList = document.createElement("ul")
     facetList.dataset.role = "trace-facet-list"
     for (const gap of history.facets.recovery.observationGaps) {
-      appendText(facetList, "li", `Recovery gap · ${gap._tag} · source journal ${gap.action.position}`)
+      const item = appendText(facetList, "li", `Recovery gap · ${gap._tag} · source journal ${gap.action.position}`)
+      item.dataset.facetTag = gap._tag
+      item.dataset.sourceRunId = gap.action.runId
+      item.dataset.sourcePosition = String(gap.action.position)
+      appendExactJson(item, "Exact recovery gap", gap, "trace-facet-exact")
     }
     for (const retained of history.facets.recovery.retainedResponsibilities) {
-      appendText(facetList, "li", `Retained responsibility · ${retained._tag} · source journal ${retained.source.position}`)
+      const item = appendText(
+        facetList,
+        "li",
+        `Retained responsibility · ${retained._tag} · source journal ${retained.source.position}`
+      )
+      item.dataset.facetTag = retained._tag
+      item.dataset.sourceRunId = retained.source.runId
+      item.dataset.sourcePosition = String(retained.source.position)
+      appendExactJson(item, "Exact retained responsibility", retained, "trace-facet-exact")
     }
     for (const disposition of history.facets.recovery.preservationDispositions) {
-      appendText(facetList, "li", `Preservation disposition · ${disposition._tag} · source journal ${disposition.source.position}`)
+      const item = appendText(
+        facetList,
+        "li",
+        `Preservation disposition · ${disposition._tag} · source journal ${disposition.source.position}`
+      )
+      item.dataset.facetTag = disposition._tag
+      item.dataset.sourceRunId = disposition.source.runId
+      item.dataset.sourcePosition = String(disposition.source.position)
+      appendExactJson(item, "Exact preservation disposition", disposition, "trace-facet-exact")
     }
     for (const fact of history.facets.integration.facts) {
-      appendText(facetList, "li", `Integration fact · ${fact._tag} · source journal ${fact.source.position}`)
+      const item = appendText(facetList, "li", `Integration fact · ${fact._tag} · source journal ${fact.source.position}`)
+      item.dataset.facetTag = fact._tag
+      item.dataset.sourceRunId = fact.source.runId
+      item.dataset.sourcePosition = String(fact.source.position)
+      appendExactJson(item, "Exact integration fact", fact, "trace-facet-exact")
     }
     if (facetList.childElementCount === 0) appendText(facetList, "li", "No recovery or integration facet is visible at this cursor.")
     facetsHost.append(facetList)

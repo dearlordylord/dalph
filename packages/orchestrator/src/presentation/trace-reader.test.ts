@@ -8,6 +8,7 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -56,6 +57,11 @@ import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
 } from "../workflow/protocols/integration-admission/events.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../workflow/protocols/planned-attempt-executor-work/events.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import {
   makeTaskClaimAcquisitionOperation,
@@ -168,6 +174,26 @@ const appendIntegrationStart = Effect.fn("TraceReaderTest.appendIntegrationStart
 ) {
   yield* journal.append(
     runId,
+    JournalRecordKey.make("executor-responsibility-began"),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt: integrationPlannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    runId,
+    JournalRecordKey.make("executor-report-accepted"),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        correlation: { attemptId: integrationPlannedAttempt.attemptId, runId },
+        result: { _tag: "Accepted", acceptedResult: integrationAcceptedResult }
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    runId,
     integrationResponsibilityBeganRecordKey(integrationPlannedAttempt.attemptId),
     IntegrationResponsibilityBeganEvent.make({
       acceptedResult: integrationAcceptedResult,
@@ -183,7 +209,7 @@ const appendIntegrationStart = Effect.fn("TraceReaderTest.appendIntegrationStart
       acceptedResult: integrationAcceptedResult,
       integrationTarget,
       plannedAttempt: integrationPlannedAttempt,
-      responsibilityBeganAt: JournalPosition.make(2),
+      responsibilityBeganAt: JournalPosition.make(4),
       version: workflowJournalEventVersion
     })
   )
@@ -328,12 +354,12 @@ it.effect("keeps process-local integration serialization separate from other tra
     yield* appendIntegrationStart(journal)
 
     const reader = yield* TraceReader
-    const view = yield* readTraceAt(reader, TraceCursor.make({ position: JournalPosition.make(3), runId }))
+    const view = yield* readTraceAt(reader, TraceCursor.make({ position: JournalPosition.make(5), runId }))
 
     expect(view.relationships.processLocalResourceSerializations).toEqual([
       {
-        earlier: { position: JournalPosition.make(2), runId },
-        later: { position: JournalPosition.make(3), runId },
+        earlier: { position: JournalPosition.make(4), runId },
+        later: { position: JournalPosition.make(5), runId },
         target: integrationTarget
       }
     ])

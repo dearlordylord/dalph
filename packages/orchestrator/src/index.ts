@@ -438,8 +438,12 @@ export {
 export {
   AttemptImplementationAbandoned,
   AttemptStoppageIntended,
+  IntegrationClaimDeletionOccurred,
+  IntegrationClaimReplacementOccurred,
   HistoricalWorkflowOccurrence,
   IntegrationFinalityOccurred,
+  IntegrationFinalitySettledOccurred,
+  IntegrationFocusedCompletionOccurred,
   IntegrationProviderRunActivityAbsent,
   IntegrationQuarantineDirectionApplied,
   IntegrationQuarantined,

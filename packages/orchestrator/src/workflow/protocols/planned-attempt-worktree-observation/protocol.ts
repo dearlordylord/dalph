@@ -12,6 +12,8 @@ import {
   WorktreeBaseMismatch
 } from "../../../authorities/git/worktree.js"
 
+export { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
+
 /** Git no longer registers the exact worktree previously proven ready for this planned attempt. */
 export const AttemptWorktreeLost = Schema.TaggedStruct("AttemptWorktreeLost", { plannedAttempt: PlannedTaskAttempt })
 export type AttemptWorktreeLost = typeof AttemptWorktreeLost.Type

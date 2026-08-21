@@ -907,6 +907,53 @@ await scenario("selects exact production cursors for Lab back/forward history wh
   assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex]?.cursor.position), "Forward must restore the exact later production cursor")
 })
 
+await scenario("renders exact trace facet payloads and source correlations in the Lab", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:targetPromotionSuccess"
+  )
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+    throw new Error("The integration trace fixture is missing")
+  }
+  const latest = result.traceHistories.at(-1)
+  if (latest === undefined) throw new Error("The integration trace has no terminal cursor")
+  const candidate = latest.facets.integration.facts.find((fact) => fact._tag === "CandidateQualification")
+  const session = latest.facets.integration.facts.find((fact) => fact._tag === "Session")
+  const promotion = latest.facets.integration.facts.find((fact) => fact._tag === "PromotionAttempt")
+  if (candidate?._tag !== "CandidateQualification" || session?._tag !== "Session" || promotion?._tag !== "PromotionAttempt") {
+    throw new Error("The integration trace fixture has no exact candidate, session, and promotion facts")
+  }
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const panel = document.querySelector<HTMLElement>("[data-role='trace-history']")
+  const selector = panel?.querySelector<HTMLSelectElement>("[data-role='trace-cursor-selector']")
+  if (panel === null || panel === undefined || selector === null || selector === undefined) {
+    throw new Error("The exact production trace panel is missing")
+  }
+  chooseOption(selector, String(result.traceHistories.length - 1))
+  const exactFacts = [...panel.querySelectorAll<HTMLElement>("[data-role='trace-facet-exact'] pre")]
+    .map(({ textContent }) => textContent ?? "")
+    .join("\n")
+  const exactItems = [...panel.querySelectorAll<HTMLElement>("[data-role='trace-history-item-exact'] pre")]
+    .map(({ textContent }) => textContent ?? "")
+    .join("\n")
+  for (const expected of [
+    candidate.candidateCommit,
+    candidate.run.session.expectedTargetHead,
+    candidate.run.session.acceptedResult.commit,
+    candidate.run.session.sessionId,
+    promotion.correlation.requestId,
+    session.source.runId,
+    String(session.source.position)
+  ]) {
+    assert(exactFacts.includes(String(expected)), `The Lab must render exact trace value ${String(expected)}`)
+  }
+  assert(exactItems.includes(String(candidate.candidateCommit)), "Exact projected occurrences must retain candidate payloads")
+})
+
 await scenario("fails visibly when a displayed production predecessor is not projected", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
