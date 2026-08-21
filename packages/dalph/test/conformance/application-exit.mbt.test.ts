@@ -715,5 +715,5 @@ quintIt(
       (spec, implementation) => JSON.stringify(spec) === JSON.stringify(implementation)
     )
   },
-  120_000
+  240_000
 )

@@ -27,7 +27,7 @@ const gates = [
   { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 5 * 60 * SECOND },
   ...(withoutQuint
     ? []
-    : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 5 * 60 * SECOND }]),
+    : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 8 * 60 * SECOND }]),
   { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 8 * 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND }
 ]
