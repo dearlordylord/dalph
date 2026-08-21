@@ -195,6 +195,7 @@ const SpecProjection = Schema.Struct({
       targetSettled: Schema.Boolean,
       graphOutcome: GraphOutcome,
       contentIdentity: TrackerContentIdentityVariant,
+      observationPosition: ITFBigInt,
       rootTaskId: TaskIdVariant
     }),
     process: Schema.Struct({
@@ -392,6 +393,7 @@ interface DriverProjection {
   readonly terminalDisposition: TerminalDispositionTag
   readonly graphOutcome: GraphOutcomeTag
   readonly trackerContentIdentity: TrackerContentIdentityTag
+  readonly trackerObservationPosition: number
   readonly trackerRootTaskId: TaskIdTag
   readonly trackerCalls: number
   readonly trackerSettled: boolean
@@ -478,6 +480,15 @@ const makeRunActivationDriverImplementation = () => {
   let ambiguousExecutorProjectionAvailable = false
   let executorCommandCalls = 0
   let executorProjectionCalls = 0
+
+  const proofHasExactDurableObservation = (proof: RunFinalityProof): boolean =>
+    "evidence" in proof &&
+    records.some(
+      ({ event, position }) =>
+        position === proof.evidence.observedAt &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId === proof.evidence.operationId
+    )
 
   const append = (eventRunId: RunId, key: JournalRecordKey, event: JournalRecord["event"]): JournalRecord => {
     const selected = eventRunId === runId ? records : otherRecords
@@ -1100,7 +1111,8 @@ const makeRunActivationDriverImplementation = () => {
                       exactTaskIdSetKey(proof.evidence.coverage.explicitlyCoveredTaskIds) !==
                         exactTaskIdSetKey(proof.evidence.readShape.explicitlyCoveredTaskIds) ||
                       exactTaskIdSetKey(proof.evidence.readShape.explicitlyCoveredTaskIds) !== exactTaskIdSetKey([]) ||
-                      proof.evidence.contentIdentity !== snapshotForGraphOutcome(graphOutcome).revision
+                      proof.evidence.contentIdentity !== snapshotForGraphOutcome(graphOutcome).revision ||
+                      !proofHasExactDurableObservation(proof)
                     )
                       return yield* Effect.die("terminal classification lacked exact graph identity evidence")
                     const disposition = proof.disposition
@@ -1544,6 +1556,15 @@ const makeRunActivationDriverImplementation = () => {
         terminalDisposition,
         graphOutcome,
         trackerContentIdentity,
+        // Quint's position 17 is a representative exact position. Map the
+        // production position to it only when the proof points at its precise
+        // durable tracker observation; a broken correlation remains visible.
+        trackerObservationPosition:
+          finalityProof === undefined ||
+          !("evidence" in finalityProof) ||
+          proofHasExactDurableObservation(finalityProof)
+            ? 17
+            : -1,
         trackerRootTaskId,
         trackerCalls,
         trackerSettled
@@ -1697,6 +1718,7 @@ quintIt(
               terminalDisposition: state.process.terminalDisposition.tag,
               graphOutcome: state.trackerFinality.graphOutcome.tag,
               trackerContentIdentity: state.trackerFinality.contentIdentity.tag,
+              trackerObservationPosition: Number(state.trackerFinality.observationPosition),
               trackerRootTaskId: state.trackerFinality.rootTaskId.tag
             })
           ),
@@ -1734,6 +1756,7 @@ quintIt(
         spec.terminalDisposition === implementation.terminalDisposition &&
         spec.graphOutcome === implementation.graphOutcome &&
         spec.trackerContentIdentity === implementation.trackerContentIdentity &&
+        spec.trackerObservationPosition === implementation.trackerObservationPosition &&
         spec.trackerRootTaskId === implementation.trackerRootTaskId &&
         spec.trackerCalls === implementation.trackerCalls &&
         spec.trackerSettled === implementation.trackerSettled
