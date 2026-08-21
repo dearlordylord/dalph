@@ -166,8 +166,8 @@ const candidatePredecessor = IntegratorSessionCorrelation.make({
   plannedAttempt: attempt,
   queuedAt: JournalPosition.make(2),
   sessionId: IntegratorSessionId.make("session:issue-69-recovery-p1"),
-  startedAt: JournalPosition.make(6),
-  targetLineageObservedAt: JournalPosition.make(4)
+  startedAt: JournalPosition.make(3),
+  targetLineageObservedAt: JournalPosition.make(5)
 })
 const candidateSuccessor = IntegratorSessionCorrelation.make({
   ...candidatePredecessor,
@@ -185,7 +185,7 @@ const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   }),
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
-  observationAt: JournalPosition.make(4),
+  observationAt: JournalPosition.make(5),
   observationOperationId: OperationId.make("session:issue-69-recovery-p1:predecessor-lineage"),
   operationId: OperationId.make("disposition-cleanup:integrator-candidate:session:issue-69-recovery-p1"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
@@ -553,7 +553,12 @@ const candidateMaintainedSource = Effect.scoped(
       FixtureTarget.make("issue-69-candidate-recovery-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    yield* appendCandidateProvenance(candidatePredecessor, candidateSuccessor, "issue-69-recovery-full-rerun")
+    yield* appendCandidateProvenance(
+      candidatePredecessor,
+      candidateSuccessor,
+      "issue-69-recovery-full-rerun",
+      "StartupValid"
+    )
     yield* runIntegratorCandidateCleanup(candidateAuthorization)
     yield* runIntegratorCandidateCleanup(candidateAuthorization)
     const records = yield* journal.read(runId)
