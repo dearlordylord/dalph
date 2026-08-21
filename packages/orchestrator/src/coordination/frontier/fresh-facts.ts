@@ -1,6 +1,7 @@
 import { Data } from "effect"
 import {
   type IntegrationTarget,
+  type PlannedTaskAttempt,
   type TaskId,
   type TaskRevision,
   type PlannedAttemptExecutorCorrelation,
@@ -8,6 +9,7 @@ import {
 } from "@dalph/contracts"
 import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type {
+  CancelledAttemptTaskClaimReleaseOperation,
   StoppedAttemptTaskClaimReleaseOperation,
   WorkflowOperation,
   WorkflowTaskClaimReleaseOperation
@@ -15,7 +17,11 @@ import type {
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
+import type {
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject,
+  AttemptQuiescenceProof
+} from "../../workflow/protocols/attempt-choice/events.js"
 import type {
   AttemptRestartRejectedReason,
   AttemptRestartWaitReason
@@ -48,6 +54,33 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly subject: AttemptChoiceSubject
   }
   AttemptStoppageWait: { readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable" }
+  /** Cancellation has proved exact executor quiescence; relinquishment is the next durable action. */
+  CancelledAttemptRelinquishmentRequired: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly proof: AttemptQuiescenceProof
+  }
+  /** A post-relinquishment claim read proved an absent or foreign claim and must be journaled as no-release. */
+  CancelledAttemptClaimNoReleaseRequired: {
+    readonly observationOperationId: OperationId
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  CancelledAttemptClaimObservationRequired: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  CancelledAttemptClaimReleaseRequired: {
+    readonly operation: CancelledAttemptTaskClaimReleaseOperation
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  /** A post-intent tracker read kept the exact cancellation claim current, so release is retried. */
+  CancelledAttemptClaimReleaseRetryRequired: {
+    readonly operation: CancelledAttemptTaskClaimReleaseOperation
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  CancelledAttemptClaimReleasePending: { readonly operationId: OperationId }
+  CancelledAttemptClaimPlanningWait: { readonly reason: "FocusedObservationContradiction" | "TrackerTargetUnavailable" }
+  CancelledAttemptClaimUnreadableWait: { readonly observationOperationId: OperationId }
+  CancelledAttemptSettled: { readonly claimDisposition: "NoRelease" | "Released" }
   DependencyWait: { readonly prerequisiteTaskIds: ReadonlyArray<TaskId> }
   FinalOutcome: { readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed" }
   PlannedAttemptExecutorWorkSafelySuspended: { readonly correlation: PlannedAttemptExecutorCorrelation }
@@ -138,6 +171,15 @@ export type PlannedAttemptExecutorDisposition =
           | "AttemptRestartWait"
           | "AttemptStoppageExecutorObservationRequired"
           | "AttemptStoppageWait"
+          | "CancelledAttemptRelinquishmentRequired"
+          | "CancelledAttemptClaimNoReleaseRequired"
+          | "CancelledAttemptClaimObservationRequired"
+          | "CancelledAttemptClaimReleaseRequired"
+          | "CancelledAttemptClaimReleaseRetryRequired"
+          | "CancelledAttemptClaimReleasePending"
+          | "CancelledAttemptClaimPlanningWait"
+          | "CancelledAttemptClaimUnreadableWait"
+          | "CancelledAttemptSettled"
           | "StoppedAttemptClaimNoReleaseRequired"
           | "StoppedAttemptClaimObservationRequired"
           | "StoppedAttemptClaimReleaseRequired"
@@ -175,6 +217,15 @@ type WorkflowOperationDisposition = Exclude<
       | "AttemptRestartWait"
       | "AttemptStoppageExecutorObservationRequired"
       | "AttemptStoppageWait"
+      | "CancelledAttemptRelinquishmentRequired"
+      | "CancelledAttemptClaimNoReleaseRequired"
+      | "CancelledAttemptClaimObservationRequired"
+      | "CancelledAttemptClaimReleaseRequired"
+      | "CancelledAttemptClaimReleaseRetryRequired"
+      | "CancelledAttemptClaimReleasePending"
+      | "CancelledAttemptClaimPlanningWait"
+      | "CancelledAttemptClaimUnreadableWait"
+      | "CancelledAttemptSettled"
       | "StoppedAttemptClaimNoReleaseRequired"
       | "StoppedAttemptClaimObservationRequired"
       | "StoppedAttemptClaimReleaseRequired"

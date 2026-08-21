@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Run bootstrap keeps activation and its serialized operator controls in one ownership boundary. */
 import { type RunId } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -21,7 +22,7 @@ import {
 } from "../../workflow/protocols/integration-quarantine/control.js"
 import { ApplyIntegrationQuarantineDirectionRequest } from "../../workflow/protocols/integration-quarantine/events.js"
 import { ReadIntegrationQuarantineDirectionRequest } from "../../workflow/protocols/integration-quarantine/request.js"
-import { Journal, journalLayer } from "../delivery/journal.js"
+import { Journal, journalLayer, type JournalState } from "../delivery/journal.js"
 import {
   DeliveryRuntimeResources,
   deliveryRuntimeResourceCapabilitiesLayer,
@@ -29,11 +30,9 @@ import {
   type DeliveryRuntimeResourcesService
 } from "../delivery/delivery-runtime-resources.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
-import {
-  RunFinalityDecision,
-  type RunFinalityDecision as RunFinalityDecisionType,
-  type RunFinalityProof
-} from "../frontier/frontier.js"
+import { RunFinalityDecision, type RunFinalityProof } from "../frontier/frontier.js"
+import { runFinalityEvidenceMatches } from "../frontier/run-finality.js"
+import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory, ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import {
@@ -49,6 +48,7 @@ import { observePauseProgress } from "./pause-progress-observer.js"
 import {
   InRunJournal,
   type JournalAppendError,
+  type JournalError,
   type JournalReadError,
   JournalStore,
   RunLifecycleJournal
@@ -57,6 +57,13 @@ import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
 import { suspendRunningExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
+import {
+  AppliedRunCancellation,
+  ApplyRunCancellationRequest,
+  RunCancellationAppliedEvent
+} from "../../workflow/protocols/run-cancellation/events.js"
+import { runCancellationAppliedRecordKey } from "../../workflow-journal/record-key.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -104,6 +111,61 @@ type RuntimeControlState =
       readonly controls: RuntimeControls
       readonly drained: Deferred.Deferred<void>
     }
+
+type TerminalRunFinalityProof = Extract<RunFinalityProof, { readonly decision: { readonly _tag: "RunMayTerminate" } }>
+
+type TaskTrackerReadIntentEvent = Extract<
+  JournalState["records"][number]["event"],
+  { readonly _tag: "TaskTrackerReadIntentRecorded" }
+>
+type TrackerGraphReadOperation = Extract<TaskTrackerReadIntentEvent["operation"], { readonly _tag: "ReadTrackerGraph" }>
+type TrackerGraphReadIntentEvent = Omit<TaskTrackerReadIntentEvent, "operation"> & {
+  readonly operation: TrackerGraphReadOperation
+}
+
+const isTrackerGraphReadIntentEvent = (
+  event: JournalState["records"][number]["event"]
+): event is TrackerGraphReadIntentEvent =>
+  event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+
+const terminalGraphReadFor = (proof: TerminalRunFinalityProof, state: JournalState) => {
+  const graph = state.graph
+  let operation: TaskTrackerReadIntentEvent | undefined
+  for (const { event } of state.records) {
+    if (event._tag !== "TaskTrackerReadIntentRecorded") continue
+    if (event.operation.operationId !== proof.evidence.operationId) continue
+    operation = event
+    break
+  }
+  if (graph._tag !== "GraphEstablished") return undefined
+  if (operation === undefined) return undefined
+  /* v8 ignore next -- @preserve Production terminal evidence is generated only from the exact tracker-graph read operation. */
+  if (!isTrackerGraphReadIntentEvent(operation)) return undefined
+  return { graph, operation }
+}
+
+const terminalProofMatchesGraphRead = (
+  proof: TerminalRunFinalityProof,
+  runId: RunId,
+  target: TrackerTarget,
+  graphRead: ReturnType<typeof terminalGraphReadFor>
+): boolean => {
+  if (graphRead === undefined) return false
+  const rootTaskId = graphRead.graph.observation.snapshot.rootTaskId
+  /* v8 ignore next -- @preserve A production RunMayTerminate proof requires a tracker-selected root in its complete graph. */
+  if (rootTaskId === undefined) return false
+  return (
+    runFinalityEvidenceMatches(proof.evidence, {
+      operationId: graphRead.graph.observation.operationId,
+      observedAt: graphRead.graph.observation.recordedAt,
+      readShape: graphRead.operation.operation.readShape,
+      revision: graphRead.graph.observation.snapshot.revision,
+      rootTaskId,
+      runId,
+      target
+    }) && taskTrackerTargetKey(graphRead.operation.operation.target) === taskTrackerTargetKey(target)
+  )
+}
 
 const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
   runId: RunId,
@@ -283,19 +345,26 @@ export const journaledRunBootstrapLayer = (
               yield* closeControlAdmission()
               return yield* Exit.match(result, {
                 onFailure: Effect.failCause,
-                onSuccess: (proof) =>
+                onSuccess: (
+                  proof
+                ): Effect.Effect<{ readonly proof: RunFinalityProof; readonly state?: JournalState }, JournalError> =>
                   proof.decision._tag === "RunMustRemainActive"
-                    ? Effect.succeed(proof.decision)
+                    ? Effect.succeed({ proof })
                     : journal.state.get.pipe(
-                        Effect.map(({ records }) =>
-                          records.some(
+                        Effect.map((state) => {
+                          const changed = state.records.some(
                             ({ event, position }) =>
                               (proof.acceptedAt === null || position > proof.acceptedAt) &&
                               event._tag !== "TaskWorkCapacityChanged"
                           )
-                            ? RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-                            : proof.decision
-                        )
+                          const finalProof = changed
+                            ? {
+                                acceptedAt: proof.acceptedAt,
+                                decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+                              }
+                            : proof
+                          return { proof: finalProof, state }
+                        })
                       )
               })
             })
@@ -304,17 +373,32 @@ export const journaledRunBootstrapLayer = (
 
       const finish = Effect.fn("JournaledRunBootstrap.finish")(function* (
         runId: RunId,
-        finality: RunFinalityDecisionType
+        target: TrackerTarget,
+        result: { readonly proof: RunFinalityProof; readonly state?: JournalState }
       ) {
-        if (finality._tag !== "RunMayTerminate") return finality
+        const { proof, state } = result
+        if (proof.decision._tag !== "RunMayTerminate") return proof.decision
+        /* v8 ignore next -- @preserve runWithJournal always returns its final immutable state with the proof. */
+        if (state === undefined) return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+        /* v8 ignore next -- @preserve The RunFinalityProof union requires evidence whenever its decision may terminate. */
+        if (!("evidence" in proof)) {
+          return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+        }
+        const terminalProof = proof
+        const graphRead = terminalGraphReadFor(terminalProof, state)
+        if (!terminalProofMatchesGraphRead(terminalProof, runId, target, graphRead)) {
+          return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+        }
         const owner = yield* admission.acquireForwardOwner("AuthorizedRunTerminationAppend").pipe(Effect.option)
         if (Option.isNone(owner)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
-        yield* observeProducedWrite(`terminate:${runId}`, "terminate", lifecycle.terminateRun(runId)).pipe(
-          Effect.ensuring(owner.value.release)
-        )
-        return finality
+        yield* observeProducedWrite(
+          `terminate:${runId}`,
+          "terminate",
+          lifecycle.terminateRun(runId, terminalProof.disposition, terminalProof.evidence)
+        ).pipe(Effect.ensuring(owner.value.release))
+        return proof.decision
       })
 
       yield* applicationExit.registerProcessLocalDrain({
@@ -368,13 +452,61 @@ export const journaledRunBootstrapLayer = (
                 }
                 yield* lifecycle.readRunForRecovery(runId, target)
                 const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-                return yield* finish(runId, yield* runWithJournal(runId, target, initial, program))
+                return yield* finish(runId, target, yield* runWithJournal(runId, target, initial, program))
               }),
             (activationOwner) => activationOwner.release
           )
         )
 
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
+        applyRunCancellation: (input) =>
+          Effect.gen(function* () {
+            const request = yield* Schema.decodeUnknownEffect(ApplyRunCancellationRequest, {
+              onExcessProperty: "error"
+            })(input)
+            if (request.runId !== expectedRunId) {
+              return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: request.runId })
+            }
+            return yield* withRuntimeControls(({ journal, runId }) =>
+              Effect.gen(function* () {
+                const existing = (yield* journal.state.get).records.find(
+                  ({ event }) => event._tag === "RunCancellationApplied"
+                )
+                if (existing !== undefined) {
+                  return AppliedRunCancellation.cases.RunCancellationAlreadyApplied.make({
+                    appliedAt: existing.position
+                  })
+                }
+                const applied = yield* journal.append(
+                  runId,
+                  runCancellationAppliedRecordKey,
+                  RunCancellationAppliedEvent.make({
+                    initiatedBy: { _tag: "Operator" },
+                    occurrenceClassification: "InitiatedAction",
+                    version: workflowJournalEventVersion
+                  })
+                )
+                return AppliedRunCancellation.cases.RunCancellationApplied.make({ appliedAt: applied.position })
+              })
+            ).pipe(
+              Effect.catchTag("JournaledRunNotActive", () =>
+                lifecycle.read(expectedRunId).pipe(
+                  Effect.flatMap((records) => {
+                    const terminated = records.find(({ event }) => event._tag === "WorkflowRunTerminated")
+                    /* v8 ignore next -- @preserve The find predicate admits only WorkflowRunTerminated records. */
+                    return terminated?.event._tag === "WorkflowRunTerminated"
+                      ? Effect.succeed(
+                          AppliedRunCancellation.cases.RunCancellationRunTerminated.make({
+                            disposition: terminated.event.disposition,
+                            terminatedAt: terminated.position
+                          })
+                        )
+                      : Effect.fail(new JournaledRunNotActive())
+                  })
+                )
+              )
+            )
+          }),
         applyIntegrationQuarantineDirection: (input) =>
           Effect.gen(function* () {
             const request = yield* Schema.decodeUnknownEffect(ApplyIntegrationQuarantineDirectionRequest, {

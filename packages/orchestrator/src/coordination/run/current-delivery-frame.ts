@@ -58,7 +58,13 @@ export const journaledCurrentDeliveryFrameOf = (
       acceptedAt: journal.position,
       currentGraph,
       currentGraphOperationId,
-      pause: journal.reconstructed.pause,
+      // Cancellation borrows the established Pause selection semantics for
+      // derived work: already-owned responsibilities may settle, but no fresh
+      // task work may be selected after the durable direction.
+      pause:
+        journal.reconstructed.cancellation._tag === "RunCancellationApplied"
+          ? { ...journal.reconstructed.pause, run: { _tag: "RunPaused" as const } }
+          : journal.reconstructed.pause,
       responsibility: journal.reconstructed.responsibility,
       runControlPolicy,
       workflowHistory: journal.reconstructed.workflowHistory

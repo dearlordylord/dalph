@@ -54,6 +54,7 @@ const comparableFullObservation = (
       (prior) =>
         prior.operationId !== complete.operationId &&
         taskTrackerTargetKey(prior.target) === taskTrackerTargetKey(complete.target) &&
+        prior.rootTaskId === complete.rootTaskId &&
         exactTaskIdSetKey(prior.factFamilies[0].taskIds) === exactTaskIdSetKey(complete.factFamilies[0].taskIds)
     )
 
@@ -83,6 +84,7 @@ const makeUnchangedReconfirmation = (
     ],
     operationId: operation.operationId,
     priorFullObservationOperationId: prior.operationId,
+    ...(complete.rootTaskId === undefined ? {} : { rootTaskId: complete.rootTaskId }),
     target: operation.target
   })
 }

@@ -60,6 +60,13 @@ export {
 export { TaskControlSubjectOutsideRun } from "./workflow/protocols/control-direction-application/task-subject.js"
 export { ApplyControlDirectionRequest } from "./workflow/protocols/control-direction-application/request.js"
 export {
+  AppliedRunCancellation,
+  ApplyRunCancellationRequest,
+  CancelledAttemptClaimNoReleaseObservedEvent,
+  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  RunCancellationAppliedEvent
+} from "./workflow/protocols/run-cancellation/events.js"
+export {
   ControlDirectionApplication,
   controlDirectionApplicationLayer
 } from "./workflow/protocols/control-direction-application/protocol.js"
@@ -240,6 +247,7 @@ export {
   RunLifecycleJournal,
   WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated,
+  WorkflowRunTerminationEvidenceInvalid,
   WorkflowRunIdentityAlreadyUsed,
   WorkflowRunNotBegan,
   WorkflowRunTargetMismatch
@@ -358,6 +366,7 @@ export * from "./workflow/protocols/integration-quarantine/changed-head-retry.js
 export * from "./workflow/protocols/integration-quarantine/initial-conclusive.js"
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
+export * from "./coordination/frontier/run-finality.js"
 export { reconstructRunState } from "./coordination/reconstruction/reduce.js"
 export { latestReconstructedTaskGraph } from "./coordination/reconstruction/graph-knowledge.js"
 export {
@@ -684,6 +693,13 @@ export {
 } from "./coordination/delivery/run-delivery-runtime.js"
 export { runStabilizedDelivery } from "./coordination/run/run-stabilization.js"
 export {
+  makeRunFinalityEvidence,
+  RunFinalityEvidence,
+  RunFinalityReadShape,
+  RunTerminationDisposition,
+  runTerminationDispositionOf
+} from "./coordination/frontier/run-finality.js"
+export {
   AppliedAttemptChoice,
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
@@ -751,6 +767,11 @@ export {
   TaskClaimReleaseAuthority,
   WorkflowOperation,
   workflowOperationId
+} from "./workflow/registry/operation.js"
+export type {
+  CancelledAttemptTaskClaimReleaseOperation,
+  StoppedAttemptTaskClaimReleaseOperation,
+  WorkflowTaskClaimReleaseOperation
 } from "./workflow/registry/operation.js"
 export {
   OperationSelected,

@@ -1,21 +1,105 @@
 import { Effect, Option, Stream } from "effect"
-import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { DeliveryRuntimeInput, DeliveryRuntimeQuiescence } from "../delivery/run-delivery-runtime.js"
 import { runDeliveryRuntimePhase } from "../delivery/run-delivery-runtime.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import type { DeliveryRuntimeEvaluation } from "../delivery/relations.js"
 import { attachCurrentSignal, deliveryFinalityOf } from "../delivery/relations.js"
-import type { RunFinalityProof } from "../frontier/run-finality.js"
+import {
+  makeRunFinalityEvidence,
+  RunFinalityReadShape,
+  runTerminationDispositionOf,
+  type RunFinalityProof
+} from "../frontier/run-finality.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
+import { InRunJournal, type InRunJournalService } from "../../workflow-journal/store.js"
 
-const proofOf = (quiescence: DeliveryRuntimeQuiescence): RunFinalityProof => ({
-  acceptedAt: quiescence.acceptedAt,
-  decision: deliveryFinalityOf(quiescence.current, quiescence.proposedActions, quiescence.disposition)
+type EstablishedTrackerGraph = Extract<
+  DeliveryRuntimeQuiescence["current"]["trackerGraph"],
+  { readonly _tag: "GraphEstablished" }
+>
+
+const unsettledProof = (acceptedAt: JournalPosition | null): RunFinalityProof => ({
+  acceptedAt,
+  decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
 })
+
+const passiveCancellationApplied = (quiescence: DeliveryRuntimeQuiescence): boolean =>
+  quiescence._tag === "PassiveRuntimeQuiescence" && quiescence.current.cancellationApplied === true
+
+const establishedGraphOf = (quiescence: DeliveryRuntimeQuiescence): EstablishedTrackerGraph | undefined => {
+  const graph = quiescence.current.trackerGraph
+  /* v8 ignore next -- @preserve A terminal delivery decision requires an established graph; nonterminal callers retain undefined. */
+  return graph._tag === "GraphEstablished" ? graph : undefined
+}
+
+const rootTaskIdOf = (
+  graph: EstablishedTrackerGraph
+): EstablishedTrackerGraph["observation"]["snapshot"]["rootTaskId"] => {
+  const taskIds = graph.observation.snapshot.taskIds()
+  if (taskIds.length === 0) return undefined
+  const rootTaskId = graph.observation.snapshot.rootTaskId
+  /* v8 ignore next -- @preserve TaskDagSnapshot projection retains only a root that belongs to its task set. */
+  return rootTaskId !== undefined && taskIds.includes(rootTaskId) ? rootTaskId : undefined
+}
+
+const finalityInputsOf = (
+  quiescence: DeliveryRuntimeQuiescence
+):
+  | {
+      readonly acceptedAt: JournalPosition
+      readonly graph: EstablishedTrackerGraph
+      readonly rootTaskId: NonNullable<EstablishedTrackerGraph["observation"]["snapshot"]["rootTaskId"]>
+      readonly runId: NonNullable<DeliveryRuntimeQuiescence["current"]["runId"]>
+    }
+  | undefined => {
+  if (quiescence.acceptedAt === null || quiescence.current.runId === undefined) return undefined
+  const graph = establishedGraphOf(quiescence)
+  /* v8 ignore next -- @preserve deliveryFinalityOf cannot return RunMayTerminate without an established graph. */
+  if (graph === undefined) return undefined
+  const rootTaskId = rootTaskIdOf(graph)
+  if (rootTaskId === undefined) return undefined
+  return { acceptedAt: quiescence.acceptedAt, graph, rootTaskId, runId: quiescence.current.runId }
+}
+
+const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): RunFinalityProof => {
+  const cancellationAppliedWhilePassive = passiveCancellationApplied(quiescence)
+  const decision = deliveryFinalityOf(
+    quiescence.current,
+    quiescence.proposedActions,
+    cancellationAppliedWhilePassive ? { _tag: "TrackerReconfirmationAllowed" } : quiescence.disposition
+  )
+  if (decision._tag === "RunMustRemainActive") return { acceptedAt: quiescence.acceptedAt, decision }
+  /* v8 ignore next -- @preserve Non-cancelled passive quiescence is classified RunMustRemainActive before this terminal-proof path. */
+  if (quiescence._tag === "PassiveRuntimeQuiescence" && !cancellationAppliedWhilePassive) {
+    return unsettledProof(quiescence.acceptedAt)
+  }
+  const inputs = finalityInputsOf(quiescence)
+  if (inputs === undefined) return unsettledProof(quiescence.acceptedAt)
+  const evidence = makeRunFinalityEvidence({
+    operationId: inputs.graph.observation.operationId,
+    observedAt: inputs.graph.observation.recordedAt,
+    readShape: RunFinalityReadShape.make({
+      explicitlyCoveredTaskIds: inputs.graph.observation.explicitlyCoveredTaskIds
+    }),
+    rootTaskId: inputs.rootTaskId,
+    runId: inputs.runId,
+    snapshot: inputs.graph.observation.snapshot,
+    target
+  })
+  const disposition = runTerminationDispositionOf(
+    evidence.graphOutcome,
+    quiescence.current.cancellationApplied === true
+  )
+  /* v8 ignore next -- @preserve RunMayTerminate plus valid finality inputs always yields Completed, Blocked, or Cancelled. */
+  return disposition === undefined
+    ? unsettledProof(inputs.acceptedAt)
+    : { acceptedAt: inputs.acceptedAt, decision, disposition, evidence }
+}
 
 const acceptsObservation = (
   operationId: ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"],
@@ -46,6 +130,35 @@ const awaitAcceptedObservation = Effect.fn("RunStabilization.awaitAcceptedObserv
   )
 })
 
+const shouldReturnInitialProof = (quiescence: DeliveryRuntimeQuiescence): boolean => {
+  if (quiescence._tag === "PassiveRuntimeQuiescence") return !passiveCancellationApplied(quiescence)
+  return false
+}
+
+const journaledPredecessorOperationIds = (
+  journal: InRunJournalService,
+  runId: DeliveryRuntimeQuiescence["current"]["runId"],
+  target: TrackerTarget
+) =>
+  runId === undefined
+    ? Effect.succeed<ReadonlyArray<ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"]>>([])
+    : journal
+        .read(runId)
+        .pipe(
+          Effect.map((records) =>
+            records.flatMap(({ event }) =>
+              event._tag === "TaskTrackerReadIntentRecorded" &&
+              event.operation._tag === "ReadTrackerGraph" &&
+              taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(target)
+                ? [event.operation.operationId]
+                : []
+            )
+          )
+        )
+
+const distinctOperationIds = <OperationId>(operationIds: ReadonlyArray<OperationId>): ReadonlyArray<OperationId> =>
+  operationIds.filter((candidate, index, all) => all.indexOf(candidate) === index)
+
 /**
  * Runs ordinary delivery actions to quiescence, obtains one later complete
  * tracker observation through the journaled read protocol, then lets the same
@@ -58,24 +171,30 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations)
-      if (firstQuiescence._tag === "PassiveRuntimeQuiescence") return proofOf(firstQuiescence)
+      if (shouldReturnInitialProof(firstQuiescence)) {
+        return proofOf(target, firstQuiescence)
+      }
+      if (firstQuiescence.acceptedAt === null) {
+        return proofOf(target, firstQuiescence)
+      }
+      const currentGraph = establishedGraphOf(firstQuiescence)
+      /* v8 ignore next -- @preserve shouldReturnInitialProof accepts every first phase without an established graph. */
+      if (currentGraph === undefined) return proofOf(target, firstQuiescence)
 
       const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
       const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
-      if (Option.isNone(owner)) return proofOf(firstQuiescence)
+      if (Option.isNone(owner)) return proofOf(target, firstQuiescence)
 
       const allocator = yield* OperationIdAllocator
       const operationId = yield* allocator.allocate()
-      const predecessorOperationIds = [firstQuiescence.current.trackerGraph.observation.operationId]
+      const currentGraphOperationId = currentGraph.observation.operationId
+      const runId = firstQuiescence.current.runId
+      const journal = yield* InRunJournal
+      const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
+      const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
       const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
       const accepted = yield* executeTrackerGraphRead(operation).pipe(
-        Effect.andThen(
-          awaitAcceptedObservation(
-            evaluations,
-            operationId,
-            firstQuiescence.current.trackerGraph.observation.recordedAt
-          )
-        ),
+        Effect.andThen(awaitAcceptedObservation(evaluations, operationId, currentGraph.observation.recordedAt)),
         Effect.ensuring(owner.value.release)
       )
       if ((yield* applicationExitAdmission.snapshot).cutoffClosed) {
@@ -84,7 +203,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
           decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
       }
-      return proofOf(yield* runDeliveryRuntimePhase(evaluations))
+      return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))
     })
   ).pipe(
     Effect.ensuring(Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll))

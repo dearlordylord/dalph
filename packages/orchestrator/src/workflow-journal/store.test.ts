@@ -6,7 +6,7 @@ import { Cause, ConfigProvider, Effect, FileSystem, Layer, Path } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import { describe, expect } from "vitest"
-import { RunId } from "@dalph/contracts"
+import { RunId, TaskId } from "@dalph/contracts"
 import {
   FixtureTarget,
   CoordinatorOwnership,
@@ -19,6 +19,7 @@ import {
   JournalStorageUnavailable,
   JournalStore,
   JournalStoreContradiction,
+  TaskClaimAcquisition,
   memoryJournalTestLayer,
   OperationId,
   sqliteJournalTestLayer,
@@ -29,10 +30,31 @@ import {
   WorkflowRunAlreadyTerminated,
   WorkflowRunIdentityAlreadyUsed,
   WorkflowRunNotBegan,
+  WorkflowRunTerminationEvidenceInvalid,
   WorkflowRunTargetMismatch,
   WorkflowOperation
 } from "../index.js"
 import { classifyJournalStorageFailure } from "./adapters/sqlite-store.js"
+import { completedRunFinalityFixture } from "../../test/run-finality.js"
+import { validSnapshot } from "../../test/task-dag.js"
+import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
+import { ActiveTaskClaim } from "../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
+import {
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquisitionRejectedEvent
+} from "../workflow/registry/event.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../workflow/task-tracker-facts/observation.js"
+import {
+  makeTaskClaimAcquisitionOperation,
+  makeTrackerGraphObservationOperation
+} from "../workflow/registry/operation.js"
+import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
+import { makeRunFinalityEvidence } from "../coordination/frontier/run-finality.js"
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
@@ -93,6 +115,13 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
   const runId = RunId.make(`run-contract-${name}`)
   const firstKey = JournalRecordKey.make("operation:one:intent")
   const secondKey = JournalRecordKey.make("operation:two:intent")
+  const terminateCompleted = (journal: JournalStore["Service"], target: ReturnType<typeof FixtureTarget.make>) =>
+    Effect.gen(function* () {
+      const fixture = completedRunFinalityFixture({ runId, target })
+      yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+      yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+      return yield* journal.terminateRun(runId, "Completed", fixture.evidence)
+    })
 
   describe(`${name} JournalStore contract`, () => {
     it.effect("atomically rejects a second beginning for one Run identity", () =>
@@ -112,17 +141,18 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
     it.effect("rejects every workflow record after Run termination", () =>
       Effect.gen(function* () {
         const journal = yield* JournalStore
-        yield* journal.beginRun(runId, FixtureTarget.make("terminated-target"), initialPolicy)
-        const terminated = yield* journal.terminateRun(runId)
+        const target = FixtureTarget.make("terminated-target")
+        yield* journal.beginRun(runId, target, initialPolicy)
+        const terminated = yield* terminateCompleted(journal, target)
         const failure = yield* Effect.flip(journal.append(runId, firstKey, intent("one", "task-1")))
 
         expect(terminated).toMatchObject({
           event: { _tag: "WorkflowRunTerminated", disposition: "Completed" },
-          position: 2,
+          position: 4,
           runId
         })
         expect(failure).toBeInstanceOf(WorkflowRunAlreadyTerminated)
-        expect(failure).toMatchObject({ runId, terminatedAt: 2 })
+        expect(failure).toMatchObject({ runId, terminatedAt: 4 })
       }).pipe(Effect.provide(makeLayer()))
     )
 
@@ -145,7 +175,249 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         const target = FixtureTarget.make("never-began-target")
 
         expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toBeInstanceOf(WorkflowRunNotBegan)
-        expect(yield* Effect.flip(journal.terminateRun(runId))).toBeInstanceOf(WorkflowRunNotBegan)
+        const fixture = completedRunFinalityFixture({ runId, target })
+        expect(yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence))).toBeInstanceOf(
+          WorkflowRunNotBegan
+        )
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("preserves typed invalid-evidence failures at the storage boundary", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("invalid-evidence-target")
+        yield* journal.beginRun(runId, target, initialPolicy)
+        const fixture = completedRunFinalityFixture({ runId, target })
+
+        const failure = yield* Effect.flip(
+          journal.terminateRun(runId, "Completed", { ...fixture.evidence, runId: RunId.make(`different-${runId}`) })
+        )
+
+        expect(failure).toBeInstanceOf(WorkflowRunTerminationEvidenceInvalid)
+        expect(failure).toMatchObject({ runId })
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rejects unsettled historical responsibility without appending", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("unsettled-responsibility-target")
+        yield* journal.beginRun(runId, target, initialPolicy)
+        const fixture = completedRunFinalityFixture({ runId, target })
+        yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+        yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+        const acquisition = TaskClaimAcquisition.make({
+          operationId: OperationId.make(`unsettled-claim:${runId}`),
+          owner: ClaimOwner.make("dalph"),
+          taskId: TaskId.make("root"),
+          token: ClaimToken.make(`unsettled-token:${runId}`)
+        })
+        const claimOperation = makeTaskClaimAcquisitionOperation({
+          acquisition,
+          predecessorOperationIds: [fixture.operation.operationId]
+        })
+        yield* journal.append(
+          runId,
+          intentRecordKey(acquisition.operationId),
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+        )
+        const beforeTermination = yield* journal.read(runId)
+
+        const failure = yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence))
+
+        expect(failure).toMatchObject({
+          _tag: "WorkflowRunTerminationEvidenceInvalid",
+          detail: expect.stringContaining("responsibility")
+        })
+        expect(yield* journal.read(runId)).toEqual(beforeTermination)
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("accepts termination after a historical claim acquisition was rejected", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("settled-responsibility-target")
+        yield* journal.beginRun(runId, target, initialPolicy)
+        const fixture = completedRunFinalityFixture({ runId, target })
+        yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+        yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+        const acquisition = TaskClaimAcquisition.make({
+          operationId: OperationId.make(`settled-claim:${runId}`),
+          owner: ClaimOwner.make("dalph"),
+          taskId: TaskId.make("root"),
+          token: ClaimToken.make(`settled-token:${runId}`)
+        })
+        const claimOperation = makeTaskClaimAcquisitionOperation({
+          acquisition,
+          predecessorOperationIds: [fixture.operation.operationId]
+        })
+        yield* journal.append(
+          runId,
+          intentRecordKey(acquisition.operationId),
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(acquisition.operationId),
+          TaskClaimAcquisitionRejectedEvent.make({
+            observed: ActiveTaskClaim.make({
+              operationId: OperationId.make(`foreign-claim:${runId}`),
+              owner: ClaimOwner.make("another-owner"),
+              taskId: acquisition.taskId,
+              token: ClaimToken.make(`foreign-token:${runId}`)
+            }),
+            operationId: acquisition.operationId,
+            reason: "ForeignClaim",
+            version: workflowJournalEventVersion
+          })
+        )
+
+        const terminated = yield* journal.terminateRun(runId, "Completed", fixture.evidence)
+
+        expect(terminated.event._tag).toBe("WorkflowRunTerminated")
+        expect(terminated.position).toBe(6)
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rejects termination while an exact acquired claim remains active", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("active-claim-target")
+        yield* journal.beginRun(runId, target, initialPolicy)
+        const fixture = completedRunFinalityFixture({ runId, target })
+        yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+        yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+        const acquisition = TaskClaimAcquisition.make({
+          operationId: OperationId.make(`active-claim:${runId}`),
+          owner: ClaimOwner.make("dalph"),
+          taskId: TaskId.make("root"),
+          token: ClaimToken.make(`active-token:${runId}`)
+        })
+        const claimOperation = makeTaskClaimAcquisitionOperation({
+          acquisition,
+          predecessorOperationIds: [fixture.operation.operationId]
+        })
+        yield* journal.append(
+          runId,
+          intentRecordKey(acquisition.operationId),
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(acquisition.operationId),
+          TaskClaimAcquiredEvent.make({
+            claim: ActiveTaskClaim.make(acquisition),
+            version: workflowJournalEventVersion
+          })
+        )
+        const beforeTermination = yield* journal.read(runId)
+
+        const failure = yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence))
+
+        expect(failure).toMatchObject({
+          _tag: "WorkflowRunTerminationEvidenceInvalid",
+          detail: expect.stringContaining("responsibility")
+        })
+        expect(yield* journal.read(runId)).toEqual(beforeTermination)
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rejects incomparable tracker graph observations without appending", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("incomparable-graph-target")
+        yield* journal.beginRun(runId, target, initialPolicy)
+        const first = completedRunFinalityFixture({ runId, target })
+        yield* journal.append(runId, intentRecordKey(first.operation.operationId), first.intent)
+        yield* journal.append(runId, outcomeRecordKey(first.operation.operationId), first.observation)
+        const secondOperation = makeTrackerGraphObservationOperation(
+          OperationId.make(`incomparable-graph:${runId}`),
+          target
+        )
+        const secondSnapshot = validSnapshot({
+          revision: `incomparable-graph:${runId}`,
+          rootTaskId: "root",
+          tasks: [
+            { id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
+            { id: "child", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: "root", prerequisiteIds: [] }
+          ]
+        })
+        const secondIntent = taskTrackerReadIntent(secondOperation)
+        const secondObservation = taskTrackerFactsObservedEvent(
+          secondOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(secondOperation, secondSnapshot)
+        )
+        yield* journal.append(runId, intentRecordKey(secondOperation.operationId), secondIntent)
+        const observed = yield* journal.append(runId, outcomeRecordKey(secondOperation.operationId), secondObservation)
+        const evidence = makeRunFinalityEvidence({
+          observedAt: observed.position,
+          operationId: secondOperation.operationId,
+          readShape: secondOperation.readShape,
+          rootTaskId: TaskId.make("root"),
+          runId,
+          snapshot: secondSnapshot,
+          target
+        })
+        const beforeTermination = yield* journal.read(runId)
+
+        const failure = yield* Effect.flip(journal.terminateRun(runId, "Completed", evidence))
+
+        expect(failure).toMatchObject({
+          _tag: "WorkflowRunTerminationEvidenceInvalid",
+          detail: expect.stringContaining("causally comparable")
+        })
+        expect(yield* journal.read(runId)).toEqual(beforeTermination)
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("accepts a graph read that causally supersedes historical facts", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("causal-graph-target")
+        yield* journal.beginRun(runId, target, initialPolicy)
+        const first = completedRunFinalityFixture({ runId, target })
+        yield* journal.append(runId, intentRecordKey(first.operation.operationId), first.intent)
+        yield* journal.append(runId, outcomeRecordKey(first.operation.operationId), first.observation)
+        const secondOperation = makeTrackerGraphObservationOperation(
+          OperationId.make(`causal-graph:${runId}`),
+          target,
+          [first.operation.operationId]
+        )
+        const secondSnapshot = validSnapshot({
+          revision: `causal-graph:${runId}`,
+          rootTaskId: "root",
+          tasks: [
+            { id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] },
+            { id: "child", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: "root", prerequisiteIds: [] }
+          ]
+        })
+        yield* journal.append(
+          runId,
+          intentRecordKey(secondOperation.operationId),
+          taskTrackerReadIntent(secondOperation)
+        )
+        const observed = yield* journal.append(
+          runId,
+          outcomeRecordKey(secondOperation.operationId),
+          taskTrackerFactsObservedEvent(
+            secondOperation.operationId,
+            makeCompleteTaskTrackerFactsObserved(secondOperation, secondSnapshot)
+          )
+        )
+        const evidence = makeRunFinalityEvidence({
+          observedAt: observed.position,
+          operationId: secondOperation.operationId,
+          readShape: secondOperation.readShape,
+          rootTaskId: TaskId.make("root"),
+          runId,
+          snapshot: secondSnapshot,
+          target
+        })
+
+        const terminated = yield* journal.terminateRun(runId, "Completed", evidence)
+
+        expect(terminated.event._tag).toBe("WorkflowRunTerminated")
+        expect(terminated.position).toBe(6)
       }).pipe(Effect.provide(makeLayer()))
     )
 
@@ -154,14 +426,17 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         const journal = yield* JournalStore
         const target = FixtureTarget.make("already-terminated-target")
         yield* journal.beginRun(runId, target, initialPolicy)
-        const terminated = yield* journal.terminateRun(runId)
+        const terminated = yield* terminateCompleted(journal, target)
 
         expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toMatchObject({
           _tag: "WorkflowRunAlreadyTerminated",
           runId,
           terminatedAt: terminated.position
         })
-        expect(yield* Effect.flip(journal.terminateRun(runId))).toBeInstanceOf(WorkflowRunAlreadyTerminated)
+        const fixture = completedRunFinalityFixture({ runId, target })
+        expect(yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence))).toBeInstanceOf(
+          WorkflowRunAlreadyTerminated
+        )
       }).pipe(Effect.provide(makeLayer()))
     )
 

@@ -7,7 +7,12 @@ import { GithubIssueTarget } from "./github/target.js"
 export const TrackerTarget = Schema.Union([FixtureTarget, GithubIssueTarget])
 export type TrackerTarget = typeof TrackerTarget.Type
 
-export const exactTaskIdSetKey = (taskIds: ReadonlyArray<TaskId>): string => JSON.stringify([...taskIds].sort())
+/** Canonical set identity for task IDs; ordering and duplicate-free schema facts are ignored. */
+export const exactTaskIdSetKey = (taskIds: ReadonlyArray<TaskId>): string =>
+  [...taskIds]
+    .sort()
+    .map((taskId) => `${taskId.length}:${taskId}`)
+    .join("|")
 
 export const factFamilyCoverageMatchesExplicitTaskIds = (
   factFamilies: ReadonlyArray<{ readonly coverage: { readonly explicitlyCoveredTaskIds: ReadonlyArray<TaskId> } }>,

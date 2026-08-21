@@ -67,6 +67,9 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
         const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
         return `Operator ${item.direction.toLowerCase()}d ${target} while its executor request was in flight`
       },
+      OperatorAppliesRunCancellation: noLandmark,
+      OperatorAppliesRunCancellationWhileExecutorRequestInFlight: (item) =>
+        `Operator cancelled the Run while executor attempt ${item.duringAttemptId} was in flight`,
       OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting: noLandmark,
       OperatorStartsPauseObservation: noLandmark,
       OperatorSubscribesToPauseObservation: noLandmark,
@@ -173,6 +176,7 @@ const orchestrationEvidenceLyric = (evidence: AuthoredOrchestrationEvidence): st
 
 const protocolEvidenceLyric = Match.type<AuthoredProtocolEvidence>().pipe(
   Match.tagsExhaustive({
+    RunCancellationApplied: () => `The story expects Operator to apply whole-Run cancellation exactly once.`,
     AttemptChoiceApplied: (evidence) =>
       `The story expects Operator to apply ${evidence.choice} to task ${evidence.taskId}, attempt ${evidence.attemptId}, at authored revision ${evidence.observedTaskRevision}.`,
     AttemptImplementationAbandoned: (evidence) =>
@@ -297,6 +301,8 @@ type OperatorStoryItem = Extract<
       | "OperatorAppliesControlDirection"
       | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
       | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+      | "OperatorAppliesRunCancellation"
+      | "OperatorAppliesRunCancellationWhileExecutorRequestInFlight"
       | "OperatorControlDirectionFailed"
       | "OperatorContinuesAttempt"
       | "OperatorDirectsTaskClaimReacquisition"
@@ -311,6 +317,8 @@ const operatorStoryItemTags: ReadonlySet<RemainingCoordinatorStoryItem["_tag"]> 
   "OperatorAppliesControlDirection",
   "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
   "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+  "OperatorAppliesRunCancellation",
+  "OperatorAppliesRunCancellationWhileExecutorRequestInFlight",
   "OperatorControlDirectionFailed",
   "OperatorContinuesAttempt",
   "OperatorDirectsTaskClaimReacquisition",
@@ -376,6 +384,12 @@ const operatorLyric = (item: OperatorStoryItem): string => {
   }
   if (item._tag === "OperatorControlDirectionFailed") {
     return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
+  }
+  if (item._tag === "OperatorAppliesRunCancellation") {
+    return "Operator applies whole-Run cancellation."
+  }
+  if (item._tag === "OperatorAppliesRunCancellationWhileExecutorRequestInFlight") {
+    return `Operator applies whole-Run cancellation while executor attempt ${item.duringAttemptId} is in flight.`
   }
   if (isAttemptChoiceOperatorItem(item)) return attemptChoiceOperatorLyric(item)
   if (item._tag === "OperatorRacesContinueAndStop") {

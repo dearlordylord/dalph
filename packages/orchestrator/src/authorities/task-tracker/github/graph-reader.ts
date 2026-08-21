@@ -429,7 +429,11 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
 
       const tasks = normalizedTasks()
 
-      const graph = projectTrackerSnapshot({ revision: trackerRevisionFor(tasks), tasks })
+      const graph = projectTrackerSnapshot({
+        revision: trackerRevisionFor(tasks),
+        rootTaskId: githubTaskIdFor(rootRepositoryNodeId, rootNodeId),
+        tasks
+      })
       if (graph._tag === "Invalid") {
         return yield* new GraphProjectionError({ issues: graph.issues })
       }

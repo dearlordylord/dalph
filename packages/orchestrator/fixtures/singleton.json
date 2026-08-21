@@ -1,5 +1,6 @@
 {
   "revision": "fixture-singleton-v1",
+  "rootTaskId": "task-only",
   "tasks": [
     {
       "id": "task-only",

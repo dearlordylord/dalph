@@ -37,6 +37,9 @@ import {
   stoppedAttemptClaimNoReleaseRecordKey,
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey,
+  runCancellationAppliedRecordKey,
+  cancelledAttemptClaimNoReleaseRecordKey,
+  cancelledAttemptImplementationResponsibilityRelinquishedRecordKey,
   taskWorkCapacityPolicyRecordKey,
   targetPromotionAttemptIntentRecordKey,
   targetPromotionIntentRecordKey,
@@ -228,6 +231,15 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     WorkflowRunTerminated: () => ({
       _tag: "WorkflowRunLifecycleEventDescriptor",
       expectedKey: workflowRunTerminatedRecordKey
+    }),
+    RunCancellationApplied: () => ({ _tag: "GenericEventDescriptor", expectedKey: runCancellationAppliedRecordKey }),
+    CancelledAttemptImplementationResponsibilityRelinquished: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: cancelledAttemptImplementationResponsibilityRelinquishedRecordKey(event.plannedAttempt.attemptId)
+    }),
+    CancelledAttemptClaimNoReleaseObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: cancelledAttemptClaimNoReleaseRecordKey(event.plannedAttempt.attemptId)
     }),
     TaskWorkCapacityChanged: (event) => ({
       _tag: "RunPolicyEventDescriptor",

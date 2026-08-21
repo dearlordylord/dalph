@@ -19,6 +19,7 @@ import {
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { advanceReconstructedRunState, reconstructValidatedRunState } from "./reduce.js"
 import type { ReconstructedRunState } from "./state.js"
+import { runGraphTaskFactsOutcome } from "../frontier/run-finality.js"
 import {
   invalidTaskTrackerReconfirmationReference,
   makeTaskTrackerReconfirmationIndex,
@@ -58,13 +59,14 @@ import {
 } from "../../workflow/protocols/attempt-choice/events.js"
 import { reconstructedTaskGraphFromEvents } from "./graph-knowledge.js"
 import { recordedTaskAttemptPlanFor } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
-import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
+import { exactTaskIdSetKey, taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { restartAuthorityReadOperationMatches } from "../../workflow/protocols/attempt-choice/replacement-events.js"
 import {
   restartChoiceWasInvalidatedByLaterSpecification,
   restartClaimAuthorityAtApplication,
   type RestartApplicationRecord
 } from "../../workflow/protocols/attempt-choice/restart-authority.js"
+import { validateCancelledAttemptHistory } from "./cancelled-attempt-history.js"
 
 const finalArrayElementOffset = -1
 
@@ -2254,13 +2256,13 @@ const validateOneUnfinishedAttemptPerTask = (
   }
 }
 
-const validateRunLifecycle = (
+const validateLifecycleBoundaries = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>,
+  began: JournalRecord | undefined,
+  terminated: JournalRecord | undefined,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
-  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
-  const terminated = records.find(({ event }) => event._tag === "WorkflowRunTerminated")
   if (began !== undefined && began.position !== 1) {
     semanticIssue(issues, runId, began.position, "WorkflowRunBegan must be the first record")
   }
@@ -2270,6 +2272,374 @@ const validateRunLifecycle = (
   if (terminated !== undefined && terminated !== records.at(finalArrayElementOffset)) {
     semanticIssue(issues, runId, terminated.position, "WorkflowRunTerminated must be the final record")
   }
+}
+
+const validateCancellationMultiplicity = (
+  runId: RunId,
+  cancellations: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (cancellations.length > 1) {
+    for (const duplicate of cancellations.slice(1)) {
+      semanticIssue(issues, runId, duplicate.position, "RunCancellationApplied may occur only once")
+    }
+  }
+}
+
+const validateCancellationBeginning = (
+  runId: RunId,
+  began: JournalRecord | undefined,
+  cancellations: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const firstInvalid = cancellations.find(({ position }) => began === undefined || position <= began.position)
+  if (firstInvalid !== undefined) {
+    semanticIssue(issues, runId, firstInvalid.position, "RunCancellationApplied requires prior WorkflowRunBegan")
+  }
+}
+
+const validateRunLifecycle = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  const terminated = records.find(({ event }) => event._tag === "WorkflowRunTerminated")
+  const cancellations = records.filter(({ event }) => event._tag === "RunCancellationApplied")
+  validateLifecycleBoundaries(runId, records, began, terminated, issues)
+  validateCancellationMultiplicity(runId, cancellations, issues)
+  validateCancellationBeginning(runId, began, cancellations, issues)
+  if (terminated?.event._tag === "WorkflowRunTerminated") {
+    validateTerminationEvidence(
+      runId,
+      records,
+      began,
+      terminated.position,
+      terminated.event,
+      cancellations.length > 0,
+      issues
+    )
+  }
+}
+
+type TaskTrackerFactsObservedEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>
+type TerminationTrackerObservation = Extract<
+  TaskTrackerFactsObservedEvent["observation"],
+  { readonly _tag: "CompleteTaskTrackerFacts" | "UnchangedTaskTrackerFactsReconfirmed" }
+>
+type CompleteTrackerObservation = Extract<
+  TaskTrackerFactsObservedEvent["observation"],
+  { readonly _tag: "CompleteTaskTrackerFacts" }
+>
+const prerequisitesFactFamilyIndex = 2
+const groupingsFactFamilyIndex = 3
+type TerminationTrackerRecord = Omit<JournalRecord, "event"> & {
+  readonly event: TaskTrackerFactsObservedEvent & { readonly observation: TerminationTrackerObservation }
+}
+
+const isTerminationTrackerRecord = (
+  record: JournalRecord | undefined,
+  terminatedAt: JournalPosition
+): record is TerminationTrackerRecord => {
+  if (record === undefined) return false
+  if (record.position >= terminatedAt) return false
+  const { event } = record
+  if (event._tag !== "TaskTrackerFactsObserved") return false
+  return (
+    event.observation._tag === "CompleteTaskTrackerFacts" ||
+    event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+  )
+}
+
+const terminationObservationsFor = (
+  records: ReadonlyArray<JournalRecord>,
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  terminatedAt: JournalPosition,
+  reject: (detail: string) => void
+): { readonly fresh: TerminationTrackerObservation; readonly complete: CompleteTrackerObservation } | undefined => {
+  const observed = records.find(({ position }) => position === evidence.observedAt)
+  if (!isTerminationTrackerRecord(observed, terminatedAt)) {
+    reject("termination evidence must name one earlier complete or unchanged tracker observation position")
+    return undefined
+  }
+  const fresh = observed.event.observation
+  const completeObservationRecord =
+    fresh._tag === "CompleteTaskTrackerFacts"
+      ? observed
+      : records.find(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.operationId === fresh.priorFullObservationOperationId &&
+            event.observation._tag === "CompleteTaskTrackerFacts"
+        )
+  if (
+    completeObservationRecord?.event._tag !== "TaskTrackerFactsObserved" ||
+    completeObservationRecord.event.observation._tag !== "CompleteTaskTrackerFacts"
+  ) {
+    reject("unchanged termination evidence must link to its earlier complete tracker observation")
+    return undefined
+  }
+  return { fresh, complete: completeObservationRecord.event.observation }
+}
+
+const validateTerminationIntent = (
+  records: ReadonlyArray<JournalRecord>,
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  reject: (detail: string) => void
+): void => {
+  const intent = records.find(
+    ({ event }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === evidence.operationId
+  )
+  if (intent?.event._tag !== "TaskTrackerReadIntentRecorded" || intent.event.operation._tag !== "ReadTrackerGraph") {
+    reject("termination evidence must name the exact complete graph-read intent")
+  } else if (
+    taskTrackerTargetKey(intent.event.operation.target) !== taskTrackerTargetKey(evidence.target) ||
+    exactTaskIdSetKey(intent.event.operation.readShape.explicitlyCoveredTaskIds) !==
+      exactTaskIdSetKey(evidence.readShape.explicitlyCoveredTaskIds)
+  ) {
+    reject("termination evidence read shape or target does not match its graph-read intent")
+  }
+}
+
+const validateTerminationFreshObservation = (
+  observation: TerminationTrackerObservation,
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  reject: (detail: string) => void
+): void => {
+  if (
+    observation.operationId !== evidence.operationId ||
+    taskTrackerTargetKey(observation.target) !== taskTrackerTargetKey(evidence.target)
+  ) {
+    reject("termination evidence operation or target does not match the observed graph")
+  }
+  if (
+    observation.factFamilies.some(
+      ({ contentIdentity, coverage }) =>
+        contentIdentity !== evidence.contentIdentity ||
+        taskTrackerTargetKey(coverage.target) !== taskTrackerTargetKey(evidence.target) ||
+        exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) !==
+          exactTaskIdSetKey(evidence.coverage.explicitlyCoveredTaskIds)
+    )
+  ) {
+    reject("termination evidence does not match the fresh observation's identity and coverage")
+  }
+}
+
+const validateTerminationFactFamilies = (
+  observation: CompleteTrackerObservation,
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  reject: (detail: string) => void
+): {
+  readonly identities: (typeof observation.factFamilies)[0]
+  readonly lifecycles: (typeof observation.factFamilies)[1]
+  readonly prerequisites: (typeof observation.factFamilies)[typeof prerequisitesFactFamilyIndex]
+  readonly groupings: (typeof observation.factFamilies)[typeof groupingsFactFamilyIndex]
+} => {
+  const [identities, lifecycles, prerequisites, groupings] = observation.factFamilies
+  const observedFamilyTags = observation.factFamilies.map(({ _tag }) => _tag)
+  if (evidence.requiredFactFamilies.some((family, index) => family !== observedFamilyTags[index])) {
+    reject("termination evidence must retain every required graph fact family in order")
+  }
+  // An unchanged read may use a different explicit closure while linking to
+  // an earlier complete observation. The fresh observation above owns exact
+  // target and coverage validation; these retained fact families own content.
+  if (evidence.rootTaskId !== observation.rootTaskId) {
+    reject("termination evidence must retain the exact tracker-selected Run root")
+  }
+  if (!groupings.groupings.some(({ taskId }) => taskId === evidence.rootTaskId)) {
+    reject("termination evidence Run root must belong to the complete grouping facts")
+  }
+  return { identities, lifecycles, prerequisites, groupings }
+}
+
+const terminationGraphFactsFor = (
+  lifecycles: CompleteTrackerObservation["factFamilies"][1],
+  prerequisites: CompleteTrackerObservation["factFamilies"][typeof prerequisitesFactFamilyIndex]
+): {
+  readonly terminalTaskIds: ReadonlyArray<TaskId>
+  readonly blockedTaskIds: ReadonlySet<TaskId>
+  readonly graphOutcome: "AllTasksSucceeded" | "Blocked" | "Unsettled"
+} => {
+  const prerequisitesByTask = new Map(
+    prerequisites.prerequisites.map(({ prerequisiteTaskIds, taskId }) => [taskId, prerequisiteTaskIds] as const)
+  )
+  const graphFacts = runGraphTaskFactsOutcome(
+    lifecycles.lifecycles.map(({ lifecycle, taskId }) => ({
+      id: taskId,
+      lifecycle,
+      prerequisiteIds: prerequisitesByTask.get(taskId) ?? []
+    }))
+  )
+  return { ...graphFacts, blockedTaskIds: new Set(graphFacts.blockedTaskIds) }
+}
+
+const validateTerminationGraphFacts = (
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  identities: CompleteTrackerObservation["factFamilies"][0],
+  graphFacts: ReturnType<typeof terminationGraphFactsFor>,
+  reject: (detail: string) => void
+): void => {
+  if (evidence.contentIdentity !== identities.contentIdentity || evidence.graphOutcome !== graphFacts.graphOutcome) {
+    reject("termination evidence revision or graph outcome is not current")
+  }
+  if (exactTaskIdSetKey(evidence.terminalTaskIds) !== exactTaskIdSetKey(graphFacts.terminalTaskIds)) {
+    reject("termination evidence terminal task facts do not match the graph")
+  }
+  if (exactTaskIdSetKey(evidence.blockedTaskIds) !== exactTaskIdSetKey([...graphFacts.blockedTaskIds])) {
+    reject("termination evidence dependency blockage facts do not match the graph")
+  }
+}
+
+const terminationDispositionIsValid = (
+  termination: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>,
+  graphOutcome: "AllTasksSucceeded" | "Blocked" | "Unsettled",
+  cancellationApplied: boolean
+): boolean => {
+  const expectedDisposition = cancellationApplied
+    ? graphOutcome === "AllTasksSucceeded"
+      ? "Completed"
+      : "Cancelled"
+    : graphOutcome === "AllTasksSucceeded"
+      ? "Completed"
+      : graphOutcome === "Blocked"
+        ? "Blocked"
+        : undefined
+  return expectedDisposition !== undefined && termination.disposition === expectedDisposition
+}
+
+const validateTerminationDisposition = (
+  termination: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>,
+  graphOutcome: "AllTasksSucceeded" | "Blocked" | "Unsettled",
+  cancellationApplied: boolean,
+  reject: (detail: string) => void
+): void => {
+  if (!terminationDispositionIsValid(termination, graphOutcome, cancellationApplied)) {
+    reject("termination disposition does not follow graph evidence and cancellation precedence")
+  }
+}
+
+const validateLatestTerminationObservation = (
+  records: ReadonlyArray<JournalRecord>,
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  terminatedAt: JournalPosition,
+  reject: (detail: string) => void
+): void => {
+  if (
+    records.some(
+      ({ event, position }) =>
+        position > evidence.observedAt &&
+        position < terminatedAt &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "CompleteTaskTrackerFacts" ||
+          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+    )
+  ) {
+    reject("termination evidence must use the latest complete graph observation")
+  }
+}
+
+const validateCancellationTerminationObservation = (
+  records: ReadonlyArray<JournalRecord>,
+  termination: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>,
+  reject: (detail: string) => void
+): void => {
+  const cancellation = records.findLast(({ event }) => event._tag === "RunCancellationApplied")
+  if (cancellation !== undefined && termination.evidence.observedAt <= cancellation.position) {
+    reject("cancellation terminal evidence must use a graph observation after RunCancellationApplied")
+  }
+}
+
+type WorkflowRunBeganRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunBegan" }>
+}
+
+const isWorkflowRunBeganRecord = (record: JournalRecord | undefined): record is WorkflowRunBeganRecord =>
+  record?.event._tag === "WorkflowRunBegan"
+
+const terminationBeginningOf = (
+  runId: RunId,
+  began: JournalRecord | undefined,
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  reject: (detail: string) => void
+): WorkflowRunBeganRecord | undefined => {
+  if (evidence.runId !== runId) reject("termination evidence must name the journal Run")
+  if (!isWorkflowRunBeganRecord(began)) {
+    reject("termination evidence requires the exact WorkflowRunBegan target")
+    return undefined
+  }
+  if (taskTrackerTargetKey(evidence.target) !== taskTrackerTargetKey(began.event.target)) {
+    reject("termination evidence must name the beginning target")
+  }
+  return began
+}
+
+const validateTerminationCompleteness = (
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  reject: (detail: string) => void
+): void => {
+  if (!evidence.complete || evidence.rootTaskId.length === 0) {
+    reject("termination evidence must prove complete root coverage")
+  }
+}
+
+const isCompleteGraphObservationForTarget = (
+  record: JournalRecord,
+  target: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"]["target"]
+): boolean =>
+  record.event._tag === "TaskTrackerFactsObserved" &&
+  record.event.observation._tag === "CompleteTaskTrackerFacts" &&
+  taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(target)
+
+const firstTrackerRootOf = (
+  records: ReadonlyArray<JournalRecord>,
+  target: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"]["target"]
+): TaskId | undefined => {
+  const firstRootObservation = records.find((record) => isCompleteGraphObservationForTarget(record, target))
+  return firstRootObservation?.event._tag === "TaskTrackerFactsObserved" &&
+    firstRootObservation.event.observation._tag === "CompleteTaskTrackerFacts"
+    ? firstRootObservation.event.observation.rootTaskId
+    : undefined
+}
+
+const validateFirstTrackerRoot = (
+  records: ReadonlyArray<JournalRecord>,
+  evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
+  reject: (detail: string) => void
+): void => {
+  if (firstTrackerRootOf(records, evidence.target) !== evidence.rootTaskId) {
+    reject("termination evidence must retain the first tracker-selected Run root")
+  }
+}
+
+const validateTerminationEvidence = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  began: JournalRecord | undefined,
+  terminatedAt: JournalPosition,
+  termination: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>,
+  cancellationApplied: boolean,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const evidence = termination.evidence
+  const reject = (detail: string) => semanticIssue(issues, runId, terminatedAt, detail)
+  if (terminationBeginningOf(runId, began, evidence, reject) === undefined) return
+  validateTerminationCompleteness(evidence, reject)
+  validateCancellationTerminationObservation(records, termination, reject)
+  const observations = terminationObservationsFor(records, evidence, terminatedAt, reject)
+  if (observations === undefined) return
+  validateFirstTrackerRoot(records, evidence, reject)
+  validateTerminationIntent(records, evidence, reject)
+  validateTerminationFreshObservation(observations.fresh, evidence, reject)
+  const { identities, lifecycles, prerequisites } = validateTerminationFactFamilies(
+    observations.complete,
+    evidence,
+    reject
+  )
+  const graphFacts = terminationGraphFactsFor(lifecycles, prerequisites)
+  validateTerminationGraphFacts(evidence, identities, graphFacts, reject)
+  validateTerminationDisposition(termination, graphFacts.graphOutcome, cancellationApplied, reject)
+  validateLatestTerminationObservation(records, evidence, terminatedAt, reject)
 }
 
 /**
@@ -2290,6 +2660,9 @@ const validateRecord = (
   next = validateControlDirection(record, runId, next, issues)
   next = validateAttemptChoice(record, runId, records, next, issues)
   next = validateAttemptStop(record, runId, records, next, issues)
+  validateCancelledAttemptHistory(record, runId, records, (detail) =>
+    semanticIssue(issues, runId, record.position, detail)
+  )
   validateTaskClaimReacquisitionDirection(record, runId, issues)
   if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.correlation.runId !== runId) {
     identityIssue(

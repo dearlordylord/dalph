@@ -24,5 +24,10 @@ export type TrackerTask = Schema.Schema.Type<typeof TrackerTask>
 export const Task = TrackerTask
 export type Task = typeof Task.Type
 
-export const TrackerSnapshot = Schema.Struct({ revision: TrackerRevision, tasks: Schema.Array(TrackerTask) })
+export const TrackerSnapshot = Schema.Struct({
+  revision: TrackerRevision,
+  /** The task tracker resolved for the selected root locator at this read boundary. */
+  rootTaskId: Schema.optionalKey(TaskId),
+  tasks: Schema.Array(TrackerTask)
+})
 export type TrackerSnapshot = Schema.Schema.Type<typeof TrackerSnapshot>

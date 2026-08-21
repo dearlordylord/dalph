@@ -28,6 +28,7 @@ import { applicationExitMutationRegistry } from "../../scripts/application-exit-
 import {
   acceptedResultIntegrationObligations,
   plannedAttemptExecutorObligations,
+  runCancellationObligations,
   runActivationObligations,
   taskFactReconciliationObligations
 } from "../../scripts/quint-model-obligations.mjs"
@@ -57,6 +58,12 @@ const SPECS = [
     file: "specs/runActivation.qnt",
     invariants: runActivationObligations.invariants,
     witnesses: runActivationObligations.witnesses
+  },
+  {
+    name: "runCancellation",
+    file: "specs/runCancellation.qnt",
+    invariants: runCancellationObligations.invariants,
+    witnesses: runCancellationObligations.witnesses
   },
   {
     name: "controlDirectionApplication",

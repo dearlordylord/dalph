@@ -9,6 +9,7 @@ import {
   WorkflowJournalEvent as WorkflowJournalEventSchema
 } from "../workflow/registry/event.js"
 import type { InitialControlPolicy } from "../control/policy.js"
+import type { RunFinalityEvidence, RunTerminationDisposition } from "../coordination/frontier/run-finality.js"
 import { InRunJournal } from "./in-run-journal.js"
 export { InRunJournal } from "./in-run-journal.js"
 export type { InRunJournalService } from "./in-run-journal.js"
@@ -147,6 +148,12 @@ export class WorkflowRunAlreadyTerminated extends Schema.TaggedError<WorkflowRun
   { runId: RunId, terminatedAt: JournalPosition }
 ) {}
 
+/** A terminal append supplied evidence that does not describe the current journal prefix. */
+export class WorkflowRunTerminationEvidenceInvalid extends Schema.TaggedError<WorkflowRunTerminationEvidenceInvalid>()(
+  "WorkflowRunTerminationEvidenceInvalid",
+  { detail: Schema.String, runId: RunId }
+) {}
+
 /** Failures owned by raw persistence before journal state publication exists. */
 export type JournalStorageAppendError = JournalStoreContradiction | JournalStoreError | WorkflowRunAlreadyTerminated
 
@@ -177,8 +184,13 @@ export interface JournalStoreService {
   >
   readonly scan: () => Effect.Effect<JournalScan, JournalStoreError>
   readonly terminateRun: (
-    runId: RunId
-  ) => Effect.Effect<JournalRecord, JournalStoreError | WorkflowRunAlreadyTerminated | WorkflowRunNotBegan>
+    runId: RunId,
+    disposition: RunTerminationDisposition,
+    evidence: RunFinalityEvidence
+  ) => Effect.Effect<
+    JournalRecord,
+    JournalStoreError | WorkflowRunAlreadyTerminated | WorkflowRunNotBegan | WorkflowRunTerminationEvidenceInvalid
+  >
 }
 
 export class JournalStore extends Context.Service<JournalStore, JournalStoreService>()("@dalph/JournalStore") {}

@@ -698,7 +698,10 @@ const nonProjectedJournalEventKinds = {
   IntegratorCandidateCleanupMutationIntended: true,
   IntegratorCandidateCleanupMutationResultRecorded: true,
   IntegratorCandidateCleanupContradicted: true,
-  IntegratorCandidateCleanupSettled: true
+  IntegratorCandidateCleanupSettled: true,
+  RunCancellationApplied: true,
+  CancelledAttemptImplementationResponsibilityRelinquished: true,
+  CancelledAttemptClaimNoReleaseObserved: true
 } satisfies Record<NonProjectedJournalEvent["_tag"], true>
 
 const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOccurrence> => {

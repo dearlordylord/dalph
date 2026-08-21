@@ -207,7 +207,12 @@ module runActivationNegativeTest {
       process: {
         ...state.process,
         postQuiescenceReads: 1,
-        finalityObservation: PostQuiescenceObservation(state.trackerFinality),
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: state.trackerFinality.targetSettled,
+          responsibilitiesSettled: state.trackerFinality.responsibilitiesSettled,
+          graphOutcome: state.trackerFinality.graphOutcome,
+          evidence: state.trackerFinality.evidence,
+        }),
       },
       trace: { ...state.trace, trackerCalls: state.trace.trackerCalls + 1 },
     },
@@ -269,6 +274,275 @@ module runActivationNegativeTest {
         terminationAppends: state.trace.terminationAppends + 1,
         terminationHadLaterSettledObservation: true,
       },
+    },
+  }
+
+  // Forbidden: a graph read whose run/target/revision/coverage does not match
+  // the requested activation cannot support a terminal append.
+  action terminateWithMismatchedGraphEvidence: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: { ...state.trackerFinality, evidence: MismatchedGraphReadEvidence },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: MismatchedGraphReadEvidence,
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: the decisive tracker observation must be cited at its exact
+  // Journal position. Matching operation, revision, root, and coverage cannot
+  // substitute for that position identity.
+  action terminateWithMismatchedObservationPosition: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition + 1,
+          GraphBlocked,
+          ContentRevisionBlocked,
+          EXACT_ROOT_TASK_ID,
+          trackerCoverageFor(GraphBlocked),
+        ),
+      },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition + 1,
+            GraphBlocked,
+            ContentRevisionBlocked,
+            EXACT_ROOT_TASK_ID,
+            trackerCoverageFor(GraphBlocked),
+          ),
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: the terminal proof must bind the exact root task returned by
+  // the tracker; a Boolean root-present flag cannot substitute for identity.
+  action terminateWithWrongRootGraphEvidence: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition,
+          GraphBlocked,
+          ContentRevisionBlocked,
+          TaskB,
+          trackerCoverageFor(GraphBlocked),
+        ),
+      },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition,
+            GraphBlocked,
+            ContentRevisionBlocked,
+            TaskB,
+            trackerCoverageFor(GraphBlocked),
+          ),
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: a fresh read's content identity must be independent of the
+  // operation ordinal and must match the exact graph revision being classified.
+  action terminateWithStaleContentIdentity: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition,
+          GraphBlocked,
+          StaleContentRevision,
+          EXACT_ROOT_TASK_ID,
+          trackerCoverageFor(GraphBlocked),
+        ),
+      },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition,
+            GraphBlocked,
+            StaleContentRevision,
+            EXACT_ROOT_TASK_ID,
+            trackerCoverageFor(GraphBlocked),
+          ),
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: a terminal proof with the right Run, operation, revision, root,
+  // and outcome is still invalid when its graph coverage is incomplete.
+  action terminateWithMismatchedGraphCoverage: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition,
+          GraphBlocked,
+          ContentRevisionBlocked,
+          EXACT_ROOT_TASK_ID,
+          Set(EXACT_ROOT_TASK_ID),
+        ),
+      },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition,
+            GraphBlocked,
+            ContentRevisionBlocked,
+            EXACT_ROOT_TASK_ID,
+            Set(EXACT_ROOT_TASK_ID),
+          ),
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: cancellation is not a terminal disposition until its durable
+  // direction is present and the fresh classification is otherwise settled.
+  action appendCancelledWithoutAppliedDirection: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.postQuiescenceReads == 1,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    not(state.durable.cancellationApplied),
+    state' = {
+      ...state,
+      durable: { ...state.durable, terminationDisposition: Cancelled },
+      process: { ...state.process, phase: ActivationReturned, terminalDisposition: Cancelled },
+      trace: { ...state.trace, terminationAppends: state.trace.terminationAppends + 1 },
+    },
+  }
+
+  // Forbidden: the cancellation direction cannot be hidden while claiming a
+  // fresh tracker blockage; the three terminal predicates must remain disjoint.
+  action appendBlockedAfterCancellation: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.postQuiescenceReads == 1,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state.durable.cancellationApplied,
+    state' = {
+      ...state,
+      durable: { ...state.durable, terminationDisposition: Blocked },
+      process: { ...state.process, phase: ActivationReturned, terminalDisposition: Blocked },
+      trace: { ...state.trace, terminationAppends: state.trace.terminationAppends + 1 },
+    },
+  }
+
+  action admitAfterCancellation: bool = all {
+    state.process.phase == ActivatingRun,
+    state.durable.cancellationApplied,
+    state' = {
+      ...state,
+      process: { ...state.process, independentTaskAdmitted: true },
     },
   }
 
@@ -419,5 +693,63 @@ module runActivationNegativeTest {
   run crashChangingDurableHistoryIsDetectedTest = {
     init.then(establishAbsentHistory).then(crashAndChangeDurableHistory)
       .expect(not(processLossPreservesDurableHistory))
+  }
+
+  run mismatchedGraphEvidenceIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithMismatchedGraphEvidence)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run mismatchedObservationPositionIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithMismatchedObservationPosition)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run wrongRootIdentityIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithWrongRootGraphEvidence)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run staleContentIdentityIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithStaleContentIdentity)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run coverageOnlyMismatchIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithMismatchedGraphCoverage)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run cancelledWithoutAppliedDirectionIsDetectedTest = {
+    init.then(selectCancelledRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(readPostQuiescenceTrackerGraph)
+      .then(appendCancelledWithoutAppliedDirection)
+      .expect(not(cancelledRequiresAppliedAndSettledDirection))
+  }
+
+  run blockedAfterCancellationIsDetectedTest = {
+    init.then(selectCancelledRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(applyCancellation).then(reachQuiescence)
+      .then(readPostQuiescenceTrackerGraph).then(appendBlockedAfterCancellation)
+      .expect(not(blockedRequiresFreshConclusiveTrackerFacts))
+  }
+
+  run forwardAdmissionAfterCancellationIsDetectedTest = {
+    init.then(establishAbsentHistory).then(activateEstablishedRun)
+      .then(readInitialTrackerGraph).then(applyCancellation)
+      .then(admitAfterCancellation)
+      .expect(not(cancellationClosesForwardAdmission))
   }
 }

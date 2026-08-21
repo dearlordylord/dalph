@@ -58,6 +58,7 @@ import {
 } from "./delivery-proposal.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import { frontierOf } from "./ticket-delivery-projection.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
@@ -106,6 +107,7 @@ const makeDeliveryRelationsLayer = (
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: null,
+          cancellationApplied: false,
           pauseCoverage: {
             _tag: "PauseCoverageGraphNotEstablished",
             applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
@@ -376,6 +378,57 @@ it.effect("lets a completed tracker target terminate after exact integration fin
     expect(
       deliveryFinalityOf(
         settledCurrent,
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "TrackerReconfirmationAllowed" }
+      )
+    ).toEqual({ _tag: "RunMayTerminate" })
+  })
+)
+
+it.effect("treats a fully disposed cancelled attempt as settled for Run finality", () =>
+  Effect.gen(function* () {
+    const fixture = integrationFinalityFixture
+    const relation = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf(releaseChronologyEvidence(5, true)),
+          graph: currentSignalOf(
+            journaledGraphState(journaledGraph("cancelled-attempt-settled", [fixture.taskId], true))
+          ),
+          policy: currentSignalOf(policy)
+        })
+      )
+    )
+    const current = Option.getOrThrow(
+      yield* relation.changes.pipe(
+        Stream.map(({ current: snapshot }) => snapshot),
+        Stream.runHead
+      )
+    )
+    const delivery = current.ticketDeliveries.deliveries[0]
+    if (delivery === undefined) return yield* Effect.die("fixture must project one ticket delivery")
+    const cancelledAttemptStanding = {
+      _tag: "ResponsibilitySituation" as const,
+      facts: {
+        _tag: "PlannedAttemptExecutorFreshFacts" as const,
+        disposition: ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" }),
+        responsibility: {
+          _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+          beganAt: JournalPosition.make(1),
+          plannedAttempt: fixture.plannedAttempt
+        }
+      }
+    }
+    expect(
+      deliveryFinalityOf(
+        {
+          ...current,
+          cancellationApplied: true,
+          ticketDeliveries: {
+            ...current.ticketDeliveries,
+            deliveries: [{ ...delivery, standings: [{ _tag: "ProposedDelivery" }, cancelledAttemptStanding] }]
+          }
+        },
         { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
         { _tag: "TrackerReconfirmationAllowed" }
       )

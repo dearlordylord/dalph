@@ -327,6 +327,10 @@ export interface StoryCursor {
       | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
     >
   >
+  /** Consume Alice's exact whole-Run cancellation boundary. */
+  readonly consumeRunCancellation: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellation.Type>
+  >
   readonly consumePauseObservationStart: Effect.Effect<
     Option.Option<
       | typeof AuthoredCassetteStoryItem.cases.OperatorStartsPauseObservation.Type
@@ -350,6 +354,7 @@ export interface StoryCursor {
   ) => Effect.Effect<
     Option.Option<
       | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type
+      | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellationWhileExecutorRequestInFlight.Type
       | typeof AuthoredCassetteStoryItem.cases.OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting.Type
     >
   >
@@ -1080,6 +1085,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       if (Option.isSome(gate)) yield* SubscriptionRef.set(controlDirectionBeforeAdmission, gate)
       return Option.some(claimed.item)
     })
+  const consumeRunCancellation = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellation.Type =>
+        item?._tag === "OperatorAppliesRunCancellation"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for the current cancellation tag. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    return Option.some(claimed.item)
+  })
   const consumePauseObservationStart = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (
@@ -1144,8 +1158,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           item
         ): item is
           | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionWhileExecutorRequestInFlight.Type
+          | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellationWhileExecutorRequestInFlight.Type
           | typeof AuthoredCassetteStoryItem.cases.OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting.Type =>
           (item?._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight" ||
+            item?._tag === "OperatorAppliesRunCancellationWhileExecutorRequestInFlight" ||
             item?._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting") &&
           (attemptId === undefined || item.duringAttemptId === attemptId)
       )
@@ -1380,6 +1396,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeCapacityChange,
     consumeControlDirection,
     consumeControlDirectionFailure,
+    consumeRunCancellation,
     consumePauseObservationStart,
     consumePauseProgressAwait,
     consumePauseProgressObservedCancelledAndReconnected,

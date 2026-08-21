@@ -2,13 +2,14 @@
 
 Issue: [Terminate one globally settled live run](https://github.com/dearlordylord/dalph/issues/102)
 
-Status: Phase 1 accepted in the 2026-08-20 scenario interview; runtime
-implementation remains Phase 2 work.
+Status: Accepted in the 2026-08-20 scenario interview and implemented on the
+issue #102 delivery branch. The scenario-to-test mapping below records the
+production seams and negative controls used for handoff.
 
 These scenarios extend the shipped `Completed`-only stabilization behavior from
 issue #194. They specify three final results for V1: `Completed`, `Blocked`, and
-`Cancelled`. They do not claim that the current implementation supports
-`Blocked` or `Cancelled`, and they do not add `Failed` for enum symmetry.
+`Cancelled`. The implementation supports `Blocked` and `Cancelled` without
+adding `Failed` for enum symmetry.
 
 A Run begins for one Run root task. After ordinary delivery has no executable
 action and no live action owner, Dalph may make one complete task-tracker read
@@ -353,32 +354,50 @@ than falsely recording `Cancelled`.
 
 ## Model, cassette, and implementation ownership
 
-Phase 2 must begin from these scenarios, not from the current completion
+The implementation begins from these scenarios rather than a completion
 Boolean.
 
-- Extend `specs/runActivation.qnt` and its executable conformance adapter for
-  the three terminal predicates, their precedence, restart freshness, and the
-  terminal-history guard. Add a negative control that makes termination
-  possible with one decisive condition removed.
-- Keep application Exit in its existing model. Its adapter must prove that the
-  Exit cutoff orders cancellation and termination without translating one into
-  the other.
-- Add `specs/runCancellation.qnt` for the materially distinct Run-scoped
-  cancellation direction and settlement boundary. Its executable conformance
-  adapter must invoke the production cancellation control, executor safe-stop,
-  claim release, integration/reconciliation settlement, and restart seams. The
-  model must expose running-executor and integration/reconciliation crash cut
-  points and include its own negative control.
-- Add authored cassettes for Alice's idle, running-executor, and
-  integration-owned cancellation outcomes. Extend the P0-P6 recovery lanes for
-  a crash before the fresh observation, after it, and around the terminal
-  append. The labels remain test cut points, not workflow stages.
+- `specs/runActivation.qnt` and its executable adapter cover the three terminal
+  predicates, precedence, restart freshness, exact Run/root/revision/operation/
+  Journal-position/coverage evidence, and the terminal-history guard. Its
+  negative model independently removes decisive conditions.
+- Application Exit remains in its existing model. The cancellation adapter
+  proves that the Exit cutoff rejects cancellation without translating it into
+  termination.
+- `specs/runCancellation.qnt` owns the distinct Run-scoped cancellation
+  direction and settlement boundary. Its executable adapter invokes the
+  production cancellation control, executor safe-stop, exact claim release or
+  typed no-release observation, integration/reconciliation settlement, fresh
+  classification, and restart seams.
+- `packages/dalph/test/cassettes/run-cancellation.test.ts` presents Alice's
+  idle, running-executor, and integration-owned outcomes. The production
+  recovery test exercises P0-P6 on both memory and SQLite journals; those
+  labels remain test cut points rather than workflow stages.
 
-## Scenario-to-test mapping required at handoff
+## Scenario-to-test mapping at handoff
 
-The Phase 2 handoff must replace every acceptance-test seam above with a
-passing test or model scenario. It must identify the typed proof used for each
-terminal result, the exact existing protocol reused for each outside effect,
-the authored cassette covering each Operator-visible cancellation outcome, and
-the negative control for every model. Aggregate checks do not replace this
-mapping.
+- Idle cancellation: `run-cancellation.test.ts` and
+  `run-cancellation.mbt.test.ts` use `RunCancellationApplied` and production
+  finality to append exactly one `Cancelled` result.
+- Running executor and exact claim disposition: the same cassette and MBT run
+  production safe suspension, implementation relinquishment, and claim
+  release. Absent, foreign, and unreadable claim lanes prove a typed no-release
+  occurrence or fail-closed retention, never a guessed release.
+- Integration ownership and quarantine: the cassette and production MBT run
+  promotion settlement, responsibility release, and quarantine before final
+  classification.
+- Pause, Exit, terminal history, and redelivery: the activation/cancellation
+  Quint suites and cancellation MBT prove no new forward work, explicit Exit
+  rejection, terminal-history finality, and idempotent cancellation delivery.
+- Crash and retry: `run-cancellation-recovery-prefixes.test.ts` bootstraps P0-P6
+  through production on memory and SQLite journals, including the ambiguous
+  terminal append and exact observation-position ordering.
+- Exact finality evidence: run-finality, workflow-journal lifecycle, and
+  reconstruction tests reject mismatched Run, target, operation, revision,
+  root, coverage, or Journal position. The activation model has independent
+  negative controls for its modeled identity dimensions.
+- Formal negative controls: `runActivation_negative_test.qnt` and
+  `runCancellation_negative_test.qnt` make forbidden terminal shortcuts
+  reachable and assert that their invariants turn red.
+
+Aggregate checks remain supporting evidence and do not replace these mappings.

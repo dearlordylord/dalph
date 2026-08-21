@@ -23,6 +23,7 @@ import type {
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import type {
+  CancelledAttemptTaskClaimReleaseOperation,
   StoppedAttemptTaskClaimReleaseOperation,
   WorkflowOperation,
   WorkflowTaskClaimReleaseOperation
@@ -45,7 +46,11 @@ import type {
   CompletionTaskRequest,
   PostPromotionBlockerClearAuthorization
 } from "../../workflow/protocols/integration-finality/events.js"
-import type { AttemptChoiceRequestId, AttemptChoiceSubject } from "../../workflow/protocols/attempt-choice/events.js"
+import type {
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject,
+  AttemptQuiescenceProof
+} from "../../workflow/protocols/attempt-choice/events.js"
 import type {
   AttemptRestartRejectedReason,
   AttemptRestartWaitReason
@@ -130,6 +135,28 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
+  }
+  /** Records executor quiescence as cancellation relinquishment for one exact planned attempt. */
+  RelinquishCancelledAttemptImplementation: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly proof: AttemptQuiescenceProof
+  }
+  ObserveCancelledAttemptClaim: {
+    readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  RecordCancelledAttemptClaimNoRelease: {
+    readonly observationOperationId: OperationId
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  ReleaseCancelledAttemptClaim: {
+    readonly operation: CancelledAttemptTaskClaimReleaseOperation
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  /** Repeats one already-intended cancellation claim release after the tracker kept that exact claim current. */
+  RetryCancelledAttemptClaimRelease: {
+    readonly operation: CancelledAttemptTaskClaimReleaseOperation
+    readonly plannedAttempt: PlannedTaskAttempt
   }
   RecordStoppedAttemptClaimNoRelease: {
     readonly observationOperationId: OperationId
@@ -299,13 +326,18 @@ const transitionTrackerGraphRequirements = {
   ObservePlannedAttemptContinuationWorktree: "AcceptedHistorySufficient",
   ObserveResponsibleTaskClaim: "CurrentTrackerGraphRequired",
   ObserveStoppedAttemptClaim: "AcceptedHistorySufficient",
+  ObserveCancelledAttemptClaim: "AcceptedHistorySufficient",
   QueueAcceptedResultIntegrationResponsibility: "CurrentTrackerGraphRequired",
   ReconcileTaskClaim: "AcceptedHistorySufficient",
   ReconcileTaskClaimRelease: "AcceptedHistorySufficient",
   ReconcileTaskWorktree: "AcceptedHistorySufficient",
   RecordStoppedAttemptClaimNoRelease: "AcceptedHistorySufficient",
+  RecordCancelledAttemptClaimNoRelease: "AcceptedHistorySufficient",
+  RelinquishCancelledAttemptImplementation: "AcceptedHistorySufficient",
   ReleaseExternallyCompletedTaskClaim: "CurrentTrackerGraphRequired",
+  ReleaseCancelledAttemptClaim: "AcceptedHistorySufficient",
   ReleaseStoppedAttemptClaim: "AcceptedHistorySufficient",
+  RetryCancelledAttemptClaimRelease: "AcceptedHistorySufficient",
   RetryStoppedAttemptClaimRelease: "AcceptedHistorySufficient",
   ReleaseStartedIntegrationTarget: "AcceptedHistorySufficient",
   StartPlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
@@ -409,6 +441,29 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly observationOperationId: OperationId
     readonly taskId: TaskId
     readonly wakeCondition: "TaskClaimFactsObserved"
+  }
+  CancelledAttemptClaimWait: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly observationOperationId: OperationId
+    readonly taskId: TaskId
+    readonly wakeCondition: "TaskClaimFactsObserved"
+  }
+  CancelledAttemptClaimReleasePending: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly operationId: OperationId
+    readonly taskId: TaskId
+    readonly wakeCondition: "TaskClaimReleaseReconciled"
+  }
+  CancelledAttemptClaimPlanningWait: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly reason: "FocusedObservationContradiction" | "TrackerTargetUnavailable"
+    readonly taskId: TaskId
+    readonly wakeCondition: "JournalHistoryRepairedOrTargetAvailable"
+  }
+  CancelledAttemptSettled: {
+    readonly claimDisposition: "NoRelease" | "Released"
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly taskId: TaskId
   }
   StoppedAttemptClaimReleasePending: {
     readonly correlation: PlannedAttemptExecutorCorrelation
@@ -633,6 +688,55 @@ const executorDecisionFor = (
       }),
       StoppedAttemptClaimNoReleaseRequired: (fields) => ({
         transition: RunnableFrontierTransition.RecordStoppedAttemptClaimNoRelease(fields)
+      }),
+      CancelledAttemptRelinquishmentRequired: ({ plannedAttempt, proof }) => ({
+        transition: RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({ plannedAttempt, proof })
+      }),
+      CancelledAttemptClaimNoReleaseRequired: ({ observationOperationId, plannedAttempt }) => ({
+        transition: RunnableFrontierTransition.RecordCancelledAttemptClaimNoRelease({
+          observationOperationId,
+          plannedAttempt
+        })
+      }),
+      CancelledAttemptClaimObservationRequired: ({ operation, plannedAttempt }) => ({
+        transition: RunnableFrontierTransition.ObserveCancelledAttemptClaim({ operation, plannedAttempt })
+      }),
+      CancelledAttemptClaimReleaseRequired: ({ operation, plannedAttempt }) => ({
+        transition: RunnableFrontierTransition.ReleaseCancelledAttemptClaim({ operation, plannedAttempt })
+      }),
+      CancelledAttemptClaimReleaseRetryRequired: ({ operation, plannedAttempt }) => ({
+        transition: RunnableFrontierTransition.RetryCancelledAttemptClaimRelease({ operation, plannedAttempt })
+      }),
+      CancelledAttemptClaimReleasePending: ({ operationId }) => ({
+        explanation: FrontierExplanation.CancelledAttemptClaimReleasePending({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          operationId,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "TaskClaimReleaseReconciled"
+        })
+      }),
+      CancelledAttemptClaimPlanningWait: ({ reason }) => ({
+        explanation: FrontierExplanation.CancelledAttemptClaimPlanningWait({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          reason,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "JournalHistoryRepairedOrTargetAvailable"
+        })
+      }),
+      CancelledAttemptClaimUnreadableWait: ({ observationOperationId }) => ({
+        explanation: FrontierExplanation.CancelledAttemptClaimWait({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          observationOperationId,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "TaskClaimFactsObserved"
+        })
+      }),
+      CancelledAttemptSettled: ({ claimDisposition }) => ({
+        explanation: FrontierExplanation.CancelledAttemptSettled({
+          claimDisposition,
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId
+        })
       }),
       StoppedAttemptClaimObservationRequired: ({ operation, requestId, subject }) => ({
         transition: RunnableFrontierTransition.ObserveStoppedAttemptClaim({ operation, requestId, subject })

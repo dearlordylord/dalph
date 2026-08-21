@@ -21,7 +21,6 @@ import {
   type DeliveryActionProposal,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeFacts,
-  type DeliveryRuntimeSnapshot,
   type DeliveryRelationInputBundle,
   type DeliveryGraphPublication,
   type TicketDeliveryEvidence,
@@ -299,19 +298,19 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
         const facts = mapCurrentSignal(input.coherent, ({ actionInputs }) => actionInputs.runtimeFacts)
-        const current = mapCurrentSignal(
-          delivery,
-          (delivery): DeliveryRuntimeSnapshot => ({
-            _tag: "DeliveryRuntimeSnapshot",
-            reflection: delivery.trackerConsequences,
-            settlements: delivery.settlements,
-            ticketDeliveries: delivery.ticketDeliveries,
-            trackerGraph: delivery.graph
-          })
-        )
+        const current = mapCurrentSignal(delivery, (delivery) => ({
+          _tag: "DeliveryRuntimeSnapshot" as const,
+          reflection: delivery.trackerConsequences,
+          settlements: delivery.settlements,
+          ticketDeliveries: delivery.ticketDeliveries,
+          trackerGraph: delivery.graph
+        }))
         const makeEvaluation = (
           facts: DeliveryRuntimeFacts,
-          current: Effect.Effect<DeliveryRuntimeEvaluation["current"], E | DeliveryRelationSourceError>,
+          current: Effect.Effect<
+            Omit<DeliveryRuntimeEvaluation["current"], "cancellationApplied" | "runId">,
+            E | DeliveryRelationSourceError
+          >,
           proposedActions: Effect.Effect<DeliveryRuntimeEvaluation["proposedActions"], E | DeliveryRelationSourceError>
         ) =>
           Effect.all({ current, proposedActions }).pipe(
@@ -319,7 +318,13 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
               ({ current, proposedActions }): DeliveryRuntimeEvaluation => ({
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
-                current,
+                current: {
+                  ...current,
+                  cancellationApplied: facts.cancellationApplied,
+                  ...(facts.runId === undefined ? {} : { runId: facts.runId })
+                },
+                cancellationApplied: facts.cancellationApplied,
+                ...(facts.runId === undefined ? {} : { runId: facts.runId }),
                 pauseCoverage: facts.pauseCoverage,
                 proposedActions,
                 quiescence: facts.quiescence,

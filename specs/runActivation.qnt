@@ -13,6 +13,42 @@ module runActivation {
   type TaskCapacity = Capacity1 | Capacity2
   type ControlPolicy = { revision: PolicyRevision, taskCapacity: TaskCapacity }
 
+  // These are the only V1 whole-Run terminal dispositions. Failed is
+  // deliberately absent until a separately accepted conclusive Run-level
+  // failure protocol exists.
+  type TerminalDisposition = NoTerminal | Completed | Blocked | Cancelled
+
+  // A complete tracker read can prove all-success, conclusive impossibility,
+  // or neither. Temporary waits and unreadable/partial reads are not terminal
+  // graph facts.
+  type GraphOutcome = GraphAllSucceeded | GraphBlocked | GraphUnsettled
+
+  // Tracker content identity is a provider revision/fingerprint, not the
+  // operation ordinal used to count this activation's boundary calls. The
+  // stale variant exists only for mutation controls that must make an invalid
+  // terminal proof reachable.
+  type TrackerContentIdentity =
+    | ContentRevisionAllSucceeded
+    | ContentRevisionBlocked
+    | ContentRevisionUnsettled
+    | StaleContentRevision
+
+  type GraphReadEvidence =
+    | NoGraphReadEvidence
+    | ExactGraphReadEvidence({
+        runId: RunId,
+        target: TrackerTarget,
+        operationOrdinal: int,
+        observedAt: int,
+        graphOutcome: GraphOutcome,
+        contentIdentity: TrackerContentIdentity,
+        rootTaskId: TaskId,
+        coveredTaskIds: Set[TaskId],
+        complete: bool,
+      })
+    | MismatchedGraphReadEvidence
+    | IncompleteGraphReadEvidence
+
   type AttemptCorrelation = {
     runId: RunId,
     taskId: TaskId,
@@ -83,6 +119,8 @@ module runActivation {
     | PostQuiescenceObservation({
         targetSettled: bool,
         responsibilitiesSettled: bool,
+        graphOutcome: GraphOutcome,
+        evidence: GraphReadEvidence,
       })
 
   // This is recreated on every process entry. It is never durable authority.
@@ -91,6 +129,7 @@ module runActivation {
     establishedRun: EstablishedRun,
     establishmentSource: EstablishmentSource,
     activationOrdinal: int,
+    terminalDisposition: TerminalDisposition,
     heldPosition: TaskPosition,
     otherHeldPosition: TaskPosition,
     initialPolicyEvaluated: bool,
@@ -111,6 +150,85 @@ module runActivation {
   type TrackerFinalityFacts = {
     targetSettled: bool,
     responsibilitiesSettled: bool,
+    graphOutcome: GraphOutcome,
+    contentIdentity: TrackerContentIdentity,
+    observationPosition: int,
+    rootTaskId: TaskId,
+    coveredTaskIds: Set[TaskId],
+    evidence: GraphReadEvidence,
+  }
+
+  pure val NO_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
+  pure val INITIAL_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
+  pure val EXACT_ROOT_TASK_ID: TaskId = TaskA
+  // The decisive observation's Journal position is identity evidence in its
+  // own right. It deliberately differs from the tracker operation ordinal.
+  pure val EXACT_OBSERVATION_POSITION: int = 17
+
+  // CompleteTargetClosure covers the target transitively; this set records
+  // only additional task IDs explicitly named by the read operation. The
+  // production G2 read names none, while its tracker result still contains
+  // and validates the exact Run root and complete graph facts.
+  pure def trackerCoverageFor(_outcome: GraphOutcome): Set[TaskId] = Set()
+
+  pure def trackerContentIdentityFor(outcome: GraphOutcome): TrackerContentIdentity = match outcome {
+    | GraphAllSucceeded => ContentRevisionAllSucceeded
+    | GraphBlocked => ContentRevisionBlocked
+    | GraphUnsettled => ContentRevisionUnsettled
+  }
+
+  pure def terminalDispositionFor(
+    graphOutcome: GraphOutcome,
+    cancellationApplied: bool,
+  ): TerminalDisposition = if (graphOutcome == GraphAllSucceeded) Completed
+    else if (cancellationApplied) Cancelled
+    else if (graphOutcome == GraphBlocked) Blocked
+    else NoTerminal
+
+  pure def exactGraphEvidenceFor(
+    runId: RunId,
+    target: TrackerTarget,
+    operationOrdinal: int,
+    observedAt: int,
+    graphOutcome: GraphOutcome,
+    contentIdentity: TrackerContentIdentity,
+    rootTaskId: TaskId,
+    coveredTaskIds: Set[TaskId],
+  ): GraphReadEvidence = ExactGraphReadEvidence({
+    runId: runId,
+    target: target,
+    operationOrdinal: operationOrdinal,
+    observedAt: observedAt,
+    graphOutcome: graphOutcome,
+    contentIdentity: contentIdentity,
+    rootTaskId: rootTaskId,
+    coveredTaskIds: coveredTaskIds,
+    complete: true,
+  })
+
+  pure def evidenceIsExactFor(
+    evidence: GraphReadEvidence,
+    runId: RunId,
+    target: TrackerTarget,
+    operationOrdinal: int,
+    observedAt: int,
+    graphOutcome: GraphOutcome,
+    contentIdentity: TrackerContentIdentity,
+    rootTaskId: TaskId,
+    coveredTaskIds: Set[TaskId],
+  ): bool = match evidence {
+    | ExactGraphReadEvidence(facts) => and {
+        facts.runId == runId,
+        facts.target == target,
+        facts.operationOrdinal == operationOrdinal,
+        facts.observedAt == observedAt,
+        facts.graphOutcome == graphOutcome,
+        facts.contentIdentity == contentIdentity,
+        facts.rootTaskId == rootTaskId,
+        facts.coveredTaskIds == coveredTaskIds,
+        facts.complete,
+      }
+    | _ => false
   }
 
   // Trace evidence is model-checker instrumentation, not a Dalph persistence
@@ -120,6 +238,8 @@ module runActivation {
     initialPolicyEvaluations: int,
     beginningAppends: int,
     terminationAppends: int,
+    cancellationAppends: int,
+    cancellationRedeliveries: int,
     activationsStarted: int,
     trackerCalls: int,
     gitCalls: int,
@@ -132,6 +252,8 @@ module runActivation {
   type DurableState = {
     history: StartupHistory,
     independentTaskSettled: bool,
+    cancellationApplied: bool,
+    terminationDisposition: TerminalDisposition,
   }
 
   type State = {
@@ -299,6 +421,7 @@ module runActivation {
     establishedRun: NoEstablishedRun,
     establishmentSource: NoEstablishmentSource,
     activationOrdinal: 0,
+    terminalDisposition: NoTerminal,
     heldPosition: NoTaskPosition,
     otherHeldPosition: NoTaskPosition,
     initialPolicyEvaluated: false,
@@ -322,7 +445,20 @@ module runActivation {
   }
 
   pure def finalityObservationIsSettled(observation: FinalityObservation): bool = match observation {
-    | PostQuiescenceObservation(facts) => facts.targetSettled and facts.responsibilitiesSettled
+    | PostQuiescenceObservation(facts) => and {
+        facts.targetSettled,
+        facts.responsibilitiesSettled,
+        match facts.evidence {
+          | ExactGraphReadEvidence(evidence) => and {
+              evidence.graphOutcome == facts.graphOutcome,
+              evidence.contentIdentity == trackerContentIdentityFor(facts.graphOutcome),
+              evidence.rootTaskId == EXACT_ROOT_TASK_ID,
+              evidence.coveredTaskIds == trackerCoverageFor(facts.graphOutcome),
+              evidence.complete,
+            }
+          | _ => false
+        },
+      }
     | NoFinalityObservation => false
   }
 
@@ -337,6 +473,7 @@ module runActivation {
       < taskCapacityValue(establishedFacts(state.process.establishedRun).latestPolicy.taskCapacity),
     not(state.process.independentTaskAdmitted),
     not(state.durable.independentTaskSettled),
+    not(state.durable.cancellationApplied),
     not(state.trackerFinality.targetSettled),
     taskCapacityValue(establishedFacts(state.process.establishedRun).latestPolicy.taskCapacity) >= 1,
     exactRequestedUnfinished(state.durable.history, state.requestedRunId, state.requestedTarget),
@@ -455,6 +592,75 @@ module runActivation {
         | _ => false
       }
 
+  // Final classification is derived from the fresh graph and the durable
+  // cancellation direction, never from enum ordering or a task outcome alone.
+  val terminalDispositionMatchesAcceptedFacts: bool =
+    state.trace.terminationAppends == 0
+      or and {
+        state.trace.terminationAppends == 1,
+        (state.trackerFinality.graphOutcome == GraphAllSucceeded
+          and state.durable.terminationDisposition == Completed)
+          or (state.trackerFinality.graphOutcome != GraphAllSucceeded
+            and state.durable.cancellationApplied
+            and state.durable.terminationDisposition == Cancelled)
+          or (state.trackerFinality.graphOutcome == GraphBlocked
+            and not(state.durable.cancellationApplied)
+            and state.durable.terminationDisposition == Blocked)
+          or (state.trackerFinality.graphOutcome == GraphUnsettled
+            and not(state.durable.cancellationApplied)
+            and state.durable.terminationDisposition == NoTerminal),
+      }
+
+  val completedRequiresAllCurrentTasksSuccessful: bool =
+    state.durable.terminationDisposition != Completed
+      or and {
+        state.trackerFinality.graphOutcome == GraphAllSucceeded,
+        state.trace.terminationAppends == 1,
+      }
+
+  val blockedRequiresFreshConclusiveTrackerFacts: bool =
+    state.durable.terminationDisposition != Blocked
+      or and {
+        state.trackerFinality.graphOutcome == GraphBlocked,
+        not(state.durable.cancellationApplied),
+        state.trace.terminationAppends == 1,
+      }
+
+  val cancelledRequiresAppliedAndSettledDirection: bool =
+    state.durable.terminationDisposition != Cancelled
+      or and {
+        state.durable.cancellationApplied,
+        state.trackerFinality.graphOutcome != GraphAllSucceeded,
+        state.trace.terminationAppends == 1,
+      }
+
+  val terminationRequiresExactFreshGraphEvidence: bool =
+    state.trace.terminationAppends == 0
+      or match state.trackerFinality.evidence {
+        | ExactGraphReadEvidence(facts) => and {
+            facts.runId == state.requestedRunId,
+            facts.target == state.requestedTarget,
+            facts.operationOrdinal == state.trace.trackerCalls,
+            facts.observedAt == state.trackerFinality.observationPosition,
+            facts.graphOutcome == state.trackerFinality.graphOutcome,
+            facts.contentIdentity == trackerContentIdentityFor(state.trackerFinality.graphOutcome),
+            facts.rootTaskId == EXACT_ROOT_TASK_ID,
+            facts.coveredTaskIds == state.trackerFinality.coveredTaskIds,
+            facts.complete,
+          }
+        | _ => false
+      }
+
+  val cancellationAppliedAtMostOnce: bool = state.trace.cancellationAppends <= 1
+
+  val cancellationClosesForwardAdmission: bool =
+    not(state.durable.cancellationApplied)
+      or not(state.process.independentTaskAdmitted)
+      or state.process.liveActionOwner
+
+  val cancellationRedeliveryDoesNotAppend: bool =
+    state.trace.cancellationRedeliveries == 0 or state.trace.cancellationAppends == 1
+
   val trackerCallsRequireEstablishedHistory: bool =
     state.trace.trackerCalls == 0
       or match state.durable.history {
@@ -542,22 +748,54 @@ module runActivation {
       and establishedFacts(state.process.establishedRun).latestPolicy == CONTRACTED_POLICY
       and unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt
       and state.trace.executorCalls >= 2
+  val exactGraphEvidenceReached: bool = match state.trackerFinality.evidence {
+    | ExactGraphReadEvidence(_) => true
+    | _ => false
+  }
+  val exactGraphIdentityReached: bool = match state.trackerFinality.evidence {
+    | ExactGraphReadEvidence(facts) => and {
+        facts.graphOutcome == state.trackerFinality.graphOutcome,
+        facts.contentIdentity == trackerContentIdentityFor(state.trackerFinality.graphOutcome),
+        facts.observedAt == state.trackerFinality.observationPosition,
+        facts.rootTaskId == EXACT_ROOT_TASK_ID,
+        facts.coveredTaskIds == state.trackerFinality.coveredTaskIds,
+      }
+    | _ => false
+  }
+  val blockedGraphReadReached: bool = state.trackerFinality.graphOutcome == GraphBlocked
+  val cancellationAppliedReached: bool = state.durable.cancellationApplied
+  val cancellationRedeliveredReached: bool = state.trace.cancellationRedeliveries == 1
+  val completedDispositionReached: bool = state.process.terminalDisposition == Completed
+  val blockedDispositionReached: bool = state.process.terminalDisposition == Blocked
+  val cancelledDispositionReached: bool = state.process.terminalDisposition == Cancelled
 
   action init: bool = all {
     state' = {
       requestedRunId: R1,
       requestedTarget: Target1,
       lazyInitialPolicy: INITIAL_POLICY,
-      durable: { history: EmptyHistory, independentTaskSettled: false },
+      durable: {
+        history: EmptyHistory,
+        independentTaskSettled: false,
+        cancellationApplied: false,
+        terminationDisposition: NoTerminal,
+      },
       trackerFinality: {
         targetSettled: false,
         responsibilitiesSettled: true,
+        graphOutcome: GraphAllSucceeded,
+        contentIdentity: ContentRevisionAllSucceeded,
+        observationPosition: EXACT_OBSERVATION_POSITION,
+        rootTaskId: EXACT_ROOT_TASK_ID,
+        coveredTaskIds: trackerCoverageFor(GraphAllSucceeded),
+        evidence: INITIAL_GRAPH_EVIDENCE,
       },
       process: {
         phase: EntryIdle,
         establishedRun: NoEstablishedRun,
         establishmentSource: NoEstablishmentSource,
         activationOrdinal: 0,
+        terminalDisposition: NoTerminal,
         heldPosition: NoTaskPosition,
         otherHeldPosition: NoTaskPosition,
         initialPolicyEvaluated: false,
@@ -575,6 +813,8 @@ module runActivation {
         initialPolicyEvaluations: 0,
         beginningAppends: 0,
         terminationAppends: 0,
+        cancellationAppends: 0,
+        cancellationRedeliveries: 0,
         activationsStarted: 0,
         trackerCalls: 0,
         gitCalls: 0,
@@ -692,6 +932,55 @@ module runActivation {
       durable: {
         ...state.durable,
         history: OneUnfinishedHistory(removeRetainedAttempt(EXISTING_FACTS)),
+      },
+    },
+  }
+
+  // A fresh complete graph can prove permanent tracker impossibility without
+  // an Operator direction. The retained-history fixture remains otherwise
+  // ordinary so the activation still has to settle all work first.
+  action selectBlockedRunGraph: bool = all {
+    fixtureMayChange,
+    state' = {
+      ...state,
+      durable: {
+        ...state.durable,
+        history: OneUnfinishedHistory(EMPTY_FACTS),
+      },
+      trackerFinality: {
+        ...state.trackerFinality,
+        targetSettled: true,
+        responsibilitiesSettled: true,
+        graphOutcome: GraphBlocked,
+        contentIdentity: ContentRevisionBlocked,
+        rootTaskId: EXACT_ROOT_TASK_ID,
+        coveredTaskIds: trackerCoverageFor(GraphBlocked),
+        evidence: NO_GRAPH_EVIDENCE,
+      },
+    },
+  }
+
+  // Cancellation is an already-applied Operator direction when activation
+  // performs final classification; the separate runCancellation model owns
+  // how that fact was established and how outstanding work was settled.
+  action selectCancelledRunGraph: bool = all {
+    fixtureMayChange,
+    state' = {
+      ...state,
+      durable: {
+        ...state.durable,
+        history: OneUnfinishedHistory(EMPTY_FACTS),
+        cancellationApplied: false,
+      },
+      trackerFinality: {
+        ...state.trackerFinality,
+        targetSettled: true,
+        responsibilitiesSettled: true,
+        graphOutcome: GraphBlocked,
+        contentIdentity: ContentRevisionBlocked,
+        rootTaskId: EXACT_ROOT_TASK_ID,
+        coveredTaskIds: trackerCoverageFor(GraphBlocked),
+        evidence: NO_GRAPH_EVIDENCE,
       },
     },
   }
@@ -938,7 +1227,43 @@ module runActivation {
     not(state.trackerFinality.targetSettled and state.trackerFinality.responsibilitiesSettled),
     state' = {
       ...state,
-      trackerFinality: { targetSettled: true, responsibilitiesSettled: true },
+      trackerFinality: {
+        ...state.trackerFinality,
+        targetSettled: true,
+        responsibilitiesSettled: true,
+      },
+    },
+  }
+
+  action applyCancellation: bool = all {
+    state.process.phase == ActivatingRun,
+    // Active-attempt cancellation settlement belongs to runCancellation. This
+    // activation composition admits the durable direction only after its
+    // abstract responsibility projection is already settled.
+    state.trackerFinality.responsibilitiesSettled,
+    state.process.heldPosition == NoTaskPosition,
+    state.process.otherHeldPosition == NoTaskPosition,
+    unfinishedFacts(state.durable.history).retainedAttempt == NoRetainedAttempt,
+    unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt,
+    state.trace.executorCalls == 0,
+    not(state.durable.cancellationApplied),
+    state.trace.cancellationAppends == 0,
+    state.trace.terminationAppends == 0,
+    state' = {
+      ...state,
+      durable: { ...state.durable, cancellationApplied: true },
+      trace: { ...state.trace, cancellationAppends: state.trace.cancellationAppends + 1 },
+    },
+  }
+
+  action redeliverCancellation: bool = all {
+    state.process.phase == ActivatingRun,
+    state.durable.cancellationApplied,
+    state.trace.cancellationAppends == 1,
+    state.trace.cancellationRedeliveries == 0,
+    state' = {
+      ...state,
+      trace: { ...state.trace, cancellationRedeliveries: state.trace.cancellationRedeliveries + 1 },
     },
   }
 
@@ -954,12 +1279,47 @@ module runActivation {
     state.process.phase == ActivatingRun,
     state.process.quiescent,
     state.process.postQuiescenceReads == 0,
+    // G2 is the fresh observation used for termination. Every retained
+    // responsibility must settle before that observation, so a later
+    // executor report cannot invalidate the proof after it was read.
+    state.trackerFinality.responsibilitiesSettled,
+    state.process.heldPosition == NoTaskPosition,
+    state.process.otherHeldPosition == NoTaskPosition,
+    unfinishedFacts(state.durable.history).retainedAttempt == NoRetainedAttempt,
+    unfinishedFacts(state.durable.history).otherRetainedAttempt == NoRetainedAttempt,
     state' = {
       ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition,
+          state.trackerFinality.graphOutcome,
+          state.trackerFinality.contentIdentity,
+          state.trackerFinality.rootTaskId,
+          state.trackerFinality.coveredTaskIds,
+        ),
+      },
       process: {
         ...state.process,
         postQuiescenceReads: 1,
-        finalityObservation: PostQuiescenceObservation(state.trackerFinality),
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: state.trackerFinality.targetSettled,
+          responsibilitiesSettled: state.trackerFinality.responsibilitiesSettled,
+          graphOutcome: state.trackerFinality.graphOutcome,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition,
+            state.trackerFinality.graphOutcome,
+            state.trackerFinality.contentIdentity,
+            state.trackerFinality.rootTaskId,
+            state.trackerFinality.coveredTaskIds,
+          ),
+        }),
       },
       trace: { ...state.trace, trackerCalls: state.trace.trackerCalls + 1 },
     },
@@ -976,6 +1336,21 @@ module runActivation {
     state.process.phase == ActivatingRun,
     state.process.postQuiescenceReads == 1,
     finalityObservationIsSettled(state.process.finalityObservation),
+    terminalDispositionFor(
+      state.trackerFinality.graphOutcome,
+      state.durable.cancellationApplied,
+    ) != NoTerminal,
+    evidenceIsExactFor(
+      state.trackerFinality.evidence,
+      state.requestedRunId,
+      state.requestedTarget,
+      state.trace.trackerCalls,
+      state.trackerFinality.observationPosition,
+      state.trackerFinality.graphOutcome,
+      trackerContentIdentityFor(state.trackerFinality.graphOutcome),
+      EXACT_ROOT_TASK_ID,
+      state.trackerFinality.coveredTaskIds,
+    ),
     state.process.heldPosition == NoTaskPosition,
     state.process.otherHeldPosition == NoTaskPosition,
     unfinishedFacts(state.durable.history).retainedAttempt == NoRetainedAttempt,
@@ -988,8 +1363,19 @@ module runActivation {
       durable: {
         ...state.durable,
         history: TerminatedHistory(unfinishedFacts(state.durable.history)),
+        terminationDisposition: terminalDispositionFor(
+          state.trackerFinality.graphOutcome,
+          state.durable.cancellationApplied,
+        ),
       },
-      process: { ...state.process, phase: ActivationReturned },
+      process: {
+        ...state.process,
+        phase: ActivationReturned,
+        terminalDisposition: terminalDispositionFor(
+          state.trackerFinality.graphOutcome,
+          state.durable.cancellationApplied,
+        ),
+      },
       trace: {
         ...state.trace,
         terminationAppends: state.trace.terminationAppends + 1,
@@ -1030,6 +1416,8 @@ module runActivation {
     selectForeignRunRecordHistory,
     selectMultipleUnfinishedHistories,
     selectTerminatedHistory,
+    selectBlockedRunGraph,
+    selectCancelledRunGraph,
     selectExactExistingHistoryWithoutResponsibility,
     establishAbsentHistory,
     establishExistingHistory,
@@ -1044,6 +1432,8 @@ module runActivation {
     admitIndependentTask,
     settleIndependentTask,
     trackerFactsBecomeSettled,
+    applyCancellation,
+    redeliverCancellation,
     reachQuiescence,
     readPostQuiescenceTrackerGraph,
     returnIncomplete,

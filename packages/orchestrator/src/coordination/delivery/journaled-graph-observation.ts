@@ -1,4 +1,5 @@
 import { Option } from "effect"
+import type { TaskId } from "@dalph/contracts"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
@@ -17,6 +18,8 @@ export interface JournaledGraphObservationFields {
   readonly contentIdentity: TrackerRevision
   readonly recordedAt: JournalPosition
   readonly freshness: { readonly _tag: "ObservedDuringLogicalRead"; readonly operationId: OperationId }
+  /** Exact explicit closure subjects carried by the journaled logical read. */
+  readonly explicitlyCoveredTaskIds: ReadonlyArray<TaskId>
 }
 
 type JournaledGraphFacts = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
@@ -75,6 +78,7 @@ export const journaledGraphObservationFieldsFromReceipt = <Receipt>(
         snapshot,
         operationId,
         contentIdentity,
+        explicitlyCoveredTaskIds: firstFamily.coverage.explicitlyCoveredTaskIds,
         recordedAt: position,
         freshness: { _tag: "ObservedDuringLogicalRead", operationId }
       })

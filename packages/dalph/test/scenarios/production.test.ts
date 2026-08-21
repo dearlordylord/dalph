@@ -1503,6 +1503,7 @@ it.effect("terminates once only after G2 proves the target complete and responsi
       const runId = yield* freshWorkflowRunId(target)
       const projected = projectTrackerSnapshot({
         revision: "production-single-start-snapshot",
+        rootTaskId: TaskId.make("A"),
         tasks: [
           {
             id: TaskId.make("A"),
@@ -1577,101 +1578,93 @@ it.effect("terminates once only after G2 proves the target complete and responsi
   )
 )
 
-it.effect(
-  "re-enters an unfinished Run through establishment and reconstructs policy without evaluating the initial fallback",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem
-        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-incomplete-" })
-        const git = yield* GitCommand
-        yield* git.runInWorktree(directory, ["init"])
-        const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
-        const target = FixtureTarget.make("production-incomplete-target")
-        const runId = yield* freshWorkflowRunId(target)
-        const projected = projectTrackerSnapshot({
-          revision: "production-incomplete-snapshot",
-          tasks: [
-            {
-              id: TaskId.make("A"),
-              lifecycle: { _tag: "TerminalWithoutSuccess" },
-              parentTaskId: null,
-              prerequisiteIds: []
-            },
-            {
-              id: TaskId.make("B"),
-              lifecycle: { _tag: "Open" },
-              parentTaskId: null,
-              prerequisiteIds: [TaskId.make("A")]
-            }
-          ]
+it.effect("rejects re-entry after fresh tracker facts conclusively block the Run", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-incomplete-" })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const target = FixtureTarget.make("production-incomplete-target")
+      const runId = yield* freshWorkflowRunId(target)
+      const projected = projectTrackerSnapshot({
+        revision: "production-incomplete-snapshot",
+        rootTaskId: TaskId.make("A"),
+        tasks: [
+          {
+            id: TaskId.make("A"),
+            lifecycle: { _tag: "TerminalWithoutSuccess" },
+            parentTaskId: null,
+            prerequisiteIds: []
+          },
+          { id: TaskId.make("B"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [TaskId.make("A")] }
+        ]
+      })
+      const snapshot = Option.getOrThrow(
+        Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
+      )
+      const trackerReads = yield* Ref.make(0)
+      const nextOperation = yield* Ref.make(0)
+      const trackerReaderLayer = Layer.succeed(
+        TrackerGraphReader,
+        TrackerGraphReader.of({
+          read: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
+          readTaskWorkSpecification: () => Effect.die("incomplete tracker has no selected task")
         })
-        const snapshot = Option.getOrThrow(
-          Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
-        )
-        const trackerReads = yield* Ref.make(0)
-        const nextOperation = yield* Ref.make(0)
-        const trackerReaderLayer = Layer.succeed(
-          TrackerGraphReader,
-          TrackerGraphReader.of({
-            read: () => Ref.update(trackerReads, (count) => count + 1).pipe(Effect.as(snapshot)),
-            readTaskWorkSpecification: () => Effect.die("incomplete tracker has no selected task")
-          })
-        )
-        const application = productionWorkflowInterpreterLayer(
-          runId,
-          GitCommonDirectoryTarget.make(`${directory}/.git`),
-          productionIntegrationTarget(`${directory}/.git`),
-          controlledTrackerMutationLayer,
-          controlledFakePlannedAttemptExecutorLayer,
-          unavailableIntegratorCandidateProviderAuthority
-        ).pipe(
-          Layer.provide(trackerReaderLayer),
-          Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
-        )
-        const operationAllocator = OperationIdAllocator.of({
-          allocate: () =>
-            Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
-              Effect.map((value) => OperationId.make(`production-incomplete-operation-${value}`))
-            )
-        })
-        const claimPlanner = TaskClaimAcquisitionPlanner.of({
-          plan: () => Effect.die("incomplete tracker has no claim")
-        })
-        const attemptPlanner = PlannedTaskAttemptPlanner.of({
-          plan: () => Effect.die("incomplete tracker has no attempt")
-        })
-        const provideRunEnvironment = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-          effect.pipe(
-            Effect.provideService(OperationIdAllocator, operationAllocator),
-            Effect.provideService(TaskClaimAcquisitionPlanner, claimPlanner),
-            Effect.provideService(PlannedTaskAttemptPlanner, attemptPlanner),
-            Effect.provide(application),
-            Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        productionIntegrationTarget(`${directory}/.git`),
+        controlledTrackerMutationLayer,
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
+      ).pipe(
+        Layer.provide(trackerReaderLayer),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const operationAllocator = OperationIdAllocator.of({
+        allocate: () =>
+          Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+            Effect.map((value) => OperationId.make(`production-incomplete-operation-${value}`))
           )
+      })
+      const claimPlanner = TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("incomplete tracker has no claim") })
+      const attemptPlanner = PlannedTaskAttemptPlanner.of({
+        plan: () => Effect.die("incomplete tracker has no attempt")
+      })
+      const provideRunEnvironment = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.provideService(OperationIdAllocator, operationAllocator),
+          Effect.provideService(TaskClaimAcquisitionPlanner, claimPlanner),
+          Effect.provideService(PlannedTaskAttemptPlanner, attemptPlanner),
+          Effect.provide(application),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+        )
 
-        const firstActivation = yield* runWorkflow(
-          target,
-          Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })),
-          runId
-        ).pipe(provideRunEnvironment)
-        const laterActivation = yield* runWorkflow(
-          target,
-          Effect.die("an existing Run must not evaluate the initial control-policy source"),
-          runId
-        ).pipe(provideRunEnvironment)
-        const records = yield* Effect.gen(function* () {
-          return yield* (yield* JournalStore).read(runId)
-        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+      const firstActivation = yield* runWorkflow(
+        target,
+        Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })),
+        runId
+      ).pipe(provideRunEnvironment)
+      const laterActivation = yield* runWorkflow(
+        target,
+        Effect.die("a terminal Run must not evaluate the initial control-policy source"),
+        runId
+      ).pipe(provideRunEnvironment, Effect.flip)
+      const records = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
-        expect(firstActivation).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
-        expect(laterActivation).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
-        expect(yield* Ref.get(trackerReads)).toBe(4)
-        expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
-        expect(new Set(records.map(({ runId: recordedRunId }) => recordedRunId))).toEqual(new Set([runId]))
-        expect(records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
-      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
-    )
+      expect(firstActivation).toEqual({ _tag: "RunMayTerminate" })
+      expect(laterActivation).toMatchObject({ _tag: "WorkflowRunAlreadyTerminated", runId })
+      expect(yield* Ref.get(trackerReads)).toBe(2)
+      expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+      expect(new Set(records.map(({ runId: recordedRunId }) => recordedRunId))).toEqual(new Set([runId]))
+      expect(records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Blocked" })
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
 )
 
 it.effect("publishes each accepted executor report before continuing and stops after Terminal", () =>

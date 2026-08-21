@@ -4,6 +4,8 @@ import { Schema } from "effect"
 
 /** Optional evidence from the claim, attempt-planning, and worktree protocol. */
 export const AuthoredProtocolEvidence = Schema.TaggedUnion({
+  /** The Operator's durable whole-Run direction was applied exactly once. */
+  RunCancellationApplied: {},
   AttemptChoiceApplied: {
     attemptId: AttemptId,
     choice: Schema.Literals(["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"]),

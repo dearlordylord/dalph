@@ -71,11 +71,6 @@
       "count": 1
     }
   },
-  "packages/dalph/test/conformance/run-activation.mbt.test.ts": {
-    "functional/no-throw-statements": {
-      "count": 6
-    }
-  },
   "packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts": {
     "functional/no-throw-statements": {
       "count": 2

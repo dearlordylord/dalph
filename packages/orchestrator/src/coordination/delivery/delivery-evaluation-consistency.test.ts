@@ -35,6 +35,7 @@ const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): Del
     reflectionProposals: [],
     runtimeFacts: {
       acceptedAt: graph._tag === "GraphEstablished" ? graph.observation.recordedAt : null,
+      cancellationApplied: false,
       pauseCoverage: {
         _tag: "PauseCoverageGraphNotEstablished",
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }

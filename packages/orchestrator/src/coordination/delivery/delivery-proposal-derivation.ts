@@ -151,6 +151,11 @@ const integrationTargetFor = (
 }
 
 const settlementTransitionTags = new Set<RunnableFrontierTransition["_tag"]>([
+  "RelinquishCancelledAttemptImplementation",
+  "ObserveCancelledAttemptClaim",
+  "RecordCancelledAttemptClaimNoRelease",
+  "ReleaseCancelledAttemptClaim",
+  "RetryCancelledAttemptClaimRelease",
   "QueueAcceptedResultIntegrationResponsibility",
   "StartQueuedIntegration",
   "AcquireStartedIntegrationTarget",

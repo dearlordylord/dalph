@@ -16,8 +16,10 @@ import type {
   InRunJournal,
   InRunJournalRunMismatch,
   JournalStoreError,
+  JournalStoreContradiction,
   WorkflowRunAlreadyBegan,
   WorkflowRunAlreadyTerminated,
+  WorkflowRunTerminationEvidenceInvalid,
   WorkflowRunIdentityAlreadyUsed,
   WorkflowRunNotBegan,
   WorkflowRunTargetMismatch
@@ -48,6 +50,7 @@ import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
+import type { AppliedRunCancellation } from "../../workflow/protocols/run-cancellation/events.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
@@ -77,9 +80,11 @@ export type JournaledRunBootstrapError =
   | InRunJournalRunMismatch
   | InvalidWorkflowJournalHistory
   | JournalStoreError
+  | JournalStoreContradiction
   | StartupRecoveryBlocked
   | WorkflowRunAlreadyBegan
   | WorkflowRunAlreadyTerminated
+  | WorkflowRunTerminationEvidenceInvalid
   | WorkflowRunIdentityAlreadyUsed
   | WorkflowRunNotBegan
   | WorkflowRunTargetMismatch
@@ -105,6 +110,16 @@ export interface JournaledRunBootstrapService {
     RInitial | Exclude<R, JournaledRunServices>
   >
   readonly operatorControl: {
+    readonly applyRunCancellation: (
+      input: unknown
+    ) => Effect.Effect<
+      AppliedRunCancellation,
+      | Schema.SchemaError
+      | JournaledRunBootstrapError
+      | JournaledRunIdentityMismatch
+      | JournaledRunNotActive
+      | ApplicationExiting
+    >
     readonly applyIntegrationQuarantineDirection: (
       input: unknown
     ) => Effect.Effect<

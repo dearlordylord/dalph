@@ -32,16 +32,22 @@ type IdentityFreeTransition = Extract<
   { readonly _tag: "IdentityFreeWorkflowRoute" }
 >["transition"]
 
+const plannedAttemptTransitionTags: ReadonlySet<IdentityFreeTransition["_tag"]> = new Set([
+  "AdvanceAttemptStoppage",
+  "RelinquishCancelledAttemptImplementation",
+  "ContinuePlannedAttemptExecutorWork",
+  "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts",
+  "ObservePlannedAttemptContinuationExecutor",
+  "ObserveAttemptStoppageExecutor",
+  "RecordStoppedAttemptClaimNoRelease",
+  "RecordCancelledAttemptClaimNoRelease",
+  "SuspendPlannedAttemptExecutorWork"
+])
+
 const isPlannedAttemptTransition = (
   transition: IdentityFreeTransition
 ): transition is Parameters<typeof executePlannedAttemptTransition>[1] =>
-  transition._tag === "AdvanceAttemptStoppage" ||
-  transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-  transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
-  transition._tag === "ObservePlannedAttemptContinuationExecutor" ||
-  transition._tag === "ObserveAttemptStoppageExecutor" ||
-  transition._tag === "RecordStoppedAttemptClaimNoRelease" ||
-  transition._tag === "SuspendPlannedAttemptExecutorWork"
+  plannedAttemptTransitionTags.has(transition._tag)
 
 const executeAcceptedAction = Effect.fn("DeliveryAction.executeAccepted")(function* (
   action: AcceptedOperationAction,
@@ -52,14 +58,12 @@ const executeAcceptedAction = Effect.fn("DeliveryAction.executeAccepted")(functi
   return deliveryActionCompleted(action.proposal.id)
 })
 
-const executeIdentityFreeAction = Effect.fn("DeliveryAction.executeIdentityFree")(function* (
+const executeIdentityFreeTransitionAction = Effect.fn("DeliveryAction.executeIdentityFreeTransition")(function* (
   action: IdentityFreeAction,
+  transition: IdentityFreeTransition,
   lease: DeliveryActionExecutionLease,
   target: TrackerTarget
 ) {
-  const route = action.proposal.route
-  if (route._tag === "FreshExecutorWorkflowRoute") return yield* executeFreshPlannedAttempt(action, route, lease)
-  const transition = route.transition
   if (transition._tag === "AdvanceAttemptRestart") {
     return yield* executeAttemptRestartTransition(action, transition, lease)
   }
@@ -67,6 +71,16 @@ const executeIdentityFreeAction = Effect.fn("DeliveryAction.executeIdentityFree"
     return yield* executePlannedAttemptTransition(action, transition, lease)
   }
   return yield* executeIntegrationAction(action, transition, lease, target)
+})
+
+const executeIdentityFreeAction = Effect.fn("DeliveryAction.executeIdentityFree")(function* (
+  action: IdentityFreeAction,
+  lease: DeliveryActionExecutionLease,
+  target: TrackerTarget
+) {
+  const route = action.proposal.route
+  if (route._tag === "FreshExecutorWorkflowRoute") return yield* executeFreshPlannedAttempt(action, route, lease)
+  return yield* executeIdentityFreeTransitionAction(action, route.transition, lease, target)
 })
 
 const executeFreshOperationAction = Effect.fn("DeliveryAction.executeFreshOperation")(function* (

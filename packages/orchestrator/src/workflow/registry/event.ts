@@ -44,6 +44,12 @@ import {
 import { WorktreeCleanupJournalEvent } from "../protocols/disposition-cleanup/worktree.js"
 import { BranchCleanupJournalEvent } from "../protocols/disposition-cleanup/branch.js"
 import { IntegratorCandidateCleanupJournalEvent } from "../protocols/disposition-cleanup/integrator-candidate.js"
+import {
+  CancelledAttemptClaimNoReleaseObservedEvent,
+  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  RunCancellationAppliedEvent
+} from "../protocols/run-cancellation/events.js"
+import { RunFinalityEvidence } from "../../coordination/frontier/run-finality.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -91,7 +97,8 @@ export type TaskWorkCapacityChangedEvent = typeof TaskWorkCapacityChangedEvent.T
  * records no termination, leaving the Run eligible for recovery.
  */
 export const WorkflowRunTerminatedEvent = Schema.TaggedStruct("WorkflowRunTerminated", {
-  disposition: Schema.Literal("Completed"),
+  disposition: Schema.Literals(["Completed", "Blocked", "Cancelled"]),
+  evidence: RunFinalityEvidence,
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),
   version: Schema.Literal(workflowJournalEventVersion)
 })
@@ -183,6 +190,9 @@ export const TargetLineageObservedEvent = Schema.TaggedStruct("TargetLineageObse
 export const WorkflowJournalEvent = Schema.Union([
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent,
+  RunCancellationAppliedEvent,
+  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptClaimNoReleaseObservedEvent,
   TaskWorkCapacityChangedEvent,
   ControlDirectionAppliedEvent,
   AttemptChoiceAppliedEvent,

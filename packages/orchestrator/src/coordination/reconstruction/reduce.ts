@@ -10,6 +10,7 @@ import {
   type ReconstructedRunResult,
   type ReconstructedRunState,
   ReconstructedPauseState,
+  ReconstructedRunCancellationState,
   ReconstructedRunPauseState,
   ReconstructedTaskPauseState,
   type ReconstructedWorkflowHistory,
@@ -146,6 +147,14 @@ const appendPauseState = (prior: ReconstructedPauseState, record: JournalRecord)
   })
 }
 
+const appendCancellationState = (
+  prior: ReconstructedRunCancellationState,
+  record: JournalRecord
+): ReconstructedRunCancellationState =>
+  record.event._tag === "RunCancellationApplied"
+    ? ReconstructedRunCancellationState.cases.RunCancellationApplied.make({ appliedAt: record.position })
+    : prior
+
 /** Advances one already-validated prefix after its exact successor record has passed history validation. */
 export const advanceReconstructedRunState = (
   prior: ReconstructedRunState,
@@ -157,6 +166,7 @@ export const advanceReconstructedRunState = (
     controlPolicy: appendControlPolicy(prior.controlPolicy, record),
     graphKnowledge: appendGraphKnowledge(prior.graphKnowledge, record),
     pause: appendPauseState(prior.pause, record),
+    cancellation: appendCancellationState(prior.cancellation, record),
     responsibility: appendResponsibility(prior.responsibility, record),
     runId: prior.runId,
     workflowHistory: { records }
@@ -274,6 +284,10 @@ export const reconstructValidatedRunState = (
     controlPolicy: reduceControlPolicy(records),
     graphKnowledge,
     pause: reducePauseState(records),
+    cancellation: records.reduce<ReconstructedRunCancellationState>(
+      appendCancellationState,
+      ReconstructedRunCancellationState.cases.RunCancellationNotApplied.make({})
+    ),
     responsibility,
     runId,
     workflowHistory: reduceWorkflowHistory(records)

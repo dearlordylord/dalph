@@ -61,7 +61,9 @@ import {
   TaskClaimReacquisitionDirectedEvent,
   type BranchCleanupJournalEvent,
   type IntegratorCandidateCleanupJournalEvent,
-  type WorktreeCleanupJournalEvent
+  type WorktreeCleanupJournalEvent,
+  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptClaimNoReleaseObservedEvent
 } from "@dalph/orchestrator"
 import {
   type CassetteIdentityRenaming,
@@ -639,14 +641,21 @@ const recordedOperatorDirectionEntryFor = (event: OperatorDirectionEvent): Recor
 type AttemptStopEvent = Extract<
   WorkflowJournalEvent,
   {
-    readonly _tag: "AttemptImplementationAbandoned" | "AttemptStoppageIntended" | "StoppedAttemptClaimNoReleaseObserved"
+    readonly _tag:
+      | "AttemptImplementationAbandoned"
+      | "AttemptStoppageIntended"
+      | "StoppedAttemptClaimNoReleaseObserved"
+      | "CancelledAttemptImplementationResponsibilityRelinquished"
+      | "CancelledAttemptClaimNoReleaseObserved"
   }
 >
 
 const isAttemptStopEvent = (event: WorkflowJournalEvent): event is AttemptStopEvent =>
   event._tag === "AttemptImplementationAbandoned" ||
   event._tag === "AttemptStoppageIntended" ||
-  event._tag === "StoppedAttemptClaimNoReleaseObserved"
+  event._tag === "StoppedAttemptClaimNoReleaseObserved" ||
+  event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" ||
+  event._tag === "CancelledAttemptClaimNoReleaseObserved"
 
 const recordedAttemptStopEntryFor = (event: AttemptStopEvent): RecordedCassetteEntry =>
   Match.valueTags(event, {
@@ -674,6 +683,24 @@ const recordedAttemptStopEntryFor = (event: AttemptStopEvent): RecordedCassetteE
       occurrenceClassification: value.occurrenceClassification,
       requestId: value.requestId,
       subject: value.subject
+    }),
+    CancelledAttemptImplementationResponsibilityRelinquished: (value) => ({
+      _tag: value._tag,
+      authorizedClaim: value.authorizedClaim,
+      cancellationAppliedAt: value.cancellationAppliedAt,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      plannedAttempt: value.plannedAttempt,
+      proof: value.proof
+    }),
+    CancelledAttemptClaimNoReleaseObserved: (value) => ({
+      _tag: value._tag,
+      cancellationAppliedAt: value.cancellationAppliedAt,
+      expectedClaim: value.expectedClaim,
+      observation: value.observation,
+      observationOperationId: value.observationOperationId,
+      occurrenceClassification: value.occurrenceClassification,
+      plannedAttempt: value.plannedAttempt
     })
   })
 
@@ -1147,14 +1174,21 @@ const eventForRecordedOperatorDirectionEntry = (
 type RecordedAttemptStopEntry = Extract<
   RecordedCassetteEntry,
   {
-    readonly _tag: "AttemptImplementationAbandoned" | "AttemptStoppageIntended" | "StoppedAttemptClaimNoReleaseObserved"
+    readonly _tag:
+      | "AttemptImplementationAbandoned"
+      | "AttemptStoppageIntended"
+      | "StoppedAttemptClaimNoReleaseObserved"
+      | "CancelledAttemptImplementationResponsibilityRelinquished"
+      | "CancelledAttemptClaimNoReleaseObserved"
   }
 >
 
 const isRecordedAttemptStopEntry = (entry: RecordedCassetteEntry): entry is RecordedAttemptStopEntry =>
   entry._tag === "AttemptImplementationAbandoned" ||
   entry._tag === "AttemptStoppageIntended" ||
-  entry._tag === "StoppedAttemptClaimNoReleaseObserved"
+  entry._tag === "StoppedAttemptClaimNoReleaseObserved" ||
+  entry._tag === "CancelledAttemptImplementationResponsibilityRelinquished" ||
+  entry._tag === "CancelledAttemptClaimNoReleaseObserved"
 
 const eventForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): WorkflowJournalEvent =>
   Match.valueTags(entry, {
@@ -1163,7 +1197,14 @@ const eventForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): Work
     AttemptImplementationAbandoned: (value) =>
       AttemptImplementationAbandonedEvent.make({ ...value, version: workflowJournalEventVersion }),
     StoppedAttemptClaimNoReleaseObserved: (value) =>
-      StoppedAttemptClaimNoReleaseObservedEvent.make({ ...value, version: workflowJournalEventVersion })
+      StoppedAttemptClaimNoReleaseObservedEvent.make({ ...value, version: workflowJournalEventVersion }),
+    CancelledAttemptImplementationResponsibilityRelinquished: (value) =>
+      CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+        ...value,
+        version: workflowJournalEventVersion
+      }),
+    CancelledAttemptClaimNoReleaseObserved: (value) =>
+      CancelledAttemptClaimNoReleaseObservedEvent.make({ ...value, version: workflowJournalEventVersion })
   })
 
 const priorEntryPosition = (
@@ -1705,7 +1746,11 @@ const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): stri
     AttemptImplementationAbandoned: (value) =>
       `Dalph coordinator abandoned implementation attempt ${value.subject.plannedAttempt.attemptId} after proving executor quiescence.`,
     StoppedAttemptClaimNoReleaseObserved: (value) =>
-      `The task tracker proved that stopping attempt ${value.subject.plannedAttempt.attemptId} must not release the current claim.`
+      `The task tracker proved that stopping attempt ${value.subject.plannedAttempt.attemptId} must not release the current claim.`,
+    CancelledAttemptImplementationResponsibilityRelinquished: (value) =>
+      `Dalph coordinator relinquished implementation responsibility for cancelled attempt ${value.plannedAttempt.attemptId}.`,
+    CancelledAttemptClaimNoReleaseObserved: (value) =>
+      `The task tracker proved that cancelling attempt ${value.plannedAttempt.attemptId} must not release the current claim.`
   })
 
 type RecordedOtherEntry = Exclude<RecordedCassetteEntry, RecordedContinuationAuthorizationEntry>

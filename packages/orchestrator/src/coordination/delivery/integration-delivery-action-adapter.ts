@@ -60,11 +60,13 @@ type IntegrationTransition = Exclude<
     readonly _tag:
       | "AdvanceAttemptRestart"
       | "AdvanceAttemptStoppage"
+      | "RelinquishCancelledAttemptImplementation"
       | "ContinuePlannedAttemptExecutorWork"
       | "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
       | "ObservePlannedAttemptContinuationExecutor"
       | "ObserveAttemptStoppageExecutor"
       | "RecordStoppedAttemptClaimNoRelease"
+      | "RecordCancelledAttemptClaimNoRelease"
       | "SuspendPlannedAttemptExecutorWork"
   }
 >

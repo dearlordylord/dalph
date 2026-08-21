@@ -343,8 +343,8 @@ every disposition.
 retained task responsibility.
 `runActivation.terminationRequiresNoRetainedResponsibilityOrPosition` checks
 whole-Run termination only after both durable retained attempts and their
-independently reconstructed positions are gone. The `Blocked` and `Cancelled`
-clauses are accepted in issue #102 and are not yet implemented.
+independently reconstructed positions are gone. Issue #102 implements the
+`Blocked` and `Cancelled` clauses through the same production finality path.
 
 **D36 No busy loop on unchanged facts.** One activation performs at most one
 post-quiescence tracker reconfirmation. It runs any actions introduced by that
@@ -357,18 +357,24 @@ existing unfinished history.
 deterministic parity scenario and production-backed conformance adapter enter
 the same bounded path after both a new beginning and existing history.
 
-**D37 Every Run is convergeable.** *The issue #102 resolution is accepted but
-not implemented.* Under the same hypotheses as D33, every retained obligation
-can reach an accepted settlement or durable relinquishment, so no Run is left
-permanently unable to terminate. A fresh complete Run task graph that
+**D37 Every Run is convergeable.** Under the same hypotheses as D33, every
+retained obligation can reach an accepted settlement or durable relinquishment,
+so no Run is left permanently unable to terminate. A fresh complete Run task
+graph that
 conclusively makes success impossible permits automatic `Blocked` after all
 responsibilities settle; it does not require an Operator to authorize that
 classification. A task that leaves a later graph no longer contributes to
 `Completed` after its retained responsibility settles or is durably
 relinquished. D16 still holds: relinquishment preserves its worktree and work
 in progress unless a separate exact cleanup disposition authorizes otherwise.
-→ `—` issue #102 identifies the required `runActivation` model and executable
-test seams; Phase 2 has not implemented them.
+→ Alice cancels an idle, executing, or integration-owned Run through the
+production cancellation control; Dalph safely suspends or observes each
+outside owner, records exact claim release or no-release disposition, settles
+integration responsibility, rereads the complete tracker graph, and only then
+records `Cancelled`. `runCancellation` and its production-backed conformance
+adapter cover those paths; `runActivation` proves final precedence and exact
+fresh evidence, while `run-cancellation-recovery-prefixes.test.ts` exercises
+P0-P6 restart prefixes on memory and SQLite journals.
 
 ### The progress hypotheses
 

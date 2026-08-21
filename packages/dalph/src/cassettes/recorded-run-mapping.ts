@@ -1,6 +1,7 @@
 import {
   TaskWorkCapacityChangedEvent,
   type WorkflowJournalEvent,
+  RunCancellationAppliedEvent,
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent,
   workflowJournalEventVersion
@@ -10,23 +11,25 @@ import type { RecordedCassetteEntry } from "./recorded-domain.js"
 
 type JournalRunEntry = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "TaskWorkCapacityChanged" | "WorkflowRunBegan" | "WorkflowRunTerminated" }
+  { readonly _tag: "TaskWorkCapacityChanged" | "WorkflowRunBegan" | "WorkflowRunTerminated" | "RunCancellationApplied" }
 >
 
 export type RecordedRunEntry = Extract<
   RecordedCassetteEntry,
-  { readonly _tag: "TaskWorkCapacityChanged" | "WorkflowRunBegan" | "WorkflowRunTerminated" }
+  { readonly _tag: "TaskWorkCapacityChanged" | "WorkflowRunBegan" | "WorkflowRunTerminated" | "RunCancellationApplied" }
 >
 
 export const isJournalRunEntry = (event: WorkflowJournalEvent): event is JournalRunEntry =>
   event._tag === "TaskWorkCapacityChanged" ||
   event._tag === "WorkflowRunBegan" ||
-  event._tag === "WorkflowRunTerminated"
+  event._tag === "WorkflowRunTerminated" ||
+  event._tag === "RunCancellationApplied"
 
 export const isRecordedRunEntry = (entry: RecordedCassetteEntry): entry is RecordedRunEntry =>
   entry._tag === "TaskWorkCapacityChanged" ||
   entry._tag === "WorkflowRunBegan" ||
-  entry._tag === "WorkflowRunTerminated"
+  entry._tag === "WorkflowRunTerminated" ||
+  entry._tag === "RunCancellationApplied"
 
 export const recordedRunEntryFor = (event: JournalRunEntry): RecordedRunEntry =>
   Match.value(event).pipe(
@@ -49,6 +52,12 @@ export const recordedRunEntryFor = (event: JournalRunEntry): RecordedRunEntry =>
       WorkflowRunTerminated: (value): RecordedRunEntry => ({
         _tag: "WorkflowRunTerminated",
         disposition: value.disposition,
+        evidence: value.evidence,
+        occurrenceClassification: value.occurrenceClassification
+      }),
+      RunCancellationApplied: (value): RecordedRunEntry => ({
+        _tag: "RunCancellationApplied",
+        initiatedBy: value.initiatedBy,
         occurrenceClassification: value.occurrenceClassification
       })
     })
@@ -77,6 +86,13 @@ export const eventForRunEntry = (entry: RecordedRunEntry): WorkflowJournalEvent 
       WorkflowRunTerminated: (value) =>
         WorkflowRunTerminatedEvent.make({
           disposition: value.disposition,
+          evidence: value.evidence,
+          occurrenceClassification: value.occurrenceClassification,
+          version: workflowJournalEventVersion
+        }),
+      RunCancellationApplied: (value) =>
+        RunCancellationAppliedEvent.make({
+          initiatedBy: value.initiatedBy,
           occurrenceClassification: value.occurrenceClassification,
           version: workflowJournalEventVersion
         })
@@ -89,6 +105,7 @@ export const lyricForRunEntry = (entry: RecordedRunEntry): string =>
       TaskWorkCapacityChanged: (value) =>
         `Operator changed task-work capacity to ${value.capacity} at policy revision ${value.revision}.`,
       WorkflowRunBegan: (value) => `Dalph began the Run for tracker target ${JSON.stringify(value.target)}.`,
-      WorkflowRunTerminated: (value) => `Dalph terminated the Run with disposition ${value.disposition}.`
+      WorkflowRunTerminated: (value) => `Dalph terminated the Run with disposition ${value.disposition}.`,
+      RunCancellationApplied: () => "Operator applied Run cancellation."
     })
   )
