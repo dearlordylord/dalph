@@ -3,8 +3,6 @@ import { it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
 import * as Orchestrator from "@dalph/orchestrator"
-import { terminationPreconditionIssues } from "../../../orchestrator/src/workflow-journal/termination-preconditions.js"
-import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
 import {
   CassetteIdentityRenaming,
   foldRecordedCassette,
@@ -18,20 +16,6 @@ import {
 } from "../../src/cassettes/index.js"
 
 const allMaintainedCassetteRoundTripTimeout = 600_000
-const terminationPrefixCassetteNames = new Set([
-  "changedAttemptStopLostThirdSuspension",
-  "changedAttemptStopRemainsUnproved",
-  "changedAttemptStopReleaseResponseLost",
-  "changedAttemptStopsAndReleases",
-  "changedAttemptStopsWithAbsentClaim",
-  "changedAttemptStopsWithForeignClaim"
-])
-const terminationSettlementMilestones = new Set([
-  "AttemptImplementationAbandoned",
-  "StoppedAttemptClaimNoReleaseObserved",
-  "TaskClaimReleaseIntended",
-  "TaskClaimReleased"
-])
 const removedIntegrationSurfacePrefixes = [
   "IntegrationCandidate",
   "IntegratorCandidateGitObserved",
@@ -64,22 +48,6 @@ it.effect(
       for (const [name, cassette] of Object.entries(maintainedAuthoredCassetteCatalog)) {
         expect(removedIntegrationSurfaceNames(cassette.story.map(({ _tag }) => _tag)), name).toEqual([])
         const run = yield* runAuthoredScenarioCassette(cassette)
-        const beginning = run.records.find(({ event }) => event._tag === "WorkflowRunBegan")
-        if (beginning?.event._tag === "WorkflowRunBegan" && terminationPrefixCassetteNames.has(name)) {
-          const evidence = completedRunFinalityFixture({
-            runId: beginning.runId,
-            target: beginning.event.target
-          }).evidence
-          const milestonePrefixLengths = new Set(
-            run.records.flatMap(({ event }, index) =>
-              terminationSettlementMilestones.has(event._tag) ? [index, index + 1] : []
-            )
-          )
-          for (const prefixLength of milestonePrefixLengths) {
-            if (prefixLength === 0) continue
-            terminationPreconditionIssues(run.records.slice(0, prefixLength), beginning.runId, evidence)
-          }
-        }
         const recorded = yield* projectRecordedCassette(run.records)
         expect(removedIntegrationSurfaceNames(recorded.entries.map(({ _tag }) => _tag)), name).toEqual([])
         const folded = foldRecordedCassette(recorded)

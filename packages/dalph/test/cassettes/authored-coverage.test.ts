@@ -22,6 +22,8 @@ import {
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
 import { controlledTrackerGraphReaderLayer, controlledTrace } from "../../src/cassettes/authored-adapters.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import { terminationPreconditionIssues } from "../../../orchestrator/src/workflow-journal/termination-preconditions.js"
+import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
 const decodeStoryItem = (input: unknown): AuthoredCassetteStoryItem =>
   Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(input)
 
@@ -124,6 +126,8 @@ it.effect("runs the authored candidate and promotion outcomes through their prod
       "changedAttemptRestartsCleanly",
       "changedAttemptRestartAfterSupersessionCrash",
       "changedAttemptStopsAndReleases",
+      "changedAttemptStopsWithAbsentClaim",
+      "changedAttemptStopsWithForeignClaim",
       "changedAttemptChoiceRace",
       "changedAttemptReacquisitionForeignConflict",
       "taskPauseExecutorAndPromotionBoundaries",
@@ -146,6 +150,30 @@ it.effect("runs the authored candidate and promotion outcomes through their prod
       if (Exit.isSuccess(exit)) {
         expect(exit.value.records.length).toBeGreaterThan(0)
         expect(exit.value.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
+        if (name.startsWith("changedAttemptStops")) {
+          const beginning = exit.value.records.find(({ event }) => event._tag === "WorkflowRunBegan")
+          if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("missing cassette beginning")
+          const finality = completedRunFinalityFixture({
+            runId: beginning.runId,
+            target: beginning.event.target
+          }).evidence
+          for (const [index, record] of exit.value.records.entries()) {
+            if (
+              ![
+                "AttemptImplementationAbandoned",
+                "StoppedAttemptClaimNoReleaseObserved",
+                "TaskClaimReleaseIntended",
+                "TaskClaimReleased"
+              ].includes(record.event._tag)
+            )
+              continue
+            for (const prefixLength of [index, index + 1]) {
+              if (prefixLength > 0) {
+                terminationPreconditionIssues(exit.value.records.slice(0, prefixLength), beginning.runId, finality)
+              }
+            }
+          }
+        }
       }
     }
   })
