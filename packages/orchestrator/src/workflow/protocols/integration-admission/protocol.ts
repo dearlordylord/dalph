@@ -289,52 +289,84 @@ const updateFinalityFacts = (
   }
 }
 
+type IntegrationResponsibilityBeganJournalEvent = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "IntegrationResponsibilityBegan" }
+>
+
+const advanceQueuedResponsibility = (
+  prior: IntegrationAdmissionPrefixIndexes,
+  event: IntegrationResponsibilityBeganJournalEvent
+): IntegrationAdmissionPrefixIndexes => ({
+  ...prior,
+  queuedAttemptIds: HashSet.add(event.plannedAttempt.attemptId)(prior.queuedAttemptIds)
+})
+
+type ExecutorResponsibilityBeganJournalEvent = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "PlannedAttemptExecutorWorkResponsibilityBegan" }
+>
+
+const advanceExecutorResponsibility = (
+  prior: IntegrationAdmissionPrefixIndexes,
+  event: ExecutorResponsibilityBeganJournalEvent
+): IntegrationAdmissionPrefixIndexes => {
+  const attemptId = event.plannedAttempt.attemptId
+  return {
+    ...prior,
+    executorResponsibilities: HashMap.set(prior.executorResponsibilities, attemptId, event.plannedAttempt),
+    executorResponsibilitiesFirst: HashMap.has(prior.executorResponsibilitiesFirst, attemptId)
+      ? prior.executorResponsibilitiesFirst
+      : HashMap.set(prior.executorResponsibilitiesFirst, attemptId, event.plannedAttempt)
+  }
+}
+
+type AttemptChoiceAppliedJournalEvent = Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+
+const advanceRestartChoice = (
+  prior: IntegrationAdmissionPrefixIndexes,
+  event: AttemptChoiceAppliedJournalEvent,
+  recordedAt: JournalPosition
+): IntegrationAdmissionPrefixIndexes => {
+  if (event.choice !== "RestartTaskImplementation") return prior
+  const attemptId = event.subject.plannedAttempt.attemptId
+  const choice = { plannedAttempt: event.subject.plannedAttempt, recordedAt }
+  const choices = hashMapValue(prior.restartChoices, attemptId) ?? Chunk.empty<RestartChoiceApplication>()
+  return { ...prior, restartChoices: HashMap.set(prior.restartChoices, attemptId, Chunk.append(choice)(choices)) }
+}
+
+const advanceAcceptedTerminal = (
+  prior: IntegrationAdmissionPrefixIndexes,
+  event: ExecutorWorkReportedEvent,
+  terminalAt: JournalPosition
+): IntegrationAdmissionPrefixIndexes => {
+  if (event.report._tag !== "Terminal" || event.report.result._tag !== "Accepted") return prior
+  const attemptId = event.report.correlation.attemptId
+  const terminal: IndexedAcceptedTerminal = {
+    acceptedResult: event.report.result.acceptedResult,
+    position: terminalAt,
+    runId: event.report.correlation.runId
+  }
+  const terminals = hashMapValue(prior.acceptedTerminalsByAttempt, attemptId) ?? Chunk.empty<IndexedAcceptedTerminal>()
+  return {
+    ...prior,
+    acceptedTerminalsByAttempt: HashMap.set(
+      prior.acceptedTerminalsByAttempt,
+      attemptId,
+      Chunk.append(terminal)(terminals)
+    )
+  }
+}
+
 const advanceIntegrationAdmissionPrefixIndexes = (
   prior: IntegrationAdmissionPrefixIndexes,
   record: JournalRecord
 ): IntegrationAdmissionPrefixIndexes => {
   const event = record.event
-  if (event._tag === "IntegrationResponsibilityBegan") {
-    return { ...prior, queuedAttemptIds: HashSet.add(event.plannedAttempt.attemptId)(prior.queuedAttemptIds) }
-  }
-  if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-    const attemptId = event.plannedAttempt.attemptId
-    return {
-      ...prior,
-      executorResponsibilities: HashMap.set(prior.executorResponsibilities, attemptId, event.plannedAttempt),
-      executorResponsibilitiesFirst: HashMap.has(prior.executorResponsibilitiesFirst, attemptId)
-        ? prior.executorResponsibilitiesFirst
-        : HashMap.set(prior.executorResponsibilitiesFirst, attemptId, event.plannedAttempt)
-    }
-  }
-  if (event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation") {
-    const attemptId = event.subject.plannedAttempt.attemptId
-    const choice = { plannedAttempt: event.subject.plannedAttempt, recordedAt: record.position }
-    const choices = hashMapValue(prior.restartChoices, attemptId) ?? Chunk.empty<RestartChoiceApplication>()
-    return { ...prior, restartChoices: HashMap.set(prior.restartChoices, attemptId, Chunk.append(choice)(choices)) }
-  }
-  if (
-    event._tag === "PlannedAttemptExecutorWorkReported" &&
-    event.report._tag === "Terminal" &&
-    event.report.result._tag === "Accepted"
-  ) {
-    const attemptId = event.report.correlation.attemptId
-    const terminal: IndexedAcceptedTerminal = {
-      acceptedResult: event.report.result.acceptedResult,
-      position: record.position,
-      runId: event.report.correlation.runId
-    }
-    const terminals =
-      hashMapValue(prior.acceptedTerminalsByAttempt, attemptId) ?? Chunk.empty<IndexedAcceptedTerminal>()
-    return {
-      ...prior,
-      acceptedTerminalsByAttempt: HashMap.set(
-        prior.acceptedTerminalsByAttempt,
-        attemptId,
-        Chunk.append(terminal)(terminals)
-      )
-    }
-  }
+  if (event._tag === "IntegrationResponsibilityBegan") return advanceQueuedResponsibility(prior, event)
+  if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") return advanceExecutorResponsibility(prior, event)
+  if (event._tag === "AttemptChoiceApplied") return advanceRestartChoice(prior, event, record.position)
+  if (event._tag === "PlannedAttemptExecutorWorkReported") return advanceAcceptedTerminal(prior, event, record.position)
   return isClaimFinalityEvent(event) ? updateFinalityFacts(prior, event) : prior
 }
 
