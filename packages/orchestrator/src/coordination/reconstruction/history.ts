@@ -7,7 +7,7 @@ import { describeJournalEvent } from "../../workflow/registry/event-descriptor.j
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
-import { Match, Option } from "effect"
+import { HashMap, HashSet, Match, Option } from "effect"
 import {
   duplicateUnfinishedTaskAttemptIssue,
   type InvalidWorkflowJournalHistory,
@@ -29,7 +29,7 @@ import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-f
 import { validateRunPolicyHistory } from "./run-policy-history.js"
 import type { IntegrationHistoryIndexes } from "./integration-history.js"
 import { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
-import { makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
+import type { TargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import { validateTaskClaimRelease } from "./claim-release-history.js"
 import {
   latestTaskClaimReacquisitionDirection,
@@ -49,7 +49,6 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { authorizedClaimForAttempt } from "../../workflow/claim-authority-history.js"
 import {
-  makeIntegrationFinalityHistoryIndexes,
   validateIntegrationFinalityHistoryRecord,
   type IntegrationFinalityHistoryIndexes
 } from "../../workflow/protocols/integration-finality/history.js"
@@ -90,137 +89,115 @@ const semanticIssue = (
 }
 
 interface FoldIndexes extends IntegrationHistoryIndexes {
-  readonly abandonedExecutorAttempts: Set<AttemptId>
+  readonly abandonedExecutorAttempts: HashSet.HashSet<AttemptId>
   readonly integrationFinalityHistory: IntegrationFinalityHistoryIndexes
-  readonly attemptChoiceSubjects: Set<string>
-  latestControlDirectionOrdinal: number
-  readonly executorCommandOrdinals: Map<AttemptId, number>
-  readonly executorCommandCountsSinceSafeSuspension: Map<string, number>
-  readonly executorCommandProjectionOrdinals: Map<string, number>
-  readonly executorReportOrdinals: Map<AttemptId, number>
-  readonly executorStateObservationOrdinals: Map<AttemptId, number>
-  readonly executorResponsibilitiesBegan: Map<
+  readonly attemptChoiceSubjects: HashSet.HashSet<string>
+  readonly latestControlDirectionOrdinal: number
+  readonly executorCommandOrdinals: HashMap.HashMap<AttemptId, number>
+  readonly executorCommandCountsSinceSafeSuspension: HashMap.HashMap<string, number>
+  readonly executorCommandProjectionOrdinals: HashMap.HashMap<string, number>
+  readonly executorReportOrdinals: HashMap.HashMap<AttemptId, number>
+  readonly executorStateObservationOrdinals: HashMap.HashMap<AttemptId, number>
+  readonly executorResponsibilitiesBegan: HashMap.HashMap<
     AttemptId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >
-  readonly plans: Map<AttemptId, PlannedTaskAttempt>
-  readonly gitReadIntents: Map<
+  readonly plans: HashMap.HashMap<AttemptId, PlannedTaskAttempt>
+  readonly gitReadIntents: HashMap.HashMap<
     OperationId,
     Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" | "ReadTaskWorktree" }>
   >
-  latestRunPolicyRevision: number | undefined
-  readonly seenEventKindsByOperation: Map<OperationId, ReadonlySet<WorkflowJournalEvent["_tag"]>>
-  readonly seenKeys: Set<JournalRecordKey>
-  readonly seenOperationIds: Set<OperationId>
-  readonly terminalExecutorAttempts: Set<AttemptId>
-  readonly supersededExecutorAttempts: Set<AttemptId>
-  readonly unsettledExecutorCommands: Map<AttemptId, number>
+  readonly latestRunPolicyRevision: number | undefined
+  readonly seenEventKindsByOperation: HashMap.HashMap<OperationId, HashSet.HashSet<WorkflowJournalEvent["_tag"]>>
+  readonly seenKeys: HashSet.HashSet<JournalRecordKey>
+  readonly seenOperationIds: HashSet.HashSet<OperationId>
+  readonly terminalExecutorAttempts: HashSet.HashSet<AttemptId>
+  readonly supersededExecutorAttempts: HashSet.HashSet<AttemptId>
+  readonly unsettledExecutorCommands: HashMap.HashMap<AttemptId, number>
   readonly trackerReconfirmations: TaskTrackerReconfirmationIndex
 }
 
+const emptyTargetPromotionHistoryIndexes = (): TargetPromotionHistoryIndexes => ({
+  attempts: HashMap.empty(),
+  intents: HashMap.empty(),
+  terminals: HashSet.empty()
+})
+
+const emptyIntegrationFinalityHistoryIndexes = (): IntegrationFinalityHistoryIndexes => ({
+  deletionAttempts: HashMap.empty(),
+  deletionIntents: HashMap.empty(),
+  deletionTerminals: HashSet.empty(),
+  replacementAttempts: HashMap.empty(),
+  replacementIntents: HashMap.empty(),
+  replacementTerminals: HashMap.empty(),
+  settlements: HashSet.empty()
+})
+
 const emptyIndexes = (): FoldIndexes => ({
-  acceptedExecutorResults: new Map(),
-  acceptedExecutorResultPositions: new Map(),
-  abandonedExecutorAttempts: new Set(),
-  attemptChoiceSubjects: new Set(),
-  executorCommandOrdinals: new Map(),
-  executorCommandCountsSinceSafeSuspension: new Map(),
-  executorCommandProjectionOrdinals: new Map(),
-  executorReportOrdinals: new Map(),
-  executorStateObservationOrdinals: new Map(),
-  executorResponsibilitiesBegan: new Map(),
-  integrationResponsibilitiesBegan: new Map(),
-  integrationStarted: new Map(),
-  targetLineageReadIntents: new Map(),
-  targetLineageObservations: new Map(),
-  integratorSessionFixed: new Map(),
-  integratorSessionsByStartedAt: new Map(),
-  integratorSessionsBySessionId: new Map(),
-  integratorSessionsByCandidateResource: new Map(),
-  integratorSuccessorSessionFixed: new Map(),
-  integratorSuccessorSessionsByPredecessor: new Map(),
-  integratorRunStarted: new Map(),
-  integratorRunResults: new Map(),
-  integratorRunCandidateGitReadIntents: new Map(),
-  integratorRunCandidateGitObservations: new Map(),
-  firstRestartChoiceAppliedAt: new Map(),
-  targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
-  integrationFinalityHistory: makeIntegrationFinalityHistoryIndexes(),
+  acceptedExecutorResults: HashMap.empty(),
+  acceptedExecutorResultPositions: HashMap.empty(),
+  abandonedExecutorAttempts: HashSet.empty(),
+  attemptChoiceSubjects: HashSet.empty(),
+  executorCommandOrdinals: HashMap.empty(),
+  executorCommandCountsSinceSafeSuspension: HashMap.empty(),
+  executorCommandProjectionOrdinals: HashMap.empty(),
+  executorReportOrdinals: HashMap.empty(),
+  executorStateObservationOrdinals: HashMap.empty(),
+  executorResponsibilitiesBegan: HashMap.empty(),
+  integrationResponsibilitiesBegan: HashMap.empty(),
+  integrationStarted: HashMap.empty(),
+  targetLineageReadIntents: HashMap.empty(),
+  targetLineageObservations: HashMap.empty(),
+  integratorSessionFixed: HashMap.empty(),
+  integratorSessionsByStartedAt: HashMap.empty(),
+  integratorSessionsBySessionId: HashMap.empty(),
+  integratorSessionsByCandidateResource: HashMap.empty(),
+  integratorSuccessorSessionFixed: HashMap.empty(),
+  integratorSuccessorSessionsByPredecessor: HashMap.empty(),
+  integratorRunStarted: HashMap.empty(),
+  integratorRunResults: HashMap.empty(),
+  integratorRunCandidateGitReadIntents: HashMap.empty(),
+  integratorRunCandidateGitObservations: HashMap.empty(),
+  firstRestartChoiceAppliedAt: HashMap.empty(),
+  targetPromotionHistory: emptyTargetPromotionHistoryIndexes(),
+  integrationFinalityHistory: emptyIntegrationFinalityHistoryIndexes(),
   latestControlDirectionOrdinal: 0,
-  plans: new Map(),
-  gitReadIntents: new Map(),
+  plans: HashMap.empty(),
+  gitReadIntents: HashMap.empty(),
   latestRunPolicyRevision: undefined,
-  seenEventKindsByOperation: new Map(),
-  seenKeys: new Set(),
-  seenOperationIds: new Set(),
-  terminalExecutorAttempts: new Set(),
-  supersededExecutorAttempts: new Set(),
-  unsettledExecutorCommands: new Map(),
+  seenEventKindsByOperation: HashMap.empty(),
+  seenKeys: HashSet.empty(),
+  seenOperationIds: HashSet.empty(),
+  terminalExecutorAttempts: HashSet.empty(),
+  supersededExecutorAttempts: HashSet.empty(),
+  unsettledExecutorCommands: HashMap.empty(),
   trackerReconfirmations: makeTaskTrackerReconfirmationIndex()
 })
 
-const copyMap = <K, V>(source: ReadonlyMap<K, V>): Map<K, V> => new Map(source)
-const copySet = <A>(source: ReadonlySet<A>): Set<A> => new Set(source)
-const copyNestedMap = <K, I, V>(source: ReadonlyMap<K, ReadonlyMap<I, V>>): Map<K, Map<I, V>> =>
-  new Map([...source].map(([key, values]) => [key, new Map(values)]))
+const foldIndexesByHistory = new WeakMap<ValidWorkflowJournalHistory, FoldIndexes>()
+type WorkflowJournalHistoryReduction = ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory
 
-/** Copies the private mutable fold indexes so a rejected successor cannot poison its accepted prefix. */
-const copyIndexes = (source: FoldIndexes): FoldIndexes => ({
-  acceptedExecutorResults: copyMap(source.acceptedExecutorResults),
-  acceptedExecutorResultPositions: copyMap(source.acceptedExecutorResultPositions),
-  abandonedExecutorAttempts: copySet(source.abandonedExecutorAttempts),
-  attemptChoiceSubjects: copySet(source.attemptChoiceSubjects),
-  executorCommandOrdinals: copyMap(source.executorCommandOrdinals),
-  executorCommandCountsSinceSafeSuspension: copyMap(source.executorCommandCountsSinceSafeSuspension),
-  executorCommandProjectionOrdinals: copyMap(source.executorCommandProjectionOrdinals),
-  executorReportOrdinals: copyMap(source.executorReportOrdinals),
-  executorStateObservationOrdinals: copyMap(source.executorStateObservationOrdinals),
-  executorResponsibilitiesBegan: copyMap(source.executorResponsibilitiesBegan),
-  integrationResponsibilitiesBegan: copyMap(source.integrationResponsibilitiesBegan),
-  integrationStarted: copyMap(source.integrationStarted),
-  targetLineageReadIntents: copyMap(source.targetLineageReadIntents),
-  targetLineageObservations: copyMap(source.targetLineageObservations),
-  integratorSessionFixed: copyMap(source.integratorSessionFixed),
-  integratorSessionsByStartedAt: copyMap(source.integratorSessionsByStartedAt),
-  integratorSessionsBySessionId: copyMap(source.integratorSessionsBySessionId),
-  integratorSessionsByCandidateResource: copyMap(source.integratorSessionsByCandidateResource),
-  integratorSuccessorSessionFixed: copyMap(source.integratorSuccessorSessionFixed),
-  integratorSuccessorSessionsByPredecessor: copyMap(source.integratorSuccessorSessionsByPredecessor),
-  integratorRunStarted: copyMap(source.integratorRunStarted),
-  integratorRunResults: copyMap(source.integratorRunResults),
-  integratorRunCandidateGitReadIntents: copyMap(source.integratorRunCandidateGitReadIntents),
-  integratorRunCandidateGitObservations: copyMap(source.integratorRunCandidateGitObservations),
-  firstRestartChoiceAppliedAt: copyMap(source.firstRestartChoiceAppliedAt),
-  targetPromotionHistory: {
-    attempts: copyNestedMap(source.targetPromotionHistory.attempts),
-    intents: copyMap(source.targetPromotionHistory.intents),
-    terminals: copySet(source.targetPromotionHistory.terminals)
-  },
-  integrationFinalityHistory: {
-    deletionAttempts: copyNestedMap(source.integrationFinalityHistory.deletionAttempts),
-    deletionIntents: copyMap(source.integrationFinalityHistory.deletionIntents),
-    deletionTerminals: copySet(source.integrationFinalityHistory.deletionTerminals),
-    replacementAttempts: copyNestedMap(source.integrationFinalityHistory.replacementAttempts),
-    replacementIntents: copyMap(source.integrationFinalityHistory.replacementIntents),
-    replacementTerminals: copyMap(source.integrationFinalityHistory.replacementTerminals),
-    settlements: copySet(source.integrationFinalityHistory.settlements)
-  },
-  gitReadIntents: copyMap(source.gitReadIntents),
-  latestControlDirectionOrdinal: source.latestControlDirectionOrdinal,
-  latestRunPolicyRevision: source.latestRunPolicyRevision,
-  plans: copyMap(source.plans),
-  seenEventKindsByOperation: new Map(
-    [...source.seenEventKindsByOperation].map(([operationId, kinds]) => [operationId, copySet(kinds)])
-  ),
-  seenKeys: copySet(source.seenKeys),
-  seenOperationIds: copySet(source.seenOperationIds),
-  supersededExecutorAttempts: copySet(source.supersededExecutorAttempts),
-  terminalExecutorAttempts: copySet(source.terminalExecutorAttempts),
-  trackerReconfirmations: { completeFactsByOperation: copyMap(source.trackerReconfirmations.completeFactsByOperation) },
-  unsettledExecutorCommands: copyMap(source.unsettledExecutorCommands)
-})
+/**
+ * Process-local reduction results keyed by the exact immutable record-array
+ * object. A restart receives freshly decoded records and therefore cannot use
+ * this cache; durable journal records remain the only recovery authority.
+ */
+const reductionsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, Map<RunId, WorkflowJournalHistoryReduction>>()
 
-const acceptedFoldIndexes = new WeakMap<ValidWorkflowJournalHistory, FoldIndexes>()
+const cachedReductionFor = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): WorkflowJournalHistoryReduction | undefined => reductionsByPrefix.get(records)?.get(runId)
+
+const rememberReduction = (reduction: WorkflowJournalHistoryReduction): WorkflowJournalHistoryReduction => {
+  const byRun = reductionsByPrefix.get(reduction.records) ?? new Map<RunId, WorkflowJournalHistoryReduction>()
+  byRun.set(reduction.runId, reduction)
+  reductionsByPrefix.set(reduction.records, byRun)
+  return reduction
+}
+
+const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
+  Option.getOrUndefined(HashMap.get(map, key))
 
 const validateRecordEnvelope = (
   record: JournalRecord,
@@ -228,7 +205,7 @@ const validateRecordEnvelope = (
   runId: RunId,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): boolean => {
+): { readonly unique: boolean; readonly indexes: FoldIndexes } => {
   const expectedPosition = index + 1
   if (record.position !== expectedPosition) {
     semanticIssue(
@@ -250,12 +227,11 @@ const validateRecordEnvelope = (
       `event ${record.event._tag} requires record key ${descriptor.expectedKey}, found ${record.key}`
     )
   }
-  if (indexes.seenKeys.has(record.key)) {
+  if (HashSet.has(indexes.seenKeys, record.key)) {
     semanticIssue(issues, runId, record.position, `duplicate journal record key ${record.key}`)
-    return false
+    return { unique: false, indexes }
   }
-  indexes.seenKeys.add(record.key)
-  return true
+  return { unique: true, indexes: { ...indexes, seenKeys: HashSet.add(indexes.seenKeys, record.key) } }
 }
 
 const validateControlDirection = (
@@ -263,9 +239,9 @@ const validateControlDirection = (
   runId: RunId,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
+): FoldIndexes => {
   const descriptor = describeJournalEvent(record.event)
-  if (descriptor._tag !== "ControlDirectionEventDescriptor") return
+  if (descriptor._tag !== "ControlDirectionEventDescriptor") return indexes
   if (descriptor.runId !== runId) {
     identityIssue(
       issues,
@@ -283,7 +259,7 @@ const validateControlDirection = (
       `control direction expected ordinal ${expectedOrdinal}, found ${descriptor.ordinal}`
     )
   }
-  indexes.latestControlDirectionOrdinal = descriptor.ordinal
+  return { ...indexes, latestControlDirectionOrdinal: descriptor.ordinal }
 }
 
 const validateTaskClaimReacquisitionDirection = (
@@ -369,8 +345,8 @@ const validateAttemptChoice = (
   records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
-  if (record.event._tag !== "AttemptChoiceApplied") return
+): FoldIndexes => {
+  if (record.event._tag !== "AttemptChoiceApplied") return indexes
   const { subject } = record.event
   const prior = records.filter(({ position }) => position < record.position)
   validateAttemptChoiceAuthority({ ...record, event: record.event }, runId, prior, issues)
@@ -418,7 +394,7 @@ const validateAttemptChoice = (
     )
   }
   const subjectKey = attemptChoiceSubjectKey(subject)
-  if (indexes.attemptChoiceSubjects.has(subjectKey)) {
+  if (HashSet.has(indexes.attemptChoiceSubjects, subjectKey)) {
     semanticIssue(
       issues,
       runId,
@@ -426,13 +402,18 @@ const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} follows the winning direction for the same fingerprint pair`
     )
   }
-  indexes.attemptChoiceSubjects.add(subjectKey)
-  if (
-    record.event.choice === "RestartTaskImplementation" &&
-    !indexes.firstRestartChoiceAppliedAt.has(subject.plannedAttempt.attemptId)
-  ) {
-    indexes.firstRestartChoiceAppliedAt.set(subject.plannedAttempt.attemptId, record.position)
-  }
+  const withSubject = { ...indexes, attemptChoiceSubjects: HashSet.add(indexes.attemptChoiceSubjects, subjectKey) }
+  return record.event.choice === "RestartTaskImplementation" &&
+    !HashMap.has(withSubject.firstRestartChoiceAppliedAt, subject.plannedAttempt.attemptId)
+    ? {
+        ...withSubject,
+        firstRestartChoiceAppliedAt: HashMap.set(
+          withSubject.firstRestartChoiceAppliedAt,
+          subject.plannedAttempt.attemptId,
+          record.position
+        )
+      }
+    : withSubject
 }
 
 const matchingAppliedStop = (
@@ -584,7 +565,7 @@ const validateAttemptStop = (
   records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
+): FoldIndexes => {
   const event = record.event
   const prior = records.filter(({ position }) => position < record.position)
   const validateStopEventAuthority = () => {
@@ -648,7 +629,6 @@ const validateAttemptStop = (
           `attempt abandonment for ${event.subject.plannedAttempt.attemptId} requires its exact authorized claim`
         )
       }
-      indexes.abandonedExecutorAttempts.add(event.subject.plannedAttempt.attemptId)
     }
   }
   const validateNoRelease = () => {
@@ -874,6 +854,15 @@ const validateAttemptStop = (
   validateNoRelease()
   validateReleaseIntent()
   validateReleaseOutcome()
+  return event._tag === "AttemptImplementationAbandoned"
+    ? {
+        ...indexes,
+        abandonedExecutorAttempts: HashSet.add(
+          indexes.abandonedExecutorAttempts,
+          event.subject.plannedAttempt.attemptId
+        )
+      }
+    : indexes
 }
 
 const validateOperationEvent = (
@@ -881,11 +870,11 @@ const validateOperationEvent = (
   runId: RunId,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
-  recordGitReadIntent(record, indexes)
+): FoldIndexes => {
+  const next = recordGitReadIntent(record, indexes)
   validateWorktreeObservationIntent(record, runId, indexes, issues)
   validateTargetLineageObservationIntent(record, runId, indexes, issues)
-  validateOperationDescriptor(record, runId, indexes, issues)
+  return validateOperationDescriptor(record, runId, next, issues)
 }
 
 /** Validates the generic authorization's causal current-fact witnesses before reconstruction. */
@@ -906,9 +895,11 @@ const validateContinuationAuthorization = (
     semanticIssue(issues, runId, record.position, evaluation.detail)
   }
 }
-const recordGitReadIntent = (record: JournalRecord, indexes: FoldIndexes): void => {
-  if (record.event._tag === "GitReadIntentRecorded") {
-    indexes.gitReadIntents.set(record.event.operation.operationId, record.event.operation)
+const recordGitReadIntent = (record: JournalRecord, indexes: FoldIndexes): FoldIndexes => {
+  if (record.event._tag !== "GitReadIntentRecorded") return indexes
+  return {
+    ...indexes,
+    gitReadIntents: HashMap.set(indexes.gitReadIntents, record.event.operation.operationId, record.event.operation)
   }
 }
 
@@ -919,7 +910,7 @@ const validateWorktreeObservationIntent = (
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (record.event._tag === "PlannedAttemptWorktreeObserved") {
-    const intent = indexes.gitReadIntents.get(record.event.operationId)
+    const intent = mapGet(indexes.gitReadIntents, record.event.operationId)
     if (
       intent?._tag !== "ReadTaskWorktree" ||
       !plannedAttemptWorktreeObservationMatchesPlan(record.event.observation, intent.plannedAttempt)
@@ -941,7 +932,7 @@ const validateTargetLineageObservationIntent = (
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (record.event._tag === "TargetLineageObserved") {
-    const intent = indexes.gitReadIntents.get(record.event.operationId)
+    const intent = mapGet(indexes.gitReadIntents, record.event.operationId)
     if (
       intent?._tag !== "ReadTargetLineage" ||
       !plannedTaskAttemptEquivalence(intent.plannedAttempt, record.event.plannedAttempt)
@@ -1020,17 +1011,22 @@ const validateOperationDescriptor = (
   runId: RunId,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
+): FoldIndexes => {
   const descriptor = describeJournalEvent(record.event)
-  if (descriptor._tag !== "OperationEventDescriptor") return
+  if (descriptor._tag !== "OperationEventDescriptor") return indexes
   validateRequiredOperationIds(record, runId, indexes, issues, descriptor)
   validateRequiredPredecessorKinds(record, runId, indexes, issues, descriptor)
   validateRequiredRecordPredecessor(record, runId, indexes, issues, descriptor)
-  indexes.seenOperationIds.add(descriptor.operationId)
-  indexes.seenEventKindsByOperation.set(
-    descriptor.operationId,
-    new Set([...(indexes.seenEventKindsByOperation.get(descriptor.operationId) ?? []), record.event._tag])
-  )
+  const previousKinds = mapGet(indexes.seenEventKindsByOperation, descriptor.operationId) ?? HashSet.empty()
+  return {
+    ...indexes,
+    seenOperationIds: HashSet.add(indexes.seenOperationIds, descriptor.operationId),
+    seenEventKindsByOperation: HashMap.set(
+      indexes.seenEventKindsByOperation,
+      descriptor.operationId,
+      HashSet.add(previousKinds, record.event._tag)
+    )
+  }
 }
 
 type OperationEventDescriptor = Extract<
@@ -1046,7 +1042,7 @@ const validateRequiredOperationIds = (
   descriptor: OperationEventDescriptor
 ): void => {
   for (const requiredOperationId of descriptor.requiredOperationIds) {
-    if (!indexes.seenOperationIds.has(requiredOperationId)) {
+    if (!HashSet.has(indexes.seenOperationIds, requiredOperationId)) {
       semanticIssue(
         issues,
         runId,
@@ -1065,8 +1061,8 @@ const validateRequiredPredecessorKinds = (
   descriptor: OperationEventDescriptor
 ): void => {
   for (const requiredKind of descriptor.requiredPredecessorKinds) {
-    const kinds = indexes.seenEventKindsByOperation.get(descriptor.operationId)
-    if (!kinds?.has(requiredKind)) {
+    const kinds = mapGet(indexes.seenEventKindsByOperation, descriptor.operationId)
+    if (kinds === undefined || !HashSet.has(kinds, requiredKind)) {
       semanticIssue(
         issues,
         runId,
@@ -1086,7 +1082,7 @@ const validateRequiredRecordPredecessor = (
 ): void => {
   if (
     descriptor.recordPredecessor._tag === "RequiredRecordPredecessor" &&
-    !indexes.seenKeys.has(descriptor.recordPredecessor.key)
+    !HashSet.has(indexes.seenKeys, descriptor.recordPredecessor.key)
   ) {
     semanticIssue(
       issues,
@@ -1588,8 +1584,8 @@ const validatePlannedAttemptReplacement = (
   records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
-  if (record.event._tag !== "PlannedAttemptReplaced") return
+): FoldIndexes => {
+  if (record.event._tag !== "PlannedAttemptReplaced") return indexes
   const event = record.event
   const prior = records.filter(({ position }) => position < record.position)
   if (!replacementBindsRun(event, runId)) {
@@ -1608,11 +1604,11 @@ const validatePlannedAttemptReplacement = (
       record.position,
       "PlannedAttemptReplaced requires its exact prior applied Restart choice"
     )
-    return
+    return indexes
   }
   const priorAttempt = event.subject.plannedAttempt
   /* v8 ignore next -- @preserve Journal record-key uniqueness rejects a second successor before semantic replacement validation. */
-  if (indexes.supersededExecutorAttempts.has(priorAttempt.attemptId)) {
+  if (HashSet.has(indexes.supersededExecutorAttempts, priorAttempt.attemptId)) {
     semanticIssue(issues, runId, record.position, `attempt ${priorAttempt.attemptId} already has a recorded successor`)
   }
   /* v8 ignore next -- @preserve The integration-start record owns this exact attempt and prevents its Restart controller from allocating a successor. */
@@ -1635,7 +1631,10 @@ const validatePlannedAttemptReplacement = (
       "PlannedAttemptReplaced lacks exact fresh F2, K1, W1, or H2 authority"
     )
   }
-  indexes.supersededExecutorAttempts.add(priorAttempt.attemptId)
+  return {
+    ...indexes,
+    supersededExecutorAttempts: HashSet.add(indexes.supersededExecutorAttempts, priorAttempt.attemptId)
+  }
 }
 
 const validatePlan = (
@@ -1643,13 +1642,13 @@ const validatePlan = (
   runId: RunId,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
-  if (record.event._tag !== "TaskAttemptPlanned" && record.event._tag !== "PlannedAttemptReplaced") return
+): FoldIndexes => {
+  if (record.event._tag !== "TaskAttemptPlanned" && record.event._tag !== "PlannedAttemptReplaced") return indexes
   const plannedAttempt =
     record.event._tag === "TaskAttemptPlanned"
       ? record.event.operation.plannedAttempt
       : record.event.successorPlan.plannedAttempt
-  const prior = indexes.plans.get(plannedAttempt.attemptId)
+  const prior = mapGet(indexes.plans, plannedAttempt.attemptId)
   if (prior !== undefined) {
     semanticIssue(
       issues,
@@ -1659,9 +1658,9 @@ const validatePlan = (
         ? `duplicate planned task attempt for attempt ${plannedAttempt.attemptId}`
         : `contradictory planned task attempts for attempt ${plannedAttempt.attemptId}`
     )
-    return
+    return indexes
   }
-  indexes.plans.set(plannedAttempt.attemptId, plannedAttempt)
+  return { ...indexes, plans: HashMap.set(indexes.plans, plannedAttempt.attemptId, plannedAttempt) }
 }
 
 const acquiredClaimMatchesIntent = (
@@ -1778,9 +1777,10 @@ const validateReconfirmationReference = (
   runId: RunId,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
-  const detail = invalidTaskTrackerReconfirmationReference(record, runId, indexes.trackerReconfirmations)
-  if (detail !== undefined) semanticIssue(issues, runId, record.position, detail)
+): FoldIndexes => {
+  const validation = invalidTaskTrackerReconfirmationReference(record, runId, indexes.trackerReconfirmations)
+  if (validation.detail !== undefined) semanticIssue(issues, runId, record.position, validation.detail)
+  return { ...indexes, trackerReconfirmations: validation.index }
 }
 
 const validateTrackerObservation = (
@@ -1810,12 +1810,13 @@ const validateExecutorEvent = (
   runId: RunId,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
+): FoldIndexes => {
+  let next = indexes
   const event = record.event
   const descriptor = describeJournalEvent(event)
   const executorAttemptId =
     descriptor._tag === "PlannedAttemptExecutorEventDescriptor" ? descriptor.correlation.attemptId : undefined
-  if (executorAttemptId !== undefined && indexes.abandonedExecutorAttempts.has(executorAttemptId)) {
+  if (executorAttemptId !== undefined && HashSet.has(next.abandonedExecutorAttempts, executorAttemptId)) {
     semanticIssue(
       issues,
       runId,
@@ -1823,7 +1824,7 @@ const validateExecutorEvent = (
       `executor event ${event._tag} follows abandonment of attempt ${executorAttemptId}`
     )
   }
-  if (executorAttemptId !== undefined && indexes.supersededExecutorAttempts.has(executorAttemptId)) {
+  if (executorAttemptId !== undefined && HashSet.has(next.supersededExecutorAttempts, executorAttemptId)) {
     semanticIssue(
       issues,
       runId,
@@ -1834,7 +1835,7 @@ const validateExecutorEvent = (
   const validateResponsibilityBegan = () => {
     if (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
       const attemptId = event.plannedAttempt.attemptId
-      const plan = indexes.plans.get(attemptId)
+      const plan = mapGet(next.plans, attemptId)
       if (plan === undefined || !plannedTaskAttemptEquivalence(plan, event.plannedAttempt)) {
         semanticIssue(
           issues,
@@ -1843,7 +1844,7 @@ const validateExecutorEvent = (
           `executor work for attempt ${attemptId} has no prior matching planned task attempt`
         )
       }
-      const priorResponsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      const priorResponsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
       if (priorResponsibility !== undefined) {
         issues.push(
           duplicateUnfinishedTaskAttemptIssue(
@@ -1855,17 +1856,20 @@ const validateExecutorEvent = (
           )
         )
       } else {
-        indexes.executorResponsibilitiesBegan.set(attemptId, {
-          plannedAttempt: event.plannedAttempt,
-          position: record.position
-        })
+        next = {
+          ...next,
+          executorResponsibilitiesBegan: HashMap.set(next.executorResponsibilitiesBegan, attemptId, {
+            plannedAttempt: event.plannedAttempt,
+            position: record.position
+          })
+        }
       }
     }
   }
   const validateCommandIntent = () => {
     if (event._tag === "PlannedAttemptExecutorCommandIntended") {
       const attemptId = event.plannedAttempt.attemptId
-      const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      const responsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
       const responsibilityMatches = () =>
         responsibility !== undefined &&
         plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
@@ -1877,7 +1881,7 @@ const validateExecutorEvent = (
           `executor command for attempt ${attemptId} has no prior matching executor-work responsibility`
         )
       }
-      const expectedCommandOrdinal = () => (indexes.executorCommandOrdinals.get(attemptId) ?? 0) + 1
+      const expectedCommandOrdinal = () => (mapGet(next.executorCommandOrdinals, attemptId) ?? 0) + 1
       const expectedOrdinal = expectedCommandOrdinal()
       if (event.ordinal !== expectedOrdinal) {
         semanticIssue(
@@ -1887,11 +1891,18 @@ const validateExecutorEvent = (
           `executor command for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
         )
       }
-      indexes.executorCommandOrdinals.set(attemptId, event.ordinal)
+      next = { ...next, executorCommandOrdinals: HashMap.set(next.executorCommandOrdinals, attemptId, event.ordinal) }
       const commandCountKey = `${attemptId}:${event.command}`
-      const nextCommandCount = () => (indexes.executorCommandCountsSinceSafeSuspension.get(commandCountKey) ?? 0) + 1
+      const nextCommandCount = () => (mapGet(next.executorCommandCountsSinceSafeSuspension, commandCountKey) ?? 0) + 1
       const commandCount = nextCommandCount()
-      indexes.executorCommandCountsSinceSafeSuspension.set(commandCountKey, commandCount)
+      next = {
+        ...next,
+        executorCommandCountsSinceSafeSuspension: HashMap.set(
+          next.executorCommandCountsSinceSafeSuspension,
+          commandCountKey,
+          commandCount
+        )
+      }
       const commandLimitFor = () =>
         event.command === "StartOrContinue"
           ? defaultPlannedAttemptExecutorContinuationLimit
@@ -1905,7 +1916,7 @@ const validateExecutorEvent = (
           `executor ${event.command} command for attempt ${attemptId} exceeds durable limit ${commandLimit}`
         )
       }
-      if (indexes.unsettledExecutorCommands.has(attemptId)) {
+      if (HashMap.has(next.unsettledExecutorCommands, attemptId)) {
         semanticIssue(
           issues,
           runId,
@@ -1913,8 +1924,11 @@ const validateExecutorEvent = (
           `executor command for attempt ${attemptId} follows an unmatched prior command intent`
         )
       }
-      indexes.unsettledExecutorCommands.set(attemptId, event.ordinal)
-      if (indexes.terminalExecutorAttempts.has(attemptId)) {
+      next = {
+        ...next,
+        unsettledExecutorCommands: HashMap.set(next.unsettledExecutorCommands, attemptId, event.ordinal)
+      }
+      if (HashSet.has(next.terminalExecutorAttempts, attemptId)) {
         semanticIssue(
           issues,
           runId,
@@ -1927,7 +1941,7 @@ const validateExecutorEvent = (
   const validateCommandProjection = () => {
     if (event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
       const attemptId = event.plannedAttempt.attemptId
-      const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      const responsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
       const responsibilityMatches = () =>
         responsibility !== undefined &&
         plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
@@ -1939,7 +1953,7 @@ const validateExecutorEvent = (
           `executor command projection for attempt ${attemptId} has no prior matching executor-work responsibility`
         )
       }
-      if (indexes.unsettledExecutorCommands.get(attemptId) !== event.commandOrdinal) {
+      if (mapGet(next.unsettledExecutorCommands, attemptId) !== event.commandOrdinal) {
         semanticIssue(
           issues,
           runId,
@@ -1948,7 +1962,7 @@ const validateExecutorEvent = (
         )
       }
       const projectionKey = `${attemptId}:${event.commandOrdinal}`
-      const expectedProjectionOrdinal = () => (indexes.executorCommandProjectionOrdinals.get(projectionKey) ?? 0) + 1
+      const expectedProjectionOrdinal = () => (mapGet(next.executorCommandProjectionOrdinals, projectionKey) ?? 0) + 1
       const expectedOrdinal = expectedProjectionOrdinal()
       if (event.projectionOrdinal !== expectedOrdinal) {
         semanticIssue(
@@ -1958,7 +1972,14 @@ const validateExecutorEvent = (
           `executor projection for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.projectionOrdinal}`
         )
       }
-      indexes.executorCommandProjectionOrdinals.set(projectionKey, event.projectionOrdinal)
+      next = {
+        ...next,
+        executorCommandProjectionOrdinals: HashMap.set(
+          next.executorCommandProjectionOrdinals,
+          projectionKey,
+          event.projectionOrdinal
+        )
+      }
       const validateExactObservation = () => {
         if (event.observation._tag !== "ExactExecutorReport") return
         const report = event.observation.report
@@ -1973,10 +1994,15 @@ const validateExecutorEvent = (
           )
           return
         }
-        indexes.unsettledExecutorCommands.delete(attemptId)
+        next = { ...next, unsettledExecutorCommands: HashMap.remove(next.unsettledExecutorCommands, attemptId) }
         if (report._tag === "SafelySuspended") {
-          indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
-          indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
+          next = {
+            ...next,
+            executorCommandCountsSinceSafeSuspension: HashMap.remove(
+              HashMap.remove(next.executorCommandCountsSinceSafeSuspension, `${attemptId}:StartOrContinue`),
+              `${attemptId}:Suspend`
+            )
+          }
         }
       }
       const validateContradictoryObservation = () => {
@@ -1997,7 +2023,7 @@ const validateExecutorEvent = (
   const validateCommandResponseContradiction = () => {
     if (event._tag === "PlannedAttemptExecutorCommandResponseContradicted") {
       const attemptId = event.plannedAttempt.attemptId
-      const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      const responsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
       if (
         responsibility === undefined ||
         !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
@@ -2009,7 +2035,7 @@ const validateExecutorEvent = (
           `contradictory executor response for attempt ${attemptId} has no prior matching executor-work responsibility`
         )
       }
-      if (indexes.unsettledExecutorCommands.get(attemptId) !== event.commandOrdinal) {
+      if (mapGet(next.unsettledExecutorCommands, attemptId) !== event.commandOrdinal) {
         semanticIssue(
           issues,
           runId,
@@ -2033,7 +2059,7 @@ const validateExecutorEvent = (
   const validateStateObservation = () => {
     if (event._tag === "PlannedAttemptExecutorStateObserved") {
       const attemptId = event.plannedAttempt.attemptId
-      const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+      const responsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
       const responsibilityMatches = () =>
         responsibility !== undefined &&
         plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
@@ -2045,7 +2071,7 @@ const validateExecutorEvent = (
           `executor state observation for attempt ${attemptId} has no prior matching executor-work responsibility`
         )
       }
-      if (indexes.unsettledExecutorCommands.has(attemptId)) {
+      if (HashMap.has(next.unsettledExecutorCommands, attemptId)) {
         semanticIssue(
           issues,
           runId,
@@ -2053,7 +2079,7 @@ const validateExecutorEvent = (
           `executor state observation for attempt ${attemptId} bypasses its unmatched command intent`
         )
       }
-      const expectedStateOrdinal = () => (indexes.executorStateObservationOrdinals.get(attemptId) ?? 0) + 1
+      const expectedStateOrdinal = () => (mapGet(next.executorStateObservationOrdinals, attemptId) ?? 0) + 1
       const expectedOrdinal = expectedStateOrdinal()
       if (event.ordinal !== expectedOrdinal) {
         semanticIssue(
@@ -2063,7 +2089,10 @@ const validateExecutorEvent = (
           `executor state observation for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
         )
       }
-      indexes.executorStateObservationOrdinals.set(attemptId, event.ordinal)
+      next = {
+        ...next,
+        executorStateObservationOrdinals: HashMap.set(next.executorStateObservationOrdinals, attemptId, event.ordinal)
+      }
       const validateExactObservationCorrelation = () => {
         if (event.observation._tag !== "ExactExecutorReport") return
         const correlation = event.observation.report.correlation
@@ -2094,15 +2123,20 @@ const validateExecutorEvent = (
       const observedSafeSuspension = () =>
         event.observation._tag === "ExactExecutorReport" && event.observation.report._tag === "SafelySuspended"
       if (observedSafeSuspension()) {
-        indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
-        indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
+        next = {
+          ...next,
+          executorCommandCountsSinceSafeSuspension: HashMap.remove(
+            HashMap.remove(next.executorCommandCountsSinceSafeSuspension, `${attemptId}:StartOrContinue`),
+            `${attemptId}:Suspend`
+          )
+        }
       }
     }
   }
   const validateWorkReport = () => {
     if (event._tag !== "PlannedAttemptExecutorWorkReported") return
     const attemptId = event.report.correlation.attemptId
-    const responsibility = indexes.executorResponsibilitiesBegan.get(attemptId)
+    const responsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
     if (responsibility === undefined || event.report.correlation.runId !== responsibility.plannedAttempt.runId) {
       semanticIssue(
         issues,
@@ -2111,7 +2145,7 @@ const validateExecutorEvent = (
         `executor report for attempt ${attemptId} has no prior matching executor-work responsibility`
       )
     }
-    const expectedOrdinal = (indexes.executorReportOrdinals.get(attemptId) ?? 0) + 1
+    const expectedOrdinal = (mapGet(next.executorReportOrdinals, attemptId) ?? 0) + 1
     if (event.ordinal !== expectedOrdinal) {
       semanticIssue(
         issues,
@@ -2120,9 +2154,9 @@ const validateExecutorEvent = (
         `executor report for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
       )
     }
-    indexes.executorReportOrdinals.set(attemptId, event.ordinal)
+    next = { ...next, executorReportOrdinals: HashMap.set(next.executorReportOrdinals, attemptId, event.ordinal) }
     const settleCommandIntent = () => {
-      if (!indexes.unsettledExecutorCommands.has(attemptId)) {
+      if (!HashMap.has(next.unsettledExecutorCommands, attemptId)) {
         semanticIssue(
           issues,
           runId,
@@ -2130,11 +2164,11 @@ const validateExecutorEvent = (
           `executor report for attempt ${attemptId} has no outstanding command intent`
         )
       } else {
-        indexes.unsettledExecutorCommands.delete(attemptId)
+        next = { ...next, unsettledExecutorCommands: HashMap.remove(next.unsettledExecutorCommands, attemptId) }
       }
     }
     settleCommandIntent()
-    if (indexes.terminalExecutorAttempts.has(attemptId)) {
+    if (HashSet.has(next.terminalExecutorAttempts, attemptId)) {
       semanticIssue(
         issues,
         runId,
@@ -2144,17 +2178,33 @@ const validateExecutorEvent = (
     }
     const recordTerminalOutcome = () => {
       if (event.report._tag === "Terminal") {
-        indexes.terminalExecutorAttempts.add(attemptId)
+        next = { ...next, terminalExecutorAttempts: HashSet.add(next.terminalExecutorAttempts, attemptId) }
         if (event.report.result._tag === "Accepted") {
-          indexes.acceptedExecutorResults.set(attemptId, event.report.result.acceptedResult)
-          indexes.acceptedExecutorResultPositions.set(attemptId, record.position)
+          next = {
+            ...next,
+            acceptedExecutorResults: HashMap.set(
+              next.acceptedExecutorResults,
+              attemptId,
+              event.report.result.acceptedResult
+            ),
+            acceptedExecutorResultPositions: HashMap.set(
+              next.acceptedExecutorResultPositions,
+              attemptId,
+              record.position
+            )
+          }
         }
       }
     }
     const recordSafeSuspension = () => {
       if (event.report._tag === "SafelySuspended") {
-        indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:StartOrContinue`)
-        indexes.executorCommandCountsSinceSafeSuspension.delete(`${attemptId}:Suspend`)
+        next = {
+          ...next,
+          executorCommandCountsSinceSafeSuspension: HashMap.remove(
+            HashMap.remove(next.executorCommandCountsSinceSafeSuspension, `${attemptId}:StartOrContinue`),
+            `${attemptId}:Suspend`
+          )
+        }
       }
     }
     recordTerminalOutcome()
@@ -2166,6 +2216,7 @@ const validateExecutorEvent = (
   validateCommandResponseContradiction()
   validateStateObservation()
   validateWorkReport()
+  return next
 }
 
 const validateOneUnfinishedAttemptPerTask = (
@@ -2177,11 +2228,14 @@ const validateOneUnfinishedAttemptPerTask = (
     TaskId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >()
-  for (const [attemptId, responsibility] of indexes.executorResponsibilitiesBegan) {
+  const responsibilities = [...indexes.executorResponsibilitiesBegan].sort(
+    ([, left], [, right]) => Number(left.position) - Number(right.position)
+  )
+  for (const [attemptId, responsibility] of responsibilities) {
     if (
-      indexes.terminalExecutorAttempts.has(attemptId) ||
-      indexes.abandonedExecutorAttempts.has(attemptId) ||
-      indexes.supersededExecutorAttempts.has(attemptId)
+      HashSet.has(indexes.terminalExecutorAttempts, attemptId) ||
+      HashSet.has(indexes.abandonedExecutorAttempts, attemptId) ||
+      HashSet.has(indexes.supersededExecutorAttempts, attemptId)
     )
       continue
     const taskId = responsibility.plannedAttempt.taskId
@@ -2609,12 +2663,13 @@ const validateRecord = (
   records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
-): void => {
-  const unique = validateRecordEnvelope(record, index, runId, indexes, issues)
+): FoldIndexes => {
+  const envelope = validateRecordEnvelope(record, index, runId, indexes, issues)
+  let next = envelope.indexes
   const descriptor = describeJournalEvent(record.event)
-  validateControlDirection(record, runId, indexes, issues)
-  validateAttemptChoice(record, runId, records, indexes, issues)
-  validateAttemptStop(record, runId, records, indexes, issues)
+  next = validateControlDirection(record, runId, next, issues)
+  next = validateAttemptChoice(record, runId, records, next, issues)
+  next = validateAttemptStop(record, runId, records, next, issues)
   validateCancelledAttemptHistory(record, runId, records, (detail) =>
     semanticIssue(issues, runId, record.position, detail)
   )
@@ -2627,45 +2682,49 @@ const validateRecord = (
       `executor work for attempt ${descriptor.correlation.attemptId} binds run ${descriptor.correlation.runId}`
     )
   }
-  if (!unique) {
+  if (!envelope.unique) {
     if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-      validateExecutorEvent(record, runId, indexes, issues)
+      next = validateExecutorEvent(record, runId, next, issues)
     }
-    return
+    return next
   }
-  validateOperationEvent(record, runId, indexes, issues)
+  next = validateOperationEvent(record, runId, next, issues)
   validateAttemptRestartAuthorityReadFailure(record, runId, records, issues)
-  validatePlannedAttemptReplacement(record, runId, records, indexes, issues)
+  next = validatePlannedAttemptReplacement(record, runId, records, next, issues)
   validateContinuationAuthorization(record, runId, records, issues)
-  validatePlan(record, runId, indexes, issues)
+  next = validatePlan(record, runId, next, issues)
   validateClaimReacquisitionIntent(record, runId, records, issues)
   validateClaim(record, runId, records, issues)
   validateClaimRejection(record, runId, records, issues)
   validateTaskClaimRelease(record, records, (detail) => identityIssue(issues, runId, record.position, detail))
   validateTrackerObservation(record, runId, records, issues)
-  validateReconfirmationReference(record, runId, indexes, issues)
-  validateExecutorEvent(record, runId, indexes, issues)
-  validateIntegrationHistoryRecord(
+  next = validateReconfirmationReference(record, runId, next, issues)
+  next = validateExecutorEvent(record, runId, next, issues)
+  next = validateIntegrationHistoryRecord(
     record,
     runId,
-    indexes,
+    next,
     (detail) => identityIssue(issues, runId, record.position, detail),
     (detail) => semanticIssue(issues, runId, record.position, detail),
     records.slice(0, index + 1)
   )
-  validateIntegrationFinalityHistoryRecord(
-    record,
-    runId,
-    records,
-    indexes.integrationFinalityHistory,
-    (detail) => identityIssue(issues, runId, record.position, detail),
-    (detail) => semanticIssue(issues, runId, record.position, detail)
-  )
-  const policyValidation = validateRunPolicyHistory(record, indexes)
-  indexes.latestRunPolicyRevision = policyValidation.latestRunPolicyRevision
+  next = {
+    ...next,
+    integrationFinalityHistory: validateIntegrationFinalityHistoryRecord(
+      record,
+      runId,
+      records,
+      next.integrationFinalityHistory,
+      (detail) => identityIssue(issues, runId, record.position, detail),
+      (detail) => semanticIssue(issues, runId, record.position, detail)
+    )
+  }
+  const policyValidation = validateRunPolicyHistory(record, next)
+  next = { ...next, latestRunPolicyRevision: policyValidation.latestRunPolicyRevision }
   for (const detail of policyValidation.details) {
     semanticIssue(issues, runId, record.position, detail)
   }
+  return next
 }
 
 const finishValidation = (
@@ -2678,7 +2737,7 @@ const finishValidation = (
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
   validateRunLifecycle(runId, records, issues)
   if (issues.length > 0) {
-    return { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
+    return rememberReduction({ _tag: "InvalidWorkflowJournalHistory", issues, records, runId })
   }
   const valid: ValidWorkflowJournalHistory = {
     _tag: "ValidWorkflowJournalHistory",
@@ -2686,17 +2745,21 @@ const finishValidation = (
     records,
     runId
   }
-  acceptedFoldIndexes.set(valid, indexes)
-  return valid
+  foldIndexesByHistory.set(valid, indexes)
+  return rememberReduction(valid)
 }
 
 export const reduceWorkflowJournalHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
+  const cached = cachedReductionFor(runId, records)
+  if (cached !== undefined) return cached
   const issues = new Array<WorkflowJournalHistoryIssue>()
-  const indexes = emptyIndexes()
-  records.forEach((record, index) => validateRecord(record, index, runId, records, indexes, issues))
+  let indexes = emptyIndexes()
+  records.forEach((record, index) => {
+    indexes = validateRecord(record, index, runId, records, indexes, issues)
+  })
   return finishValidation(runId, records, indexes, issues)
 }
 
@@ -2709,16 +2772,24 @@ export const advanceWorkflowJournalHistory = (
   record: JournalRecord
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
   const records = [...prior.records, record]
-  const cached = acceptedFoldIndexes.get(prior)
+  const cached = foldIndexesByHistory.get(prior)
   if (cached === undefined) return reduceWorkflowJournalHistory(prior.runId, records)
-  const indexes = copyIndexes(cached)
+
+  /*
+   * Fork the immutable index roots for this successor. Effect HashMap and
+   * HashSet updates share unchanged HAMT nodes, while the accepted prefix
+   * keeps its exact roots for later branches or retries.
+   */
+  const indexes = cached
   const issues = new Array<WorkflowJournalHistoryIssue>()
-  validateRecord(record, prior.records.length, prior.runId, records, indexes, issues)
-  const advanced = finishValidation(prior.runId, records, indexes, issues, () =>
+  const advancedIndexes = validateRecord(record, prior.records.length, prior.runId, records, indexes, issues)
+  const advanced = finishValidation(prior.runId, records, advancedIndexes, issues, () =>
     advanceReconstructedRunState(prior.runState, record, records)
   )
   if (advanced._tag === "ValidWorkflowJournalHistory") {
     rememberValidatedJournalPrefixSuccessor(prior, advanced, record)
+    return advanced
   }
+
   return advanced
 }

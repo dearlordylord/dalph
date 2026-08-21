@@ -1105,16 +1105,69 @@ const isGraphObservationRecord = (
   (record.event.observation._tag === "CompleteTaskTrackerFacts" ||
     record.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
 
+const reconstructedGraphsByHistory = new WeakMap<
+  ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  Map<JournalPosition, TaskDagSnapshot | undefined>
+>()
+
+type PauseCoverageHistoryIndex = {
+  readonly graphObservations: ReadonlyArray<GraphObservationRecord>
+  readonly taskUnpausePositions: Map<JournalPosition, JournalPosition | undefined>
+}
+
+const pauseCoverageHistoryIndexes = new WeakMap<
+  ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  PauseCoverageHistoryIndex
+>()
+
+const pauseCoverageHistoryIndexFor = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>
+): PauseCoverageHistoryIndex => {
+  const cached = pauseCoverageHistoryIndexes.get(records)
+  if (cached !== undefined) return cached
+  const index = {
+    graphObservations: records.filter(isGraphObservationRecord),
+    taskUnpausePositions: new Map<JournalPosition, JournalPosition | undefined>()
+  }
+  pauseCoverageHistoryIndexes.set(records, index)
+  return index
+}
+
+const taskUnpausePositionFor = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  index: PauseCoverageHistoryIndex,
+  pause: TaskPauseEvent,
+  pausePosition: JournalPosition
+): JournalPosition | undefined => {
+  if (index.taskUnpausePositions.has(pausePosition)) return index.taskUnpausePositions.get(pausePosition)
+  const unpausePosition = records.find(
+    ({ event, position }) => position > pausePosition && isMatchingTaskUnpause(event, pause)
+  )?.position
+  // eslint-disable-next-line functional/immutable-data -- This process-local index is intentionally populated lazily.
+  index.taskUnpausePositions.set(pausePosition, unpausePosition)
+  return unpausePosition
+}
+
 const graphReconstructedAt = (
   records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
   graphObservation: GraphObservationRecord
-): TaskDagSnapshot | undefined =>
-  Option.getOrUndefined(
+): TaskDagSnapshot | undefined => {
+  const cachedByPosition = reconstructedGraphsByHistory.get(records)
+  if (cachedByPosition?.has(graphObservation.position) === true) {
+    return cachedByPosition.get(graphObservation.position)
+  }
+  const graph = Option.getOrUndefined(
     reconstructedTaskGraphFromEvents(
       records.filter(({ position }) => position <= graphObservation.position).map(({ event }) => event),
       graphObservation.event.observation.target
     )
   )
+  const cache = cachedByPosition ?? new Map<JournalPosition, TaskDagSnapshot | undefined>()
+  // eslint-disable-next-line functional/immutable-data -- This process-local index is intentionally populated lazily.
+  cache.set(graphObservation.position, graph)
+  reconstructedGraphsByHistory.set(records, cache)
+  return graph
+}
 
 const taskPauseCoverageBoundaries = (
   records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
@@ -1124,16 +1177,13 @@ const taskPauseCoverageBoundaries = (
   currentGraph: TaskDagSnapshot | undefined
 ): ReadonlyArray<JournalPosition> => {
   if (pause.subject.taskId === plannedAttempt.taskId) return [pausePosition]
-  const unpausePosition = records.find(
-    ({ event, position }) => position > pausePosition && isMatchingTaskUnpause(event, pause)
-  )?.position
-  const graphObservations = records
-    .filter(isGraphObservationRecord)
-    .filter(
-      ({ position }) =>
-        position < pausePosition ||
-        (position > pausePosition && (unpausePosition === undefined || position < unpausePosition))
-    )
+  const historyIndex = pauseCoverageHistoryIndexFor(records)
+  const unpausePosition = taskUnpausePositionFor(records, historyIndex, pause, pausePosition)
+  const graphObservations = historyIndex.graphObservations.filter(
+    ({ position }) =>
+      position < pausePosition ||
+      (position > pausePosition && (unpausePosition === undefined || position < unpausePosition))
+  )
   const graphBeforePause = graphObservations.findLast(({ position }) => position < pausePosition)
   const graphsWhilePaused = graphObservations.filter(({ position }) => position > pausePosition)
   const observedGraphs = [
@@ -1654,15 +1704,23 @@ const latestCompletedRunPauseCyclePosition = (runState: ReconstructedRunState): 
   )?.position
 }
 
+const completedTaskPauseCyclesByRecords = new WeakMap<
+  ReadonlyArray<JournalRecord>,
+  ReadonlyArray<{ readonly position: JournalPosition; readonly taskId: TaskId }>
+>()
+
 const completedTaskPauseCycles = (
   runState: ReconstructedRunState
-): ReadonlyArray<{ readonly position: JournalPosition; readonly taskId: TaskId }> =>
-  runState.workflowHistory.records.flatMap(({ event, position }) => {
+): ReadonlyArray<{ readonly position: JournalPosition; readonly taskId: TaskId }> => {
+  const records = runState.workflowHistory.records
+  const cached = completedTaskPauseCyclesByRecords.get(records)
+  if (cached !== undefined) return cached
+  const cycles = records.flatMap(({ event, position }) => {
     if (event._tag !== "ControlDirectionApplied" || event.direction !== "Unpause" || event.subject._tag !== "Task") {
       return []
     }
     const taskId = event.subject.taskId
-    const completesPause = runState.workflowHistory.records.some(
+    const completesPause = records.some(
       ({ event: candidate, position: candidatePosition }) =>
         candidatePosition < position &&
         candidate._tag === "ControlDirectionApplied" &&
@@ -1672,6 +1730,9 @@ const completedTaskPauseCycles = (
     )
     return completesPause ? [{ position, taskId }] : []
   })
+  completedTaskPauseCyclesByRecords.set(records, cycles)
+  return cycles
+}
 
 const latestCompletedTaskPauseCyclePosition = (runState: ReconstructedRunState): JournalPosition | undefined =>
   completedTaskPauseCycles(runState).at(finalRecordOffset)?.position

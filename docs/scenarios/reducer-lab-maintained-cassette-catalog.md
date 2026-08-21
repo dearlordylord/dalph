@@ -311,7 +311,7 @@ the longer provenance, production-layer chain, and graph legend, which are
 collapsed under **How to read this delivery graph** until the maintainer asks
 for them. The visible playback help says that **Moment** moves to an adjacent
 captured story, Delivery, or runtime observation, **Jump** moves to a useful
-graph, responsibility, integration, restart, or terminal landmark, and
+frontier, held-position, restart, or terminal landmark, and
 **Live** follows the newest moment. A timeline with no established
 settlement says only **Established settlements in this timeline: 0** beside the
 graph; the cross-catalog explanation of direct integration-finality behavior is
@@ -461,9 +461,18 @@ settles an action owner, the Lab passively records the sanitized owner snapshot
 at the next capture order. Display timestamps never order these events.
 
 **Previous moment** and **Next moment** move by one exact captured observation.
-**Jump** moves among useful graph, responsibility, integration-owner, restart,
-and terminal landmarks. **Live** follows the newest observation; rewinding
-keeps the chosen moment stable while newer moments arrive.
+**Jump** moves among useful frontier, held-position, restart, and terminal
+landmarks. Responsibility, integration-owner, and authored-story changes remain
+available as exact adjacent moments and through the selector without expanding
+the bounded Jump path. **Live** follows the newest observation; rewinding keeps
+the chosen moment stable while newer moments arrive.
+
+When a held-position change immediately precedes a coordinator restart, Jump
+presents them as one chronological boundary at the restart frame. When the
+restart's first eligible frontier follows within six captured observations,
+Jump likewise presents the restart and frontier as one establishment boundary.
+The exact intermediate observations remain reachable with **Moment** or the
+selector; this grouping keeps the double-diamond story within 24 Jump actions.
 
 The compact **Current observed moment** region is the last section in the
 Delivery frame. It keeps one fixed viewport height and scrolls its own longer

@@ -84,11 +84,64 @@ const following = makeDeliveryPlaybackModel(frames, false)
       ["ResponsibilitiesChanged", "IntegrationOwnerChanged"]
     ]
   )
+  assert.deepEqual(
+    projectDeliveryPlayback(makeDeliveryPlaybackModel(transitions, true)).landmarkIndexes,
+    [0],
+    "Jump must leave responsibility and integration-owner details to exact-moment navigation"
+  )
+}
+
+{
+  const heldBeforeRestart = deliveryPlaybackFramesFrom([
+    { ...frame(1, ["A"], "initial"), capacity: TaskWorkCapacity.make(1) },
+    { ...frame(1, ["A"], "held before restart", ["A"]), capacity: TaskWorkCapacity.make(1) },
+    { ...frame(2, ["A"], "restart", ["A"]), capacity: TaskWorkCapacity.make(1) }
+  ], false)
+  const projection = projectDeliveryPlayback(makeDeliveryPlaybackModel(heldBeforeRestart, false))
+  assert.deepEqual(projection.landmarkIndexes, [0, 2])
+  assert.equal(
+    projection.frameOptions[2]?.landmarkLabel,
+    "held task-work positions A; coordinator restart into activation 2; settled terminal publication"
+  )
+}
+
+{
+  const heldRestartFrontier = deliveryPlaybackFramesFrom([
+    { ...frame(1, ["A"], "initial"), capacity: TaskWorkCapacity.make(1) },
+    { ...frame(1, ["A"], "held before restart", ["A"]), capacity: TaskWorkCapacity.make(1) },
+    { ...frame(2, [], "restart", ["A"]), capacity: TaskWorkCapacity.make(1) },
+    { ...frame(2, ["B"], "first frontier capture", ["A"]), capacity: TaskWorkCapacity.make(1) },
+    { ...frame(2, ["B"], "stable frontier", ["A"]), capacity: TaskWorkCapacity.make(1) }
+  ], true)
+  const projection = projectDeliveryPlayback(makeDeliveryPlaybackModel(heldRestartFrontier, true))
+  assert.deepEqual(projection.landmarkIndexes, [0, 3])
+  assert.equal(
+    projection.frameOptions[3]?.landmarkLabel,
+    "held task-work positions A; coordinator restart into activation 2; eligible frontier B"
+  )
+}
+
+{
+  const rapidFrontiersAfterRestart = deliveryPlaybackFramesFrom([
+    frame(1, ["A"], "initial"),
+    frame(2, [], "restart"),
+    frame(2, ["B"], "first B capture"),
+    frame(2, ["B"], "stable B frontier"),
+    frame(2, ["C"], "first C capture"),
+    frame(2, ["C"], "stable C frontier")
+  ], true)
+  const projection = projectDeliveryPlayback(makeDeliveryPlaybackModel(rapidFrontiersAfterRestart, true))
+  assert.deepEqual(projection.landmarkIndexes, [0, 2, 4])
+  assert.equal(
+    projection.frameOptions[2]?.landmarkLabel,
+    "coordinator restart into activation 2; eligible frontier B"
+  )
+  assert.equal(projection.frameOptions[4]?.landmarkLabel, "eligible frontier C")
 }
 
 assert.deepEqual(deliveryPlaybackViewContract, {
   groupLabel: "Delivery playback controls",
-  help: "Moment = one captured story, Delivery, or runtime observation · Jump = graph, responsibility, integration, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
+  help: "Moment = one captured story, Delivery, or runtime observation · Jump = frontier, held positions, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
   nextFrame: { accessibleName: "Next moment", label: "Moment →", shortcut: "ArrowRight" },
   nextLandmark: { accessibleName: "Next delivery landmark", label: "Jump →", shortcut: "]" },
   previousFrame: { accessibleName: "Previous moment", label: "← Moment", shortcut: "ArrowLeft" },

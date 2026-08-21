@@ -115,6 +115,12 @@ export const executionSummaryItems = (result: CassetteLabResult): ReadonlyArray<
     })
   } else {
     base.push({ term: "Journal evidence", description: `${result.journalRecordCount} records, ordered within each Run` })
+    if (result.traceHistories !== null) {
+      base.push({
+        term: "Production trace reader",
+        description: `${result.traceHistories.length} exact (RunId, JournalPosition) history views`
+      })
+    }
   }
   if (result.runId === null) {
     const journalRunIds = [...new Set(result.journalRecords.flatMap((record) => {

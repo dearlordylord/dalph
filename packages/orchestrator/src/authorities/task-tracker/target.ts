@@ -23,15 +23,20 @@ export const factFamilyCoverageMatchesExplicitTaskIds = (
       exactTaskIdSetKey(coverage.explicitlyCoveredTaskIds) === exactTaskIdSetKey(explicitlyCoveredTaskIds)
   )
 
-/** Canonical tracker-target identity used for domain equality and map keys. */
+const taskTrackerObjectTargetKeysByIdentity = new WeakMap<object, string>()
+
+/** Encoded target identity is immutable for one journal/recovery prefix. */
 export const taskTrackerTargetKey = (target: TrackerTarget): string => {
-  if (typeof target === "string") return `FixtureTarget:${target.length}:${target}`
-  return [
-    "GithubIssue",
-    `${target.owner.length}:${target.owner}`,
-    `${target.repository.length}:${target.repository}`,
-    String(target.issueNumber)
-  ].join("|")
+  if (typeof target === "object") {
+    const cached = taskTrackerObjectTargetKeysByIdentity.get(target)
+    if (cached !== undefined) return cached
+    const key = JSON.stringify(Schema.encodeUnknownSync(TrackerTarget)(target))
+    taskTrackerObjectTargetKeysByIdentity.set(target, key)
+    return key
+  }
+  // Fixture targets are primitive strings and may be unbounded across runs;
+  // encoding them on demand avoids retaining every historical target forever.
+  return JSON.stringify(Schema.encodeUnknownSync(TrackerTarget)(target))
 }
 
 export const factFamiliesCoverTarget = (

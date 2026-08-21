@@ -187,7 +187,7 @@
       "count": 2
     },
     "import-x/no-unused-modules": {
-      "count": 16
+      "count": 15
     }
   },
   "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts": {
@@ -316,11 +316,6 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/workflow/protocols/integration-finality/history.ts": {
-    "functional/prefer-tacit": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/protocol.ts": {
     "functional/prefer-tacit": {
       "count": 1
@@ -359,11 +354,6 @@
   "packages/orchestrator/src/workflow/task-tracker-facts/observation.test.ts": {
     "functional/no-throw-statements": {
       "count": 3
-    }
-  },
-  "packages/orchestrator/src/workflow/task-tracker-facts/reconfirmation.ts": {
-    "functional/immutable-data": {
-      "count": 1
     }
   }
 }

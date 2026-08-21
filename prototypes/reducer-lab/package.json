@@ -3,9 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "browser:install": "playwright install --with-deps chromium",
     "browser-smoke": "node scripts/browser-smoke.mjs",
     "build": "vite build",
     "check": "pnpm run typecheck && pnpm run smoke && pnpm run build",
+    "check:browser": "node scripts/run-browser-smoke.mjs",
     "dev": "vite --host 0.0.0.0",
     "smoke": "node scripts/smoke.mjs",
     "typecheck": "tsc --noEmit"

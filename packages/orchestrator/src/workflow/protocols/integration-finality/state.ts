@@ -180,7 +180,15 @@ const finalityStateByPrefix = new WeakMap<
   Map<string, IntegrationFinalityState | undefined>
 >()
 
-const finalityClaimKey = (claim: CompletionTaskClaim): string => JSON.stringify(claim)
+const finalityClaimKeysByIdentity = new WeakMap<CompletionTaskClaim, string>()
+
+const finalityClaimKey = (claim: CompletionTaskClaim): string => {
+  const cached = finalityClaimKeysByIdentity.get(claim)
+  if (cached !== undefined) return cached
+  const key = JSON.stringify(claim)
+  finalityClaimKeysByIdentity.set(claim, key)
+  return key
+}
 
 const appendedEventChangesClaim = (event: unknown, claim: CompletionTaskClaim): boolean => {
   return Schema.is(CompletionClaimFinalityJournalEvent)(event) && completionTaskClaimEquals(event.claim, claim)

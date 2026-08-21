@@ -5,7 +5,7 @@ import type {
 import type { AttemptId } from "../../../packages/contracts/src/planned-attempt.ts"
 import { TaskId, type TaskId as TaskIdType } from "../../../packages/contracts/src/task-identity.ts"
 import type { RunId } from "../../../packages/contracts/src/workflow-identity.ts"
-import { deliveryProposalOrderTaskId } from "@dalph/orchestrator"
+import { deliveryProposalOrderTaskId, type TraceAtCursor } from "@dalph/orchestrator"
 import { Match } from "effect"
 import {
   deliveryGraphEncoding,
@@ -40,6 +40,18 @@ import {
   TaskSelectedRequested,
   updateDeliveryPlayback
 } from "./delivery-playback.ts"
+import {
+  NextTraceCursorRequested,
+  PreviousTraceCursorRequested,
+  TraceCursorFollowingLive,
+  TraceCursorSelected,
+  auxiliaryTraceCorrelation,
+  historyAtCursor,
+  makeTraceCursorSelectionModel,
+  projectTraceCursorSelection,
+  resolveTraceCausalPredecessor,
+  updateTraceCursorSelection
+} from "./trace-cursor-selection.ts"
 
 type CassetteRow = (typeof maintainedCassetteRows)[number]
 type AuthoredRow = CassetteRow & {
@@ -842,6 +854,251 @@ const restartContinuity = (
   return `Coordinator restarted: ${activationLabel(previous.activationOrdinal)} → ${activationLabel(frame.activationOrdinal)}. Unchanged: ${joinedSummaries(unchanged)}. Changed: ${joinedSummaries(changed)}. Disappeared: ${joinedSummaries(disappeared)}. Added: ${joinedSummaries(added)}.`
 }
 
+/**
+ * Correlates an auxiliary authored/runtime observation only when its carried
+ * production Delivery value names an exact committed journal position. The
+ * capture order and story position remain display chronology; neither chooses
+ * a history cursor.
+ */
+const auxiliaryTraceCorrelations = (
+  moments: ReadonlyArray<AuthoredObservationMoment>,
+  histories: ReadonlyArray<TraceAtCursor>
+) => moments.flatMap((moment) => {
+  const kind = moment._tag === "AuthoredStoryOccurrenceMoment"
+    ? "AuthoredStoryOccurrence" as const
+    : moment._tag === "DeliveryRuntimeOwnersMoment"
+      ? "DeliveryRuntimeOwner" as const
+      : undefined
+  if (kind === undefined) return []
+  const carriedPosition = moment.deliveryFrame === null
+    ? null
+    : moment.deliveryFrame.graph._tag === "Established"
+      ? moment.deliveryFrame.graph.observation.recordedAt
+      : moment.deliveryFrame.acceptedAt
+  const nearestJournalCursor = carriedPosition === null
+    ? null
+    : histories.find(({ cursor }) => cursor.position === carriedPosition)?.cursor ?? null
+  return [auxiliaryTraceCorrelation(kind, moment.captureOrder, moment.storyPosition, nearestJournalCursor)]
+})
+
+const noSelectedTraceCursorIndex = -1
+
+const renderProductionTraceHistory = (
+  parent: HTMLElement,
+  histories: ReadonlyArray<TraceAtCursor>,
+  moments: ReadonlyArray<AuthoredObservationMoment>
+): void => {
+  const section = document.createElement("section")
+  section.className = "production-trace-history"
+  section.dataset.role = "trace-history"
+  appendText(section, "h4", "Historical journal trace · production TraceReader")
+  appendText(
+    section,
+    "p",
+    "Durable history, task graph, and workflow-causal relationships below are read from the schema-versioned production trace reader. Authored story and runtime-owner observations remain auxiliary chronology and never select or renumber a journal cursor.",
+    "trace-history-explanation"
+  )
+
+  let model = makeTraceCursorSelectionModel(
+    histories.map(({ cursor }) => cursor),
+    auxiliaryTraceCorrelations(moments, histories)
+  )
+  const controls = document.createElement("div")
+  controls.className = "trace-cursor-controls"
+  controls.setAttribute("role", "group")
+  controls.setAttribute("aria-label", "Production journal cursor navigation")
+  const previous = appendText(controls, "button", "Back")
+  previous.type = "button"
+  previous.dataset.role = "trace-previous-cursor"
+  previous.setAttribute("aria-label", "Select previous production journal cursor")
+  const follow = appendText(controls, "button", "Follow live")
+  follow.type = "button"
+  follow.dataset.role = "trace-follow-live"
+  follow.setAttribute("aria-label", "Follow newest production journal cursor")
+  const selectorLabel = appendText(controls, "label", "Journal cursor")
+  const selector = document.createElement("select")
+  selector.dataset.role = "trace-cursor-selector"
+  selectorLabel.append(selector)
+  const next = appendText(controls, "button", "Forward")
+  next.type = "button"
+  next.dataset.role = "trace-next-cursor"
+  next.setAttribute("aria-label", "Select next production journal cursor")
+  const status = document.createElement("output")
+  status.dataset.role = "trace-cursor-status"
+  status.setAttribute("aria-live", "polite")
+  controls.append(status)
+  section.append(controls)
+
+  const cursor = appendText(section, "p", "", "trace-selected-cursor")
+  cursor.dataset.role = "trace-cursor"
+  const graphHost = document.createElement("section")
+  graphHost.dataset.role = "trace-graph"
+  const causalHost = document.createElement("section")
+  causalHost.dataset.role = "trace-causal-edges"
+  const itemsHost = document.createElement("section")
+  itemsHost.dataset.role = "trace-history-items"
+  const auxiliaryHost = document.createElement("details")
+  auxiliaryHost.dataset.role = "trace-auxiliary-chronology"
+  appendText(auxiliaryHost, "summary", "Authored story and runtime-owner chronology (auxiliary)")
+  appendText(
+    auxiliaryHost,
+    "p",
+    "Capture order and story position explain the authored observation stream only. A missing carried production cursor is shown as auxiliary-only; no journal position or causal edge is fabricated."
+  )
+  const auxiliaryList = document.createElement("ul")
+  for (const auxiliary of model.auxiliary) {
+    appendText(
+      auxiliaryList,
+      "li",
+      `${auxiliary.kind} · capture ${auxiliary.captureOrder} · story position ${auxiliary.storyPosition} · ${auxiliary.nearestJournalCursor === null
+        ? "auxiliary-only; no production cursor"
+        : `beside Run ${auxiliary.nearestJournalCursor.runId} · journal position ${auxiliary.nearestJournalCursor.position}`}`
+    )
+  }
+  if (model.auxiliary.length === 0) appendText(auxiliaryList, "li", "No authored story or runtime-owner moments were captured.")
+  auxiliaryHost.append(auxiliaryList)
+  section.append(graphHost, causalHost, itemsHost, auxiliaryHost)
+  let causalNavigationError: string | null = null
+
+  const renderSelected = (): void => {
+    const projection = projectTraceCursorSelection(model)
+    status.textContent = projection.status
+    follow.setAttribute("aria-pressed", String(projection.followingLive))
+    previous.disabled = projection.cursor === null || projection.options.findIndex(({ cursor: candidate }) =>
+      candidate.runId === projection.cursor?.runId && candidate.position === projection.cursor?.position
+    ) <= 0
+    const selectedIndex = projection.cursor === null
+      ? noSelectedTraceCursorIndex
+      : projection.options.findIndex(({ cursor: candidate }) =>
+          candidate.runId === projection.cursor?.runId && candidate.position === projection.cursor?.position
+        )
+    next.disabled = selectedIndex < 0 || selectedIndex >= projection.options.length - 1
+    selector.replaceChildren()
+    for (const [index, optionValue] of projection.options.entries()) {
+      const option = document.createElement("option")
+      option.value = String(index)
+      option.textContent = optionValue.label
+      option.selected = optionValue.selected
+      option.dataset.runId = optionValue.cursor.runId
+      option.dataset.journalPosition = String(optionValue.cursor.position)
+      selector.append(option)
+    }
+    if (projection.cursor === null) {
+      cursor.textContent = "No production journal cursor is available."
+      graphHost.replaceChildren()
+      causalHost.replaceChildren()
+      itemsHost.replaceChildren()
+      return
+    }
+    cursor.textContent = `Selected production cursor: Run ${projection.cursor.runId} · JournalPosition ${projection.cursor.position}`
+    cursor.dataset.runId = projection.cursor.runId
+    cursor.dataset.journalPosition = String(projection.cursor.position)
+    const history = historyAtCursor(histories, projection.cursor)
+    graphHost.replaceChildren()
+    causalHost.replaceChildren()
+    itemsHost.replaceChildren()
+    if (history === undefined) {
+      appendText(graphHost, "p", "The selected exact production cursor has no returned trace view.")
+      return
+    }
+
+    appendText(graphHost, "h5", "Task graph at exact journal cursor")
+    if (history.graph === null) {
+      appendText(graphHost, "p", "No complete tracker graph had been observed at this exact cursor.")
+    } else {
+      appendText(
+        graphHost,
+        "p",
+        `Production graph observation ${history.graph.observation.operationId} recorded at journal position ${history.graph.observation.recordedAt} · revision ${history.graph.snapshot.revision}`
+      )
+      const graphList = document.createElement("ul")
+      for (const task of history.graph.snapshot.tasks) {
+        appendText(
+          graphList,
+          "li",
+          `${task.id} · ${task.lifecycle._tag} · prerequisites ${task.prerequisiteIds.length === 0 ? "none" : task.prerequisiteIds.join(", ")}${task.parentTaskId === null ? "" : ` · parent ${task.parentTaskId}`}`
+        )
+      }
+      graphHost.append(graphList)
+      appendText(graphHost, "p", `Graph edges: ${history.graph.edges.length}; derived task order: ${history.derivedTaskOrder.taskIds.join(", ") || "none"}.`)
+      const edgeList = document.createElement("ul")
+      edgeList.dataset.role = "trace-task-graph-edges"
+      for (const edge of history.graph.edges) {
+        appendText(
+          edgeList,
+          "li",
+          edge._tag === "Prerequisite"
+            ? `${edge.prerequisiteTaskId} → ${edge.dependantTaskId} · prerequisite`
+            : `${edge.parentTaskId} → ${edge.childTaskId} · grouping`
+        )
+      }
+      if (history.graph.edges.length > 0) graphHost.append(edgeList)
+    }
+
+    appendText(causalHost, "h5", "Workflow-causal predecessors at exact cursor")
+    if (causalNavigationError !== null) {
+      appendText(causalHost, "p", causalNavigationError, "trace-causal-navigation-error").dataset.role = "trace-causal-navigation-error"
+    }
+    if (history.relationships.workflowCausalEdges.length === 0) {
+      appendText(causalHost, "p", "No workflow-causal predecessor edges are proven at this cursor.")
+    } else {
+      const causalList = document.createElement("ul")
+      for (const edge of history.relationships.workflowCausalEdges) {
+        const causalItem = appendText(causalList, "li", `${edge.predecessorOperationId} → ${edge.successorOperationId} · `)
+        const predecessor = appendText(causalItem, "button", `Go to predecessor ${edge.predecessorOperationId}`)
+        predecessor.type = "button"
+        predecessor.dataset.role = "trace-causal-predecessor"
+        predecessor.dataset.predecessorOperationId = edge.predecessorOperationId
+        predecessor.dataset.successorOperationId = edge.successorOperationId
+        predecessor.addEventListener("click", () => {
+          const resolution = resolveTraceCausalPredecessor(
+            histories,
+            history,
+            edge.successorOperationId,
+            edge.predecessorOperationId
+          )
+          if (resolution._tag === "Missing") {
+            causalNavigationError = `Causal predecessor unavailable: ${resolution.reason} · ${resolution.predecessorOperationId} → ${resolution.successorOperationId}`
+            renderSelected()
+            return
+          }
+          model = updateTraceCursorSelection(model, TraceCursorSelected.make({ cursor: resolution.cursor }))
+          causalNavigationError = null
+          renderSelected()
+        })
+      }
+      causalHost.append(causalList)
+    }
+
+    appendText(itemsHost, "h5", `Workflow history items · ${history.items.length}`)
+    const itemList = document.createElement("ul")
+    for (const item of history.items) {
+      appendText(
+        itemList,
+        "li",
+        `Run ${item.identity.runId} · journal position ${item.identity.position} · ${item.occurrence._tag} · operations ${item.operationIds.length === 0 ? "none" : item.operationIds.join(", ")}`
+      )
+    }
+    if (history.items.length === 0) appendText(itemList, "li", "No projected workflow occurrence is visible at this cursor.")
+    itemsHost.append(itemList)
+  }
+
+  const dispatch = (message: Parameters<typeof updateTraceCursorSelection>[1]): void => {
+    model = updateTraceCursorSelection(model, message)
+    causalNavigationError = null
+    renderSelected()
+  }
+  previous.addEventListener("click", () => dispatch(PreviousTraceCursorRequested.make({})))
+  next.addEventListener("click", () => dispatch(NextTraceCursorRequested.make({})))
+  follow.addEventListener("click", () => dispatch(TraceCursorFollowingLive.make({})))
+  selector.addEventListener("change", () => {
+    const option = projectTraceCursorSelection(model).options[Number(selector.value)]
+    if (option !== undefined) dispatch(TraceCursorSelected.make({ cursor: option.cursor }))
+  })
+  renderSelected()
+  parent.append(section)
+}
+
 const renderTimeline = (
   parent: HTMLElement,
   row: AuthoredRow,
@@ -1365,6 +1622,15 @@ const renderTimeline = (
       : "WorkbenchShortcut"
     const message = deliveryPlaybackShortcutMessage(event.key, source)
     if (message === null) return
+    if (
+      message._tag === "PreviousLandmarkRequested" && previousLandmark.disabled
+      || message._tag === "NextLandmarkRequested" && nextLandmark.disabled
+      || message._tag === "PreviousFrameRequested" && previous.disabled
+      || message._tag === "NextFrameRequested" && next.disabled
+    ) {
+      event.preventDefault()
+      return
+    }
     dispatchPlayback(message)
     event.preventDefault()
   }
@@ -1399,6 +1665,11 @@ const observationMomentsFrom = (state: CassetteState): ReadonlyArray<AuthoredObs
   return state._tag === "Settled" && state.result._tag === "Completed" ? state.result.observationMoments : null
 }
 
+const productionTraceHistoriesFrom = (state: CassetteState): ReadonlyArray<TraceAtCursor> | null => {
+  if (state._tag !== "Settled" || state.result._tag !== "Completed") return null
+  return state.result.traceHistories
+}
+
 export const renderCassetteDeliveryWorkbench = (
   host: HTMLElement,
   row: CassetteRow,
@@ -1429,21 +1700,31 @@ export const renderCassetteDeliveryWorkbench = (
   const content = document.createElement("div")
   content.className = "delivery-workbench-content"
   section.append(content)
+  const historicalTraceHost = document.createElement("div")
+  historicalTraceHost.dataset.role = "trace-history-host"
+  const deliveryTimelineHost = document.createElement("div")
+  deliveryTimelineHost.dataset.role = "delivery-timeline-host"
+  content.append(historicalTraceHost, deliveryTimelineHost)
   const renderContents = (): void => {
     const moments = observationMomentsFrom(currentState)
+    const traceHistories = productionTraceHistoriesFrom(currentState)
+    historicalTraceHost.replaceChildren()
+    if (traceHistories !== null && traceHistories.length > 0) {
+      renderProductionTraceHistory(historicalTraceHost, traceHistories, moments ?? [])
+    }
     if (timeline !== undefined && moments !== null && moments.length > 0) {
       timeline.update(moments, currentState._tag === "Running")
       return
     }
     timeline?.destroy()
-    content.replaceChildren()
+    deliveryTimelineHost.replaceChildren()
     timeline = undefined
-    const heading = appendText(content, "h4", "Production delivery timeline")
+    const heading = appendText(deliveryTimelineHost, "h4", "Production delivery timeline · auxiliary chronology")
     heading.tabIndex = -1
     if (moments !== null && moments.length > 0) {
-      timeline = renderTimeline(content, authoredRow, moments, playback, currentState._tag === "Running")
+      timeline = renderTimeline(deliveryTimelineHost, authoredRow, moments, playback, currentState._tag === "Running")
     } else {
-      renderNotObserved(content, authoredRow, currentState)
+      renderNotObserved(deliveryTimelineHost, authoredRow, currentState)
     }
   }
   renderContents()

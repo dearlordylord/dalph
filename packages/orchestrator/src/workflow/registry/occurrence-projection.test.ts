@@ -222,6 +222,58 @@ it("projects both integration actions and rejects every inexact start relationsh
   })
 })
 
+it.effect("rejects an integration start whose responsibility facts are not exact", () =>
+  Effect.gen(function* () {
+    const mismatchedAttempt = PlannedTaskAttempt.make({
+      ...plannedAttempt,
+      attemptId: AttemptId.make("occurrence-mismatched-start-attempt")
+    })
+    const failure = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        IntegrationResponsibilityBeganEvent.make({
+          acceptedResult,
+          integrationTarget,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        2,
+        IntegrationStartedEvent.make({
+          acceptedResult,
+          integrationTarget,
+          plannedAttempt: mismatchedAttempt,
+          responsibilityBeganAt: JournalPosition.make(1),
+          version: workflowJournalEventVersion
+        })
+      )
+    ]).pipe(Effect.flip)
+
+    expect(failure._tag).toBe("SchemaError")
+  })
+)
+
+it.effect("keeps duplicate integration responsibility occurrences fail-closed without mutating the first index", () =>
+  Effect.gen(function* () {
+    const first = record(
+      1,
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const duplicate = { ...first, key: JournalRecordKey.make("occurrence-duplicate-responsibility") }
+    const projection = yield* projectWorkflowOccurrences([first, duplicate])
+
+    expect(projection.occurrences).toHaveLength(2)
+    expect(projection.occurrences[0]?.recordedAt).toEqual(JournalPosition.make(1))
+    expect(projection.occurrences[1]?.recordedAt).toEqual(JournalPosition.make(1))
+  })
+)
+
 it.effect("projects journaled integration actions through the complete occurrence boundary", () =>
   Effect.gen(function* () {
     const projection = yield* projectWorkflowOccurrences([
@@ -250,6 +302,17 @@ it.effect("projects journaled integration actions through the complete occurrenc
       "IntegrationResponsibilityBegan",
       "IntegrationStarted"
     ])
+  })
+)
+
+it.effect("reuses the successful projection for one unchanged immutable record array", () =>
+  Effect.gen(function* () {
+    const records = [record(1, taskTrackerReadIntent(operation))]
+    const first = yield* projectWorkflowOccurrences(records)
+    const second = yield* projectWorkflowOccurrences(records)
+
+    expect(second).toBe(first)
+    expect(second.occurrences).toBe(first.occurrences)
   })
 )
 
@@ -682,6 +745,60 @@ it.effect("rejects an already projected Git observation when its initiating acti
       occurrences: [observation],
       version: valid.version
     }).pipe(Effect.flip)
+    expect(failure._tag).toBe("SchemaError")
+  })
+)
+
+it.effect("rejects a Git observation when two earlier reads share its same-run operation identity", () =>
+  Effect.gen(function* () {
+    const gitRead = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("ambiguous-worktree-observation"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const intent = GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: gitRead,
+      version: workflowJournalEventVersion
+    })
+    const valid = yield* projectWorkflowOccurrences([
+      record(1, intent),
+      record(
+        3,
+        PlannedAttemptWorktreeObservedEvent.make({
+          observation: AttemptWorktreeLost.make({ plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: gitRead.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    const action = valid.occurrences.find(({ _tag }) => _tag === "GitReadInitiated")
+    const observation = valid.occurrences.find(({ _tag }) => _tag === "PlannedAttemptWorktreeObserved")
+    if (action?._tag !== "GitReadInitiated" || observation?._tag !== "PlannedAttemptWorktreeObserved") {
+      return expect.fail("expected Git read and worktree observation occurrences")
+    }
+    const equivalentFailure = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+      occurrences: [action, { ...action, recordedAt: JournalPosition.make(2) }, observation],
+      version: valid.version
+    }).pipe(Effect.flip)
+    expect(equivalentFailure._tag).toBe("SchemaError")
+
+    const failure = yield* projectWorkflowOccurrences([
+      record(1, intent),
+      { ...record(2, intent), key: JournalRecordKey.make("ambiguous-worktree-observation-intent") },
+      record(
+        3,
+        PlannedAttemptWorktreeObservedEvent.make({
+          observation: AttemptWorktreeLost.make({ plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: gitRead.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+    ]).pipe(Effect.flip)
+
     expect(failure._tag).toBe("SchemaError")
   })
 )
@@ -1225,6 +1342,7 @@ it.effect("rejects a Restart read failure without one exact earlier authority re
       return expect.fail("expected applied Restart, read action, and failure")
     }
     const laterAction = { ...action, recordedAt: JournalPosition.make(failure.recordedAt + 1) }
+    const laterApplied = { ...applied, recordedAt: JournalPosition.make(failure.recordedAt + 1) }
     const wrongTarget = {
       ...failure,
       failure: AttemptRestartTaskFactsReadFailure.make({
@@ -1241,6 +1359,7 @@ it.effect("rejects a Restart read failure without one exact earlier authority re
     for (const occurrences of [
       [failure],
       [failure, applied, action],
+      [laterApplied, failure],
       [applied, laterAction, failure],
       [applied, action, action, failure],
       [applied, action, wrongTarget],

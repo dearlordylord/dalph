@@ -1,6 +1,6 @@
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
-import { Effect, Option, Ref } from "effect"
+import { Effect, HashMap, Option, Ref } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -244,19 +244,19 @@ const makeJournal = (initial: ReadonlyArray<JournalRecord>) =>
 const makeRunHistoryIndexes = (): IntegratorHistoryIndexes => {
   const fixed = IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })
   return {
-    integrationStarted: new Map(),
-    targetLineageReadIntents: new Map(),
-    targetLineageObservations: new Map(),
-    integratorSessionFixed: new Map([[JournalPosition.make(6), fixed]]),
-    integratorSessionsByStartedAt: new Map([[session.startedAt, JournalPosition.make(6)]]),
-    integratorSessionsBySessionId: new Map([[session.sessionId, JournalPosition.make(6)]]),
-    integratorSessionsByCandidateResource: new Map([[session.candidateResource, JournalPosition.make(6)]]),
-    integratorSuccessorSessionFixed: new Map(),
-    integratorSuccessorSessionsByPredecessor: new Map(),
-    integratorRunStarted: new Map(),
-    integratorRunResults: new Map(),
-    integratorRunCandidateGitReadIntents: new Map(),
-    integratorRunCandidateGitObservations: new Map()
+    integrationStarted: HashMap.empty(),
+    targetLineageReadIntents: HashMap.empty(),
+    targetLineageObservations: HashMap.empty(),
+    integratorSessionFixed: HashMap.make([JournalPosition.make(6), fixed]),
+    integratorSessionsByStartedAt: HashMap.make([session.startedAt, JournalPosition.make(6)]),
+    integratorSessionsBySessionId: HashMap.make([session.sessionId, JournalPosition.make(6)]),
+    integratorSessionsByCandidateResource: HashMap.make([session.candidateResource, JournalPosition.make(6)]),
+    integratorSuccessorSessionFixed: HashMap.empty(),
+    integratorSuccessorSessionsByPredecessor: HashMap.empty(),
+    integratorRunStarted: HashMap.empty(),
+    integratorRunResults: HashMap.empty(),
+    integratorRunCandidateGitReadIntents: HashMap.empty(),
+    integratorRunCandidateGitObservations: HashMap.empty()
   }
 }
 
@@ -280,11 +280,14 @@ const makeSuccessorValidationFixture = () => {
     plannedAttempt,
     version: workflowJournalEventVersion
   })
-  indexes.targetLineageReadIntents.set(freshOperationId, {
-    operation: freshOperation,
-    position: JournalPosition.make(14)
-  })
-  indexes.targetLineageObservations.set(JournalPosition.make(15), freshLineage)
+  const withFreshLineage = {
+    ...indexes,
+    targetLineageReadIntents: HashMap.set(indexes.targetLineageReadIntents, freshOperationId, {
+      operation: freshOperation,
+      position: JournalPosition.make(14)
+    }),
+    targetLineageObservations: HashMap.set(indexes.targetLineageObservations, JournalPosition.make(15), freshLineage)
+  }
   const quarantineAt = JournalPosition.make(10)
   const directionAppliedAt = JournalPosition.make(12)
   const quarantine = IntegrationQuarantinedEvent.make({
@@ -328,7 +331,7 @@ const makeSuccessorValidationFixture = () => {
     record(12, direction),
     record(16, successorEvent, integratorSuccessorSessionFixedRecordKey(session, quarantineAt, directionAppliedAt))
   ]
-  return { freshLineage, indexes, records, successor, successorEvent }
+  return { freshLineage, indexes: withFreshLineage, records, successor, successorEvent }
 }
 
 describe("Integrator reconstruction states", () => {
@@ -393,15 +396,16 @@ describe("Integrator reconstruction states", () => {
   })
 
   it("fails closed when the exact run session index is missing or points to an unknown session", () => {
-    const missingSession = makeRunHistoryIndexes()
-    missingSession.integratorSessionsBySessionId.clear()
+    const missingSession = { ...makeRunHistoryIndexes(), integratorSessionsBySessionId: HashMap.empty() }
     expect(validateIntegratorHistoryEvent(runStartRecord(), missingSession)).toMatchObject({
       handled: true,
       issue: expect.stringContaining("no exact earlier fixed session")
     })
 
-    const unknownSession = makeRunHistoryIndexes()
-    unknownSession.integratorSessionsBySessionId.set(session.sessionId, JournalPosition.make(99))
+    const unknownSession = {
+      ...makeRunHistoryIndexes(),
+      integratorSessionsBySessionId: HashMap.make([session.sessionId, JournalPosition.make(99)])
+    }
     expect(validateIntegratorHistoryEvent(runStartRecord(), unknownSession)).toMatchObject({
       handled: true,
       issue: expect.stringContaining("no exact earlier fixed session")
@@ -710,31 +714,27 @@ describe("Integrator reconstruction states", () => {
 
 describe("Integrator reconstruction history indexes", () => {
   it("accepts and validates one exact run start, result, Git intent, and observation", () => {
-    const indexes = makeRunHistoryIndexes()
+    let indexes = makeRunHistoryIndexes()
+    const check = (current: JournalRecord, records: ReadonlyArray<JournalRecord> = [current]) => {
+      const validation = validateIntegratorHistoryEvent(current, indexes, records)
+      indexes = validation.indexes
+      return validation
+    }
     const start = runStartRecord()
     const result = runResultRecord(preparedResult())
     const [intent, observation] = runGitFacts()
     expect(intent).toBeDefined()
     expect(observation).toBeDefined()
     if (intent === undefined || observation === undefined) return
-    expect(validateIntegratorHistoryEvent(start, indexes, [start])).toEqual({ handled: true, issue: undefined })
-    expect(validateIntegratorHistoryEvent(result, indexes, [start, result])).toEqual({
-      handled: true,
-      issue: undefined
-    })
-    expect(validateIntegratorHistoryEvent(intent, indexes, [start, result, intent])).toEqual({
-      handled: true,
-      issue: undefined
-    })
-    expect(validateIntegratorHistoryEvent(observation, indexes, [start, result, intent, observation])).toEqual({
-      handled: true,
-      issue: undefined
-    })
-    expect(validateIntegratorHistoryEvent(runStartRecord(runOne, 12), indexes)).toMatchObject({
+    expect(check(start, [start])).toMatchObject({ handled: true, issue: undefined })
+    expect(check(result, [start, result])).toMatchObject({ handled: true, issue: undefined })
+    expect(check(intent, [start, result, intent])).toMatchObject({ handled: true, issue: undefined })
+    expect(check(observation, [start, result, intent, observation])).toMatchObject({ handled: true, issue: undefined })
+    expect(check(runStartRecord(runOne, 12))).toMatchObject({
       handled: true,
       issue: expect.stringContaining("repeats exact session ordinal")
     })
-    expect(validateIntegratorHistoryEvent(runResultRecord(preparedResult(), runOne, 13), indexes)).toMatchObject({
+    expect(check(runResultRecord(preparedResult(), runOne, 13))).toMatchObject({
       handled: true,
       issue: expect.stringContaining("repeats exact session ordinal")
     })
@@ -744,29 +744,28 @@ describe("Integrator reconstruction history indexes", () => {
     expect(duplicateIntent).toBeDefined()
     expect(duplicateObservation).toBeDefined()
     if (duplicateIntent === undefined || duplicateObservation === undefined) return
-    expect(validateIntegratorHistoryEvent(duplicateIntent, indexes)).toMatchObject({
+    expect(check(duplicateIntent)).toMatchObject({
       handled: true,
       issue: expect.stringContaining("repeats candidate text")
     })
-    expect(validateIntegratorHistoryEvent(duplicateObservation, indexes)).toMatchObject({
+    expect(check(duplicateObservation)).toMatchObject({
       handled: true,
       issue: expect.stringContaining("repeats candidate text")
     })
     const foreignKeyIndexes = makeRunHistoryIndexes()
-    expect(validateIntegratorHistoryEvent(start, foreignKeyIndexes, [start])).toEqual({
-      handled: true,
-      issue: undefined
-    })
-    expect(validateIntegratorHistoryEvent(result, foreignKeyIndexes, [start, result])).toEqual({
-      handled: true,
-      issue: undefined
-    })
+    const foreignStartValidation = validateIntegratorHistoryEvent(start, foreignKeyIndexes, [start])
+    expect(foreignStartValidation).toMatchObject({ handled: true, issue: undefined })
+    const foreignResultValidation = validateIntegratorHistoryEvent(result, foreignStartValidation.indexes, [
+      start,
+      result
+    ])
+    expect(foreignResultValidation).toMatchObject({ handled: true, issue: undefined })
     expect(
-      validateIntegratorHistoryEvent({ ...intent, key: JournalRecordKey.make("foreign-key") }, foreignKeyIndexes, [
-        start,
-        result,
-        intent
-      ])
+      validateIntegratorHistoryEvent(
+        { ...intent, key: JournalRecordKey.make("foreign-key") },
+        foreignResultValidation.indexes,
+        [start, result, intent]
+      )
     ).toMatchObject({ handled: true, issue: expect.stringContaining("foreign key") })
   })
 
@@ -777,7 +776,7 @@ describe("Integrator reconstruction history indexes", () => {
       handled: true,
       issue: expect.any(String)
     })
-    const indexes = makeRunHistoryIndexes()
+    let indexes = makeRunHistoryIndexes()
     const fixed = sessionRecord()
     const previousStart = runStartRecord(runOne, 8)
     const previousResult = runResultRecord(notPreparedResult(), runOne, 9)
@@ -839,14 +838,20 @@ describe("Integrator reconstruction history indexes", () => {
         version: workflowJournalEventVersion
       })
     )
-    indexes.integratorRunStarted.set(integratorRunRecordKeyPrefix(runOne), {
-      event: previousStart.event as Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunStarted" }>,
-      position: previousStart.position
-    })
-    indexes.integratorRunResults.set(integratorRunRecordKeyPrefix(runOne), {
-      event: previousResult.event as Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunResultRecorded" }>,
-      position: previousResult.position
-    })
+    indexes = {
+      ...indexes,
+      integratorRunStarted: HashMap.set(indexes.integratorRunStarted, integratorRunRecordKeyPrefix(runOne), {
+        event: previousStart.event as Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunStarted" }>,
+        position: previousStart.position
+      }),
+      integratorRunResults: HashMap.set(indexes.integratorRunResults, integratorRunRecordKeyPrefix(runOne), {
+        event: previousResult.event as Extract<
+          JournalRecord["event"],
+          { readonly _tag: "IntegratorRunResultRecorded" }
+        >,
+        position: previousResult.position
+      })
+    }
     const retryRecords = [
       ...lineageRecords(),
       fixed,
@@ -881,16 +886,13 @@ describe("Integrator reconstruction history indexes", () => {
     const successorRecord = fixture.records[2]
     expect(successorRecord).toBeDefined()
     if (successorRecord === undefined) return
-    expect(validateIntegratorHistoryEvent(successorRecord, fixture.indexes, fixture.records)).toEqual({
-      handled: true,
-      issue: undefined
-    })
+    const successorValidation = validateIntegratorHistoryEvent(successorRecord, fixture.indexes, fixture.records)
+    expect(successorValidation).toMatchObject({ handled: true, issue: undefined })
 
     const duplicate = { ...successorRecord, position: JournalPosition.make(17) }
-    expect(validateIntegratorHistoryEvent(duplicate, fixture.indexes, [...fixture.records, duplicate])).toMatchObject({
-      handled: true,
-      issue: expect.stringContaining("already has a successor")
-    })
+    expect(
+      validateIntegratorHistoryEvent(duplicate, successorValidation.indexes, [...fixture.records, duplicate])
+    ).toMatchObject({ handled: true, issue: expect.stringContaining("already has a successor") })
 
     const foreignKeyFixture = makeSuccessorValidationFixture()
     expect(
@@ -902,25 +904,24 @@ describe("Integrator reconstruction history indexes", () => {
     ).toMatchObject({ handled: true, issue: expect.stringContaining("requires record key") })
 
     const missingLineageFixture = makeSuccessorValidationFixture()
-    missingLineageFixture.indexes.targetLineageObservations.clear()
+    const missingLineageIndexes = { ...missingLineageFixture.indexes, targetLineageObservations: HashMap.empty() }
     expect(
-      validateIntegratorHistoryEvent(successorRecord, missingLineageFixture.indexes, missingLineageFixture.records)
+      validateIntegratorHistoryEvent(successorRecord, missingLineageIndexes, missingLineageFixture.records)
     ).toMatchObject({ handled: true, issue: expect.stringContaining("not the deterministic result") })
 
     const missingIntentFixture = makeSuccessorValidationFixture()
-    missingIntentFixture.indexes.targetLineageReadIntents.clear()
+    const missingIntentIndexes = { ...missingIntentFixture.indexes, targetLineageReadIntents: HashMap.empty() }
     expect(
-      validateIntegratorHistoryEvent(successorRecord, missingIntentFixture.indexes, missingIntentFixture.records)
+      validateIntegratorHistoryEvent(successorRecord, missingIntentIndexes, missingIntentFixture.records)
     ).toMatchObject({ handled: true, issue: expect.stringContaining("fresh target-lineage observation") })
 
     const missingPredecessorFixture = makeSuccessorValidationFixture()
-    missingPredecessorFixture.indexes.integratorSessionsBySessionId.clear()
+    const missingPredecessorIndexes = {
+      ...missingPredecessorFixture.indexes,
+      integratorSessionsBySessionId: HashMap.empty()
+    }
     expect(
-      validateIntegratorHistoryEvent(
-        successorRecord,
-        missingPredecessorFixture.indexes,
-        missingPredecessorFixture.records
-      )
+      validateIntegratorHistoryEvent(successorRecord, missingPredecessorIndexes, missingPredecessorFixture.records)
     ).toMatchObject({ handled: true, issue: expect.stringContaining("no exact earlier predecessor") })
 
     const missingQuarantineFixture = makeSuccessorValidationFixture()
@@ -979,18 +980,24 @@ describe("Integrator reconstruction history indexes", () => {
     ]
 
     for (const { result, start } of cases) {
-      const indexes = makeRunHistoryIndexes()
+      let indexes = makeRunHistoryIndexes()
       if (start !== undefined && start.event._tag === "IntegratorRunStarted") {
-        indexes.integratorRunStarted.set(integratorRunRecordKeyPrefix(runOne), {
-          event: start.event,
-          position: start.position
-        })
+        indexes = {
+          ...indexes,
+          integratorRunStarted: HashMap.set(indexes.integratorRunStarted, integratorRunRecordKeyPrefix(runOne), {
+            event: start.event,
+            position: start.position
+          })
+        }
       }
       if (result !== undefined && result.event._tag === "IntegratorRunResultRecorded") {
-        indexes.integratorRunResults.set(integratorRunRecordKeyPrefix(runOne), {
-          event: result.event,
-          position: result.position
-        })
+        indexes = {
+          ...indexes,
+          integratorRunResults: HashMap.set(indexes.integratorRunResults, integratorRunRecordKeyPrefix(runOne), {
+            event: result.event,
+            position: result.position
+          })
+        }
       }
       expect(validateIntegratorHistoryEvent(laterStart, indexes, [laterStart])).toMatchObject({ handled: true })
     }
@@ -998,13 +1005,27 @@ describe("Integrator reconstruction history indexes", () => {
 
   it("binds a first run to a fixed FullRerun successor session", () => {
     const fixture = makeSuccessorValidationFixture()
-    const indexes = fixture.indexes
-    indexes.integratorSessionFixed.set(JournalPosition.make(16), fixture.successorEvent)
-    indexes.integratorSessionsBySessionId.set(fixture.successor.sessionId, JournalPosition.make(16))
-    indexes.integratorSessionsByCandidateResource.set(fixture.successor.candidateResource, JournalPosition.make(16))
+    const indexes = {
+      ...fixture.indexes,
+      integratorSessionFixed: HashMap.set(
+        fixture.indexes.integratorSessionFixed,
+        JournalPosition.make(16),
+        fixture.successorEvent
+      ),
+      integratorSessionsBySessionId: HashMap.set(
+        fixture.indexes.integratorSessionsBySessionId,
+        fixture.successor.sessionId,
+        JournalPosition.make(16)
+      ),
+      integratorSessionsByCandidateResource: HashMap.set(
+        fixture.indexes.integratorSessionsByCandidateResource,
+        fixture.successor.candidateResource,
+        JournalPosition.make(16)
+      )
+    }
     const successorRun = integratorRunCorrelationForSession(fixture.successor, IntegratorRunOrdinal.make(1))
 
-    expect(validateIntegratorHistoryEvent(runStartRecord(successorRun, 17), indexes)).toEqual({
+    expect(validateIntegratorHistoryEvent(runStartRecord(successorRun, 17), indexes)).toMatchObject({
       handled: true,
       issue: undefined
     })
