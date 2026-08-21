@@ -5,6 +5,7 @@ import { encodeTaskRevisionFingerprint } from "@dalph/contracts"
 import {
   dispositionCleanupAuthoredCassetteCatalog,
   dispositionCleanupRecordedCassetteCatalog,
+  dispositionCleanupRecordedTranscriptCatalog,
   projectRecordedCassette,
   renderRecordedCassetteLyrics,
   runDispositionCleanupCassette
@@ -35,6 +36,9 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
       if (expected.events.length > 0) expect(renderRecordedCassetteLyrics(recorded)).toContain("cleanup")
       else expect(filteredCleanupTags).toEqual([])
       expect(run.boundaryCalls).toEqual(cassette.expectedBoundaryCalls)
+      expect(run.transcriptWitnesses).toEqual(
+        dispositionCleanupRecordedTranscriptCatalog[key as keyof typeof dispositionCleanupRecordedTranscriptCatalog]
+      )
       expect(run.forbiddenBoundaryCalls, `${key} forbidden boundary calls`).toEqual([])
       expect(run.forbiddenJournalTags, `${key} forbidden journal events`).toEqual([])
       expect(run.sentinelsAfter, `${key} upstream sentinels`).toEqual(run.sentinelsBefore)
@@ -143,11 +147,7 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         ])
       }
       if (cassette.scenario === "FullRerunPredecessorCandidate") {
-        expect(transcriptTags).toEqual([
-          "CandidateObserved",
-          "CandidateMutationResult",
-          "CandidateObserved"
-        ])
+        expect(transcriptTags).toEqual(["CandidateObserved", "CandidateMutationResult", "CandidateObserved"])
         expect(tags).toEqual([
           "WorkflowRunBegan",
           "IntegrationResponsibilityBegan",

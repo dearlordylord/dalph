@@ -30,6 +30,7 @@ import {
 import { OperationId } from "../../identity.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 
 /** Fresh Git facts for the exact planned branch after its worktree settled. */
 export const BranchCleanupObservation = Schema.TaggedUnion({
@@ -173,7 +174,7 @@ export interface BranchCleanupBoundaryService {
   readonly remove: (
     authorization: BranchCleanupAuthorization,
     attempt: CleanupMutationOrdinal
-  ) => Effect.Effect<BranchCleanupMutationResult>
+  ) => Effect.Effect<BranchCleanupMutationResult, CoordinatorOwnershipError>
 }
 export class BranchCleanupBoundary extends Context.Service<BranchCleanupBoundary, BranchCleanupBoundaryService>()(
   "@dalph/BranchCleanupBoundary"

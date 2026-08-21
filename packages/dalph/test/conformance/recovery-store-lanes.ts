@@ -202,24 +202,33 @@ export const recoveryPrefixMismatch = (
   if (canonicalSemanticProjection(expected.projection) !== canonicalSemanticProjection(actual.projection)) {
     return `recovery prefix ${cut} / ${lane}: production semantic projection differs`
   }
-  if (expected.finalHistoryTag !== undefined && actual.finalHistoryTag !== undefined) {
+  if (
+    expected.finalHistoryTag !== undefined ||
+    expected.finalDecodedRecords !== undefined ||
+    expected.finalProjection !== undefined
+  ) {
+    if (expected.finalHistoryTag === undefined || actual.finalHistoryTag === undefined) {
+      return `recovery prefix ${cut} / ${lane}: resumed history validity is missing`
+    }
     if (expected.finalHistoryTag !== actual.finalHistoryTag) {
       return `recovery prefix ${cut} / ${lane}: resumed history validity differs`
     }
-    if (
-      expected.finalDecodedRecords === undefined ||
-      actual.finalDecodedRecords === undefined ||
-      canonicalDecodedJournalHistory(expected.finalDecodedRecords) !==
-        canonicalDecodedJournalHistory(actual.finalDecodedRecords)
-    ) {
-      return `recovery prefix ${cut} / ${lane}: resumed decoded history differs`
+    if (expected.finalDecodedRecords !== undefined) {
+      if (
+        actual.finalDecodedRecords === undefined ||
+        canonicalDecodedJournalHistory(expected.finalDecodedRecords) !==
+          canonicalDecodedJournalHistory(actual.finalDecodedRecords)
+      ) {
+        return `recovery prefix ${cut} / ${lane}: resumed decoded history differs`
+      }
     }
-    if (
-      expected.finalProjection === undefined ||
-      actual.finalProjection === undefined ||
-      canonicalSemanticProjection(expected.finalProjection) !== canonicalSemanticProjection(actual.finalProjection)
-    ) {
-      return `recovery prefix ${cut} / ${lane}: resumed production semantic projection differs`
+    if (expected.finalProjection !== undefined) {
+      if (
+        actual.finalProjection === undefined ||
+        canonicalSemanticProjection(expected.finalProjection) !== canonicalSemanticProjection(actual.finalProjection)
+      ) {
+        return `recovery prefix ${cut} / ${lane}: resumed production semantic projection differs`
+      }
     }
   }
   return undefined
@@ -232,11 +241,7 @@ export const expectedRecoveryPrefix = Effect.fn("RecoveryStoreLanes.expectedReco
   const runId = prefix.records[0].runId
   const history = reduceWorkflowJournalHistory(runId, prefix.records)
   const projection = yield* projectWorkflowOccurrences(prefix.records)
-  return {
-    decodedRecords: prefix.records,
-    historyTag: history._tag,
-    projection
-  }
+  return { decodedRecords: prefix.records, historyTag: history._tag, projection }
 })
 
 /** Builds one prefix record from an endpoint in a production-produced chronology. */

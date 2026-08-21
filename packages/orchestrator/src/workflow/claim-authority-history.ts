@@ -9,7 +9,8 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
-  plannedAttemptReplacedRecordKey
+  plannedAttemptReplacedRecordKey,
+  taskClaimReacquisitionDirectedRecordKey
 } from "../workflow-journal/record-key.js"
 
 /** Finds the exact acquired claim in one planned attempt's causal history. */
@@ -89,32 +90,67 @@ const deriveAuthorizedClaimForAttempt = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
 ): AcquiredClaimEvent | undefined => {
-  const replacement = records.findLast(({ event, position: outcomePosition }) => {
-    if (event._tag !== "TaskClaimAcquired" || event.claim.taskId !== plannedAttempt.taskId) return false
-    const intent = records.findLast(
-      ({ event: candidate, position: intentPosition }) =>
-        intentPosition < outcomePosition &&
-        candidate._tag === "TaskClaimAcquisitionIntended" &&
-        candidate.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority" &&
-        candidate.operation.acquisition.operationId === event.claim.operationId &&
-        candidate.operation.acquisition.owner === event.claim.owner &&
-        candidate.operation.acquisition.taskId === event.claim.taskId &&
-        candidate.operation.acquisition.token === event.claim.token
+  const plannedRecords = records.filter((record) => {
+    if (record.event._tag === "TaskAttemptPlanned") {
+      return (
+        record.event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId &&
+        record.event.operation.plannedAttempt.runId === plannedAttempt.runId &&
+        record.runId === plannedAttempt.runId &&
+        record.key === attemptPlanRecordKey(plannedAttempt.attemptId)
+      )
+    }
+    return (
+      record.event._tag === "PlannedAttemptReplaced" &&
+      record.event.successorPlan.plannedAttempt.attemptId === plannedAttempt.attemptId &&
+      record.event.successorPlan.plannedAttempt.runId === plannedAttempt.runId &&
+      record.runId === plannedAttempt.runId &&
+      record.key === plannedAttemptReplacedRecordKey(record.event.subject.plannedAttempt.attemptId)
     )
-    if (intent?.event._tag !== "TaskClaimAcquisitionIntended") return false
+  })
+  if (plannedRecords.length !== 1) return undefined
+  const plannedRecord = plannedRecords[0]
+  if (plannedRecord === undefined) return undefined
+  const replacement = records.toReversed().flatMap((claimRecord) => {
+    const event = claimRecord.event
+    if (
+      event._tag !== "TaskClaimAcquired" ||
+      claimRecord.runId !== plannedAttempt.runId ||
+      claimRecord.key !== outcomeRecordKey(event.claim.operationId) ||
+      event.claim.taskId !== plannedAttempt.taskId
+    ) {
+      return []
+    }
+    const intents = records.filter(
+      (intentRecord) =>
+        intentRecord.position < claimRecord.position &&
+        intentRecord.runId === plannedAttempt.runId &&
+        intentRecord.event._tag === "TaskClaimAcquisitionIntended" &&
+        intentRecord.key === intentRecordKey(event.claim.operationId) &&
+        intentRecord.event.operation.authority._tag === "ExplicitTaskClaimReacquisitionAuthority" &&
+        intentRecord.event.operation.acquisition.operationId === event.claim.operationId &&
+        intentRecord.event.operation.acquisition.owner === event.claim.owner &&
+        intentRecord.event.operation.acquisition.taskId === event.claim.taskId &&
+        intentRecord.event.operation.acquisition.token === event.claim.token
+    )
+    if (intents.length !== 1) return []
+    const intent = intents[0]
+    if (intent === undefined || intent.event._tag !== "TaskClaimAcquisitionIntended") return []
     const authority = intent.event.operation.authority
-    /* v8 ignore next -- @preserve The selecting predicate above narrows the exact authority variant. */
-    if (authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return false
-    return records.some(
-      ({ event: candidate, position: directionPosition }) =>
-        directionPosition < intent.position &&
-        candidate._tag === "TaskClaimReacquisitionDirected" &&
-        candidate.subject.runId === plannedAttempt.runId &&
-        candidate.subject.taskId === plannedAttempt.taskId &&
-        candidate.requestId === authority.requestId &&
-        taskClaimReacquisitionOperationId(candidate.requestId) === event.claim.operationId
+    if (authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return []
+    const directions = records.filter(
+      (directionRecord) =>
+        directionRecord.position < intent.position &&
+        directionRecord.position > plannedRecord.position &&
+        directionRecord.runId === plannedAttempt.runId &&
+        directionRecord.key === taskClaimReacquisitionDirectedRecordKey(authority.requestId) &&
+        directionRecord.event._tag === "TaskClaimReacquisitionDirected" &&
+        directionRecord.event.subject.runId === plannedAttempt.runId &&
+        directionRecord.event.subject.taskId === plannedAttempt.taskId &&
+        directionRecord.event.requestId === authority.requestId &&
+        taskClaimReacquisitionOperationId(directionRecord.event.requestId) === event.claim.operationId
     )
-  })?.event
+    return directions.length === 1 ? [event] : []
+  })[0]
   const authorized =
     replacement?._tag === "TaskClaimAcquired" ? replacement : causalClaimForAttempt(records, plannedAttempt.attemptId)
   return authorized

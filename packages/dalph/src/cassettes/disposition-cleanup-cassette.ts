@@ -67,16 +67,12 @@ const issue69P1Branch = TaskBranchRef.make("refs/heads/task/issue-69-maintained-
 const issue69AbandonedCleanupOperation = OperationId.make("issue-69-maintained-abandoned-worktree-cleanup")
 const issue69P1Candidate = IntegratorCandidateResourceLocator.make("candidate:issue-69-maintained-p1")
 const issue69P1Session = IntegratorSessionId.make("session:issue-69-maintained-p1")
-const issue69DerivedWorktreeOperation = OperationId.make(
-  "disposition-cleanup:worktree:issue-69-maintained-p1:19"
-)
+const issue69DerivedWorktreeOperation = OperationId.make("disposition-cleanup:worktree:issue-69-maintained-p1:19")
 const issue69DerivedBranchOperation = OperationId.make("disposition-cleanup:branch:issue-69-maintained-p1:28")
 const issue69DerivedAbandonedWorktreeOperation = OperationId.make(
   "disposition-cleanup:worktree:issue-69-maintained-p1:9"
 )
-const issue69DerivedAbandonedBranchOperation = OperationId.make(
-  "disposition-cleanup:branch:issue-69-maintained-p1:20"
-)
+const issue69DerivedAbandonedBranchOperation = OperationId.make("disposition-cleanup:branch:issue-69-maintained-p1:20")
 const issue69DerivedCandidateOperation = OperationId.make(
   "disposition-cleanup:integrator-candidate:session:issue-69-maintained-p1:13"
 )
@@ -453,6 +449,78 @@ const DispositionCleanupTranscriptEntry = Schema.TaggedUnion({
 })
 type DispositionCleanupTranscriptEntry = typeof DispositionCleanupTranscriptEntry.Type
 
+/** Frozen typed boundary witness retained in the recorded catalog.  This is
+ * separate from journal-tag projection so a replay proves the exact locator,
+ * owner, evidence revision, observation, and mutation result. */
+export const DispositionCleanupTranscriptWitness = Schema.Struct({
+  _tag: Schema.String,
+  branch: Schema.NullOr(TaskBranchRef),
+  call: Schema.Union([
+    DispositionCleanupBoundaryCall.cases.BranchObserve,
+    DispositionCleanupBoundaryCall.cases.BranchRemove,
+    DispositionCleanupBoundaryCall.cases.CandidateObserve,
+    DispositionCleanupBoundaryCall.cases.CandidateRemove,
+    DispositionCleanupBoundaryCall.cases.WorktreeObserve,
+    DispositionCleanupBoundaryCall.cases.WorktreeRemove
+  ]),
+  evidenceRevision: Schema.Union([
+    WorktreeCleanupEvidenceRevision,
+    BranchCleanupEvidenceRevision,
+    IntegratorCandidateCleanupEvidenceRevision
+  ]),
+  locator: Schema.NullOr(Schema.Union([WorktreeLocator, IntegratorCandidateResourceLocator])),
+  observation: Schema.NullOr(
+    Schema.Union([WorktreeCleanupObservation, BranchCleanupObservation, IntegratorCandidateCleanupObservation])
+  ),
+  ownerAttemptId: Schema.NullOr(AttemptId),
+  ownerBranch: Schema.NullOr(TaskBranchRef),
+  ownerSessionId: Schema.NullOr(IntegratorSessionId),
+  result: Schema.NullOr(
+    Schema.Union([WorktreeCleanupMutationResult, BranchCleanupMutationResult, IntegratorCandidateCleanupMutationResult])
+  )
+})
+export type DispositionCleanupTranscriptWitness = typeof DispositionCleanupTranscriptWitness.Type
+
+const transcriptWitnessesFor = (
+  transcript: ReadonlyArray<DispositionCleanupTranscriptEntry>
+): ReadonlyArray<DispositionCleanupTranscriptWitness> =>
+  transcript.map((entry) => {
+    const authorization = entry.authorization
+    const call = entry.call
+    const ownerAttemptId = "attemptId" in authorization.owner ? authorization.owner.attemptId : null
+    const ownerBranch = "branch" in authorization.owner ? authorization.owner.branch : null
+    const ownerSessionId = "sessionId" in authorization.owner ? authorization.owner.sessionId : null
+    const branch =
+      call._tag === "BranchObserve" || call._tag === "BranchRemove"
+        ? call.branch
+        : call._tag === "WorktreeRemove"
+          ? call.branch
+          : ownerBranch
+    const locator =
+      call._tag === "WorktreeObserve" ||
+      call._tag === "WorktreeRemove" ||
+      call._tag === "CandidateObserve" ||
+      call._tag === "CandidateRemove"
+        ? call.locator
+        : null
+    return Object.freeze(
+      DispositionCleanupTranscriptWitness.make({
+        _tag: entry._tag,
+        branch,
+        call,
+        evidenceRevision: authorization.evidenceRevision,
+        locator,
+        observation: "observation" in entry ? entry.observation : null,
+        ownerAttemptId,
+        ownerBranch,
+        ownerSessionId,
+        result: "result" in entry ? entry.result : null
+      })
+    )
+  })
+
+const transcriptWitnessEqual = Schema.toEquivalence(Schema.Array(DispositionCleanupTranscriptWitness))
+
 /** Typed sentinels prove cleanup does not rewrite live successor, Integrator, history, or Git evidence. */
 const DispositionCleanupSentinels = Schema.Struct({
   c2: Schema.NullOr(IntegratorSessionCorrelation),
@@ -478,12 +546,11 @@ const upstreamSentinelsFor = (records: ReadonlyArray<JournalRecord>): Dispositio
   return DispositionCleanupSentinels.make({
     c2: c2?.event._tag === "IntegratorSuccessorSessionFixed" ? c2.event.successor : null,
     evidence: {
-      direction:
-        direction?.event._tag === "IntegrationQuarantineDirectionApplied" ? direction.event.fingerprint : null,
-      targetHead:
-        target?.event._tag === "TargetLineageObserved" ? target.event.observation.targetHeadSha : null,
+      direction: direction?.event._tag === "IntegrationQuarantineDirectionApplied" ? direction.event.fingerprint : null,
+      targetHead: target?.event._tag === "TargetLineageObserved" ? target.event.observation.targetHeadSha : null,
       worktreeHead:
-        worktree?.event._tag === "PlannedAttemptWorktreeObserved" && worktree.event.observation._tag === "PlannedWorktreeReady"
+        worktree?.event._tag === "PlannedAttemptWorktreeObserved" &&
+        worktree.event.observation._tag === "PlannedWorktreeReady"
           ? worktree.event.observation.headSha
           : null
     },
@@ -666,6 +733,121 @@ const transcriptFor = (
     return []
   })
 
+const expectedTranscriptWitnessesFor = (
+  cassette: DispositionCleanupCassette
+): ReadonlyArray<DispositionCleanupTranscriptWitness> =>
+  Object.freeze(
+    cassette.expectedBoundaryCalls.map((call) => {
+      const isWorktree = call._tag === "WorktreeObserve" || call._tag === "WorktreeRemove"
+      const isBranch = call._tag === "BranchObserve" || call._tag === "BranchRemove"
+      const isCandidate = call._tag === "CandidateObserve" || call._tag === "CandidateRemove"
+      const observation =
+        call._tag === "WorktreeObserve"
+          ? cassette.scenario === "ChangedGitFactsPreserveResources"
+            ? WorktreeCleanupObservation.cases.Foreign.make({
+                locator: issue69Attempt.worktree,
+                observedBranch: TaskBranchRef.make("refs/heads/other"),
+                observedHead: issue69BaseSha,
+                reason: "OtherBranch",
+                revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              })
+            : Number(call.ordinal) === 1
+              ? worktreePresent
+              : WorktreeCleanupObservation.cases.Absent.make({
+                  locator: issue69Attempt.worktree,
+                  revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                })
+          : call._tag === "BranchObserve"
+            ? cassette.scenario === "AbandonedWorktree"
+              ? BranchCleanupObservation.cases.Unreadable.make({ branch: issue69P1Branch, detail: "script exhausted" })
+              : Number(call.ordinal) === 1
+                ? branchPresent
+                : BranchCleanupObservation.cases.Absent.make({
+                    branch: issue69P1Branch,
+                    revision: BranchCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                  })
+            : call._tag === "CandidateObserve"
+              ? Number(call.ordinal) === 1
+                ? candidatePresent
+                : IntegratorCandidateCleanupObservation.cases.Absent.make({
+                    locator: issue69P1Candidate,
+                    revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                  })
+              : null
+      const result =
+        call._tag === "WorktreeRemove"
+          ? WorktreeCleanupMutationResult.cases.Removed.make({
+              branch: issue69P1Branch,
+              locator: issue69P1Worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+            })
+          : call._tag === "BranchRemove"
+            ? BranchCleanupMutationResult.cases.Removed.make({
+                branch: issue69P1Branch,
+                revision: BranchCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              })
+            : call._tag === "CandidateRemove"
+              ? IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+                  locator: issue69P1Candidate,
+                  revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision),
+                  sessionId: issue69P1Session
+                })
+              : null
+      return Object.freeze(
+        DispositionCleanupTranscriptWitness.make({
+          _tag:
+            call._tag === "WorktreeObserve"
+              ? "WorktreeObserved"
+              : call._tag === "WorktreeRemove"
+                ? "WorktreeMutationResult"
+                : call._tag === "BranchObserve"
+                  ? "BranchObserved"
+                  : call._tag === "BranchRemove"
+                    ? "BranchMutationResult"
+                    : call._tag === "CandidateObserve"
+                      ? "CandidateObserved"
+                      : "CandidateMutationResult",
+          branch: isBranch
+            ? call.branch
+            : isWorktree && call._tag === "WorktreeRemove"
+              ? call.branch
+              : isWorktree
+                ? issue69P1Branch
+                : null,
+          call,
+          evidenceRevision: isWorktree
+            ? WorktreeCleanupEvidenceRevision.make(1)
+            : isBranch
+              ? BranchCleanupEvidenceRevision.make(1)
+              : IntegratorCandidateCleanupEvidenceRevision.make(1),
+          locator: isWorktree || isCandidate ? call.locator : null,
+          observation,
+          ownerAttemptId: isWorktree || isBranch ? issue69Attempt.attemptId : null,
+          ownerBranch: isWorktree ? issue69P1Branch : null,
+          ownerSessionId: isCandidate ? issue69P1Session : null,
+          result
+        })
+      )
+    })
+  )
+
+/** Recorded typed transcripts are maintained independently from journal-tag catalogs. */
+export const dispositionCleanupRecordedTranscriptCatalog = Object.freeze({
+  supersededWorktreeAndBranch: expectedTranscriptWitnessesFor(
+    dispositionCleanupAuthoredCassetteCatalog.supersededWorktreeAndBranch
+  ),
+  abandonedWorktree: expectedTranscriptWitnessesFor(dispositionCleanupAuthoredCassetteCatalog.abandonedWorktree),
+  changedGitFactsPreserveResources: expectedTranscriptWitnessesFor(
+    dispositionCleanupAuthoredCassetteCatalog.changedGitFactsPreserveResources
+  ),
+  fullRerunPredecessorCandidate: expectedTranscriptWitnessesFor(
+    dispositionCleanupAuthoredCassetteCatalog.fullRerunPredecessorCandidate
+  ),
+  currentQuarantinePreserved: expectedTranscriptWitnessesFor(
+    dispositionCleanupAuthoredCassetteCatalog.currentQuarantinePreserved
+  )
+})
+
 /** Observable result of one maintained cleanup cassette after its production loop. */
 export const DispositionCleanupCassetteRun = Schema.Struct({
   boundaryCalls: Schema.Array(DispositionCleanupBoundaryCall),
@@ -684,6 +866,7 @@ export const DispositionCleanupCassetteRun = Schema.Struct({
   sentinelsBefore: DispositionCleanupSentinels,
   terminalResult: Schema.NonEmptyString,
   transcript: Schema.Array(DispositionCleanupTranscriptEntry),
+  transcriptWitnesses: Schema.Array(DispositionCleanupTranscriptWitness),
   version: Schema.Literal(1)
 })
 export type DispositionCleanupCassetteRun = typeof DispositionCleanupCassetteRun.Type
@@ -829,6 +1012,22 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
     ]
     const sentinelsAfter = upstreamSentinelsFor(records)
     const transcript = transcriptFor(records, boundaryCalls)
+    const transcriptWitnesses = transcriptWitnessesFor(transcript)
+    const recordedTranscriptKey =
+      cassette.scenario === "SupersededWorktreeAndBranch"
+        ? "supersededWorktreeAndBranch"
+        : cassette.scenario === "AbandonedWorktree"
+          ? "abandonedWorktree"
+          : cassette.scenario === "ChangedGitFactsPreserveResources"
+            ? "changedGitFactsPreserveResources"
+            : cassette.scenario === "FullRerunPredecessorCandidate"
+              ? "fullRerunPredecessorCandidate"
+              : "currentQuarantinePreserved"
+    if (
+      !transcriptWitnessEqual(transcriptWitnesses, dispositionCleanupRecordedTranscriptCatalog[recordedTranscriptKey])
+    ) {
+      return yield* Effect.die(`cleanup cassette typed transcript mismatch: ${cassette.forbiddenResult}`)
+    }
     if (JSON.stringify(boundaryCalls) !== JSON.stringify(cassette.expectedBoundaryCalls)) {
       return yield* Effect.die(
         `cleanup cassette boundary mismatch: expected ${JSON.stringify(cassette.expectedBoundaryCalls)}, received ${JSON.stringify(boundaryCalls)}`
@@ -958,6 +1157,7 @@ export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCasset
       sentinelsBefore,
       terminalResult,
       transcript,
+      transcriptWitnesses,
       version: 1
     })
   }).pipe(Effect.provide(layers))

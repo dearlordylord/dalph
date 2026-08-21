@@ -1,5 +1,6 @@
 import { Context, Effect } from "effect"
 import type { RunId } from "@dalph/contracts"
+import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import type { OperationId } from "../../identity.js"
 import type { JournalAppendError, JournalReadError, JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
@@ -7,7 +8,10 @@ import {
   isCleanupEligibleDisposition,
   type BranchCleanupAuthorization,
   type IntegratorCandidateCleanupAuthorization,
-  type WorktreeCleanupAuthorization
+  type WorktreeCleanupAuthorization,
+  branchCleanupAuthorizationEquals,
+  integratorCandidateCleanupAuthorizationEquals,
+  worktreeCleanupAuthorizationEquals
 } from "./disposition.js"
 import {
   BranchCleanupAuthorizedEvent,
@@ -32,7 +36,8 @@ import {
   validateIntegratorCandidateCleanupHistory,
   validateIntegratorCandidateCleanupProvenance,
   validateWorktreeCleanupHistory,
-  validateWorktreeCleanupProvenance
+  validateWorktreeCleanupProvenance,
+  validateSettledWorktreeForBranch
 } from "./provenance.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -81,7 +86,10 @@ export const cleanupResponsibilitySelectionLimit = 3 as const // eslint-disable-
 export interface DispositionCleanupActivationService {
   readonly responsibilities: DispositionCleanupResponsibilitySet
   /** Executes the same bounded protocol loop used by controlled compositions. */
-  readonly run: Effect.Effect<DispositionCleanupLoopResult, JournalAppendError | JournalReadError>
+  readonly run: Effect.Effect<
+    DispositionCleanupLoopResult,
+    JournalAppendError | JournalReadError | CoordinatorOwnershipError
+  >
 }
 
 export class DispositionCleanupActivation extends Context.Service<
@@ -125,12 +133,45 @@ const byOperation = <Authorization extends { readonly operationId: OperationId }
 const bounded = <Authorization>(values: ReadonlyArray<Authorization>): ReadonlyArray<Authorization> =>
   values.slice(0, cleanupResponsibilitySelectionLimit)
 
+const hasTerminalCleanupEvent = (
+  records: ReadonlyArray<JournalRecord>,
+  authorization: BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization | WorktreeCleanupAuthorization
+): boolean =>
+  records.some((record) => {
+    if (record.event._tag === "WorktreeCleanupSettled" || record.event._tag === "WorktreeCleanupContradicted") {
+      if (!("expectedHead" in authorization) || "worktreeCleanupOperationId" in authorization) return false
+      return (
+        record.event.authorization.operationId === authorization.operationId &&
+        worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
+      )
+    }
+    if (record.event._tag === "BranchCleanupSettled" || record.event._tag === "BranchCleanupContradicted") {
+      if (!("worktreeCleanupOperationId" in authorization)) return false
+      return (
+        record.event.authorization.operationId === authorization.operationId &&
+        branchCleanupAuthorizationEquals(record.event.authorization, authorization)
+      )
+    }
+    if (
+      record.event._tag === "IntegratorCandidateCleanupSettled" ||
+      record.event._tag === "IntegratorCandidateCleanupContradicted"
+    ) {
+      if ("expectedHead" in authorization || "worktreeCleanupOperationId" in authorization) return false
+      return (
+        record.event.authorization.operationId === authorization.operationId &&
+        integratorCandidateCleanupAuthorizationEquals(record.event.authorization, authorization)
+      )
+    }
+    return false
+  })
+
 const validWorktree = (records: ReadonlyArray<JournalRecord>, authorization: WorktreeCleanupAuthorization): boolean =>
   validateWorktreeCleanupProvenance(records, authorization)._tag === "Valid" &&
   validateWorktreeCleanupHistory(records, authorization)._tag === "Valid"
 
 const validBranch = (records: ReadonlyArray<JournalRecord>, authorization: BranchCleanupAuthorization): boolean =>
   validateWorktreeCleanupProvenance(records, authorization)._tag === "Valid" &&
+  validateSettledWorktreeForBranch(records, authorization)._tag === "Valid" &&
   validateBranchCleanupHistory(records, authorization)._tag === "Valid"
 
 const validCandidate = (
@@ -171,7 +212,7 @@ export const selectCleanupResponsibilitySet = (
       "BranchCleanupAuthorized",
       (record) => (record.event._tag === "BranchCleanupAuthorized" ? record.event.authorization : undefined),
       (authorization) => validBranch(records, authorization)
-    )
+    ).filter((authorization) => !hasTerminalCleanupEvent(records, authorization))
   ),
   candidate: bounded(
     familyAuthorizations(
@@ -180,7 +221,7 @@ export const selectCleanupResponsibilitySet = (
       (record) =>
         record.event._tag === "IntegratorCandidateCleanupAuthorized" ? record.event.authorization : undefined,
       (authorization) => validCandidate(records, authorization)
-    )
+    ).filter((authorization) => !hasTerminalCleanupEvent(records, authorization))
   ),
   worktree: bounded(
     familyAuthorizations(
@@ -188,7 +229,7 @@ export const selectCleanupResponsibilitySet = (
       "WorktreeCleanupAuthorized",
       (record) => (record.event._tag === "WorktreeCleanupAuthorized" ? record.event.authorization : undefined),
       (authorization) => validWorktree(records, authorization)
-    )
+    ).filter((authorization) => !hasTerminalCleanupEvent(records, authorization))
   )
 })
 
@@ -328,6 +369,8 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
     })
     for (const family of families) {
       const authorizations = derived[family]
+        .filter((authorization) => !hasTerminalCleanupEvent(records, authorization))
+        .slice(0, cleanupResponsibilitySelectionLimit)
       for (const authorization of authorizations) yield* appendOne(authorization)
     }
   }

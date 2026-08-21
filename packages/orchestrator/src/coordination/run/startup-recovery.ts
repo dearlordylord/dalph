@@ -221,7 +221,11 @@ export const validatedRunActivationLayer = (
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
   completionTask?: CompletionTaskBoundaryService,
-  cleanupBoundaryLayer: Layer.Layer<DispositionCleanupBoundaryServices> = preservingDispositionCleanupBoundaryLayer,
+  cleanupBoundaryLayer: Layer.Layer<
+    DispositionCleanupBoundaryServices,
+    never,
+    CoordinatorOwnership
+  > = preservingDispositionCleanupBoundaryLayer,
   acceptedResultEvidenceStore?: EvidenceStoreService,
   cleanupActivation = true
 ) =>

@@ -8,30 +8,38 @@ import {
   outcomeRecordKey,
   worktreeCleanupAuthorizedRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { PlannedAttemptWorktreeObservedEvent } from "../../registry/event.js"
+import type { PlannedAttemptWorktreeObservedEvent } from "../../registry/event.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import { IntegratorRunCorrelation, integratorRetryRunOrdinal } from "../integrator/events.js"
 import { evaluateIntegratorFullRerunAuthorization } from "../integrator/retry-authorization.js"
+import { AttemptImplementationAbandonedEvent } from "../attempt-choice/events.js"
+import { PlannedAttemptReplacedEvent } from "../attempt-choice/replacement-events.js"
 import {
-  BranchCleanupAuthorization,
   BranchCleanupEvidenceRevision,
-  IntegratorCandidateCleanupAuthorization,
+  BranchCleanupAuthorization as BranchCleanupAuthorizationSchema,
   IntegratorCandidateCleanupDisposition,
   IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupOwner,
+  IntegratorCandidateCleanupAuthorization as IntegratorCandidateCleanupAuthorizationSchema,
   PlannedAttemptCleanupDisposition,
   plannedAttemptCleanupDispositionEquals,
-  WorktreeCleanupAuthorization,
   WorktreeCleanupEvidenceRevision,
-  WorktreeCleanupOwner
+  WorktreeCleanupOwner,
+  WorktreeCleanupAuthorization as WorktreeCleanupAuthorizationSchema
+} from "./disposition.js"
+import type {
+  BranchCleanupAuthorization,
+  IntegratorCandidateCleanupAuthorization,
+  WorktreeCleanupAuthorization
 } from "./disposition.js"
 import {
   validateBranchCleanupHistory,
   validateIntegratorCandidateCleanupHistory,
   validateIntegratorCandidateCleanupProvenance,
   validateWorktreeCleanupHistory,
-  validateWorktreeCleanupProvenance
+  validateWorktreeCleanupProvenance,
+  validateSettledWorktreeForBranch
 } from "./provenance.js"
 
 /**
@@ -46,9 +54,22 @@ const operationFor = (family: string, identity: string, position: JournalPositio
 
 const candidateDispositionEquals = Schema.toEquivalence(IntegratorCandidateCleanupDisposition)
 
+const isPlannedAttemptReplacedRecord = (
+  record: JournalRecord
+): record is JournalRecord & { readonly event: PlannedAttemptReplacedEvent } =>
+  Schema.is(PlannedAttemptReplacedEvent)(record.event)
+
+const isAttemptImplementationAbandonedRecord = (
+  record: JournalRecord
+): record is JournalRecord & { readonly event: AttemptImplementationAbandonedEvent } =>
+  Schema.is(AttemptImplementationAbandonedEvent)(record.event)
+
 const exactWorktreeAuthorityRecord = (
   records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>["subject"]["plannedAttempt"],
+  plannedAttempt: Extract<
+    JournalRecord["event"],
+    { readonly _tag: "PlannedAttemptReplaced" }
+  >["subject"]["plannedAttempt"],
   operationId: OperationId,
   afterPosition?: JournalPosition
 ): (JournalRecord & { readonly event: typeof PlannedAttemptWorktreeObservedEvent.Type }) | undefined => {
@@ -66,17 +87,19 @@ const exactWorktreeAuthorityRecord = (
 }
 
 const decodeWorktreeAuthorization = (value: unknown): WorktreeCleanupAuthorization | undefined =>
-  Schema.is(WorktreeCleanupAuthorization)(value) ? value : undefined
+  Schema.is(WorktreeCleanupAuthorizationSchema)(value) ? value : undefined
 
 const decodeBranchAuthorization = (value: unknown): BranchCleanupAuthorization | undefined =>
-  Schema.is(BranchCleanupAuthorization)(value) ? value : undefined
+  Schema.is(BranchCleanupAuthorizationSchema)(value) ? value : undefined
 
 const decodeCandidateAuthorization = (value: unknown): IntegratorCandidateCleanupAuthorization | undefined =>
-  Schema.is(IntegratorCandidateCleanupAuthorization)(value) ? value : undefined
+  Schema.is(IntegratorCandidateCleanupAuthorizationSchema)(value) ? value : undefined
 
 const worktreeAuthorizationFromReplacement = (
   records: ReadonlyArray<JournalRecord>,
-  record: JournalRecord & { readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }> }
+  record: JournalRecord & {
+    readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
+  }
 ): WorktreeCleanupAuthorization | undefined => {
   const event = record.event
   const plannedAttempt = event.subject.plannedAttempt
@@ -110,7 +133,9 @@ const worktreeAuthorizationFromReplacement = (
 
 const worktreeAuthorizationFromAbandonment = (
   records: ReadonlyArray<JournalRecord>,
-  record: JournalRecord & { readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }> }
+  record: JournalRecord & {
+    readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>
+  }
 ): WorktreeCleanupAuthorization | undefined => {
   const event = record.event
   const plannedAttempt = event.subject.plannedAttempt
@@ -152,22 +177,11 @@ const worktreeAuthorizationsFromTerminalFacts = (
   records: ReadonlyArray<JournalRecord>
 ): ReadonlyArray<WorktreeCleanupAuthorization> =>
   records.flatMap((record) => {
-    const authorization =
-      record.event._tag === "PlannedAttemptReplaced"
-        ? worktreeAuthorizationFromReplacement(
-            records,
-            record as JournalRecord & {
-              readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
-            }
-          )
-        : record.event._tag === "AttemptImplementationAbandoned"
-          ? worktreeAuthorizationFromAbandonment(
-              records,
-              record as JournalRecord & {
-                readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>
-              }
-            )
-          : undefined
+    const authorization = isPlannedAttemptReplacedRecord(record)
+      ? worktreeAuthorizationFromReplacement(records, record)
+      : isAttemptImplementationAbandonedRecord(record)
+        ? worktreeAuthorizationFromAbandonment(records, record)
+        : undefined
     if (authorization === undefined) return []
     if (
       records.some(
@@ -190,11 +204,7 @@ const branchAuthorizationsFromSettledWorktrees = (
   records.flatMap((record) => {
     if (record.event._tag !== "WorktreeCleanupSettled") return []
     const worktree = record.event.authorization
-    const operationId = operationFor(
-      "branch",
-      worktree.disposition.plannedAttempt.attemptId,
-      record.position
-    )
+    const operationId = operationFor("branch", worktree.disposition.plannedAttempt.attemptId, record.position)
     const authorization = decodeBranchAuthorization({
       causalPredecessors: [worktree.operationId, ...worktree.causalPredecessors],
       disposition: worktree.disposition,
@@ -209,6 +219,7 @@ const branchAuthorizationsFromSettledWorktrees = (
       writerQuiescent: true
     })
     if (authorization === undefined) return []
+    if (validateSettledWorktreeForBranch(records, authorization)._tag === "Invalid") return []
     if (
       records.some(
         (candidate) =>
@@ -230,10 +241,7 @@ const candidateAuthorizationsFromSuccessors = (
   records.flatMap((record) => {
     if (record.event._tag !== "IntegratorSuccessorSessionFixed") return []
     const event = record.event
-    const successorRun = IntegratorRunCorrelation.make({
-      ordinal: integratorRetryRunOrdinal,
-      session: event.successor
-    })
+    const successorRun = IntegratorRunCorrelation.make({ ordinal: integratorRetryRunOrdinal, session: event.successor })
     const lineage = exactTargetLineageRecord(records, {
       expectedTargetHead: event.predecessor.expectedTargetHead,
       integrationTarget: event.predecessor.integrationTarget,
@@ -291,7 +299,8 @@ const uniqueByOperation = <Authorization extends { readonly operationId: Operati
   values: ReadonlyArray<Authorization>
 ): ReadonlyArray<Authorization> =>
   values.reduce<ReadonlyArray<Authorization>>(
-    (unique, value) => unique.some((candidate) => candidate.operationId === value.operationId) ? unique : [...unique, value],
+    (unique, value) =>
+      unique.some((candidate) => candidate.operationId === value.operationId) ? unique : [...unique, value],
     []
   )
 

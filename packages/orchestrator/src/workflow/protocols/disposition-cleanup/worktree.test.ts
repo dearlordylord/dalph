@@ -35,6 +35,7 @@ import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../re
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
 import {
   CleanupObservationOrdinal,
+  BranchCleanupEvidenceRevision,
   isCleanupEligibleDisposition,
   PlannedAttemptCleanupDisposition,
   WorktreeCleanupAuthorization,
@@ -50,7 +51,7 @@ import {
   WorktreeCleanupObservation,
   WorktreeCleanupAuthorizedEvent
 } from "./worktree.js"
-import { branchCleanupTestLayer } from "./branch.js"
+import { BranchCleanupMutationResult, BranchCleanupObservation, branchCleanupTestLayer } from "./branch.js"
 import { integratorCandidateCleanupTestLayer } from "./integrator-candidate.js"
 import { activateDispositionCleanup, makeDispositionCleanupActivation, runDispositionCleanupLoop } from "./loop.js"
 import {
@@ -136,6 +137,15 @@ const secondAttempt = PlannedTaskAttempt.make({
   branch: TaskBranchRef.make("refs/heads/task/issue-69-p1-second"),
   worktree: WorktreeLocator.make("/tmp/issue-69-p1-second")
 })
+
+const loopAttempt = (suffix: string) =>
+  PlannedTaskAttempt.make({
+    ...attempt,
+    attemptId: AttemptId.make(`issue-69-${suffix}`),
+    branch: TaskBranchRef.make(`refs/heads/task/issue-69-${suffix}`),
+    taskRevision: TaskRevision.make(`revision:${suffix}`),
+    worktree: WorktreeLocator.make(`/tmp/issue-69-${suffix}`)
+  })
 
 it.effect("removes the exact superseded worktree after fresh matching facts", () =>
   setup(
@@ -396,6 +406,98 @@ it.effect("ordinary activation runs two terminal responsibilities and excludes a
       })
     ),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("converges past the three-responsibility activation cap", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-more-than-three-responsibilities"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const attempts = [attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")]
+    for (const [index, plannedAttempt] of attempts.entries()) {
+      yield* appendAbandonedProvenance(plannedAttempt, OperationId.make(`issue-69-fourth-cap-${index + 1}`))
+    }
+
+    const first = yield* runDispositionCleanupLoop(runId)
+    expect(first.worktreeOutcomes).toHaveLength(3)
+    expect(first.branchOutcomes).toHaveLength(3)
+    expect(first.worktreeOutcomes.every(({ _tag }) => _tag === "Settled")).toBe(true)
+    expect(first.branchOutcomes.every(({ _tag }) => _tag === "Settled")).toBe(true)
+
+    const second = yield* runDispositionCleanupLoop(runId)
+    expect(second.worktreeOutcomes).toHaveLength(1)
+    expect(second.branchOutcomes).toHaveLength(1)
+    expect(second.worktreeOutcomes[0]?._tag).toBe("Settled")
+    expect(second.branchOutcomes[0]?._tag).toBe("Settled")
+
+    const records = yield* journal.read(runId)
+    expect(records.filter(({ event }) => event._tag === "WorktreeCleanupSettled")).toHaveLength(4)
+    expect(records.filter(({ event }) => event._tag === "BranchCleanupSettled")).toHaveLength(4)
+    expect((yield* (yield* TestWorktreeCleanupBoundary).calls()).filter(({ _tag }) => _tag === "Remove")).toHaveLength(
+      4
+    )
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          ...[attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")].flatMap((plannedAttempt) => [
+            WorktreeCleanupObservation.cases.Present.make({
+              attemptId: plannedAttempt.attemptId,
+              branch: plannedAttempt.branch,
+              headSha: plannedAttempt.baseSha,
+              locator: plannedAttempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(1),
+              writerQuiescent: true
+            }),
+            WorktreeCleanupObservation.cases.Absent.make({
+              locator: plannedAttempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(1)
+            })
+          ])
+        ],
+        mutations: [
+          ...[attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")].map((plannedAttempt) =>
+            WorktreeCleanupMutationResult.cases.Removed.make({
+              branch: plannedAttempt.branch,
+              locator: plannedAttempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(1)
+            })
+          )
+        ]
+      })
+    ),
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          ...[attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")].flatMap((plannedAttempt) => [
+            BranchCleanupObservation.cases.Present.make({
+              branch: plannedAttempt.branch,
+              headSha: plannedAttempt.baseSha,
+              registeredWorktree: null,
+              revision: BranchCleanupEvidenceRevision.make(1)
+            }),
+            BranchCleanupObservation.cases.Absent.make({
+              branch: plannedAttempt.branch,
+              revision: BranchCleanupEvidenceRevision.make(1)
+            })
+          ])
+        ],
+        mutations: [
+          ...[attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")].map((plannedAttempt) =>
+            BranchCleanupMutationResult.cases.Removed.make({
+              branch: plannedAttempt.branch,
+              revision: BranchCleanupEvidenceRevision.make(1)
+            })
+          )
+        ]
+      })
+    ),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
     Effect.provide(memoryJournalTestLayer)
   )

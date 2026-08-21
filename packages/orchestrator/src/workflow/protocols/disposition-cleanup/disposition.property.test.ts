@@ -37,12 +37,14 @@ import {
 } from "./disposition.js"
 import {
   BranchCleanupObservation,
+  BranchCleanupMutationResult,
   branchCleanupTestLayer,
   runBranchCleanup,
   TestBranchCleanupBoundary
 } from "./branch.js"
 import {
   IntegratorCandidateCleanupObservation,
+  IntegratorCandidateCleanupMutationResult,
   integratorCandidateCleanupTestLayer,
   runIntegratorCandidateCleanup,
   TestIntegratorCandidateCleanupBoundary
@@ -51,13 +53,20 @@ import {
   runWorktreeCleanup,
   TestWorktreeCleanupBoundary,
   worktreeCleanupTestLayer,
+  WorktreeCleanupMutationResult,
   WorktreeCleanupObservation
 } from "./worktree.js"
 import { attempt, authorization, baseSha, runId, successor } from "./fixtures.js"
-import { appendAbandonedProvenance, appendCandidateProvenance, appendReplacementProvenance } from "./provenance-fixtures.js"
+import {
+  appendAbandonedProvenance,
+  appendCandidateProvenance,
+  appendReplacementProvenance
+} from "./provenance-fixtures.js"
+import { deriveCleanupAuthorizations } from "./activation.js"
 
 type PropertyCase = {
   readonly disposition: "Abandoned" | "Settled" | "Superseded"
+  readonly exact: boolean
   readonly locatorMatches: boolean
   readonly ownerMatches: boolean
   readonly revisionMatches: boolean
@@ -131,7 +140,7 @@ const branchAuthorizationFor = (worktree: WorktreeCleanupAuthorization) =>
   })
 
 const worktreeObservationFor = (value: PropertyCase, exact: boolean): WorktreeCleanupObservation => {
-  const revisionMatches = value.revisionMatches && value.disposition === "Superseded"
+  const revisionMatches = exact && value.revisionMatches && value.disposition === "Superseded"
   if (exact) {
     return WorktreeCleanupObservation.cases.Present.make({
       attemptId: attempt.attemptId,
@@ -162,7 +171,7 @@ const worktreeObservationFor = (value: PropertyCase, exact: boolean): WorktreeCl
 }
 
 const branchObservationFor = (value: PropertyCase, exact: boolean): BranchCleanupObservation => {
-  const revisionMatches = value.revisionMatches && value.disposition === "Superseded"
+  const revisionMatches = exact && value.revisionMatches && value.disposition === "Superseded"
   if (exact) {
     return BranchCleanupObservation.cases.Present.make({
       branch: attempt.branch,
@@ -188,11 +197,8 @@ const branchObservationFor = (value: PropertyCase, exact: boolean): BranchCleanu
   })
 }
 
-const candidateObservationFor = (
-  value: PropertyCase,
-  exact: boolean
-): IntegratorCandidateCleanupObservation => {
-  const revisionMatches = value.revisionMatches && value.disposition === "Superseded"
+const candidateObservationFor = (value: PropertyCase, exact: boolean): IntegratorCandidateCleanupObservation => {
+  const revisionMatches = exact && value.revisionMatches && value.disposition === "Superseded"
   if (exact) {
     return IntegratorCandidateCleanupObservation.cases.Present.make({
       locator: candidatePredecessor.candidateResource,
@@ -226,29 +232,38 @@ const runPropertyCase = Effect.fn("DispositionCleanup.propertyCase")(function* (
     FixtureTarget.make("issue-69-disposition-property"),
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
   )
+  if (value.disposition === "Superseded") {
+    yield* appendCandidateProvenance(candidatePredecessor, candidateSuccessor, "issue-69-property-full-rerun")
+    yield* appendReplacementProvenance(attempt, successor)
+  }
   const worktree =
     value.disposition === "Superseded"
-      ? (yield* appendReplacementProvenance(attempt, successor), authorization)
+      ? (deriveCleanupAuthorizations(yield* journal.read(runId)).worktree[0] ?? authorization)
       : value.disposition === "Abandoned"
         ? yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-property-abandoned-cleanup"))
         : settledWorktreeAuthorization
   const exactFacts =
-    value.disposition === "Superseded" && value.locatorMatches && value.ownerMatches && value.revisionMatches
-  if (value.disposition === "Superseded") {
-    yield* appendCandidateProvenance(candidatePredecessor, candidateSuccessor, "issue-69-property-full-rerun")
-  }
+    value.exact &&
+    value.disposition !== "Settled" &&
+    value.locatorMatches &&
+    value.ownerMatches &&
+    value.revisionMatches
+  const candidateBase =
+    value.disposition === "Superseded"
+      ? (deriveCleanupAuthorizations(yield* journal.read(runId)).candidate[0] ?? candidateAuthorization)
+      : candidateAuthorization
   const candidate =
     value.disposition === "Superseded"
-      ? candidateAuthorization
+      ? candidateBase
       : IntegratorCandidateCleanupAuthorization.make({
-          ...candidateAuthorization,
+          ...candidateBase,
           causalPredecessors: [OperationId.make("issue-69-property-foreign-cause")]
         })
   const branch = branchAuthorizationFor(worktree)
   const outcomes = {
+    worktree: yield* runWorktreeCleanup(worktree),
     branch: yield* runBranchCleanup(branch),
-    candidate: yield* runIntegratorCandidateCleanup(candidate),
-    worktree: yield* runWorktreeCleanup(worktree)
+    candidate: yield* runIntegratorCandidateCleanup(candidate)
   }
   return {
     calls: {
@@ -264,38 +279,132 @@ const runPropertyCase = Effect.fn("DispositionCleanup.propertyCase")(function* (
 it("runs all three cleanup families for independently varied facts without a destructive call", async () => {
   await fc.assert(
     fc.asyncProperty(
-      fc
-        .record({
+      fc.oneof(
+        fc.constantFrom<PropertyCase>(
+          { disposition: "Abandoned", exact: true, locatorMatches: true, ownerMatches: true, revisionMatches: true },
+          { disposition: "Superseded", exact: true, locatorMatches: true, ownerMatches: true, revisionMatches: true }
+        ),
+        fc.record({
           disposition: fc.constantFrom<PropertyCase["disposition"]>("Abandoned", "Settled", "Superseded"),
+          exact: fc.boolean(),
           locatorMatches: fc.boolean(),
           ownerMatches: fc.boolean(),
           revisionMatches: fc.boolean()
         })
-        .filter(
-          (value) =>
-            value.disposition !== "Superseded" ||
-            !value.locatorMatches ||
-            !value.ownerMatches ||
-            !value.revisionMatches
-        ),
+      ),
       async (value) => {
         const result = await Effect.runPromise(
           runPropertyCase(value).pipe(
             Effect.provide(
               Layer.mergeAll(
-                branchCleanupTestLayer({ observations: [branchObservationFor(value, false)] }),
-                integratorCandidateCleanupTestLayer({ observations: [candidateObservationFor(value, false)] }),
+                branchCleanupTestLayer({
+                  observations: [
+                    branchObservationFor(
+                      value,
+                      value.exact && value.locatorMatches && value.ownerMatches && value.revisionMatches
+                    ),
+                    ...(value.exact && value.locatorMatches && value.ownerMatches && value.revisionMatches
+                      ? [
+                          BranchCleanupObservation.cases.Absent.make({
+                            branch: attempt.branch,
+                            revision: BranchCleanupEvidenceRevision.make(1)
+                          })
+                        ]
+                      : [])
+                  ],
+                  mutations:
+                    value.exact && value.locatorMatches && value.ownerMatches && value.revisionMatches
+                      ? [
+                          BranchCleanupMutationResult.cases.Removed.make({
+                            branch: attempt.branch,
+                            revision: BranchCleanupEvidenceRevision.make(1)
+                          })
+                        ]
+                      : []
+                }),
+                integratorCandidateCleanupTestLayer({
+                  observations: [
+                    candidateObservationFor(
+                      value,
+                      value.exact &&
+                        value.disposition === "Superseded" &&
+                        value.locatorMatches &&
+                        value.ownerMatches &&
+                        value.revisionMatches
+                    ),
+                    ...(value.exact &&
+                    value.disposition === "Superseded" &&
+                    value.locatorMatches &&
+                    value.ownerMatches &&
+                    value.revisionMatches
+                      ? [
+                          IntegratorCandidateCleanupObservation.cases.Absent.make({
+                            locator: candidatePredecessor.candidateResource,
+                            revision: IntegratorCandidateCleanupEvidenceRevision.make(1)
+                          })
+                        ]
+                      : [])
+                  ],
+                  mutations:
+                    value.exact &&
+                    value.disposition === "Superseded" &&
+                    value.locatorMatches &&
+                    value.ownerMatches &&
+                    value.revisionMatches
+                      ? [
+                          IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+                            locator: candidatePredecessor.candidateResource,
+                            revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+                            sessionId: candidatePredecessor.sessionId
+                          })
+                        ]
+                      : []
+                }),
                 memoryJournalTestLayer,
-                worktreeCleanupTestLayer({ observations: [worktreeObservationFor(value, false)] })
+                worktreeCleanupTestLayer({
+                  observations: [
+                    worktreeObservationFor(
+                      value,
+                      value.exact && value.locatorMatches && value.ownerMatches && value.revisionMatches
+                    ),
+                    ...(value.exact && value.locatorMatches && value.ownerMatches && value.revisionMatches
+                      ? [
+                          WorktreeCleanupObservation.cases.Absent.make({
+                            locator: attempt.worktree,
+                            revision: WorktreeCleanupEvidenceRevision.make(1)
+                          })
+                        ]
+                      : [])
+                  ],
+                  mutations:
+                    value.exact && value.locatorMatches && value.ownerMatches && value.revisionMatches
+                      ? [
+                          WorktreeCleanupMutationResult.cases.Removed.make({
+                            branch: attempt.branch,
+                            locator: attempt.worktree,
+                            revision: WorktreeCleanupEvidenceRevision.make(1)
+                          })
+                        ]
+                      : []
+                })
               )
             )
           )
         )
-        expect(result.exactFacts).toBe(false)
-        expect(result.outcomes.worktree._tag).not.toBe("Settled")
-        expect(result.calls.worktree.some(({ _tag }) => _tag === "Remove")).toBe(false)
-        expect(result.calls.branch.some(({ _tag }) => _tag === "Remove")).toBe(false)
-        expect(result.calls.candidate.some(({ _tag }) => _tag === "Remove")).toBe(false)
+        const exactFacts =
+          value.exact &&
+          value.disposition !== "Settled" &&
+          value.locatorMatches &&
+          value.ownerMatches &&
+          value.revisionMatches
+        const exactCandidate = exactFacts && value.disposition === "Superseded"
+        expect(result.exactFacts).toBe(exactFacts)
+        expect(result.outcomes.worktree._tag).toBe(exactFacts ? "Settled" : "Preserved")
+        expect(result.outcomes.branch._tag).toBe(exactFacts ? "Settled" : "Preserved")
+        expect(result.outcomes.candidate._tag).toBe(exactCandidate ? "Settled" : "Preserved")
+        expect(result.calls.worktree.some(({ _tag }) => _tag === "Remove")).toBe(exactFacts)
+        expect(result.calls.branch.some(({ _tag }) => _tag === "Remove")).toBe(exactFacts)
+        expect(result.calls.candidate.some(({ _tag }) => _tag === "Remove")).toBe(exactCandidate)
       }
     ),
     { numRuns: 24 }

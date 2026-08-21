@@ -29,6 +29,7 @@ import { IntegratorCandidateResourceLocator, IntegratorSessionId } from "../inte
 import { OperationId } from "../../identity.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 
 /** Fresh provider-neutral observation for one quarantined predecessor candidate. */
 export const IntegratorCandidateCleanupObservation = Schema.TaggedUnion({
@@ -210,12 +211,38 @@ export interface IntegratorCandidateCleanupBoundaryService {
   readonly remove: (
     authorization: IntegratorCandidateCleanupAuthorization,
     attempt: CleanupMutationOrdinal
-  ) => Effect.Effect<IntegratorCandidateCleanupMutationResult>
+  ) => Effect.Effect<IntegratorCandidateCleanupMutationResult, CoordinatorOwnershipError>
 }
 export class IntegratorCandidateCleanupBoundary extends Context.Service<
   IntegratorCandidateCleanupBoundary,
   IntegratorCandidateCleanupBoundaryService
 >()("@dalph/IntegratorCandidateCleanupBoundary") {}
+
+/**
+ * Provider-owned candidate facts are a separate authority from Git object
+ * existence.  An adapter may return an exact owner/quiescence observation,
+ * but it must not infer those facts from a locator lookup.
+ */
+export interface IntegratorCandidateProviderAuthorityService {
+  readonly observe: (
+    authorization: IntegratorCandidateCleanupAuthorization
+  ) => Effect.Effect<IntegratorCandidateCleanupObservation>
+}
+export class IntegratorCandidateProviderAuthority extends Context.Service<
+  IntegratorCandidateProviderAuthority,
+  IntegratorCandidateProviderAuthorityService
+>()("@dalph/IntegratorCandidateProviderAuthority") {}
+
+/** No provider authority is available in a provider-neutral composition. */
+export const unavailableIntegratorCandidateProviderAuthority = IntegratorCandidateProviderAuthority.of({
+  observe: (authorization) =>
+    Effect.succeed(
+      IntegratorCandidateCleanupObservation.cases.Unreadable.make({
+        detail: "provider authority is unavailable; Git object existence is not ownership evidence",
+        locator: authorization.locator
+      })
+    )
+})
 
 export const IntegratorCandidateCleanupBoundaryCall = Schema.TaggedUnion({
   Observe: {
@@ -248,32 +275,33 @@ export const integratorCandidateCleanupTestLayer = (input: {
       const observations = yield* Ref.make(input.observations)
       const mutations = yield* Ref.make(input.mutations ?? [])
       const calls = yield* Ref.make<ReadonlyArray<IntegratorCandidateCleanupBoundaryCall>>([])
+      const observe = (authorization: IntegratorCandidateCleanupAuthorization) =>
+        Effect.gen(function* () {
+          const current = yield* Ref.getAndUpdate(observations, (values) =>
+            values.length > 1 ? values.slice(1) : values
+          )
+          const ordinal = CleanupObservationOrdinal.make(
+            (yield* Ref.get(calls)).filter((call) => call._tag === "Observe").length + 1
+          )
+          yield* Ref.update(calls, (values) => [
+            ...values,
+            IntegratorCandidateCleanupBoundaryCall.cases.Observe.make({
+              locator: authorization.locator,
+              operationId: authorization.operationId,
+              ordinal,
+              sessionId: authorization.owner.sessionId
+            })
+          ])
+          return (
+            current[0] ??
+            IntegratorCandidateCleanupObservation.cases.Unreadable.make({
+              detail: "script exhausted",
+              locator: authorization.locator
+            })
+          )
+        })
       const service = IntegratorCandidateCleanupBoundary.of({
-        observe: (authorization) =>
-          Effect.gen(function* () {
-            const current = yield* Ref.getAndUpdate(observations, (values) =>
-              values.length > 1 ? values.slice(1) : values
-            )
-            const ordinal = CleanupObservationOrdinal.make(
-              (yield* Ref.get(calls)).filter((call) => call._tag === "Observe").length + 1
-            )
-            yield* Ref.update(calls, (values) => [
-              ...values,
-              IntegratorCandidateCleanupBoundaryCall.cases.Observe.make({
-                locator: authorization.locator,
-                operationId: authorization.operationId,
-                ordinal,
-                sessionId: authorization.owner.sessionId
-              })
-            ])
-            return (
-              current[0] ??
-              IntegratorCandidateCleanupObservation.cases.Unreadable.make({
-                detail: "script exhausted",
-                locator: authorization.locator
-              })
-            )
-          }),
+        observe,
         remove: (authorization, attempt) =>
           Effect.gen(function* () {
             yield* Ref.update(calls, (values) => [
@@ -300,6 +328,7 @@ export const integratorCandidateCleanupTestLayer = (input: {
       })
       return Context.empty().pipe(
         Context.add(IntegratorCandidateCleanupBoundary, service),
+        Context.add(IntegratorCandidateProviderAuthority, { observe }),
         Context.add(TestIntegratorCandidateCleanupBoundary, { calls: () => Ref.get(calls) })
       )
     })

@@ -69,7 +69,7 @@ import {
   recoveryPrefixMismatch,
   replayRecoveryPrefix
 } from "./recovery-store-lanes.js"
-import type { RecoveryPrefix, RecoveryPrefixResume } from "./recovery-store-lanes.js"
+import type { RecoveryPrefix, RecoveryPrefixResume, RecoveryStoreReplay } from "./recovery-store-lanes.js"
 import { recoveryPrefixCutLabels, type RecoveryPrefixCutLabel } from "./recovery-prefix-contract.js"
 
 const runId = RunId.make("issue-69-recovery-prefix-run")
@@ -390,6 +390,9 @@ const endpointForCut = (
 it.effect("reopens every cleanup P0-P6 prefix through memory and SQLite", () =>
   Effect.gen(function* () {
     const records = yield* maintainedSource
+    const sourcePrefix = prefixThrough(records, "P6", "maintained source terminal projection", records.length - 1)
+    if (sourcePrefix === undefined) return yield* Effect.die("maintained worktree source is empty")
+    const sourceFinal = yield* expectedRecoveryPrefix(sourcePrefix)
     const cuts = recoveryPrefixCutLabels.flatMap((cut) => {
       const { endpoint, position } = endpointForCut(records, cut)
       const prefix = prefixThrough(records, cut, endpoint, position)
@@ -398,25 +401,10 @@ it.effect("reopens every cleanup P0-P6 prefix through memory and SQLite", () =>
     expect(cuts).toHaveLength(7)
     for (const prefix of cuts) {
       const expectedPrefix = yield* expectedRecoveryPrefix(prefix)
-      // Use one fresh memory replay as the authoritative post-resume lane for
-      // this cut.  P2 legitimately resumes without the lost mutation result,
-      // so the final durable record sequence is cut-specific rather than the
-      // same raw sequence as the fully exercised source.  Both physical
-      // stores must nevertheless match this independently reopened lane in
-      // decoded history, validity, and production projection.
-      const canonical = yield* replayRecoveryPrefix(prefix, "memory", resumeCleanupAfter(prefix.cut))
-      if (
-        canonical.finalDecodedRecords === undefined ||
-        canonical.finalHistoryTag === undefined ||
-        canonical.finalProjection === undefined
-      ) {
-        return yield* Effect.die(`${prefix.cut} canonical recovery lane did not reread final state`)
-      }
       const expected = {
         ...expectedPrefix,
-        finalDecodedRecords: canonical.finalDecodedRecords,
-        finalHistoryTag: canonical.finalHistoryTag,
-        finalProjection: canonical.finalProjection
+        finalHistoryTag: sourceFinal.historyTag,
+        finalProjection: sourceFinal.projection
       }
       const actualByLane = {
         memory: yield* replayRecoveryPrefix(prefix, "memory", resumeCleanupAfter(prefix.cut)),
@@ -690,7 +678,8 @@ const assertCleanupRecoveryFamily = (
     records: ReadonlyArray<{ readonly event: { readonly _tag: string; readonly [key: string]: unknown } }>,
     cut: RecoveryPrefixCutLabel
   ) => { readonly position: number; readonly endpoint: string },
-  resume: (cut: RecoveryPrefixCutLabel) => RecoveryPrefixResume
+  resume: (cut: RecoveryPrefixCutLabel) => RecoveryPrefixResume,
+  sourceFinal: Pick<RecoveryStoreReplay, "historyTag" | "projection">
 ) =>
   Effect.gen(function* () {
     const cuts = recoveryPrefixCutLabels.flatMap((cut) => {
@@ -701,19 +690,10 @@ const assertCleanupRecoveryFamily = (
     expect(cuts).toHaveLength(7)
     for (const prefix of cuts) {
       const expectedPrefix = yield* expectedRecoveryPrefix(prefix)
-      const canonical = yield* replayRecoveryPrefix(prefix, "memory", resume(prefix.cut))
-      if (
-        canonical.finalDecodedRecords === undefined ||
-        canonical.finalHistoryTag === undefined ||
-        canonical.finalProjection === undefined
-      ) {
-        return yield* Effect.die(`${prefix.cut} canonical recovery lane did not reread final state`)
-      }
       const expected = {
         ...expectedPrefix,
-        finalDecodedRecords: canonical.finalDecodedRecords,
-        finalHistoryTag: canonical.finalHistoryTag,
-        finalProjection: canonical.finalProjection
+        finalHistoryTag: sourceFinal.historyTag,
+        finalProjection: sourceFinal.projection
       }
       const actualByLane = {
         memory: yield* replayRecoveryPrefix(prefix, "memory", resume(prefix.cut)),
@@ -766,6 +746,14 @@ const assertCleanupRecoveryFamily = (
 it.effect("reopens branch and predecessor-candidate cleanup P0-P6 prefixes through memory and SQLite", () =>
   Effect.gen(function* () {
     const branchRecords = yield* branchMaintainedSource
+    const branchSourcePrefix = prefixThrough(
+      branchRecords,
+      "P6",
+      "maintained branch source terminal projection",
+      branchRecords.length - 1
+    )
+    if (branchSourcePrefix === undefined) return yield* Effect.die("maintained branch source is empty")
+    const branchSourceFinal = yield* expectedRecoveryPrefix(branchSourcePrefix)
     yield* assertCleanupRecoveryFamily(
       "Branch",
       branchRecords,
@@ -783,9 +771,18 @@ it.effect("reopens branch and predecessor-candidate cleanup P0-P6 prefixes throu
           },
           true
         ),
-      resumeBranchCleanupAfter
+      resumeBranchCleanupAfter,
+      branchSourceFinal
     )
     const candidateRecords = yield* candidateMaintainedSource
+    const candidateSourcePrefix = prefixThrough(
+      candidateRecords,
+      "P6",
+      "maintained candidate source terminal projection",
+      candidateRecords.length - 1
+    )
+    if (candidateSourcePrefix === undefined) return yield* Effect.die("maintained candidate source is empty")
+    const candidateSourceFinal = yield* expectedRecoveryPrefix(candidateSourcePrefix)
     yield* assertCleanupRecoveryFamily(
       "IntegratorCandidate",
       candidateRecords,
@@ -803,7 +800,8 @@ it.effect("reopens branch and predecessor-candidate cleanup P0-P6 prefixes throu
           },
           true
         ),
-      resumeCandidateCleanupAfter
+      resumeCandidateCleanupAfter,
+      candidateSourceFinal
     )
   })
 )

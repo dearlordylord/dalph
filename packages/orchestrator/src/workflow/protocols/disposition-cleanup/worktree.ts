@@ -17,6 +17,7 @@ import {
 import { OperationId } from "../../identity.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import {
   CleanupMutationOrdinal,
   CleanupObservationOrdinal,
@@ -179,7 +180,7 @@ export interface WorktreeCleanupBoundaryService {
   readonly remove: (
     authorization: WorktreeCleanupAuthorization,
     attempt: CleanupMutationOrdinal
-  ) => Effect.Effect<WorktreeCleanupMutationResult>
+  ) => Effect.Effect<WorktreeCleanupMutationResult, CoordinatorOwnershipError>
 }
 
 export class WorktreeCleanupBoundary extends Context.Service<WorktreeCleanupBoundary, WorktreeCleanupBoundaryService>()(
