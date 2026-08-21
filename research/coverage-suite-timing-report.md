@@ -18,8 +18,8 @@ history/property tests:
 | Existing scenario or outcome | Concrete result that remains required | Acceptance test or model check |
 |---|---|---|
 | Ten-task restart story | Capacity two, dependency waves, the same B/C Run and Attempt identities after one coordinator process death, late X discovery, accepted-result integration/finality, and terminal Run settlement remain unchanged. | `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`: `consumes a staggered graph while reconstructed positions delay restart-added X`; `preserves the double-diamond middle positions across coordinator restart` |
-| Repeated read of one immutable prefix | A second projection/reconstruction request for the same prefix reuses the validated process-local result; a new process still starts from durable rows. | `packages/orchestrator/src/coordination/reconstruction/reduce.property.test.ts`: `reuses one validated result for repeated reads of the same immutable prefix`; focused journal/bootstrap/recovery tests |
-| Accepted append | One valid successor advances the validated reconstruction and reusable indexes; unrelated or malformed successors retain the complete-replay answer and typed issues. | `packages/orchestrator/src/coordination/reconstruction/reduce.property.test.ts`: `advances every generated valid prefix to the same state and frontier as complete replay`; `keeps a prior prefix correct when a linear successor is rejected, then accepts a later successor`; `rejects generated malformed successors with the same issues as complete replay`; `packages/orchestrator/src/coordination/reconstruction/history.test.ts`: `reports the same terminating-record issue when an accepted terminated prefix is advanced` |
+| Repeated read and sibling successors of one immutable prefix | A second projection/reconstruction request for the same prefix reuses the validated process-local result. Advancing either successor does not mutate the shared prefix or leak facts into its sibling. A new process still starts from durable rows. | `packages/orchestrator/src/coordination/reconstruction/reduce.property.test.ts`: `reuses one validated result for repeated reads of the same immutable prefix`; `preserves persistent immutable branching after one sibling successor advances`; `packages/orchestrator/src/workflow/protocols/integration-admission/protocol.test.ts`: `derives sibling successors from one persistent prefix index without leaking facts`; focused journal/bootstrap/recovery tests |
+| Accepted or rejected append | One valid successor derives new persistent indexes from the validated prefix; unrelated or malformed successors retain the complete-replay answer and typed issues without changing that prefix. | `packages/orchestrator/src/coordination/reconstruction/reduce.property.test.ts`: `advances every generated valid prefix to the same state and frontier as complete replay`; `keeps a prior prefix correct when a linear successor is rejected, then accepts a later successor`; `rejects generated malformed successors with the same issues as complete replay`; `isolates a semantically rejected predecessor index from immutable sibling branches`; `packages/orchestrator/src/coordination/reconstruction/history.test.ts`: `reports the same terminating-record issue when an accepted terminated prefix is advanced` |
 | Cold restart and malformed history | Recovery replays durable history and rejects the same invalid prefix; no process-local cache is treated as recovery authority. | Focused startup/recovery/history suites and the ten-task restart assertion above |
 
 The tests above contain no wall-clock semantic assertions. The approximately
@@ -41,9 +41,9 @@ repository.
 ### Environment
 
 - Date: 2026-08-20 (America/Montreal)
-- Final measured code revision: `8794bb528`, based on
-  `8415e1b81e08759d8f925af329c1a0b397b97efe`; the cleaner initial
-  implementation sample is retained for `e87c370c6`.
+- Final measured production-code revision: `43b5faf56`, based on
+  `8415e1b81e08759d8f925af329c1a0b397b97efe`; earlier mutable-index
+  implementation samples are retained for comparison.
 - Node: `v24.18.0`
 - pnpm: `10.29.3`
 - Host: Linux `7.0.14-orbstack-00380-ga7e0a2dc9535`, `aarch64`
@@ -73,20 +73,23 @@ Vitest's per-assertion intervals were:
 | Initial implementation reported warm sample (`e87c370c6`) | 5.842 s | 3.240 s | 0.614 ms | 2 passed |
 | Final code warm-up (`8794bb528`) | 6.910 s | 3.623 s | 0.872 ms | 2 passed |
 | Final code reported warm sample (`8794bb528`) | 6.999 s | 4.164 s | 0.767 ms | 2 passed |
+| Persistent-index warm-up (`b25ec63a4`) | 6.874 s | 3.584 s | 0.830 ms | 2 passed |
+| Persistent-index reported warm sample (`b25ec63a4`) | 6.167 s | 3.516 s | 0.647 ms | 2 passed |
+| Final immutable-code warm-up (`43b5faf56`) | 6.341 s | 3.374 s | 1.365 ms | 2 passed |
+| Final immutable-code reported warm sample (`43b5faf56`) | 6.369 s | 3.557 s | 0.849 ms | 2 passed |
 
 The second assertion reads the same `Effect.cached` Run result, so its small
 duration is not a second execution of the coordinator. The first assertion is
 the capstone's actual production-shaped chronology. The cleaner initial
 implementation sample is 7.6 times faster than the same host's reported
-base-revision assertion. The exact-final-code sample is 5.9 times faster, but
-overlapped an unrelated Quint/TLC verification on the shared host; both are
-characterization evidence rather than service-level claims. Even the cleaner
-3.240-second sample remains above the approximately one-second aspiration, so
-the aspiration is not claimed as met. The chronology, records, and two
-assertions are unchanged; the improvement comes from reusing exact immutable
-journal prefixes, incrementally maintaining accepted indexes, indexing trace
-and occurrence relationships once, and avoiding a duplicate delivery
-evaluation for each captured publication.
+base-revision assertion. The final immutable-code sample is 6.95 times faster
+than the reported base-revision assertion and was taken after the host's
+concurrent TypeScript and Quint jobs had finished. It remains above the approximately
+one-second target, so that acceptance criterion is not claimed as met. The
+chronology, records, and two assertions are unchanged; the improvement comes
+from reusing exact immutable journal prefixes, incrementally maintaining
+structurally shared indexes, indexing trace and occurrence relationships once,
+and avoiding a duplicate delivery evaluation for each captured publication.
 
 The capstone's ten tasks cross substantially more than ten executor calls:
 capacity and dependency-wave reads, one coordinator restart, exact task-work
@@ -178,14 +181,17 @@ at the top of this report.
 
 ## Final verification outcome
 
-At code revision `8794bb528`, `pnpm check:all` passed after executing all
-repository stages. Its aggregate coverage stage reported 193 passing files,
-one skipped file, 1,796 passing tests, two skipped tests, and 100% coverage of
-898 changed production lines. The same gate also passed all 16 Quint-connected
-model-based tests, all 79 maintained Reducer Lab cassettes, the production
-coverage policy, and the Git-history secret scan.
+At production-code revision `43b5faf56`, `pnpm check:all` passed all repository
+stages, including the production coverage policy, all 16 Quint-connected
+model-based tests, all 79 maintained Reducer Lab cassettes, complexity and
+duplication checks, and the Git-history secret scan.
 
-The required final `pnpm check:quint` run passed in 339.35 seconds against the
-360-second regression budget. Positive deterministic, sampled, temporal, and
-exhaustive checks passed, and the planned negative temporal mutation produced
-its expected counterexample rather than silently passing.
+Three required `pnpm check:quint` attempts did not produce a final green gate
+on the shared host. The first two progressed without counterexamples until the
+360-second aggregate regression budget expired, respectively at the
+integration-finality sampled model and Git-reconciliation exhaustive model.
+The third reached TLC artifact preparation quickly, then collided with another
+worktree's concurrent Apalache server on its fixed port and exited. The last
+known complete gate at `8794bb528` passed in 339.35 seconds; the subsequent
+change does not edit a Quint model or executable conformance adapter, but this
+report does not represent that earlier pass as a final-revision green gate.

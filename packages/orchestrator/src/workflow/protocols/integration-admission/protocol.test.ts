@@ -286,7 +286,7 @@ it("derives one unqueued accepted result from matching executor responsibility a
   ).toBe(true)
 })
 
-it("transfers one linear prefix index and cold-replays an older branch without leaking mutations", () => {
+it("derives sibling successors from one persistent prefix index without leaking facts", () => {
   const responsibility = JournalRecord.make({
     event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
       plannedAttempt: fixture.plannedAttempt,
