@@ -8,6 +8,7 @@ import {
   IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorResult,
+  IntegratorRunCorrelation,
   IntegratorRunQualifiedCandidate,
   IntegratorRunCandidateGitObservedEvent,
   IntegratorRunCandidateGitReadIntendedEvent,
@@ -36,8 +37,12 @@ import {
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowActor } from "../../workflow/registry/actor.js"
-import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../workflow/registry/event.js"
-import { WorkflowOperation } from "../../workflow/registry/operation.js"
+import {
+  GitReadIntentRecordedEvent,
+  TargetLineageObservedEvent,
+  TaskClaimAcquisitionIntendedEvent
+} from "../../workflow/registry/event.js"
+import { makeCompletionTaskFactsObservationOperation, WorkflowOperation } from "../../workflow/registry/operation.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import {
@@ -52,6 +57,25 @@ import type { IntegrationHistoryIndexes } from "./integration-history.js"
 import { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
 import { makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import { invalidIntegrationRunBinding } from "./integration-history-run-binding.js"
+import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
+import {
+  CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimDeletionReadPurpose,
+  CompletionClaimCleanupReadOrdinal,
+  CompletionClaimRequestOrdinal,
+  CompletionTaskAuthorizationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskRequestOrdinal,
+  completionClaimDeletionRequestFor,
+  completionTaskRequestFor,
+  CompletionTaskClaim,
+  FocusedTaskCompletionFacts
+} from "../../workflow/protocols/integration-finality/events.js"
+import {
+  makeFocusedTaskCompletionFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 
 const fixture = integrationFinalityFixture
 const runId = fixture.runId
@@ -383,6 +407,127 @@ describe("retained integration history", () => {
       `Integrator run candidate Git-read intent binds run ${foreignRun}`,
       `Integrator run candidate Git observation binds run ${foreignRun}`
     ])
+  })
+
+  it("rejects foreign nested completion claims and explicit reacquisition identities", () => {
+    const foreignRun = RunId.make("integrator-history-nested-foreign-run")
+    const foreignAttempt = { ...fixture.plannedAttempt, runId: foreignRun }
+    const foreignSession = IntegratorSessionCorrelation.make({
+      ...fixture.qualifiedCandidate.run.session,
+      plannedAttempt: foreignAttempt
+    })
+    const foreignIntegratorRun = IntegratorRunCorrelation.make({
+      ...fixture.qualifiedCandidate.run,
+      session: foreignSession
+    })
+    const foreignCandidate = IntegratorRunQualifiedCandidate.make({
+      ...fixture.qualifiedCandidate,
+      run: foreignIntegratorRun
+    })
+    const foreignClaim = CompletionTaskClaim.make({
+      ...fixture.claim,
+      plannedAttempt: foreignAttempt,
+      promotionCorrelation: targetPromotionCorrelationFor(foreignCandidate)
+    })
+    const focusedPurpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+      attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+      authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
+    })
+    const foreignCompletionOperation = makeCompletionTaskFactsObservationOperation(
+      completionTaskRequestFor(foreignClaim),
+      fixture.target,
+      focusedPurpose
+    )
+    const foreignFocusedObservation = makeFocusedTaskCompletionFactsObserved(
+      foreignCompletionOperation,
+      FocusedTaskCompletionFacts.make({
+        ...fixture.focusedSuccessFactsEvent.observation.facts,
+        currentClaim: foreignClaim,
+        lifecycle: "Open",
+        operationId: foreignCompletionOperation.operationId
+      })
+    )
+    const foreignFocusedFactsEvent = taskTrackerFactsObservedEvent(
+      foreignCompletionOperation.operationId,
+      foreignFocusedObservation
+    )
+
+    const validAcquisitionOperation = WorkflowOperation.cases.AcquireTaskClaim.make({
+      acquisition: fixture.activeClaim,
+      authority: {
+        _tag: "ExplicitTaskClaimReacquisitionAuthority",
+        requestId: TaskClaimReacquisitionRequestId.make("integrator-history-nested-reacquisition")
+      },
+      predecessorOperationIds: []
+    })
+    const validAcquisitionIntent = TaskClaimAcquisitionIntendedEvent.make({
+      operation: validAcquisitionOperation,
+      version: workflowJournalEventVersion
+    })
+    const foreignAuthorityRequestId = { nonce: "integrator-history-nested-reacquisition", runId: foreignRun }
+    const foreignAcquisitionIntent = Object.assign({}, validAcquisitionIntent, {
+      operation: {
+        ...validAcquisitionIntent.operation,
+        authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId: foreignAuthorityRequestId }
+      }
+    })
+
+    const deletionReadPurpose = CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+      readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+    })
+    const deletionRequest = completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation)
+    const validDeletionRead = CompletionClaimDeletionReadObservedEvent.make({
+      observation: fixture.claim,
+      purpose: deletionReadPurpose,
+      replacementOperationId: OperationId.make("integrator-history-nested-replacement"),
+      request: deletionRequest,
+      version: workflowJournalEventVersion
+    })
+    const foreignDeletionRead = CompletionClaimDeletionReadObservedEvent.make({
+      ...validDeletionRead,
+      observation: foreignClaim
+    })
+
+    const cases = [
+      {
+        foreign: foreignAcquisitionIntent,
+        foreignDetail: `task-claim reacquisition authority binds run ${foreignRun}`,
+        valid: validAcquisitionIntent,
+        validRunId: runId
+      },
+      {
+        foreign: foreignFocusedFactsEvent,
+        foreignDetail: `focused task-completion observation binds run ${foreignRun}`,
+        valid: fixture.focusedSuccessFactsEvent,
+        validRunId: runId
+      },
+      {
+        foreign: foreignDeletionRead,
+        foreignDetail: `completion claim deletion read binds run ${foreignRun}`,
+        valid: validDeletionRead,
+        validRunId: runId
+      }
+    ] as const
+
+    for (const { foreign, foreignDetail, valid, validRunId } of cases) {
+      const foreignRecord: JournalRecord = {
+        event: foreign,
+        key: describeJournalEvent(foreign).expectedKey,
+        position: JournalPosition.make(20),
+        runId: foreignRun
+      }
+      const validRecord: JournalRecord = {
+        event: valid,
+        key: describeJournalEvent(valid).expectedKey,
+        position: JournalPosition.make(21),
+        runId: validRunId
+      }
+      expect(foreignRecord.key).toBe(describeJournalEvent(foreign).expectedKey)
+      expect(validRecord.key).toBe(describeJournalEvent(valid).expectedKey)
+      expect(invalidIntegrationRunBinding(foreign, runId)).toBe(foreignDetail)
+      expect(invalidIntegrationRunBinding(valid, validRunId)).toBeUndefined()
+    }
   })
 
   it("accepts current-run boundaries and rejects their foreign run bindings", () => {

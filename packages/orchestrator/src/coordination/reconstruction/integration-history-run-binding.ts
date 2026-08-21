@@ -1,5 +1,5 @@
-import type { RunId } from "@dalph/contracts"
-import { HashMap, Match } from "effect"
+import { RunId } from "@dalph/contracts"
+import { HashMap, Match, Schema } from "effect"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import { targetPromotionRunIdOf } from "../../workflow/protocols/target-promotion/events.js"
 
@@ -43,23 +43,52 @@ const invalidAttemptChoiceRunBinding = (
 ): string | undefined =>
   invalidNestedRunBinding(label, [event.requestId.runId, event.subject.plannedAttempt.runId], runId)
 
+const StructuredRequestIdentity = Schema.Struct({ runId: RunId })
+
+const runIdOfStructuredRequestIdentity = (requestId: unknown): RunId | undefined =>
+  Schema.is(StructuredRequestIdentity)(requestId) ? requestId.runId : undefined
+
+const invalidCompletionTaskClaimRunBinding = (
+  claim: { readonly plannedAttempt: { readonly runId: RunId } },
+  runId: RunId,
+  label: string
+): string | undefined => invalidNestedRunBinding(label, [claim.plannedAttempt.runId], runId)
+
 const invalidCompletionTaskRunBinding = (
   event: { readonly request: { readonly claim: { readonly plannedAttempt: { readonly runId: RunId } } } },
   runId: RunId,
   label: string
-): string | undefined => invalidNestedRunBinding(label, [event.request.claim.plannedAttempt.runId], runId)
+): string | undefined => invalidCompletionTaskClaimRunBinding(event.request.claim, runId, label)
+
+const invalidCompletionTaskRequestLookupRunBinding = (
+  event: {
+    readonly request: { readonly claim: { readonly plannedAttempt: { readonly runId: RunId } } }
+    readonly lookup: { readonly request: { readonly claim: { readonly plannedAttempt: { readonly runId: RunId } } } }
+  },
+  runId: RunId,
+  label: string
+): string | undefined =>
+  invalidNestedRunBinding(
+    label,
+    [event.request.claim.plannedAttempt.runId, event.lookup.request.claim.plannedAttempt.runId],
+    runId
+  )
 
 const invalidTaskTrackerObservationRunBinding = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>,
   runId: RunId
-): string | undefined =>
-  event.observation._tag === "FocusedTaskCompletionFacts"
-    ? invalidNestedRunBinding(
-        "focused task-completion observation",
-        [event.observation.request.claim.plannedAttempt.runId],
-        runId
-      )
-    : undefined
+): string | undefined => {
+  if (event.observation._tag !== "FocusedTaskCompletionFacts") return undefined
+  const currentClaim = event.observation.facts.currentClaim
+  return invalidNestedRunBinding(
+    "focused task-completion observation",
+    [
+      event.observation.request.claim.plannedAttempt.runId,
+      ...(currentClaim._tag === "CompletionTaskClaim" ? [currentClaim.plannedAttempt.runId] : [])
+    ],
+    runId
+  )
+}
 
 const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | undefined =>
   Match.value(event).pipe(
@@ -86,7 +115,19 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
         invalidAttemptChoiceRunBinding(candidate, runId, "stopped-attempt claim observation"),
       TaskClaimReacquisitionDirected: (candidate) =>
         invalidNestedRunBinding("task-claim reacquisition direction", [candidate.subject.runId], runId),
-      TaskClaimAcquisitionIntended: () => undefined,
+      TaskClaimAcquisitionIntended: (candidate) => {
+        if (candidate.operation.authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return undefined
+        // TaskClaimReacquisitionRequestId is currently a transport-only
+        // branded string. Keep this compatibility path for the structured
+        // request identity accepted by newer journal records without weakening
+        // ordinary string identities.
+        const authorityRunId = runIdOfStructuredRequestIdentity(candidate.operation.authority.requestId)
+        return invalidNestedRunBinding(
+          "task-claim reacquisition authority",
+          authorityRunId === undefined ? [] : [authorityRunId],
+          runId
+        )
+      },
       TaskClaimReleaseIntended: (candidate) =>
         candidate.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority"
           ? invalidNestedRunBinding(
@@ -171,7 +212,7 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
       CompletionTaskRequestLookupIntended: (candidate) =>
         invalidCompletionTaskRunBinding(candidate, runId, "completion request lookup intent"),
       CompletionTaskRequestLookupObserved: (candidate) =>
-        invalidCompletionTaskRunBinding(candidate, runId, "completion request lookup observation"),
+        invalidCompletionTaskRequestLookupRunBinding(candidate, runId, "completion request lookup observation"),
       PostPromotionBlockerCandidateAncestryReadIntended: (candidate) =>
         invalidNestedRunBinding(
           "post-promotion blocker ancestry read intent",
@@ -201,7 +242,10 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
           "completion claim deletion read",
           [
             candidate.request.claim.plannedAttempt.runId,
-            candidate.request.successObservation.claim.plannedAttempt.runId
+            candidate.request.successObservation.claim.plannedAttempt.runId,
+            ...(candidate.observation._tag === "CompletionTaskClaim"
+              ? [candidate.observation.plannedAttempt.runId]
+              : [])
           ],
           runId
         ),
