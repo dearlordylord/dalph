@@ -39,7 +39,7 @@ import {
 } from "@dalph/orchestrator"
 import { CoordinatorOwnership } from "../../../orchestrator/src/authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
-import type { TrackerTarget } from "../../../orchestrator/src/authorities/task-tracker/target.js"
+import { exactTaskIdSetKey, type TrackerTarget } from "../../../orchestrator/src/authorities/task-tracker/target.js"
 import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
 import { makeDeliveryRuntimeAdmissionController } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-admission.js"
 import {
@@ -1097,7 +1097,9 @@ const makeRunActivationDriverImplementation = () => {
                       !("disposition" in proof) ||
                       !("evidence" in proof) ||
                       proof.evidence.rootTaskId !== taskA ||
-                      !proof.evidence.rootPresent ||
+                      exactTaskIdSetKey(proof.evidence.coverage.explicitlyCoveredTaskIds) !==
+                        exactTaskIdSetKey(proof.evidence.readShape.explicitlyCoveredTaskIds) ||
+                      exactTaskIdSetKey(proof.evidence.readShape.explicitlyCoveredTaskIds) !== exactTaskIdSetKey([]) ||
                       proof.evidence.contentIdentity !== snapshotForGraphOutcome(graphOutcome).revision
                     )
                       return yield* Effect.die("terminal classification lacked exact graph identity evidence")

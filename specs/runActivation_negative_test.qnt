@@ -324,6 +324,7 @@ module runActivationNegativeTest {
           GraphBlocked,
           ContentRevisionBlocked,
           TaskB,
+          trackerCoverageFor(GraphBlocked),
         ),
       },
       process: {
@@ -341,6 +342,7 @@ module runActivationNegativeTest {
             GraphBlocked,
             ContentRevisionBlocked,
             TaskB,
+            trackerCoverageFor(GraphBlocked),
           ),
         }),
       },
@@ -370,6 +372,7 @@ module runActivationNegativeTest {
           GraphBlocked,
           StaleContentRevision,
           EXACT_ROOT_TASK_ID,
+          trackerCoverageFor(GraphBlocked),
         ),
       },
       process: {
@@ -387,6 +390,55 @@ module runActivationNegativeTest {
             GraphBlocked,
             StaleContentRevision,
             EXACT_ROOT_TASK_ID,
+            trackerCoverageFor(GraphBlocked),
+          ),
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: a terminal proof with the right Run, operation, revision, root,
+  // and outcome is still invalid when its graph coverage is incomplete.
+  action terminateWithMismatchedGraphCoverage: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          GraphBlocked,
+          ContentRevisionBlocked,
+          EXACT_ROOT_TASK_ID,
+          Set(EXACT_ROOT_TASK_ID),
+        ),
+      },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            GraphBlocked,
+            ContentRevisionBlocked,
+            EXACT_ROOT_TASK_ID,
+            Set(EXACT_ROOT_TASK_ID),
           ),
         }),
       },
@@ -604,6 +656,13 @@ module runActivationNegativeTest {
     init.then(selectBlockedRunGraph).then(establishExistingHistory)
       .then(activateEstablishedRun).then(readInitialTrackerGraph)
       .then(reachQuiescence).then(terminateWithStaleContentIdentity)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run coverageOnlyMismatchIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithMismatchedGraphCoverage)
       .expect(not(terminationRequiresExactFreshGraphEvidence))
   }
 

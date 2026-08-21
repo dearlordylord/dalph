@@ -332,6 +332,7 @@ module runActivationTest {
         state.trace.trackerCalls == 2,
         state.trackerFinality.rootTaskId == EXACT_ROOT_TASK_ID,
         state.trackerFinality.contentIdentity == ContentRevisionBlocked,
+        state.trackerFinality.coveredTaskIds == trackerCoverageFor(GraphBlocked),
         exactGraphEvidenceReached,
         exactGraphIdentityReached,
       })

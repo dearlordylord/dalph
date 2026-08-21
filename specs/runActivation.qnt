@@ -42,6 +42,7 @@ module runActivation {
         graphOutcome: GraphOutcome,
         contentIdentity: TrackerContentIdentity,
         rootTaskId: TaskId,
+        coveredTaskIds: Set[TaskId],
         complete: bool,
       })
     | MismatchedGraphReadEvidence
@@ -151,12 +152,18 @@ module runActivation {
     graphOutcome: GraphOutcome,
     contentIdentity: TrackerContentIdentity,
     rootTaskId: TaskId,
+    coveredTaskIds: Set[TaskId],
     evidence: GraphReadEvidence,
   }
 
   pure val NO_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
   pure val INITIAL_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
   pure val EXACT_ROOT_TASK_ID: TaskId = TaskA
+
+  pure def trackerCoverageFor(outcome: GraphOutcome): Set[TaskId] = match outcome {
+    | GraphBlocked => Set(EXACT_ROOT_TASK_ID, TaskB)
+    | _ => Set(EXACT_ROOT_TASK_ID)
+  }
 
   pure def trackerContentIdentityFor(outcome: GraphOutcome): TrackerContentIdentity = match outcome {
     | GraphAllSucceeded => ContentRevisionAllSucceeded
@@ -179,6 +186,7 @@ module runActivation {
     graphOutcome: GraphOutcome,
     contentIdentity: TrackerContentIdentity,
     rootTaskId: TaskId,
+    coveredTaskIds: Set[TaskId],
   ): GraphReadEvidence = ExactGraphReadEvidence({
     runId: runId,
     target: target,
@@ -186,6 +194,7 @@ module runActivation {
     graphOutcome: graphOutcome,
     contentIdentity: contentIdentity,
     rootTaskId: rootTaskId,
+    coveredTaskIds: coveredTaskIds,
     complete: true,
   })
 
@@ -197,6 +206,7 @@ module runActivation {
     graphOutcome: GraphOutcome,
     contentIdentity: TrackerContentIdentity,
     rootTaskId: TaskId,
+    coveredTaskIds: Set[TaskId],
   ): bool = match evidence {
     | ExactGraphReadEvidence(facts) => and {
         facts.runId == runId,
@@ -205,6 +215,7 @@ module runActivation {
         facts.graphOutcome == graphOutcome,
         facts.contentIdentity == contentIdentity,
         facts.rootTaskId == rootTaskId,
+        facts.coveredTaskIds == coveredTaskIds,
         facts.complete,
       }
     | _ => false
@@ -432,6 +443,7 @@ module runActivation {
               evidence.graphOutcome == facts.graphOutcome,
               evidence.contentIdentity == trackerContentIdentityFor(facts.graphOutcome),
               evidence.rootTaskId == EXACT_ROOT_TASK_ID,
+              evidence.coveredTaskIds == trackerCoverageFor(facts.graphOutcome),
               evidence.complete,
             }
           | _ => false
@@ -622,6 +634,7 @@ module runActivation {
             facts.graphOutcome == state.trackerFinality.graphOutcome,
             facts.contentIdentity == trackerContentIdentityFor(state.trackerFinality.graphOutcome),
             facts.rootTaskId == EXACT_ROOT_TASK_ID,
+            facts.coveredTaskIds == state.trackerFinality.coveredTaskIds,
             facts.complete,
           }
         | _ => false
@@ -733,6 +746,7 @@ module runActivation {
         facts.graphOutcome == state.trackerFinality.graphOutcome,
         facts.contentIdentity == trackerContentIdentityFor(state.trackerFinality.graphOutcome),
         facts.rootTaskId == EXACT_ROOT_TASK_ID,
+        facts.coveredTaskIds == state.trackerFinality.coveredTaskIds,
       }
     | _ => false
   }
@@ -760,6 +774,7 @@ module runActivation {
         graphOutcome: GraphAllSucceeded,
         contentIdentity: ContentRevisionAllSucceeded,
         rootTaskId: EXACT_ROOT_TASK_ID,
+        coveredTaskIds: trackerCoverageFor(GraphAllSucceeded),
         evidence: INITIAL_GRAPH_EVIDENCE,
       },
       process: {
@@ -926,6 +941,7 @@ module runActivation {
         graphOutcome: GraphBlocked,
         contentIdentity: ContentRevisionBlocked,
         rootTaskId: EXACT_ROOT_TASK_ID,
+        coveredTaskIds: trackerCoverageFor(GraphBlocked),
         evidence: NO_GRAPH_EVIDENCE,
       },
     },
@@ -950,6 +966,7 @@ module runActivation {
         graphOutcome: GraphBlocked,
         contentIdentity: ContentRevisionBlocked,
         rootTaskId: EXACT_ROOT_TASK_ID,
+        coveredTaskIds: trackerCoverageFor(GraphBlocked),
         evidence: NO_GRAPH_EVIDENCE,
       },
     },
@@ -1268,6 +1285,7 @@ module runActivation {
           state.trackerFinality.graphOutcome,
           state.trackerFinality.contentIdentity,
           state.trackerFinality.rootTaskId,
+          state.trackerFinality.coveredTaskIds,
         ),
       },
       process: {
@@ -1284,6 +1302,7 @@ module runActivation {
             state.trackerFinality.graphOutcome,
             state.trackerFinality.contentIdentity,
             state.trackerFinality.rootTaskId,
+            state.trackerFinality.coveredTaskIds,
           ),
         }),
       },
@@ -1314,6 +1333,7 @@ module runActivation {
       state.trackerFinality.graphOutcome,
       trackerContentIdentityFor(state.trackerFinality.graphOutcome),
       EXACT_ROOT_TASK_ID,
+      state.trackerFinality.coveredTaskIds,
     ),
     state.process.heldPosition == NoTaskPosition,
     state.process.otherHeldPosition == NoTaskPosition,
