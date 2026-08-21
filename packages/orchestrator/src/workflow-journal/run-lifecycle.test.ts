@@ -39,7 +39,6 @@ const evidence = (overrides: Partial<RunFinalityEvidence> = {}): RunFinalityEvid
     readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [TaskId.make("root")] }),
     requiredFactFamilies: requiredRunFinalityFactFamilies,
     rootTaskId: TaskId.make("root"),
-    rootPresent: true,
     runId,
     target,
     terminalTaskIds: [],
@@ -96,7 +95,6 @@ it("rejects Cancelled termination evidence observed before cancellation", () => 
       readShape: RunFinalityReadShape.make(operation.readShape),
       requiredFactFamilies: requiredRunFinalityFactFamilies,
       rootTaskId: TaskId.make("root"),
-      rootPresent: true,
       runId,
       target,
       terminalTaskIds: [],
@@ -247,7 +245,6 @@ it("rejects a different parentless task standing in for the selected Run root", 
   })
   const evidenceWithWrongRoot = RunFinalityEvidence.make({
     ...validEvidence,
-    rootPresent: true,
     rootTaskId: TaskId.make("foreign-parentless")
   })
   const began = makeWorkflowRunBeganRecord(runId, target, policy)
@@ -289,7 +286,6 @@ const makeRunFinalityEvidenceForTest = (
     operationId: operation.operationId,
     readShape: RunFinalityReadShape.make(operation.readShape),
     requiredFactFamilies: requiredRunFinalityFactFamilies,
-    rootPresent: true,
     rootTaskId: TaskId.make("root"),
     runId,
     target,

@@ -235,7 +235,6 @@ const completeFactFamilyIssues = (
   const [, , , groupings] = observation.factFamilies
   // A reconfirmation may widen its explicit closure while retaining the earlier full facts.
   // freshObservationIssues validates the terminal read's exact target and coverage.
-  const rootPresentInGrouping = groupings.groupings.some(({ taskId }) => taskId === evidence.rootTaskId)
   return [
     evidence.requiredFactFamilies.some((family, index) => family !== requiredRunFinalityFactFamilies[index])
       ? "termination evidence must include every complete graph fact family"
@@ -243,9 +242,8 @@ const completeFactFamilyIssues = (
     evidence.rootTaskId !== observation.rootTaskId
       ? "termination evidence must retain the exact tracker-selected Run root"
       : undefined,
-    !rootPresentInGrouping ? "termination evidence Run root must belong to the complete grouping facts" : undefined,
-    evidence.rootPresent !== rootPresentInGrouping
-      ? "termination evidence root presence does not match the exact grouping fact"
+    !groupings.groupings.some(({ taskId }) => taskId === evidence.rootTaskId)
+      ? "termination evidence Run root must belong to the complete grouping facts"
       : undefined
   ].filter((issue): issue is string => issue !== undefined)
 }
@@ -325,7 +323,7 @@ const basicEvidenceIssues = (
   if (taskTrackerTargetKey(evidence.target) !== taskTrackerTargetKey(beganTarget)) {
     issues.push("termination evidence must name the beginning target")
   }
-  if (!evidence.complete || !evidence.rootPresent || evidence.rootTaskId.length === 0) {
+  if (!evidence.complete || evidence.rootTaskId.length === 0) {
     issues.push("termination evidence must prove complete root coverage")
   }
   return issues

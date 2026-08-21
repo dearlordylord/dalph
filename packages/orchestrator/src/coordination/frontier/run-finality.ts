@@ -81,7 +81,6 @@ const RunFinalityEvidenceFields = Schema.Struct({
   ]),
   /** Exact normalized task identity resolved by the tracker for the Run target. */
   rootTaskId: TaskId,
-  rootPresent: Schema.Boolean,
   runId: RunId,
   blockedTaskIds: Schema.Array(TaskId).check(Schema.isUnique()),
   target: TrackerTarget,
@@ -94,7 +93,6 @@ type RunFinalityEvidenceFields = typeof RunFinalityEvidenceFields.Type
 const runFinalityEvidenceIssue = (evidence: RunFinalityEvidenceFields): string | undefined => {
   const issues: ReadonlyArray<readonly [boolean, string]> = [
     [!evidence.complete, "finality evidence must be complete"],
-    [!evidence.rootPresent, "finality evidence must include the Run root"],
     [
       taskTrackerTargetKey(evidence.coverage.target) !== taskTrackerTargetKey(evidence.target),
       "finality coverage must name the exact Run tracker target"
@@ -108,7 +106,7 @@ const runFinalityEvidenceIssue = (evidence: RunFinalityEvidenceFields): string |
         exactTaskIdSetKey(evidence.coverage.explicitlyCoveredTaskIds),
       "finality evidence read shape must exactly match its coverage"
     ],
-    [!evidence.rootPresent || evidence.rootTaskId.length === 0, "finality evidence must name the exact Run root"],
+    [evidence.rootTaskId.length === 0, "finality evidence must name the exact Run root"],
     [
       evidence.graphOutcome === "Blocked" &&
         [evidence.terminalTaskIds.length, evidence.blockedTaskIds.length].some((length) => length === 0),
@@ -180,7 +178,6 @@ export const makeRunFinalityEvidence = (input: {
   /** Exact normalized root supplied by the tracker read, never inferred from parent edges. */
   readonly rootTaskId: TaskId
 }): RunFinalityEvidence => {
-  const tasks = input.snapshot.toWire().tasks
   const { blockedTaskIds, graphOutcome, terminalTaskIds } = runGraphFactsOutcome(input.snapshot)
   return RunFinalityEvidence.make({
     blockedTaskIds,
@@ -195,7 +192,6 @@ export const makeRunFinalityEvidence = (input: {
     readShape: input.readShape,
     requiredFactFamilies: requiredRunFinalityFactFamilies,
     rootTaskId: input.rootTaskId,
-    rootPresent: tasks.some(({ id }) => id === input.rootTaskId),
     runId: input.runId,
     target: input.target,
     terminalTaskIds,
@@ -227,7 +223,6 @@ export const runFinalityEvidenceMatches = (
     exactTaskIdSetKey(evidence.coverage.explicitlyCoveredTaskIds) === expectedTaskIds,
     exactTaskIdSetKey(evidence.readShape.explicitlyCoveredTaskIds) === expectedTaskIds,
     evidence.complete,
-    evidence.rootPresent,
     evidence.rootTaskId === expected.rootTaskId,
     exactStringSequenceKey(evidence.requiredFactFamilies) === exactStringSequenceKey(requiredRunFinalityFactFamilies),
     exactTaskIdSetKey(evidence.readShape.explicitlyCoveredTaskIds) ===

@@ -113,7 +113,6 @@ it("rejects missing root, incomplete family coverage, and mismatched graph ident
     target
   })
 
-  expect(Schema.is(RunFinalityEvidence)({ ...evidence, rootPresent: false })).toBe(false)
   expect(
     Schema.is(RunFinalityEvidence)({
       ...evidence,

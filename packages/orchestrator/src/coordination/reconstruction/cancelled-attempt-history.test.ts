@@ -693,7 +693,6 @@ it("does not let a terminal report and pre-cancellation claim release bypass can
     operationId: OperationId.make("cancelled-history-finality-read"),
     readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [] }),
     requiredFactFamilies: requiredRunFinalityFactFamilies,
-    rootPresent: true,
     rootTaskId: TaskId.make("root"),
     runId,
     target,

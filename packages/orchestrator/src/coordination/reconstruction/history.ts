@@ -2457,9 +2457,6 @@ const validateTerminationFactFamilies = (
   if (!groupings.groupings.some(({ taskId }) => taskId === evidence.rootTaskId)) {
     reject("termination evidence Run root must belong to the complete grouping facts")
   }
-  if (evidence.rootPresent !== groupings.groupings.some(({ taskId }) => taskId === evidence.rootTaskId)) {
-    reject("termination evidence root presence does not match the exact grouping fact")
-  }
   return { identities, lifecycles, prerequisites, groupings }
 }
 
@@ -2588,7 +2585,7 @@ const validateTerminationCompleteness = (
   evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
   reject: (detail: string) => void
 ): void => {
-  if (!evidence.complete || !evidence.rootPresent || evidence.rootTaskId.length === 0) {
+  if (!evidence.complete || evidence.rootTaskId.length === 0) {
     reject("termination evidence must prove complete root coverage")
   }
 }
