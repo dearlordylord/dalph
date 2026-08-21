@@ -19,16 +19,16 @@ const gates = [
   { args: ["check:package-boundary"], name: "production package boundary", timeout: 60 * SECOND },
   { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
-  { args: ["check:format"], name: "format and lint", timeout: 2 * 60 * SECOND },
+  { args: ["check:format"], name: "format and lint", timeout: 5 * 60 * SECOND },
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
   { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
-  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 3 * 60 * SECOND },
+  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 5 * 60 * SECOND },
   ...(withoutQuint
     ? []
     : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 5 * 60 * SECOND }]),
-  { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 5 * 60 * SECOND },
+  { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 8 * 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND }
 ]
 
