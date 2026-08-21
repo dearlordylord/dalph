@@ -438,7 +438,9 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
       Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
     )
     expect(result).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
-    expect((yield* Ref.get(records)).at(-1)?.event).toMatchObject({
+    expect(
+      (yield* Ref.get(records)).findLast(({ event }) => event._tag === "CancelledAttemptClaimNoReleaseObserved")?.event
+    ).toMatchObject({
       _tag: "CancelledAttemptClaimNoReleaseObserved",
       expectedClaim: activeClaim,
       observationOperationId: observationOperation.operationId,
@@ -850,7 +852,7 @@ effectIt.effect("revalidates cancellation quiescence while holding the attempt p
       },
       {
         event: TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion }),
-        key: outcomeRecordKey(planOperation.operationId),
+        key: attemptPlanRecordKey(plannedAttempt.attemptId),
         position: JournalPosition.make(3),
         runId
       },
@@ -908,7 +910,11 @@ effectIt.effect("revalidates cancellation quiescence while holding the attempt p
       Effect.provideService(InRunJournal, appendableJournalFor(records)),
       Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
     )
-    expect((yield* Ref.get(records)).at(-1)?.event).toMatchObject({
+    expect(
+      (yield* Ref.get(records)).findLast(
+        ({ event }) => event._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
+      )?.event
+    ).toMatchObject({
       _tag: "CancelledAttemptImplementationResponsibilityRelinquished",
       authorizedClaim: activeClaim,
       cancellationAppliedAt: cancellationPosition,

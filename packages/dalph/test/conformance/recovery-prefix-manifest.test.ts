@@ -70,13 +70,13 @@ const decodeFailureMessage = (input: unknown): string => {
 
 it("keeps the recovery-prefix manifest closed and tied to current evidence", () => {
   const decoded = decodeRecoveryPrefixManifest(recoveryPrefixManifest)
-  expect(decoded.boundaries).toHaveLength(16)
+  expect(decoded.boundaries).toHaveLength(17)
   expect(decoded.boundaries.map(({ id }) => id)).toHaveLength(new Set(decoded.boundaries.map(({ id }) => id)).size)
   expect(evidenceReferenceIssues(decoded)).toEqual([])
   expect(
     decoded.boundaries.filter(({ qualification }) => qualification._tag === "RepresentativeDualStoreTrace")
   ).toHaveLength(1)
-  expect(decoded.boundaries.filter(({ qualification }) => qualification._tag === "MetadataOnly")).toHaveLength(15)
+  expect(decoded.boundaries.filter(({ qualification }) => qualification._tag === "MetadataOnly")).toHaveLength(16)
   const representative = decoded.boundaries.find(
     ({ qualification }) => qualification._tag === "RepresentativeDualStoreTrace"
   )
