@@ -269,6 +269,23 @@ it("lower reducer identifies duplicate unfinished planned-attempt executor work"
   )
 })
 
+it("reports duplicate unfinished attempts in journal order despite HashMap key order", () => {
+  const first = attempt("attempt-z")
+  const second = attempt("attempt-a")
+  const reduction = reduceWorkflowJournalHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 3)])
+
+  expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
+  if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+  expect(reduction.issues).toContainEqual(
+    expect.objectContaining({
+      _tag: "DuplicateUnfinishedTaskAttemptIssue",
+      first: expect.objectContaining({ attemptId: "attempt-z", position: 2, runId }),
+      second: expect.objectContaining({ attemptId: "attempt-a", position: 4, runId }),
+      taskId: "A"
+    })
+  )
+})
+
 it("rejects a second start for the same planned attempt without merging it", () => {
   const plannedAttempt = attempt("attempt-A-3")
   const records = planAndStart(plannedAttempt, 1)

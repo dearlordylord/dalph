@@ -1,11 +1,11 @@
 import type { RunId } from "@dalph/contracts"
-import { Match } from "effect"
+import { HashMap, Match } from "effect"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import { targetPromotionRunIdOf } from "../../workflow/protocols/target-promotion/events.js"
 
-export const setMapValue = <K, V>(map: Map<K, V>, key: K, value: V): void => {
-  Map.prototype.set.call(map, key, value)
-}
+/** Adds one causal fact without mutating the accepted prefix's index. */
+export const setMapValue = <K, V>(map: HashMap.HashMap<K, V>, key: K, value: V): HashMap.HashMap<K, V> =>
+  HashMap.set(map, key, value)
 
 type TargetPromotionRunBindingEvent = Extract<
   WorkflowJournalEvent,

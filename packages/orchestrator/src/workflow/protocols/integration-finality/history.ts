@@ -1,5 +1,6 @@
-/* eslint-disable functional/immutable-data, max-lines -- One chronological validator owns its private indexes and exact causal checks. */
+/* eslint-disable max-lines -- One chronological validator owns its private indexes and exact causal checks. */
 import { type RunId } from "@dalph/contracts"
+import { HashMap, HashSet, Option } from "effect"
 import { type JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { OperationId } from "../../identity.js"
@@ -33,27 +34,43 @@ type DeletionOutcome = Extract<WorkflowJournalEvent, { readonly _tag: "Completio
 type Settlement = Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationFinalitySettled" }>
 type DeletionRead = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimDeletionReadObserved" }>
 type IntegrationFinalityEvent = CompletionClaimFinalityJournalEvent
+type ReplacementAttemptRecord = JournalRecord & { readonly event: ReplacementAttempt }
+type DeletionAttemptRecord = JournalRecord & { readonly event: DeletionAttempt }
 
 export interface IntegrationFinalityHistoryIndexes {
-  readonly replacementIntents: Map<OperationId, JournalRecord & { readonly event: ReplacementIntent }>
-  readonly replacementAttempts: Map<OperationId, Map<number, JournalRecord & { readonly event: ReplacementAttempt }>>
-  readonly replacementTerminals: Map<OperationId, JournalRecord & { readonly event: ReplacementOutcome }>
-  readonly deletionIntents: Map<OperationId, JournalRecord & { readonly event: DeletionIntent }>
-  readonly deletionAttempts: Map<OperationId, Map<number, JournalRecord & { readonly event: DeletionAttempt }>>
-  readonly deletionTerminals: Set<OperationId>
-  readonly settlements: Set<string>
+  readonly replacementIntents: HashMap.HashMap<OperationId, JournalRecord & { readonly event: ReplacementIntent }>
+  readonly replacementAttempts: HashMap.HashMap<
+    OperationId,
+    HashMap.HashMap<number, JournalRecord & { readonly event: ReplacementAttempt }>
+  >
+  readonly replacementTerminals: HashMap.HashMap<OperationId, JournalRecord & { readonly event: ReplacementOutcome }>
+  readonly deletionIntents: HashMap.HashMap<OperationId, JournalRecord & { readonly event: DeletionIntent }>
+  readonly deletionAttempts: HashMap.HashMap<
+    OperationId,
+    HashMap.HashMap<number, JournalRecord & { readonly event: DeletionAttempt }>
+  >
+  readonly deletionTerminals: HashSet.HashSet<OperationId>
+  readonly settlements: HashSet.HashSet<string>
 }
 
 /** Creates an empty private history index; no authority or frontier is stored. */
 export const makeIntegrationFinalityHistoryIndexes = (): IntegrationFinalityHistoryIndexes => ({
-  deletionAttempts: new Map(),
-  deletionIntents: new Map(),
-  deletionTerminals: new Set(),
-  replacementAttempts: new Map(),
-  replacementIntents: new Map(),
-  replacementTerminals: new Map(),
-  settlements: new Set()
+  deletionAttempts: HashMap.empty(),
+  deletionIntents: HashMap.empty(),
+  deletionTerminals: HashSet.empty(),
+  replacementAttempts: HashMap.empty(),
+  replacementIntents: HashMap.empty(),
+  replacementTerminals: HashMap.empty(),
+  settlements: HashSet.empty()
 })
+
+const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
+  Option.getOrUndefined(HashMap.get(map, key))
+
+export interface IntegrationFinalityHistoryValidation {
+  readonly indexes: IntegrationFinalityHistoryIndexes
+  readonly detail: string | undefined
+}
 
 const prior = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): ReadonlyArray<JournalRecord> =>
   records.filter((record) => record.position < position)
@@ -146,71 +163,79 @@ const focusedTaskInObservation = (
   )
 }
 
-const completeTaskInObservation = (
-  records: ReadonlyArray<JournalRecord>,
-  observation: CompletionSuccessObservation,
-  at: JournalPosition
-): boolean => {
-  return focusedTaskInObservation(records, observation, at)
-}
-
-const attemptsFor = <A extends ReplacementAttempt | DeletionAttempt>(
-  index: Map<OperationId, Map<number, JournalRecord & { readonly event: A }>>,
-  operationId: OperationId
-): Map<number, JournalRecord & { readonly event: A }> => {
-  const existing = index.get(operationId)
-  if (existing !== undefined) return existing
-  const created = new Map<number, JournalRecord & { readonly event: A }>()
-  index.set(operationId, created)
-  return created
-}
+const completeTaskInObservation = focusedTaskInObservation
 
 const invalidReplacementIntent = (
   record: JournalRecord,
   records: ReadonlyArray<JournalRecord>,
   indexes: IntegrationFinalityHistoryIndexes,
   event: ReplacementIntent
-): string | undefined => {
-  const duplicate = indexes.replacementIntents.has(event.operationId)
-  indexes.replacementIntents.set(event.operationId, { ...record, event })
-  return !duplicate &&
+): IntegrationFinalityHistoryValidation => {
+  const duplicate = HashMap.has(indexes.replacementIntents, event.operationId)
+  const valid =
+    !duplicate &&
     exactPlanPrior(records, event.claim, record.position) &&
     exactOriginalClaimPrior(records, event.claim, record.position) &&
     exactPromotionPrior(records, event.claim, record.position)
-    ? undefined
-    : `completion-claim replacement intent ${event.operationId} has no exact claim-bound planned attempt, active claim, and promotion proof`
+  return {
+    detail: valid
+      ? undefined
+      : `completion-claim replacement intent ${event.operationId} has no exact claim-bound planned attempt, active claim, and promotion proof`,
+    indexes: {
+      ...indexes,
+      replacementIntents: HashMap.set(indexes.replacementIntents, event.operationId, { ...record, event })
+    }
+  }
 }
 
 const invalidReplacementAttempt = (
   record: JournalRecord,
   indexes: IntegrationFinalityHistoryIndexes,
   event: ReplacementAttempt
-): string | undefined => {
-  const intent = indexes.replacementIntents.get(event.operationId)
-  const attempts = attemptsFor(indexes.replacementAttempts, event.operationId)
+): IntegrationFinalityHistoryValidation => {
+  const intent = mapGet(indexes.replacementIntents, event.operationId)
+  const attempts =
+    mapGet(indexes.replacementAttempts, event.operationId) ?? HashMap.empty<number, ReplacementAttemptRecord>()
   const ordinal = Number(event.attemptOrdinal)
   const valid =
     intent !== undefined &&
     completionTaskClaimEquals(intent.event.claim, event.claim) &&
-    !indexes.replacementTerminals.has(event.operationId) &&
-    ordinal === attempts.size + 1 &&
+    !HashMap.has(indexes.replacementTerminals, event.operationId) &&
+    ordinal === HashMap.size(attempts) + 1 &&
     ordinal <= completionClaimRequestLimit &&
-    !attempts.has(ordinal)
-  attempts.set(ordinal, { ...record, event })
-  return valid ? undefined : `completion-claim replacement attempt ${event.operationId} is not the next exact request`
+    !HashMap.has(attempts, ordinal)
+  return {
+    detail: valid
+      ? undefined
+      : `completion-claim replacement attempt ${event.operationId} is not the next exact request`,
+    indexes: {
+      ...indexes,
+      replacementAttempts: HashMap.set(
+        indexes.replacementAttempts,
+        event.operationId,
+        HashMap.set(attempts, ordinal, { ...record, event })
+      )
+    }
+  }
 }
 
 const invalidReplacementOutcome = (
   _record: JournalRecord,
   indexes: IntegrationFinalityHistoryIndexes,
   event: ReplacementOutcome
-): string | undefined => {
-  const intent = indexes.replacementIntents.get(event.operationId)
-  const duplicate = indexes.replacementTerminals.has(event.operationId)
-  indexes.replacementTerminals.set(event.operationId, { ..._record, event })
-  return !duplicate && intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim)
-    ? undefined
-    : `completion-claim replacement outcome ${event.operationId} has no unique matching intent`
+): IntegrationFinalityHistoryValidation => {
+  const intent = mapGet(indexes.replacementIntents, event.operationId)
+  const duplicate = HashMap.has(indexes.replacementTerminals, event.operationId)
+  const valid = !duplicate && intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim)
+  return {
+    detail: valid
+      ? undefined
+      : `completion-claim replacement outcome ${event.operationId} has no unique matching intent`,
+    indexes: {
+      ...indexes,
+      replacementTerminals: HashMap.set(indexes.replacementTerminals, event.operationId, { ..._record, event })
+    }
+  }
 }
 
 const invalidDeletionIntent = (
@@ -218,18 +243,17 @@ const invalidDeletionIntent = (
   records: ReadonlyArray<JournalRecord>,
   indexes: IntegrationFinalityHistoryIndexes,
   event: DeletionIntent
-): string | undefined => {
-  const duplicate = indexes.deletionIntents.has(event.operationId)
-  const replacement = [...indexes.replacementTerminals.keys()]
-    .map((operationId) => indexes.replacementIntents.get(operationId))
+): IntegrationFinalityHistoryValidation => {
+  const duplicate = HashMap.has(indexes.deletionIntents, event.operationId)
+  const replacement = [...HashMap.keys(indexes.replacementTerminals)]
+    .map((operationId) => mapGet(indexes.replacementIntents, operationId))
     .find((intent) => intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim))
-  indexes.deletionIntents.set(event.operationId, { ...record, event })
   const replacementRecord = prior(records, record.position).find(
     (candidate) =>
       candidate.event._tag === "CompletionClaimReplaced" &&
       completionTaskClaimEquals(candidate.event.claim, event.claim)
   )
-  return [
+  const valid = [
     !duplicate,
     completionTaskClaimEquals(event.claim, event.successObservation.claim),
     replacement !== undefined,
@@ -237,17 +261,24 @@ const invalidDeletionIntent = (
     replacementRecord !== undefined && replacementRecord.position < event.successObservation.observedAt,
     completeTaskInObservation(records, event.successObservation, record.position)
   ].every(Boolean)
-    ? undefined
-    : `completion-claim deletion intent ${event.operationId} lacks replacement and focused task-completion success`
+  return {
+    detail: valid
+      ? undefined
+      : `completion-claim deletion intent ${event.operationId} lacks replacement and focused task-completion success`,
+    indexes: {
+      ...indexes,
+      deletionIntents: HashMap.set(indexes.deletionIntents, event.operationId, { ...record, event })
+    }
+  }
 }
 
 const invalidDeletionAttempt = (
   record: JournalRecord,
   indexes: IntegrationFinalityHistoryIndexes,
   event: DeletionAttempt
-): string | undefined => {
-  const intent = indexes.deletionIntents.get(event.operationId)
-  const attempts = attemptsFor(indexes.deletionAttempts, event.operationId)
+): IntegrationFinalityHistoryValidation => {
+  const intent = mapGet(indexes.deletionIntents, event.operationId)
+  const attempts = mapGet(indexes.deletionAttempts, event.operationId) ?? HashMap.empty<number, DeletionAttemptRecord>()
   const ordinal = Number(event.attemptOrdinal)
   const valid = [
     intent !== undefined,
@@ -255,13 +286,22 @@ const invalidDeletionAttempt = (
     intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim),
     intent !== undefined &&
       completionSuccessObservationEquals(intent.event.successObservation, event.successObservation),
-    !indexes.deletionTerminals.has(event.operationId),
-    ordinal === attempts.size + 1,
+    !HashSet.has(indexes.deletionTerminals, event.operationId),
+    ordinal === HashMap.size(attempts) + 1,
     ordinal <= completionClaimRequestLimit,
-    !attempts.has(ordinal)
+    !HashMap.has(attempts, ordinal)
   ].every(Boolean)
-  attempts.set(ordinal, { ...record, event })
-  return valid ? undefined : `completion-claim deletion attempt ${event.operationId} is not the next exact request`
+  return {
+    detail: valid ? undefined : `completion-claim deletion attempt ${event.operationId} is not the next exact request`,
+    indexes: {
+      ...indexes,
+      deletionAttempts: HashMap.set(
+        indexes.deletionAttempts,
+        event.operationId,
+        HashMap.set(attempts, ordinal, { ...record, event })
+      )
+    }
+  }
 }
 
 const invalidDeletionOutcome = (
@@ -269,18 +309,22 @@ const invalidDeletionOutcome = (
   records: ReadonlyArray<JournalRecord>,
   indexes: IntegrationFinalityHistoryIndexes,
   event: DeletionOutcome
-): string | undefined => {
-  const intent = indexes.deletionIntents.get(event.operationId)
-  const duplicate = indexes.deletionTerminals.has(event.operationId)
-  indexes.deletionTerminals.add(event.operationId)
-  return !duplicate &&
+): IntegrationFinalityHistoryValidation => {
+  const intent = mapGet(indexes.deletionIntents, event.operationId)
+  const duplicate = HashSet.has(indexes.deletionTerminals, event.operationId)
+  const valid =
+    !duplicate &&
     intent !== undefined &&
     completionTaskClaimEquals(event.claim, event.successObservation.claim) &&
     completionTaskClaimEquals(intent.event.claim, event.claim) &&
     completionSuccessObservationEquals(intent.event.successObservation, event.successObservation) &&
     completeTaskInObservation(records, event.successObservation, record.position)
-    ? undefined
-    : `completion-claim deletion outcome ${event.operationId} has no exact intent and fresh success`
+  return {
+    detail: valid
+      ? undefined
+      : `completion-claim deletion outcome ${event.operationId} has no exact intent and fresh success`,
+    indexes: { ...indexes, deletionTerminals: HashSet.add(indexes.deletionTerminals, event.operationId) }
+  }
 }
 
 const invalidSettlement = (
@@ -288,10 +332,9 @@ const invalidSettlement = (
   records: ReadonlyArray<JournalRecord>,
   indexes: IntegrationFinalityHistoryIndexes,
   event: Settlement
-): string | undefined => {
+): IntegrationFinalityHistoryValidation => {
   const key = event.claim.promotionCorrelation.requestId
-  const duplicate = indexes.settlements.has(key)
-  indexes.settlements.add(key)
+  const duplicate = HashSet.has(indexes.settlements, key)
   const deleted = prior(records, record.position).some(
     (candidate) =>
       candidate.event._tag === "CompletionClaimDeleted" &&
@@ -306,9 +349,14 @@ const invalidSettlement = (
       candidate.event.operationId === event.replacementOperationId &&
       completionTaskClaimEquals(candidate.event.claim, event.claim)
   )
-  return !duplicate && completionTaskClaimEquals(event.claim, event.successObservation.claim) && replaced && deleted
-    ? undefined
-    : `integration finality settlement ${key} requires one exact deleted completion claim and fresh success`
+  const valid =
+    !duplicate && completionTaskClaimEquals(event.claim, event.successObservation.claim) && replaced && deleted
+  return {
+    detail: valid
+      ? undefined
+      : `integration finality settlement ${key} requires one exact deleted completion claim and fresh success`,
+    indexes: { ...indexes, settlements: HashSet.add(indexes.settlements, key) }
+  }
 }
 
 const integrationFinalityEventTags: ReadonlyArray<IntegrationFinalityEvent["_tag"]> = [
@@ -341,8 +389,9 @@ const invalidDeletionRead = (
   if (request.claim.plannedAttempt.runId !== runId) {
     return `completion claim cleanup read binds run ${request.claim.plannedAttempt.runId}`
   }
-  const intent = indexes.deletionIntents.get(request.operationId)?.event
-  const priorAttempts = indexes.deletionAttempts.get(request.operationId)?.size ?? 0
+  const intent = mapGet(indexes.deletionIntents, request.operationId)?.event
+  const priorAttemptIndex = mapGet(indexes.deletionAttempts, request.operationId)
+  const priorAttempts = priorAttemptIndex === undefined ? 0 : HashMap.size(priorAttemptIndex)
   const priorReads = countPriorDeletionReads(records, record.position, event)
   return deletionReadIsValid(intent, indexes, event, priorAttempts, priorReads)
     ? undefined
@@ -364,7 +413,7 @@ const deletionReadIsValid = (
   ].every(Boolean)
 
 const replacementOutcomeMatches = (indexes: IntegrationFinalityHistoryIndexes, event: DeletionRead): boolean => {
-  const outcome = indexes.replacementTerminals.get(event.replacementOperationId)?.event
+  const outcome = mapGet(indexes.replacementTerminals, event.replacementOperationId)?.event
   return outcome !== undefined && completionTaskClaimEquals(outcome.claim, event.request.claim)
 }
 
@@ -404,7 +453,7 @@ export const invalidIntegrationFinalityHistory = (
   record: JournalRecord,
   records: ReadonlyArray<JournalRecord>,
   indexes: IntegrationFinalityHistoryIndexes
-): string | undefined => {
+): IntegrationFinalityHistoryValidation => {
   const event = record.event
   if (event._tag === "CompletionClaimReplacementIntended")
     return invalidReplacementIntent(record, records, indexes, event)
@@ -415,7 +464,7 @@ export const invalidIntegrationFinalityHistory = (
   if (event._tag === "CompletionClaimDeletionAttemptIntended") return invalidDeletionAttempt(record, indexes, event)
   if (event._tag === "CompletionClaimDeleted") return invalidDeletionOutcome(record, records, indexes, event)
   if (event._tag === "IntegrationFinalitySettled") return invalidSettlement(record, records, indexes, event)
-  return undefined
+  return { detail: undefined, indexes }
 }
 
 /** Applies run binding and causal validation for one finality event. */
@@ -438,7 +487,7 @@ export const validateIntegrationFinalityHistoryRecord = (
   indexes: IntegrationFinalityHistoryIndexes,
   recordIdentityIssue: (detail: string) => void,
   recordSemanticIssue: (detail: string) => void
-): void => {
+): IntegrationFinalityHistoryIndexes => {
   recordCompletionTaskIssue(
     invalidCompletionTaskHistory(record, records, runId),
     recordIdentityIssue,
@@ -450,6 +499,7 @@ export const validateIntegrationFinalityHistoryRecord = (
     const readIssue = invalidDeletionRead(record, indexes, record.event, runId, records)
     if (readIssue !== undefined) recordSemanticIssue(readIssue)
   }
-  const historyIssue = invalidIntegrationFinalityHistory(record, records, indexes)
-  if (historyIssue !== undefined) recordSemanticIssue(historyIssue)
+  const historyValidation = invalidIntegrationFinalityHistory(record, records, indexes)
+  if (historyValidation.detail !== undefined) recordSemanticIssue(historyValidation.detail)
+  return historyValidation.indexes
 }

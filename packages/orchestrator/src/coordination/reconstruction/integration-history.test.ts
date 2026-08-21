@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { HashMap } from "effect"
 import { GitCommitSha, IntegrationTarget, RunId } from "@dalph/contracts"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import {
@@ -90,26 +91,27 @@ const integrationStarted = IntegrationStartedEvent.make({
 })
 
 const indexes = (): IntegrationHistoryIndexes => ({
-  acceptedExecutorResults: new Map(),
-  acceptedExecutorResultPositions: new Map(),
-  executorResponsibilitiesBegan: new Map(),
-  integrationResponsibilitiesBegan: new Map(),
-  integrationStarted: new Map([[session.startedAt, integrationStarted]]),
-  targetLineageReadIntents: new Map([
-    [lineageOperationId, { operation: lineageOperation, position: JournalPosition.make(1) }]
+  acceptedExecutorResults: HashMap.empty(),
+  acceptedExecutorResultPositions: HashMap.empty(),
+  executorResponsibilitiesBegan: HashMap.empty(),
+  integrationResponsibilitiesBegan: HashMap.empty(),
+  integrationStarted: HashMap.make([session.startedAt, integrationStarted]),
+  targetLineageReadIntents: HashMap.make([
+    lineageOperationId,
+    { operation: lineageOperation, position: JournalPosition.make(1) }
   ]),
-  targetLineageObservations: new Map([[session.targetLineageObservedAt, lineageObservation]]),
-  integratorSessionFixed: new Map(),
-  integratorSessionsByStartedAt: new Map(),
-  integratorSessionsBySessionId: new Map(),
-  integratorSessionsByCandidateResource: new Map(),
-  integratorSuccessorSessionFixed: new Map(),
-  integratorSuccessorSessionsByPredecessor: new Map(),
-  integratorRunStarted: new Map(),
-  integratorRunResults: new Map(),
-  integratorRunCandidateGitReadIntents: new Map(),
-  integratorRunCandidateGitObservations: new Map(),
-  firstRestartChoiceAppliedAt: new Map(),
+  targetLineageObservations: HashMap.make([session.targetLineageObservedAt, lineageObservation]),
+  integratorSessionFixed: HashMap.empty(),
+  integratorSessionsByStartedAt: HashMap.empty(),
+  integratorSessionsBySessionId: HashMap.empty(),
+  integratorSessionsByCandidateResource: HashMap.empty(),
+  integratorSuccessorSessionFixed: HashMap.empty(),
+  integratorSuccessorSessionsByPredecessor: HashMap.empty(),
+  integratorRunStarted: HashMap.empty(),
+  integratorRunResults: HashMap.empty(),
+  integratorRunCandidateGitReadIntents: HashMap.empty(),
+  integratorRunCandidateGitObservations: HashMap.empty(),
+  firstRestartChoiceAppliedAt: HashMap.empty(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes()
 })
 
@@ -122,11 +124,12 @@ const record = (
 const validate = (historyIndexes: IntegrationHistoryIndexes, records: ReadonlyArray<JournalRecord>) => {
   const identityIssues: Array<string> = []
   const semanticIssues: Array<string> = []
+  let indexes = historyIndexes
   for (const [index, item] of records.entries()) {
-    validateIntegrationHistoryRecord(
+    indexes = validateIntegrationHistoryRecord(
       item,
       runId,
-      historyIndexes,
+      indexes,
       (detail) => identityIssues.push(detail),
       (detail) => semanticIssues.push(detail),
       records.slice(0, index + 1)
@@ -200,18 +203,15 @@ describe("retained integration history", () => {
       expect.stringContaining("reuses a responsibility, session, or candidate resource")
     ])
 
-    const withoutStartIndexes = indexes()
-    withoutStartIndexes.integrationStarted.clear()
+    const withoutStartIndexes = { ...indexes(), integrationStarted: HashMap.empty() }
     const withoutStart = validate(withoutStartIndexes, [fixedSessionRecord()])
     expect(withoutStart.semanticIssues).toEqual([expect.stringContaining("no exact earlier IntegrationStarted")])
 
-    const withoutLineageIndexes = indexes()
-    withoutLineageIndexes.targetLineageObservations.clear()
+    const withoutLineageIndexes = { ...indexes(), targetLineageObservations: HashMap.empty() }
     const withoutLineage = validate(withoutLineageIndexes, [fixedSessionRecord()])
     expect(withoutLineage.semanticIssues).toEqual([expect.stringContaining("no exact earlier TargetLineageObserved")])
 
-    const withoutLineageIntentIndexes = indexes()
-    withoutLineageIntentIndexes.targetLineageReadIntents.clear()
+    const withoutLineageIntentIndexes = { ...indexes(), targetLineageReadIntents: HashMap.empty() }
     const withoutLineageIntent = validate(withoutLineageIntentIndexes, [fixedSessionRecord()])
     expect(withoutLineageIntent.semanticIssues).toEqual([
       expect.stringContaining("no exact earlier TargetLineageObserved")
@@ -270,14 +270,19 @@ describe("retained integration history", () => {
     const successorIndexes = indexes()
     const predecessorPosition = JournalPosition.make(10)
     const collisionPosition = JournalPosition.make(20)
-    successorIndexes.integratorSessionFixed.set(
-      predecessorPosition,
-      IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })
-    )
-    successorIndexes.integratorSessionsBySessionId.set(session.sessionId, predecessorPosition)
-    successorIndexes.integratorSessionsBySessionId.set(collisionSession.sessionId, collisionPosition)
+    const withPredecessor = {
+      ...successorIndexes,
+      integratorSessionFixed: HashMap.make([
+        predecessorPosition,
+        IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })
+      ]),
+      integratorSessionsBySessionId: HashMap.make(
+        [session.sessionId, predecessorPosition],
+        [collisionSession.sessionId, collisionPosition]
+      )
+    }
 
-    const result = validate(successorIndexes, [
+    const result = validate(withPredecessor, [
       record(30, successorEvent, integratorSuccessorSessionFixedRecordKey(session, quarantineAt, directionAppliedAt))
     ])
     expect(result.semanticIssues).toEqual([expect.stringContaining("reuses a session or resource at 20")])

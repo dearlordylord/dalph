@@ -4,6 +4,7 @@ import {
   type AttemptId,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
+import { HashMap, Option } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
@@ -22,55 +23,63 @@ import { deriveIntegrationQuarantineState } from "../../workflow/protocols/integ
 import { validateProviderRunActivityAbsent } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
 
 export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
-  readonly acceptedExecutorResults: Map<AttemptId, AcceptedResult>
-  readonly acceptedExecutorResultPositions: Map<AttemptId, JournalPosition>
-  readonly executorResponsibilitiesBegan: Map<
+  readonly acceptedExecutorResults: HashMap.HashMap<AttemptId, AcceptedResult>
+  readonly acceptedExecutorResultPositions: HashMap.HashMap<AttemptId, JournalPosition>
+  readonly executorResponsibilitiesBegan: HashMap.HashMap<
     AttemptId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >
-  readonly integrationResponsibilitiesBegan: Map<
+  readonly integrationResponsibilitiesBegan: HashMap.HashMap<
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" }>
   >
-  readonly integrationStarted: Map<
+  readonly integrationStarted: HashMap.HashMap<
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
   >
-  readonly firstRestartChoiceAppliedAt: Map<AttemptId, JournalPosition>
+  readonly firstRestartChoiceAppliedAt: HashMap.HashMap<AttemptId, JournalPosition>
   readonly targetPromotionHistory: TargetPromotionHistoryIndexes
 }
 
 /** Creates one fresh in-memory index for validating a trace prefix. */
 export const makeIntegrationHistoryIndexes = (): IntegrationHistoryIndexes => ({
-  acceptedExecutorResults: new Map(),
-  acceptedExecutorResultPositions: new Map(),
-  executorResponsibilitiesBegan: new Map(),
-  integrationResponsibilitiesBegan: new Map(),
-  integrationStarted: new Map(),
-  firstRestartChoiceAppliedAt: new Map(),
+  acceptedExecutorResults: HashMap.empty(),
+  acceptedExecutorResultPositions: HashMap.empty(),
+  executorResponsibilitiesBegan: HashMap.empty(),
+  integrationResponsibilitiesBegan: HashMap.empty(),
+  integrationStarted: HashMap.empty(),
+  firstRestartChoiceAppliedAt: HashMap.empty(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
-  targetLineageReadIntents: new Map(),
-  targetLineageObservations: new Map(),
-  integratorSessionFixed: new Map(),
-  integratorSessionsByStartedAt: new Map(),
-  integratorSessionsBySessionId: new Map(),
-  integratorSessionsByCandidateResource: new Map(),
-  integratorSuccessorSessionFixed: new Map(),
-  integratorSuccessorSessionsByPredecessor: new Map(),
-  integratorRunStarted: new Map(),
-  integratorRunResults: new Map(),
-  integratorRunCandidateGitReadIntents: new Map(),
-  integratorRunCandidateGitObservations: new Map()
+  targetLineageReadIntents: HashMap.empty(),
+  targetLineageObservations: HashMap.empty(),
+  integratorSessionFixed: HashMap.empty(),
+  integratorSessionsByStartedAt: HashMap.empty(),
+  integratorSessionsBySessionId: HashMap.empty(),
+  integratorSessionsByCandidateResource: HashMap.empty(),
+  integratorSuccessorSessionFixed: HashMap.empty(),
+  integratorSuccessorSessionsByPredecessor: HashMap.empty(),
+  integratorRunStarted: HashMap.empty(),
+  integratorRunResults: HashMap.empty(),
+  integratorRunCandidateGitReadIntents: HashMap.empty(),
+  integratorRunCandidateGitObservations: HashMap.empty()
 })
+
+const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
+  Option.getOrUndefined(HashMap.get(map, key))
+
+interface IntegrationHistoryValidation<Indexes extends IntegrationHistoryIndexes = IntegrationHistoryIndexes> {
+  readonly indexes: Indexes
+  readonly detail: string | undefined
+}
 
 const invalidResponsibilityBeginning = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" }>,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
-  const accepted = indexes.acceptedExecutorResults.get(event.plannedAttempt.attemptId)
-  const acceptedAt = indexes.acceptedExecutorResultPositions.get(event.plannedAttempt.attemptId)
-  const restartAt = indexes.firstRestartChoiceAppliedAt.get(event.plannedAttempt.attemptId)
-  const executorResponsibility = indexes.executorResponsibilitiesBegan.get(event.plannedAttempt.attemptId)
+  const accepted = mapGet(indexes.acceptedExecutorResults, event.plannedAttempt.attemptId)
+  const acceptedAt = mapGet(indexes.acceptedExecutorResultPositions, event.plannedAttempt.attemptId)
+  const restartAt = mapGet(indexes.firstRestartChoiceAppliedAt, event.plannedAttempt.attemptId)
+  const executorResponsibility = mapGet(indexes.executorResponsibilitiesBegan, event.plannedAttempt.attemptId)
   return restartAt !== undefined && acceptedAt !== undefined && restartAt < acceptedAt
     ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} follows an Accepted result suppressed by prior Restart`
     : accepted === undefined ||
@@ -86,7 +95,7 @@ const invalidIntegrationStart = (
   position: JournalPosition,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
-  const began = indexes.integrationResponsibilitiesBegan.get(event.responsibilityBeganAt)
+  const began = mapGet(indexes.integrationResponsibilitiesBegan, event.responsibilityBeganAt)
   return began === undefined ||
     event.responsibilityBeganAt >= position ||
     !integrationResponsibilityEquivalence(began, event)
@@ -181,29 +190,36 @@ const isTargetPromotionEvent = (event: WorkflowJournalEvent): event is TargetPro
   event._tag === "TargetPromotionStale" ||
   event._tag === "TargetPromotionNonConvergence"
 
-export const invalidIntegrationHistoryEvent = (
+export const invalidIntegrationHistoryEvent = <Indexes extends IntegrationHistoryIndexes>(
   record: JournalRecord,
-  indexes: IntegrationHistoryIndexes,
+  indexes: Indexes,
   records: ReadonlyArray<JournalRecord> = [record]
-): string | undefined => {
+): IntegrationHistoryValidation<Indexes> => {
   const integrator = validateIntegratorHistoryEvent(record, indexes, records)
-  if (integrator.handled) return integrator.issue
+  if (integrator.handled) return { detail: integrator.issue, indexes: integrator.indexes }
   const event = record.event
   if (event._tag === "IntegrationResponsibilityBegan") {
-    setMapValue(indexes.integrationResponsibilitiesBegan, record.position, event)
-    return invalidResponsibilityBeginning(event, indexes)
+    return {
+      detail: invalidResponsibilityBeginning(event, indexes),
+      indexes: {
+        ...indexes,
+        integrationResponsibilitiesBegan: setMapValue(indexes.integrationResponsibilitiesBegan, record.position, event)
+      }
+    }
   }
   if (event._tag === "IntegrationStarted") {
-    setMapValue(indexes.integrationStarted, record.position, event)
-    return invalidIntegrationStart(event, record.position, indexes)
+    return {
+      detail: invalidIntegrationStart(event, record.position, indexes),
+      indexes: { ...indexes, integrationStarted: setMapValue(indexes.integrationStarted, record.position, event) }
+    }
   }
   const quarantineIssue = invalidIntegrationQuarantineHistory(record, records)
-  if (quarantineIssue !== undefined) return quarantineIssue
-  return isTargetPromotionEvent(event)
-    ? invalidTargetPromotionHistory(
-        record,
-        indexes.targetPromotionHistory,
-        indexes.integratorRunCandidateGitObservations
-      )
-    : undefined
+  if (quarantineIssue !== undefined) return { detail: quarantineIssue, indexes }
+  if (!isTargetPromotionEvent(event)) return { detail: undefined, indexes }
+  const validation = invalidTargetPromotionHistory(
+    record,
+    indexes.targetPromotionHistory,
+    indexes.integratorRunCandidateGitObservations
+  )
+  return { detail: validation.detail, indexes: { ...indexes, targetPromotionHistory: validation.indexes } }
 }

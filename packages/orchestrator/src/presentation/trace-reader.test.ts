@@ -48,11 +48,15 @@ import {
 } from "../workflow-journal/record-key.js"
 import { memoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
 import { sqliteJournalStoreLayer } from "../workflow-journal/adapters/sqlite-store.js"
-import { JournalDatabaseLocator, JournalPosition } from "../workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../workflow-journal/identity.js"
 import { JournalReadSource } from "../workflow-journal/read-source.js"
 import { InRunJournal, JournalStore, RunLifecycleJournal, type JournalRecord } from "../workflow-journal/store.js"
 import { OperationId } from "../workflow/identity.js"
-import { TaskClaimAcquisitionIntendedEvent, taskTrackerReadIntent } from "../workflow/registry/event.js"
+import {
+  TaskClaimAcquisitionIntendedEvent,
+  WorkflowRunBeganEvent,
+  taskTrackerReadIntent
+} from "../workflow/registry/event.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
@@ -222,6 +226,46 @@ const sqliteReaderLayer = (filename: JournalDatabaseLocator) => {
 const readerFromRecords = (records: ReadonlyArray<JournalRecord>) =>
   makeTraceReader({ read: () => Effect.succeed(records) })
 
+it.effect("maps projection failures consistently through complete and cursor trace reads", () =>
+  Effect.gen(function* () {
+    const records: ReadonlyArray<JournalRecord> = [
+      {
+        event: WorkflowRunBeganEvent.make({
+          initialControlPolicy: initialPolicy,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          target,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("trace-projection-invalid-begin"),
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: IntegrationStartedEvent.make({
+          acceptedResult: integrationAcceptedResult,
+          integrationTarget,
+          plannedAttempt: integrationPlannedAttempt,
+          responsibilityBeganAt: JournalPosition.make(1),
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("trace-projection-invalid-start"),
+        position: JournalPosition.make(2),
+        runId
+      }
+    ]
+    const reader = readerFromRecords(records)
+
+    const historyFailure = yield* Effect.flip(reader.read(runId))
+    expect(historyFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+
+    const cursorFailure = yield* Effect.flip(
+      reader.readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
+    )
+    expect(cursorFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+  })
+)
+
 it.effect("keeps the composed trace reader context read-only", () =>
   Effect.gen(function* () {
     const context = yield* Layer.build(readerOnlyLayer)
@@ -340,6 +384,68 @@ it.effect(
       expect(failure).toBeInstanceOf(TraceCausalPredecessorMissing)
       expect(failure).toMatchObject({ predecessorOperationId: missingOperationId, runId })
     }).pipe(Effect.provide(readerLayer))
+)
+
+it.effect("reuses the immutable complete-prefix trace result for repeated reads", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* appendGraphObservation(journal, OperationId.make("repeatable-prefix"))
+
+    const records = yield* journal.read(runId)
+    let reads = 0
+    const reader = makeTraceReader({
+      read: () =>
+        Effect.sync(() => {
+          reads += 1
+          return records
+        })
+    })
+    const cursor = TraceCursor.make({ position: JournalPosition.make(3), runId })
+    const firstView = yield* reader.readAt(cursor)
+    const repeatedView = yield* reader.readAt(cursor)
+    const firstHistory = yield* reader.read(runId)
+    const repeatedHistory = yield* reader.read(runId)
+
+    expect(reads).toBe(4)
+    expect(repeatedView).toBe(firstView)
+    expect(repeatedHistory).toBe(firstHistory)
+  }).pipe(Effect.provide(readerLayer))
+)
+
+it.effect("matches the prefix projection at every early cursor when a later immutable suffix is malformed", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* appendGraphObservation(journal, OperationId.make("malformed-suffix-prefix"))
+    const records = yield* journal.read(runId)
+    const duplicated = records[1]
+    if (duplicated === undefined) {
+      return yield* Effect.die("malformed suffix fixture did not produce an operation intent")
+    }
+    const malformedRecords: ReadonlyArray<JournalRecord> = [
+      ...records,
+      {
+        ...duplicated,
+        key: JournalRecordKey.make("malformed-suffix-duplicate"),
+        position: JournalPosition.make(records.length + 1)
+      }
+    ]
+    const indexedReader = readerFromRecords(records)
+    const fallbackReader = readerFromRecords(malformedRecords)
+
+    for (const position of [1, 2, 3]) {
+      const cursor = TraceCursor.make({ position: JournalPosition.make(position), runId })
+      const indexedView = yield* indexedReader.readAt(cursor)
+      const fallbackView = yield* fallbackReader.readAt(cursor)
+      expect(fallbackView).toEqual(indexedView)
+    }
+
+    const malformedCursorFailure = yield* Effect.flip(
+      fallbackReader.readAt(TraceCursor.make({ position: JournalPosition.make(4), runId }))
+    )
+    expect(malformedCursorFailure).toBeInstanceOf(TraceCausalPredecessorContradiction)
+  }).pipe(Effect.provide(readerLayer))
 )
 
 it.effect("keeps process-local integration serialization separate from other trace relationships", () =>
