@@ -236,6 +236,38 @@ it.effect("classifies a missing branch ref reported as not a valid ref as absent
   })
 )
 
+it.effect("does not treat an existing non-Git planned path as a present branch", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const commands: GitCommandService = {
+      run: (_directory, args) =>
+        Ref.update(calls, (count) => count + 1).pipe(
+          Effect.as(
+            args[0] === "show-ref"
+              ? { exitCode: 0, stderr: "", stdout: baseSha }
+              : { exitCode: 0, stderr: "", stdout: "" }
+          )
+        ),
+      runInWorktree: (_directory, _args) =>
+        Ref.update(calls, (count) => count + 1).pipe(
+          Effect.as({ exitCode: 1, stderr: "fatal: not a git repository", stdout: "" })
+        ),
+      runBytesInWorktree: () => Effect.die("byte command is outside this boundary test")
+    }
+    const boundaries = yield* boundaryServices(calls, commands)
+    const authorizationWithExistingNonGitPath = BranchCleanupAuthorization.make({
+      ...branchAuthorization,
+      disposition: {
+        ...branchAuthorization.disposition,
+        plannedAttempt: { ...branchAuthorization.disposition.plannedAttempt, worktree: WorktreeLocator.make("/tmp") }
+      }
+    })
+    const observed = yield* boundaries.branch.observe(authorizationWithExistingNonGitPath)
+    expect(observed._tag).toBe("Unreadable")
+    expect(yield* Ref.get(calls)).toBe(3)
+  })
+)
+
 it.effect("rejects malformed or ambiguous porcelain blocks as unreadable", () =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)

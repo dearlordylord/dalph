@@ -293,20 +293,10 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
               })
             }
             return nonGitPath(pathProbe.result.stderr)
-              ? head === authorization.expectedHead
-                ? BranchCleanupObservation.cases.Present.make({
-                    branch: authorization.locator,
-                    headSha: head,
-                    registeredWorktree: null,
-                    revision: revisionOneBranch
-                  })
-                : BranchCleanupObservation.cases.Foreign.make({
-                    branch: authorization.locator,
-                    observedHead: head,
-                    observedWorktree: WorktreeLocator.make("<unregistered>"),
-                    reason: "DifferentHead",
-                    revision: revisionOneBranch
-                  })
+              ? BranchCleanupObservation.cases.Unreadable.make({
+                  branch: authorization.locator,
+                  detail: "branch ref is present but its planned path is not a Git worktree"
+                })
               : BranchCleanupObservation.cases.Unreadable.make({
                   branch: authorization.locator,
                   detail: resultDetail(pathProbe.result.stderr, pathProbe.result.exitCode)

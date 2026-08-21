@@ -54,6 +54,53 @@ const operationFor = (family: string, identity: string, position: JournalPositio
 
 const candidateDispositionEquals = Schema.toEquivalence(IntegratorCandidateCleanupDisposition)
 
+const hasValidatedWorktreeAuthorization = (
+  records: ReadonlyArray<JournalRecord>,
+  disposition: WorktreeCleanupAuthorization["disposition"]
+): boolean =>
+  records.some(
+    (candidate) =>
+      candidate.event._tag === "WorktreeCleanupAuthorized" &&
+      plannedAttemptCleanupDispositionEquals(candidate.event.authorization.disposition, disposition) &&
+      candidate.runId === candidate.event.authorization.disposition.plannedAttempt.runId &&
+      candidate.key === worktreeCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
+      validateWorktreeCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
+      validateWorktreeCleanupHistory(records, candidate.event.authorization)._tag === "Valid"
+  )
+
+const hasValidatedBranchAuthorization = (
+  records: ReadonlyArray<JournalRecord>,
+  disposition: BranchCleanupAuthorization["disposition"]
+): boolean =>
+  records.some(
+    (candidate) =>
+      candidate.event._tag === "BranchCleanupAuthorized" &&
+      plannedAttemptCleanupDispositionEquals(candidate.event.authorization.disposition, disposition) &&
+      candidate.runId === candidate.event.authorization.disposition.plannedAttempt.runId &&
+      candidate.key === branchCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
+      validateWorktreeCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
+      validateBranchCleanupHistory(records, candidate.event.authorization)._tag === "Valid"
+  )
+
+const hasValidatedCandidateAuthorization = (
+  records: ReadonlyArray<JournalRecord>,
+  disposition: IntegratorCandidateCleanupAuthorization["disposition"]
+): boolean =>
+  records.some(
+    (candidate) =>
+      candidate.event._tag === "IntegratorCandidateCleanupAuthorized" &&
+      candidateDispositionEquals(candidate.event.authorization.disposition, disposition) &&
+      candidate.runId === candidate.event.authorization.disposition.predecessor.plannedAttempt.runId &&
+      candidate.key === integratorCandidateCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
+      validateIntegratorCandidateCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
+      validateIntegratorCandidateCleanupHistory(records, candidate.event.authorization)._tag === "Valid"
+  )
+
+const recordsWithoutAuthorizationTag = (
+  records: ReadonlyArray<JournalRecord>,
+  authorizationTag: "WorktreeCleanupAuthorized" | "BranchCleanupAuthorized" | "IntegratorCandidateCleanupAuthorized"
+): ReadonlyArray<JournalRecord> => records.filter(({ event }) => event._tag !== authorizationTag)
+
 const isPlannedAttemptReplacedRecord = (
   record: JournalRecord
 ): record is JournalRecord & { readonly event: PlannedAttemptReplacedEvent } =>
@@ -183,19 +230,12 @@ const worktreeAuthorizationsFromTerminalFacts = (
         ? worktreeAuthorizationFromAbandonment(records, record)
         : undefined
     if (authorization === undefined) return []
-    if (
-      records.some(
-        (candidate) =>
-          candidate.event._tag === "WorktreeCleanupAuthorized" &&
-          plannedAttemptCleanupDispositionEquals(candidate.event.authorization.disposition, authorization.disposition)
-      )
-    ) {
-      return []
-    }
-    return validateWorktreeCleanupProvenance(records, authorization)._tag === "Valid" &&
-      validateWorktreeCleanupHistory(records, authorization)._tag === "Valid"
-      ? [authorization]
-      : []
+    if (hasValidatedWorktreeAuthorization(records, authorization.disposition)) return []
+    const canonicalRecords = recordsWithoutAuthorizationTag(records, "WorktreeCleanupAuthorized")
+    const provenance = validateWorktreeCleanupProvenance(canonicalRecords, authorization)
+    const history = validateWorktreeCleanupHistory(canonicalRecords, authorization)
+    if (provenance._tag !== "Valid" || history._tag !== "Valid") return []
+    return [authorization]
   })
 
 const branchAuthorizationsFromSettledWorktrees = (
@@ -220,19 +260,12 @@ const branchAuthorizationsFromSettledWorktrees = (
     })
     if (authorization === undefined) return []
     if (validateSettledWorktreeForBranch(records, authorization)._tag === "Invalid") return []
-    if (
-      records.some(
-        (candidate) =>
-          candidate.event._tag === "BranchCleanupAuthorized" &&
-          plannedAttemptCleanupDispositionEquals(candidate.event.authorization.disposition, authorization.disposition)
-      )
-    ) {
-      return []
-    }
-    return validateWorktreeCleanupProvenance(records, authorization)._tag === "Valid" &&
-      validateBranchCleanupHistory(records, authorization)._tag === "Valid"
-      ? [authorization]
-      : []
+    if (hasValidatedBranchAuthorization(records, authorization.disposition)) return []
+    const canonicalRecords = recordsWithoutAuthorizationTag(records, "BranchCleanupAuthorized")
+    const provenance = validateWorktreeCleanupProvenance(canonicalRecords, authorization)
+    const history = validateBranchCleanupHistory(canonicalRecords, authorization)
+    if (provenance._tag !== "Valid" || history._tag !== "Valid") return []
+    return [authorization]
   })
 
 const candidateAuthorizationsFromSuccessors = (
@@ -280,19 +313,12 @@ const candidateAuthorizationsFromSuccessors = (
       writerQuiescent: true
     })
     if (authorization === undefined) return []
-    if (
-      records.some(
-        (candidate) =>
-          candidate.event._tag === "IntegratorCandidateCleanupAuthorized" &&
-          candidateDispositionEquals(candidate.event.authorization.disposition, authorization.disposition)
-      )
-    ) {
-      return []
-    }
-    return validateIntegratorCandidateCleanupProvenance(records, authorization)._tag === "Valid" &&
-      validateIntegratorCandidateCleanupHistory(records, authorization)._tag === "Valid"
-      ? [authorization]
-      : []
+    if (hasValidatedCandidateAuthorization(records, authorization.disposition)) return []
+    const canonicalRecords = recordsWithoutAuthorizationTag(records, "IntegratorCandidateCleanupAuthorized")
+    const provenance = validateIntegratorCandidateCleanupProvenance(canonicalRecords, authorization)
+    const history = validateIntegratorCandidateCleanupHistory(canonicalRecords, authorization)
+    if (provenance._tag !== "Valid" || history._tag !== "Valid") return []
+    return [authorization]
   })
 
 const uniqueByOperation = <Authorization extends { readonly operationId: OperationId }>(

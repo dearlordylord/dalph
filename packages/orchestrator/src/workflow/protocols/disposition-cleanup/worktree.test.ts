@@ -21,7 +21,7 @@ import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
@@ -353,6 +353,42 @@ it.effect("ordinary activation derives authorization from terminal facts before 
         ]
       })
     ),
+    Effect.provide(branchCleanupTestLayer({ observations: [] })),
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("does not let a forged same-disposition authorization suppress canonical recovery", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-forged-recovery-authorization"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const canonical = yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-forged-recovery"))
+    const forged = WorktreeCleanupAuthorization.make({ ...canonical, expectedHead: GitCommitSha.make("2".repeat(40)) })
+    yield* journal.append(
+      runId,
+      JournalRecordKey.make("issue-69-foreign-cleanup-key"),
+      WorktreeCleanupAuthorizedEvent.make({
+        authorization: forged,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const activated = yield* makeDispositionCleanupActivation(runId)
+    const derived = activated.responsibilities.worktree
+    expect(derived).toHaveLength(1)
+    expect(derived[0]?.operationId).not.toBe(forged.operationId)
+    expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "WorktreeCleanupAuthorized")).toHaveLength(
+      2
+    )
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [], mutations: [] })),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
     Effect.provide(memoryJournalTestLayer)
