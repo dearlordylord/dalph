@@ -90,7 +90,7 @@ interface FoldIndexes extends IntegrationHistoryIndexes {
   readonly abandonedExecutorAttempts: HashSet.HashSet<AttemptId>
   readonly integrationFinalityHistory: IntegrationFinalityHistoryIndexes
   readonly attemptChoiceSubjects: HashSet.HashSet<string>
-  latestControlDirectionOrdinal: number
+  readonly latestControlDirectionOrdinal: number
   readonly executorCommandOrdinals: HashMap.HashMap<AttemptId, number>
   readonly executorCommandCountsSinceSafeSuspension: HashMap.HashMap<string, number>
   readonly executorCommandProjectionOrdinals: HashMap.HashMap<string, number>
@@ -105,7 +105,7 @@ interface FoldIndexes extends IntegrationHistoryIndexes {
     OperationId,
     Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" | "ReadTaskWorktree" }>
   >
-  latestRunPolicyRevision: number | undefined
+  readonly latestRunPolicyRevision: number | undefined
   readonly seenEventKindsByOperation: HashMap.HashMap<OperationId, HashSet.HashSet<WorkflowJournalEvent["_tag"]>>
   readonly seenKeys: HashSet.HashSet<JournalRecordKey>
   readonly seenOperationIds: HashSet.HashSet<OperationId>
@@ -2226,7 +2226,10 @@ const validateOneUnfinishedAttemptPerTask = (
     TaskId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >()
-  for (const [attemptId, responsibility] of indexes.executorResponsibilitiesBegan) {
+  const responsibilities = [...indexes.executorResponsibilitiesBegan].sort(
+    ([, left], [, right]) => Number(left.position) - Number(right.position)
+  )
+  for (const [attemptId, responsibility] of responsibilities) {
     if (
       HashSet.has(indexes.terminalExecutorAttempts, attemptId) ||
       HashSet.has(indexes.abandonedExecutorAttempts, attemptId) ||
