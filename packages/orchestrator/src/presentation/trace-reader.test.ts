@@ -21,14 +21,36 @@ import { acceptedResultFixture } from "../../test/support/evidence.js"
 import { GitCommand } from "../authorities/git/command.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
+import { TargetLineageObservation } from "../authorities/git/target-lineage.js"
 import { TrackerMutation } from "../authorities/task-tracker/claim-mutation.js"
+import { WorkflowActor } from "../workflow/registry/actor.js"
 import { IntegrationTargetSelection } from "../workflow/protocols/integration-admission/protocol.js"
 import { IntegrationQuarantineDirectionControl } from "../workflow/protocols/integration-quarantine/control.js"
 import { CompletionClaimBoundary } from "../workflow/protocols/integration-finality/completion-claim.js"
-import { CompletionTaskBoundary } from "../workflow/protocols/integration-finality/events.js"
+import {
+  CompletionClaimReplacementAttemptIntendedEvent,
+  CompletionClaimReplacementIntendedEvent,
+  CompletionClaimRequestOrdinal,
+  CompletionClaimReplacedEvent,
+  CompletionTaskAttemptIntendedEvent,
+  CompletionTaskCandidateAncestryObservedEvent,
+  CompletionTaskCandidateAncestryReadIntendedEvent,
+  CompletionTaskRequestLookup,
+  CompletionTaskRequestLookupIntendedEvent,
+  CompletionTaskRequestLookupObservedEvent,
+  CompletionTaskRequestOrdinal,
+  CompletionTaskResponseLostEvent,
+  CompletionTaskClaim,
+  FocusedTaskCompletionFacts,
+  CompletionTaskIntendedEvent,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskAuthorizationReadOrdinal,
+  CompletionTaskConfirmationReadOrdinal,
+  completionTaskRequestFor,
+  CompletionTaskBoundary
+} from "../workflow/protocols/integration-finality/events.js"
 import { EvidenceStore } from "../workflow/protocols/evidence-store.js"
 import { Integrator, IntegratorGit } from "../workflow/protocols/integrator/protocol.js"
-import { TargetPromotionGit } from "../workflow/protocols/target-promotion/events.js"
 import { TrackerAdapterReadFailureReason } from "../authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../authorities/task-tracker/graph.js"
 import { type TrackerTarget } from "../authorities/task-tracker/target.js"
@@ -53,7 +75,11 @@ import { JournalReadSource } from "../workflow-journal/read-source.js"
 import { InRunJournal, JournalStore, RunLifecycleJournal, type JournalRecord } from "../workflow-journal/store.js"
 import { OperationId } from "../workflow/identity.js"
 import {
+  GitReadIntentRecordedEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquiredEvent,
+  TaskAttemptPlannedEvent,
+  TargetLineageObservedEvent,
   WorkflowRunBeganEvent,
   taskTrackerReadIntent
 } from "../workflow/registry/event.js"
@@ -69,9 +95,51 @@ import {
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import {
   makeTaskClaimAcquisitionOperation,
+  makeCompletionTaskFactsObservationOperation,
+  makeTargetLineageObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../workflow/registry/operation.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task-tracker-read/protocol.js"
+import {
+  completionTaskCandidateAncestryReadOperationIdFor,
+  completionTaskRequestLookupOperationIdFor
+} from "../workflow/protocols/integration-finality/completion-task-operation-identity.js"
+import { makeFocusedTaskCompletionFactsObserved } from "../workflow/task-tracker-facts/focused-completion-observation.js"
+import { integrationFinalityFixture } from "../workflow/protocols/integration-finality/fixtures.js"
+import {
+  IntegratorRunCorrelation,
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorRunResultRecordedEvent,
+  IntegratorResult,
+  IntegratorGitObservation,
+  IntegratorCandidateText,
+  IntegratorRunQualifiedCandidate,
+  IntegratorRunStartedEvent,
+  IntegratorSessionCorrelation,
+  IntegratorSessionFixedEvent,
+  IntegratorSuccessorSessionFixedEvent,
+  firstFullRerunSuccessorGeneration
+} from "../workflow/protocols/integrator/events.js"
+import { integratorSuccessorCorrelationFor } from "../workflow/protocols/integrator/session.js"
+import {
+  TargetPromotionAttemptIntendedEvent,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionGit,
+  TargetPromotionObservedSuccessEvent,
+  TargetPromotionSuccessObservation,
+  TargetPromotionIntendedEvent,
+  targetPromotionCorrelationFor
+} from "../workflow/protocols/target-promotion/events.js"
+import {
+  IntegrationProviderRunActivityAbsentEvent,
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineFailureDetail,
+  IntegrationQuarantinedEvent
+} from "../workflow/protocols/integration-quarantine/events.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import {
   TraceCausalPredecessorMissing,
@@ -225,6 +293,461 @@ const sqliteReaderLayer = (filename: JournalDatabaseLocator) => {
 
 const readerFromRecords = (records: ReadonlyArray<JournalRecord>) =>
   makeTraceReader({ read: () => Effect.succeed(records) })
+
+const historicalIntegrationBoundaryRecords = (): ReadonlyArray<JournalRecord> => {
+  const fixture = integrationFinalityFixture
+  const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(position),
+    runId: fixture.runId
+  })
+  const predecessor = IntegratorSessionCorrelation.make({
+    ...fixture.qualifiedCandidate.run.session,
+    queuedAt: JournalPosition.make(4),
+    startedAt: JournalPosition.make(5),
+    targetLineageObservedAt: JournalPosition.make(7)
+  })
+  const predecessorRun = IntegratorRunCorrelation.make({
+    ordinal: fixture.qualifiedCandidate.run.ordinal,
+    session: predecessor
+  })
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: fixture.integrationTarget,
+    operationId: OperationId.make("trace-reader-successor-lineage"),
+    plannedAttempt: fixture.plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const freshLineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: fixture.integrationTarget,
+    operationId: OperationId.make("trace-reader-successor-fresh-lineage"),
+    plannedAttempt: fixture.plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const absenceDetail = IntegrationQuarantineFailureDetail.make("provider activity was absent")
+  const quarantineBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+    detail: absenceDetail,
+    ownedActivityProvenAbsentAt: JournalPosition.make(10)
+  })
+  const successorLineageObservation = TargetLineageObservation.make({
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: fixture.plannedAttempt.baseSha,
+    targetHeadSha: predecessor.expectedTargetHead
+  })
+  const successor = integratorSuccessorCorrelationFor({
+    directionAppliedAt: JournalPosition.make(12),
+    predecessor,
+    quarantineAt: JournalPosition.make(11),
+    targetLineage: successorLineageObservation,
+    targetLineageObservedAt: JournalPosition.make(14)
+  })
+  return [
+    record(
+      1,
+      WorkflowRunBeganEvent.make({
+        initialControlPolicy: initialPolicy,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        target: fixture.target,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      2,
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: fixture.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      3,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+          correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
+          result: { _tag: "Accepted", acceptedResult: predecessor.acceptedResult }
+        }),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      4,
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult: predecessor.acceptedResult,
+        integrationTarget: predecessor.integrationTarget,
+        plannedAttempt: predecessor.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      5,
+      IntegrationStartedEvent.make({
+        acceptedResult: predecessor.acceptedResult,
+        integrationTarget: predecessor.integrationTarget,
+        plannedAttempt: predecessor.plannedAttempt,
+        responsibilityBeganAt: predecessor.queuedAt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      6,
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        operation: lineageOperation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      7,
+      TargetLineageObservedEvent.make({
+        observation: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: fixture.plannedAttempt.baseSha,
+          targetHeadSha: predecessor.expectedTargetHead
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: lineageOperation.operationId,
+        plannedAttempt: fixture.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(8, IntegratorSessionFixedEvent.make({ correlation: predecessor, version: workflowJournalEventVersion })),
+    record(9, IntegratorRunStartedEvent.make({ run: predecessorRun, version: workflowJournalEventVersion })),
+    record(
+      10,
+      IntegrationProviderRunActivityAbsentEvent.make({
+        correlation: predecessor,
+        detail: absenceDetail,
+        occurrenceClassification: "NonActionOccurrence",
+        run: predecessorRun,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      11,
+      IntegrationQuarantinedEvent.make({
+        basis: quarantineBasis,
+        correlation: predecessor,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      12,
+      IntegrationQuarantineDirectionAppliedEvent.make({
+        fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+          direction: "FullRerun",
+          quarantineAt: JournalPosition.make(11),
+          sessionId: predecessor.sessionId
+        }),
+        initiatedBy: WorkflowActor.cases.Operator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        requestId: IntegrationQuarantineDirectionRequestId.make({
+          nonce: "trace-reader-successor",
+          runId: fixture.runId
+        }),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      13,
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        operation: freshLineageOperation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      14,
+      TargetLineageObservedEvent.make({
+        observation: successorLineageObservation,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: freshLineageOperation.operationId,
+        plannedAttempt: fixture.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      15,
+      IntegratorSuccessorSessionFixedEvent.make({
+        direction: "FullRerun",
+        directionAppliedAt: JournalPosition.make(12),
+        predecessor,
+        quarantineAt: JournalPosition.make(11),
+        successor,
+        successorGeneration: firstFullRerunSuccessorGeneration,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+}
+
+const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
+  const fixture = integrationFinalityFixture
+  const records = historicalIntegrationBoundaryRecords().slice(0, 9)
+  const sessionRecord = Option.getOrThrow(
+    Option.fromUndefinedOr(records.find(({ event }) => event._tag === "IntegratorSessionFixed"))
+  )
+  const runRecord = Option.getOrThrow(
+    Option.fromUndefinedOr(records.find(({ event }) => event._tag === "IntegratorRunStarted"))
+  )
+  const sessionEvent = Option.getOrThrow(
+    sessionRecord.event._tag === "IntegratorSessionFixed" ? Option.some(sessionRecord.event) : Option.none()
+  )
+  const runEvent = Option.getOrThrow(
+    runRecord.event._tag === "IntegratorRunStarted" ? Option.some(runRecord.event) : Option.none()
+  )
+  const session = sessionEvent.correlation
+  const run = runEvent.run
+  const candidateText = IntegratorCandidateText.make("refs/heads/trace-reader-finality-candidate")
+  const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+    ...fixture.qualifiedCandidate,
+    candidateText,
+    qualifiedAt: JournalPosition.make(12),
+    run
+  })
+  const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
+  const candidateObservation = IntegratorGitObservation.cases.Commit.make({
+    candidateText,
+    commit: qualifiedCandidate.candidateCommit,
+    directParents: qualifiedCandidate.directParents
+  })
+  const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(position),
+    runId: fixture.runId
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: fixture.activeClaim.operationId,
+      owner: fixture.activeClaim.owner,
+      taskId: fixture.activeClaim.taskId,
+      token: fixture.activeClaim.token
+    },
+    predecessorOperationIds: []
+  })
+  const claim = CompletionTaskClaim.make({
+    originalClaim: fixture.claim.originalClaim,
+    plannedAttempt: fixture.claim.plannedAttempt,
+    promotionCorrelation
+  })
+  const request = completionTaskRequestFor(claim)
+  const ordinal = CompletionTaskRequestOrdinal.make(1)
+  const authorizationPurpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+    attemptOrdinal: ordinal,
+    authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
+  })
+  const authorizationOperation = makeCompletionTaskFactsObservationOperation(
+    request,
+    fixture.target,
+    authorizationPurpose
+  )
+  const authorizationFacts = FocusedTaskCompletionFacts.make({
+    ...fixture.focusedSuccessFactsEvent.observation.facts,
+    currentClaim: claim,
+    lifecycle: "Open",
+    operationId: authorizationOperation.operationId
+  })
+  const authorizationObservation = makeFocusedTaskCompletionFactsObserved(authorizationOperation, authorizationFacts)
+  const ancestryOperationId = completionTaskCandidateAncestryReadOperationIdFor(request, authorizationPurpose)
+  const confirmationPurpose = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+    attemptOrdinal: ordinal,
+    confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
+  })
+  const confirmationOperation = makeCompletionTaskFactsObservationOperation(
+    request,
+    fixture.target,
+    confirmationPurpose
+  )
+  const confirmationFacts = FocusedTaskCompletionFacts.make({
+    ...fixture.focusedSuccessFactsEvent.observation.facts,
+    currentClaim: claim,
+    lifecycle: "Open",
+    operationId: confirmationOperation.operationId
+  })
+  const confirmationObservation = makeFocusedTaskCompletionFactsObserved(confirmationOperation, confirmationFacts)
+  const lookupOperationId = completionTaskRequestLookupOperationIdFor(request, ordinal)
+  return [
+    ...records,
+    record(
+      10,
+      IntegratorRunResultRecordedEvent.make({
+        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: session }),
+        run,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      11,
+      IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion })
+    ),
+    record(
+      12,
+      IntegratorRunCandidateGitObservedEvent.make({
+        candidateText,
+        observation: candidateObservation,
+        run,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      13,
+      TargetPromotionIntendedEvent.make({ correlation: promotionCorrelation, version: workflowJournalEventVersion })
+    ),
+    record(
+      14,
+      TargetPromotionAttemptIntendedEvent.make({
+        attemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+        correlation: promotionCorrelation,
+        reason: { _tag: "Initial", observedHeadSha: session.expectedTargetHead },
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      15,
+      TargetPromotionObservedSuccessEvent.make({
+        basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
+        correlation: promotionCorrelation,
+        observation: TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
+          candidateAncestry: "Current",
+          targetHeadSha: qualifiedCandidate.candidateCommit
+        }),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      16,
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+    ),
+    record(17, TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion })),
+    record(
+      18,
+      TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion })
+    ),
+    record(
+      19,
+      CompletionClaimReplacementIntendedEvent.make({
+        claim,
+        operationId: OperationId.make("trace-reader-replacement"),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      20,
+      CompletionClaimReplacementAttemptIntendedEvent.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+        claim,
+        operationId: OperationId.make("trace-reader-replacement"),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      21,
+      CompletionClaimReplacedEvent.make({
+        claim,
+        operationId: OperationId.make("trace-reader-replacement"),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(22, taskTrackerReadIntent(authorizationOperation)),
+    record(23, taskTrackerFactsObservedEvent(authorizationOperation.operationId, authorizationObservation)),
+    record(
+      24,
+      CompletionTaskCandidateAncestryReadIntendedEvent.make({
+        attemptOrdinal: ordinal,
+        operationId: ancestryOperationId,
+        request,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      25,
+      CompletionTaskCandidateAncestryObservedEvent.make({
+        attemptOrdinal: ordinal,
+        observation: { _tag: "CandidateCurrent", currentHeadSha: qualifiedCandidate.candidateCommit },
+        operationId: ancestryOperationId,
+        request,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(26, CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })),
+    record(
+      27,
+      CompletionTaskAttemptIntendedEvent.make({
+        attemptOrdinal: ordinal,
+        focusedFactsOperationId: authorizationOperation.operationId,
+        gitReadOperationId: ancestryOperationId,
+        request,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      28,
+      CompletionTaskResponseLostEvent.make({ attemptOrdinal: ordinal, request, version: workflowJournalEventVersion })
+    ),
+    record(29, taskTrackerReadIntent(confirmationOperation)),
+    record(30, taskTrackerFactsObservedEvent(confirmationOperation.operationId, confirmationObservation)),
+    record(
+      31,
+      CompletionTaskRequestLookupIntendedEvent.make({
+        attemptOrdinal: ordinal,
+        operationId: lookupOperationId,
+        request,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      32,
+      CompletionTaskRequestLookupObservedEvent.make({
+        attemptOrdinal: ordinal,
+        lookup: CompletionTaskRequestLookup.cases.NotApplied.make({ request }),
+        operationId: lookupOperationId,
+        request,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+}
+
+it.effect("indexes provider quarantine and successor identities in the public trace", () =>
+  Effect.gen(function* () {
+    const records = historicalIntegrationBoundaryRecords()
+    const view = yield* readerFromRecords(records).readAt(
+      TraceCursor.make({ position: JournalPosition.make(15), runId: integrationFinalityFixture.runId })
+    )
+    const successor = view.items.find(({ occurrence }) => occurrence._tag === "IntegratorSuccessorSessionFixed")
+    const quarantine = view.items.find(({ occurrence }) => occurrence._tag === "IntegrationQuarantined")
+    expect(successor?.taskIds).toEqual([integrationFinalityFixture.taskId])
+    expect(quarantine?.taskIds).toEqual([integrationFinalityFixture.taskId])
+  })
+)
+
+it.effect("indexes completion lookup and candidate ancestry roles in the public trace", () =>
+  Effect.gen(function* () {
+    const records = historicalLookupRecords()
+    const view = yield* readerFromRecords(records).readAt(
+      TraceCursor.make({ position: JournalPosition.make(32), runId: integrationFinalityFixture.runId })
+    )
+    const lookup = view.items.find(({ occurrence }) => occurrence._tag === "IntegrationFocusedCompletionOccurred")
+    expect(lookup?.operationIds.length).toBeGreaterThan(0)
+    expect(lookup?.taskIds).toEqual([integrationFinalityFixture.taskId])
+    expect(view.facets.integration.facts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          _tag: "FocusedCompletion",
+          event: expect.objectContaining({ _tag: "CompletionTaskRequestLookupIntended" })
+        }),
+        expect.objectContaining({
+          _tag: "FocusedCompletion",
+          event: expect.objectContaining({ _tag: "CompletionTaskCandidateAncestryReadIntended" })
+        })
+      ])
+    )
+  })
+)
 
 it.effect("maps projection failures consistently through complete and cursor trace reads", () =>
   Effect.gen(function* () {

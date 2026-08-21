@@ -182,8 +182,7 @@ const traceObservationGapIssue = (
   gap: TraceObservationGap,
   items: ReadonlyArray<TraceHistoryItem>
 ): string | undefined => {
-  const action = historyItemAt(items, gap.action)
-  if (action === undefined) return "Observation gap action must identify one history occurrence"
+  const action = provenHistoryItemAt(items, gap.action)
   const occurrence = action.occurrence
   if (gap._tag === "ExecutorReport") return executorReportGapIssue(gap, occurrence)
   if (gap._tag === "IntegratorResult") return integratorResultGapIssue(gap, occurrence)
@@ -252,8 +251,7 @@ const traceRetainedResponsibilityIssue = (
   responsibility: TraceRetainedResponsibility,
   items: ReadonlyArray<TraceHistoryItem>
 ): string | undefined => {
-  const source = historyItemAt(items, responsibility.source)
-  if (source === undefined) return "Retained responsibility source must identify one history occurrence"
+  const source = provenHistoryItemAt(items, responsibility.source)
   const occurrence = source.occurrence
   if (responsibility._tag === "ExecutorWork") return retainedExecutorWorkIssue(responsibility, occurrence)
   if (responsibility._tag === "TaskClaim") return retainedTaskClaimIssue(responsibility, occurrence)
@@ -316,8 +314,7 @@ const tracePreservationDispositionIssue = (
   disposition: TracePreservationDisposition,
   items: ReadonlyArray<TraceHistoryItem>
 ): string | undefined => {
-  const source = historyItemAt(items, disposition.source)
-  if (source === undefined) return "Preservation disposition source must identify one history occurrence"
+  const source = provenHistoryItemAt(items, disposition.source)
   const occurrence = source.occurrence
   if (disposition._tag === "WorktreeLost") return worktreeLostDispositionIssue(disposition, occurrence)
   if (disposition._tag === "TaskAuthorityConflict")
@@ -747,9 +744,7 @@ const completionFactIssue = (fact: CompletionFact, source: WorkflowOccurrenceVal
 const dependantGraphObservationMatches = (
   fact: DependantReleaseFact,
   sourceItem: TraceHistoryItem
-): sourceItem is TraceHistoryItem & {
-  readonly occurrence: Extract<WorkflowOccurrenceValue, { readonly _tag: "TaskTrackerFactsObserved" }>
-} => {
+): sourceItem is TraceHistoryItem & { readonly occurrence: CompleteGraphObservationOccurrence } => {
   if (!sameTraceItemIdentity(sourceItem.identity, fact.source)) return false
   if (!sameTraceItemIdentity(sourceItem.identity, fact.graphSource)) return false
   const source = sourceItem.occurrence
@@ -757,11 +752,6 @@ const dependantGraphObservationMatches = (
 }
 
 type SettledOccurrence = Extract<WorkflowOccurrenceValue, { readonly _tag: "IntegrationFinalitySettledOccurred" }>
-
-const dependantReleaseGraphIdentityMatches = (
-  fact: DependantReleaseFact,
-  graph: TraceHistoryItem | undefined
-): boolean => graph !== undefined && sameTraceItemIdentity(graph.identity, fact.graphSource)
 
 const dependantReleaseSettlementIdentityMatches = (
   fact: DependantReleaseFact,
@@ -808,20 +798,17 @@ const dependantReleaseFactMatchesSettlement = (
   settlement: SettledOccurrence
 ): boolean =>
   sameJson(settlement.event, fact.settlement) &&
-  taskIdsOfObservation(source.evidence).includes(settlement.event.claim.plannedAttempt.taskId) &&
+  taskIdsOfCompleteGraphObservation(source.evidence).includes(settlement.event.claim.plannedAttempt.taskId) &&
   fact.settlementSource.position < fact.graphSource.position &&
   source.recordedAt === fact.graphSource.position
 
 const dependantReleaseSettlementMatches = (
   fact: DependantReleaseFact,
-  source: Extract<WorkflowOccurrenceValue, { readonly _tag: "TaskTrackerFactsObserved" }>,
-  graph: TraceHistoryItem | undefined,
+  source: CompleteGraphObservationOccurrence,
   settlement: TraceHistoryItem | undefined,
   items: ReadonlyArray<TraceHistoryItem>
 ): boolean => {
-  if (!dependantReleaseGraphIdentityMatches(fact, graph)) return false
   if (!dependantReleaseSettlementIdentityMatches(fact, settlement)) return false
-  if (!isCompleteGraphObservation(source)) return false
   if (!dependantReleaseSettlementProofMatches(source, settlement.occurrence)) return false
   const reconstructed = dependantReleaseGraphFor(source, settlement.occurrence, items)
   if (Option.isNone(reconstructed)) return false
@@ -838,11 +825,10 @@ const dependantReleaseFactIssue = (
   items: ReadonlyArray<TraceHistoryItem>
 ): string | undefined => {
   const settlement = historyItemAt(items, fact.settlementSource)
-  const graph = historyItemAt(items, fact.graphSource)
   if (!dependantGraphObservationMatches(fact, sourceItem)) {
     return "Dependant-release evidence must bind the exact later complete graph and earlier settlement"
   }
-  return dependantReleaseSettlementMatches(fact, sourceItem.occurrence, graph, settlement, items)
+  return dependantReleaseSettlementMatches(fact, sourceItem.occurrence, settlement, items)
     ? undefined
     : "Dependant-release evidence must bind the exact later complete graph and earlier settlement"
 }
@@ -898,8 +884,7 @@ const traceHistoricalFactIssue = (
   fact: TraceIntegrationFact,
   items: ReadonlyArray<TraceHistoryItem>
 ): string | undefined => {
-  const sourceItem = historyItemAt(items, fact.source)
-  if (sourceItem === undefined) return "Every integration fact source must resolve to a history item"
+  const sourceItem = provenHistoryItemAt(items, fact.source)
   return traceHistoricalFactIssueAfterSource(fact, sourceItem, items)
 }
 
@@ -965,6 +950,10 @@ const historyItemAt = (
     ({ identity: itemIdentity }) => itemIdentity.runId === identity.runId && itemIdentity.position === identity.position
   )
 
+/** The public facet invariant proves this lookup before any private facet validator runs. */
+const provenHistoryItemAt = (items: ReadonlyArray<TraceHistoryItem>, identity: TraceItemIdentity): TraceHistoryItem =>
+  Option.getOrThrow(Option.fromUndefinedOr(historyItemAt(items, identity)))
+
 const sameTraceItemIdentity = (left: TraceItemIdentity, right: TraceItemIdentity): boolean =>
   left.runId === right.runId && left.position === right.position
 
@@ -985,23 +974,12 @@ const samePromotion = targetPromotionCorrelationEquals
 
 const sameIntegrationTarget = Schema.toEquivalence(IntegrationTarget)
 
-const taskIdsOfObservation = (observation: TaskTrackerFactsObservation): ReadonlyArray<TaskId> => {
-  switch (observation._tag) {
-    case "CompleteTaskTrackerFacts":
-      return observation.factFamilies[0].taskIds
-    case "UnchangedTaskTrackerFactsReconfirmed":
-      return observation.factFamilies[1].subjectTaskIds
-    case "FocusedTaskWorkSpecificationFacts":
-      return [observation.factFamily.taskId]
-    case "FocusedTaskClaimFacts":
-    case "FocusedTaskClaimFactsUnreadable":
-      return [observation.coverage.taskId]
-    case "FocusedTaskCompletionFacts":
-      return [observation.facts.taskId]
-    case "TaskTrackerFactsReadFailed":
-      return []
-  }
-}
+const taskIdsOfCompleteGraphObservation = (
+  observation: CompleteGraphObservationOccurrence["evidence"]
+): ReadonlyArray<TaskId> =>
+  observation._tag === "CompleteTaskTrackerFacts"
+    ? observation.factFamilies[0].taskIds
+    : observation.factFamilies[1].subjectTaskIds
 
 const operationIdsOfHistoricalWorktreeOccurrence = (
   occurrence: WorkflowOccurrenceValue
@@ -1082,7 +1060,7 @@ const historicalFacetTaskIdsOfTrackerOperation = (
 const reduceDependantReleaseFact = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
   const occurrence = item.occurrence
   if (!isCompleteGraphObservation(occurrence)) return
-  const graphTaskIds = taskIdsOfObservation(occurrence.evidence)
+  const graphTaskIds = taskIdsOfCompleteGraphObservation(occurrence.evidence)
   const settlement = state.items.findLast(
     ({ occurrence: candidate }) =>
       candidate._tag === "IntegrationFinalitySettledOccurred" &&

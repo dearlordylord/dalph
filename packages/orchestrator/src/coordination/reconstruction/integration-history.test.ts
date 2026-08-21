@@ -25,10 +25,13 @@ import {
 } from "../../workflow/protocols/integration-admission/events.js"
 import {
   IntegrationProviderRunActivityAbsentEvent,
+  IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
-  IntegrationQuarantineFailureDetail
+  IntegrationQuarantineFailureDetail,
+  IntegrationQuarantineDirectionSubject,
+  IntegrationQuarantinedEvent
 } from "../../workflow/protocols/integration-quarantine/events.js"
 import {
   TargetPromotionIntendedEvent,
@@ -50,6 +53,10 @@ import {
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
+  integratorSessionFixedRecordKey,
+  integrationProviderRunActivityAbsentRecordKey,
+  integrationQuarantineDirectionAppliedRecordKey,
+  integrationQuarantinedRecordKey,
   integratorSuccessorSessionFixedRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -71,6 +78,7 @@ import {
   CompletionTaskClaim,
   FocusedTaskCompletionFacts
 } from "../../workflow/protocols/integration-finality/events.js"
+import { UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import {
   makeFocusedTaskCompletionFactsObserved,
   taskTrackerFactsObservedEvent
@@ -655,6 +663,174 @@ describe("retained integration history", () => {
     expect(validate(indexes(), [record(30, foreignResponsibility)]).identityIssues).toEqual([
       `integration work for attempt ${foreignSession.plannedAttempt.attemptId} binds run ${foreignRun}`
     ])
+  })
+
+  it("validates provider absence, quarantine, and the first operator direction as one history", () => {
+    const absenceDetail = IntegrationQuarantineFailureDetail.make("provider activity is absent")
+    const responsibility = {
+      acceptedResult: session.acceptedResult,
+      integrationTarget: session.integrationTarget,
+      plannedAttempt: session.plannedAttempt,
+      queuedAt: session.queuedAt,
+      startedAt: session.startedAt
+    }
+    const fixedSession = record(
+      10,
+      IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion }),
+      integratorSessionFixedRecordKey(responsibility)
+    )
+    const runStart = record(
+      11,
+      IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }),
+      integratorRunStartedRecordKey(run)
+    )
+    const absence = record(
+      12,
+      IntegrationProviderRunActivityAbsentEvent.make({
+        correlation: session,
+        detail: absenceDetail,
+        occurrenceClassification: "NonActionOccurrence",
+        run,
+        version: workflowJournalEventVersion
+      }),
+      integrationProviderRunActivityAbsentRecordKey(run)
+    )
+    const basis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+      detail: absenceDetail,
+      ownedActivityProvenAbsentAt: absence.position
+    })
+    const quarantine = record(
+      13,
+      IntegrationQuarantinedEvent.make({
+        basis,
+        correlation: session,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      integrationQuarantinedRecordKey(session.sessionId, basis)
+    )
+    const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+      direction: "FullRerun",
+      quarantineAt: quarantine.position,
+      sessionId: session.sessionId
+    })
+    const directionSubject = IntegrationQuarantineDirectionSubject.make({
+      quarantineAt: quarantine.position,
+      sessionId: session.sessionId
+    })
+    const direction = record(
+      14,
+      IntegrationQuarantineDirectionAppliedEvent.make({
+        fingerprint,
+        initiatedBy: WorkflowActor.cases.Operator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "history-direction", runId }),
+        version: workflowJournalEventVersion
+      }),
+      integrationQuarantineDirectionAppliedRecordKey(directionSubject)
+    )
+    const records = [
+      record(8, lineageIntent),
+      record(9, lineageObservation),
+      fixedSession,
+      runStart,
+      absence,
+      quarantine,
+      direction
+    ]
+    expect(validate(indexes(), records)).toEqual({ identityIssues: [], semanticIssues: [] })
+
+    const invalidAbsence = validate(indexes(), [record(1, absence.event)])
+    expect(invalidAbsence.semanticIssues).toEqual([
+      expect.stringContaining("provider-activity absence is not justified")
+    ])
+    const invalidQuarantine = validate(indexes(), [record(1, quarantine.event)])
+    expect(invalidQuarantine.semanticIssues).toEqual([
+      expect.stringContaining("Integration quarantine is not justified")
+    ])
+    const invalidDirection = validate(indexes(), [record(1, direction.event)])
+    expect(invalidDirection.semanticIssues).toEqual([
+      expect.stringContaining("Integration quarantine direction is not the exact first direction")
+    ])
+  })
+
+  it("validates responsibility acceptance, restart ordering, and integration start chronology", () => {
+    const attemptId = fixture.plannedAttempt.attemptId
+    const responsibilityAt = JournalPosition.make(4)
+    const acceptedAt = JournalPosition.make(2)
+    const executorResponsibilityAt = JournalPosition.make(3)
+    const responsibility = IntegrationResponsibilityBeganEvent.make({
+      acceptedResult: session.acceptedResult,
+      integrationTarget: fixture.integrationTarget,
+      plannedAttempt: fixture.plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+    const started = IntegrationStartedEvent.make({ ...integrationStarted, responsibilityBeganAt: responsibilityAt })
+    const emptyIndexes = indexes()
+    const seeded = {
+      ...emptyIndexes,
+      acceptedExecutorResults: HashMap.set(emptyIndexes.acceptedExecutorResults, attemptId, session.acceptedResult),
+      acceptedExecutorResultPositions: HashMap.set(emptyIndexes.acceptedExecutorResultPositions, attemptId, acceptedAt),
+      executorResponsibilitiesBegan: HashMap.set(emptyIndexes.executorResponsibilitiesBegan, attemptId, {
+        plannedAttempt: fixture.plannedAttempt,
+        position: executorResponsibilityAt
+      })
+    }
+    expect(validate(seeded, [record(responsibilityAt, responsibility), record(5, started)])).toEqual({
+      identityIssues: [],
+      semanticIssues: []
+    })
+
+    const restartBeforeAcceptance = validate(
+      {
+        ...seeded,
+        firstRestartChoiceAppliedAt: HashMap.set(seeded.firstRestartChoiceAppliedAt, attemptId, JournalPosition.make(1))
+      },
+      [record(responsibilityAt, responsibility)]
+    )
+    expect(restartBeforeAcceptance.semanticIssues).toEqual([
+      expect.stringContaining("Accepted result suppressed by prior Restart")
+    ])
+
+    const missingAcceptance = validate(indexes(), [record(responsibilityAt, responsibility)])
+    expect(missingAcceptance.semanticIssues).toEqual([
+      expect.stringContaining("has no prior matching accepted terminal result")
+    ])
+
+    const startAtResponsibility = validate(seeded, [
+      record(responsibilityAt, responsibility),
+      record(responsibilityAt, started)
+    ])
+    expect(startAtResponsibility.semanticIssues).toEqual([
+      expect.stringContaining("has no exact earlier responsibility")
+    ])
+
+    const targetPromotion = validate(indexes(), [
+      record(
+        1,
+        TargetPromotionIntendedEvent.make({
+          correlation: fixture.promotionCorrelation,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    expect(targetPromotion.semanticIssues).toHaveLength(1)
+  })
+
+  it("covers ordinary and unclaimed focused observations in run binding", () => {
+    expect(invalidIntegrationRunBinding(fixture.graphRecordEvent, runId)).toBeUndefined()
+    const purpose = fixture.focusedSuccessFactsEvent.observation.purpose
+    const operation = makeCompletionTaskFactsObservationOperation(fixture.completionRequest, fixture.target, purpose)
+    const observation = makeFocusedTaskCompletionFactsObserved(
+      operation,
+      FocusedTaskCompletionFacts.make({
+        ...fixture.focusedSuccessFactsEvent.observation.facts,
+        currentClaim: UnclaimedTask.make({ taskId: fixture.taskId }),
+        operationId: operation.operationId
+      })
+    )
+    const unclaimedEvent = taskTrackerFactsObservedEvent(operation.operationId, observation)
+    expect(invalidIntegrationRunBinding(unclaimedEvent, runId)).toBeUndefined()
   })
 
   it("retains target lineage facts as the Integrator session prerequisite", () => {

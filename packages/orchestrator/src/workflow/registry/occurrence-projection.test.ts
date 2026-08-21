@@ -36,6 +36,7 @@ import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journa
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
+  TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimReleasedEvent,
@@ -106,7 +107,7 @@ import { expect } from "vitest"
 import { invalidIntegrationOccurrenceRelationship, projectIntegrationOccurrence } from "./integration-occurrence.js"
 import { GitTargetLineageReadFailure } from "../../authorities/git/target-lineage.js"
 import { GitWorktreeReadFailure, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
-import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
+import { ActiveTaskClaim, TaskClaimRelease, UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import {
   IntegrationResponsibilityBeganEvent,
@@ -116,7 +117,13 @@ import {
   ControlDirectionAppliedEvent,
   ControlDirectionApplicationOrdinal
 } from "../protocols/control-direction-application/events.js"
-import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
+import {
+  AttemptChoiceAppliedEvent,
+  AttemptChoiceRequestId,
+  AttemptImplementationAbandonedEvent,
+  AttemptStoppageIntendedEvent,
+  StoppedAttemptClaimNoReleaseObservedEvent
+} from "../protocols/attempt-choice/events.js"
 import {
   AttemptRestartAuthorityReadFailedEvent,
   AttemptRestartTaskFactsReadFailure,
@@ -128,6 +135,50 @@ import {
   TaskClaimReacquisitionRequestId
 } from "../protocols/task-claim-reacquisition/events.js"
 import { integrationFinalityFixture } from "../protocols/integration-finality/fixtures.js"
+import {
+  CompletionClaimDeletionIntendedEvent,
+  CompletionClaimReplacementIntendedEvent,
+  CompletionTaskIntendedEvent,
+  IntegrationFinalitySettledEvent
+} from "../protocols/integration-finality/events.js"
+import {
+  IntegrationQuarantineBasis,
+  IntegrationQuarantineFailureDetail,
+  IntegrationProviderRunActivityAbsentEvent,
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantinedEvent
+} from "../protocols/integration-quarantine/events.js"
+import {
+  IntegratorCandidateText,
+  IntegratorGitObservation,
+  IntegratorResult,
+  IntegratorRunCorrelation,
+  IntegratorRunQualifiedCandidate,
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
+  IntegratorSessionCorrelation,
+  IntegratorSessionFixedEvent,
+  IntegratorSuccessorSessionFixedEvent,
+  IntegratorCandidateResourceLocator,
+  IntegratorSessionId,
+  IntegratorRunOrdinal,
+  firstFullRerunSuccessorGeneration
+} from "../protocols/integrator/events.js"
+import {
+  TargetPromotionAttemptIntendedEvent,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionAttemptLimit,
+  TargetPromotionIntendedEvent,
+  TargetPromotionNonConvergenceEvent,
+  TargetPromotionObservedSuccessEvent,
+  TargetPromotionSuccessObservation,
+  TargetPromotionStaleEvent,
+  targetPromotionCorrelationFor
+} from "../protocols/target-promotion/events.js"
 
 const runId = RunId.make("occurrence-run")
 const operation = makeTrackerGraphObservationOperation(
@@ -156,6 +207,131 @@ const record = (position: number, event: JournalRecord["event"]): JournalRecord 
   position: JournalPosition.make(position),
   runId
 })
+
+const historicalRunId = integrationFinalityFixture.runId
+
+const historicalRecord = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+  event,
+  key: JournalRecordKey.make(`historical-occurrence-record-${position}`),
+  position: JournalPosition.make(position),
+  runId: historicalRunId
+})
+
+/** One valid prefix reaches the candidate Git observation before any promotion. */
+const historicalIntegrationPrefix = () => {
+  const fixture = integrationFinalityFixture
+  const session = IntegratorSessionCorrelation.make({
+    ...fixture.qualifiedCandidate.run.session,
+    queuedAt: JournalPosition.make(5),
+    startedAt: JournalPosition.make(8),
+    targetLineageObservedAt: JournalPosition.make(7)
+  })
+  const integratorRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+  const candidateText = IntegratorCandidateText.make("refs/heads/historical-occurrence-candidate")
+  const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+    ...fixture.qualifiedCandidate,
+    candidateText,
+    qualifiedAt: JournalPosition.make(14),
+    run: integratorRun
+  })
+  const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: fixture.integrationTarget,
+    operationId: OperationId.make("historical-occurrence-lineage"),
+    plannedAttempt: fixture.plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const candidateObservation = IntegratorGitObservation.cases.Commit.make({
+    candidateText,
+    commit: qualifiedCandidate.candidateCommit,
+    directParents: qualifiedCandidate.directParents
+  })
+  return {
+    candidateText,
+    candidateObservation,
+    integratorRun,
+    lineageOperation,
+    promotionCorrelation,
+    qualifiedCandidate,
+    records: [
+      historicalRecord(
+        5,
+        IntegrationResponsibilityBeganEvent.make({
+          acceptedResult: session.acceptedResult,
+          integrationTarget: session.integrationTarget,
+          plannedAttempt: session.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      historicalRecord(
+        6,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          operation: lineageOperation,
+          version: workflowJournalEventVersion
+        })
+      ),
+      historicalRecord(
+        7,
+        TargetLineageObservedEvent.make({
+          observation: {
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: fixture.plannedAttempt.baseSha,
+            targetHeadSha: session.expectedTargetHead
+          },
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: lineageOperation.operationId,
+          plannedAttempt: fixture.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      historicalRecord(
+        8,
+        IntegrationStartedEvent.make({
+          acceptedResult: session.acceptedResult,
+          integrationTarget: session.integrationTarget,
+          plannedAttempt: session.plannedAttempt,
+          responsibilityBeganAt: session.queuedAt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      historicalRecord(
+        10,
+        IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })
+      ),
+      historicalRecord(
+        11,
+        IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion })
+      ),
+      historicalRecord(
+        12,
+        IntegratorRunResultRecordedEvent.make({
+          result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: session }),
+          run: integratorRun,
+          version: workflowJournalEventVersion
+        })
+      ),
+      historicalRecord(
+        13,
+        IntegratorRunCandidateGitReadIntendedEvent.make({
+          candidateText,
+          run: integratorRun,
+          version: workflowJournalEventVersion
+        })
+      ),
+      historicalRecord(
+        14,
+        IntegratorRunCandidateGitObservedEvent.make({
+          candidateText,
+          observation: candidateObservation,
+          run: integratorRun,
+          version: workflowJournalEventVersion
+        })
+      )
+    ] as const
+  }
+}
 
 it("projects both integration actions and rejects every inexact start relationship", () => {
   const began = projectIntegrationOccurrence(
@@ -1848,6 +2024,463 @@ it.effect("projects an atomic replacement occurrence while ignoring lifecycle ro
       version: projection.version
     }).pipe(Effect.flip)
     expect(missingChoice._tag).toBe("SchemaError")
+  })
+)
+
+it.effect("projects the historical #81 preservation variants and the #82 successor session", () =>
+  Effect.gen(function* () {
+    const fixture = integrationFinalityFixture
+    const requestId = AttemptChoiceRequestId.make({ nonce: "historical-preservation", runId: fixture.runId })
+    const subject = {
+      observedTaskRevision: TaskRevision.make("historical-observed-revision"),
+      plannedAttempt: fixture.plannedAttempt
+    }
+    const preservationRecords = [
+      historicalRecord(
+        1,
+        AttemptStoppageIntendedEvent.make({
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        })
+      ),
+      historicalRecord(
+        2,
+        AttemptImplementationAbandonedEvent.make({
+          expectedClaim: fixture.activeClaim,
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          proof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        })
+      ),
+      historicalRecord(
+        3,
+        StoppedAttemptClaimNoReleaseObservedEvent.make({
+          expectedClaim: fixture.activeClaim,
+          observation: UnclaimedTask.make({ taskId: fixture.plannedAttempt.taskId }),
+          observationOperationId: OperationId.make("historical-preservation-claim-read"),
+          occurrenceClassification: "NonActionOccurrence",
+          requestId,
+          subject,
+          version: workflowJournalEventVersion
+        })
+      )
+    ]
+    const preservation = yield* projectWorkflowOccurrences(preservationRecords)
+    expect(preservation.occurrences.map(({ _tag }) => _tag)).toEqual([
+      "AttemptStoppageIntended",
+      "AttemptImplementationAbandoned",
+      "StoppedAttemptClaimPreserved"
+    ])
+
+    const prefix = historicalIntegrationPrefix()
+    const predecessorSession = prefix.integratorRun.session
+    const quarantineBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+      detail: IntegrationQuarantineFailureDetail.make("historical successor provider absence"),
+      ownedActivityProvenAbsentAt: JournalPosition.make(11)
+    })
+    const quarantine = IntegrationQuarantinedEvent.make({
+      basis: quarantineBasis,
+      correlation: predecessorSession,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+    const directionFingerprint = IntegrationQuarantineDirectionFingerprint.make({
+      direction: "FullRerun",
+      quarantineAt: JournalPosition.make(11),
+      sessionId: predecessorSession.sessionId
+    })
+    const direction = IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: directionFingerprint,
+      initiatedBy: WorkflowActor.cases.Operator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "historical-successor", runId: fixture.runId }),
+      version: workflowJournalEventVersion
+    })
+    const successorSession = IntegratorSessionCorrelation.make({
+      ...predecessorSession,
+      candidateResource: IntegratorCandidateResourceLocator.make("historical-successor-resource"),
+      sessionId: IntegratorSessionId.make("historical-successor-session"),
+      targetLineageObservedAt: JournalPosition.make(14)
+    })
+    const successor = IntegratorSuccessorSessionFixedEvent.make({
+      direction: "FullRerun",
+      directionAppliedAt: JournalPosition.make(12),
+      predecessor: predecessorSession,
+      quarantineAt: JournalPosition.make(11),
+      successor: successorSession,
+      successorGeneration: firstFullRerunSuccessorGeneration,
+      version: workflowJournalEventVersion
+    })
+    const successorRun = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: successorSession
+    })
+    const successorProjection = yield* projectWorkflowOccurrences([
+      ...prefix.records,
+      historicalRecord(11, quarantine),
+      historicalRecord(12, direction),
+      historicalRecord(13, successor),
+      historicalRecord(15, IntegratorRunStartedEvent.make({ run: successorRun, version: workflowJournalEventVersion }))
+    ])
+    expect(successorProjection.occurrences).toContainEqual(
+      expect.objectContaining({
+        _tag: "IntegratorSuccessorSessionFixed",
+        predecessor: predecessorSession,
+        successor: successorSession
+      })
+    )
+    expect(successorProjection.occurrences.at(-1)).toMatchObject({ _tag: "IntegratorRunStarted", run: successorRun })
+  })
+)
+
+it.effect("projects every historical boundary and finality event family", () =>
+  Effect.gen(function* () {
+    const fixture = integrationFinalityFixture
+    const session = fixture.qualifiedCandidate.run.session
+    const run = fixture.qualifiedCandidate.run
+    const basis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+      detail: IntegrationQuarantineFailureDetail.make("historical boundary provider absence"),
+      ownedActivityProvenAbsentAt: JournalPosition.make(1)
+    })
+    const directionFingerprint = IntegrationQuarantineDirectionFingerprint.make({
+      direction: "Retry",
+      quarantineAt: JournalPosition.make(1),
+      sessionId: session.sessionId
+    })
+    const replacementOperationId = OperationId.make("historical-finality-replacement")
+    const deletionOperationId = OperationId.make("historical-finality-deletion")
+    const events: ReadonlyArray<JournalRecord["event"]> = [
+      IntegrationProviderRunActivityAbsentEvent.make({
+        correlation: session,
+        detail: IntegrationQuarantineFailureDetail.make("provider activity absent"),
+        occurrenceClassification: "NonActionOccurrence",
+        run,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationQuarantinedEvent.make({
+        basis,
+        correlation: session,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      IntegrationQuarantineDirectionAppliedEvent.make({
+        fingerprint: directionFingerprint,
+        initiatedBy: WorkflowActor.cases.Operator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "historical-boundary", runId: fixture.runId }),
+        version: workflowJournalEventVersion
+      }),
+      CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion }),
+      CompletionClaimReplacementIntendedEvent.make({
+        claim: fixture.claim,
+        operationId: replacementOperationId,
+        version: workflowJournalEventVersion
+      }),
+      CompletionClaimDeletionIntendedEvent.make({
+        claim: fixture.claim,
+        operationId: deletionOperationId,
+        successObservation: fixture.successObservation,
+        version: workflowJournalEventVersion
+      }),
+      IntegrationFinalitySettledEvent.make({
+        claim: fixture.claim,
+        deletionOperationId,
+        replacementOperationId,
+        successObservation: fixture.successObservation,
+        version: workflowJournalEventVersion
+      })
+    ]
+    const projection = yield* projectWorkflowOccurrences(
+      events.map((event, index) => historicalRecord(index + 1, event))
+    )
+    expect(projection.occurrences.map(({ _tag }) => _tag)).toEqual([
+      "IntegrationProviderRunActivityAbsent",
+      "IntegrationQuarantined",
+      "IntegrationQuarantineDirectionApplied",
+      "IntegrationFocusedCompletionOccurred",
+      "IntegrationClaimReplacementOccurred",
+      "IntegrationClaimDeletionOccurred",
+      "IntegrationFinalitySettledOccurred"
+    ])
+  })
+)
+
+it.effect("projects valid historical worktree and promotion terminal outcomes", () =>
+  Effect.gen(function* () {
+    const fixture = integrationFinalityFixture
+    const worktree = yield* projectWorkflowOccurrences([
+      historicalRecord(
+        1,
+        TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion })
+      )
+    ])
+    expect(worktree.occurrences.map(({ _tag }) => _tag)).toEqual(["TaskAttemptPlanned"])
+
+    const prefix = historicalIntegrationPrefix()
+    const intent = TargetPromotionIntendedEvent.make({
+      correlation: prefix.promotionCorrelation,
+      version: workflowJournalEventVersion
+    })
+    const attempt = TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+      correlation: prefix.promotionCorrelation,
+      reason: { _tag: "Initial", observedHeadSha: prefix.integratorRun.session.expectedTargetHead },
+      version: workflowJournalEventVersion
+    })
+    const success = TargetPromotionObservedSuccessEvent.make({
+      basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
+      correlation: prefix.promotionCorrelation,
+      observation: TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
+        candidateAncestry: "Current",
+        targetHeadSha: prefix.qualifiedCandidate.candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    })
+    const stale = TargetPromotionStaleEvent.make({
+      basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
+      correlation: prefix.promotionCorrelation,
+      observation: { _tag: "CompareAndSetRejected", observedHeadSha: prefix.integratorRun.session.expectedTargetHead },
+      version: workflowJournalEventVersion
+    })
+    const nonConvergenceAttempt = TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal: TargetPromotionAttemptOrdinal.make(3),
+      correlation: prefix.promotionCorrelation,
+      reason: {
+        _tag: "ReconciledExpectedHead",
+        observedHeadSha: prefix.integratorRun.session.expectedTargetHead,
+        previousAttemptOrdinal: TargetPromotionAttemptOrdinal.make(2)
+      },
+      version: workflowJournalEventVersion
+    })
+    const nonConvergence = TargetPromotionNonConvergenceEvent.make({
+      attemptLimit: TargetPromotionAttemptLimit.make(3),
+      attemptOrdinal: TargetPromotionAttemptOrdinal.make(3),
+      correlation: prefix.promotionCorrelation,
+      lastObservation: {
+        _tag: "ExpectedHeadStillObserved",
+        observedHeadSha: prefix.integratorRun.session.expectedTargetHead
+      },
+      version: workflowJournalEventVersion
+    })
+    const successProjection = yield* projectWorkflowOccurrences([
+      ...prefix.records,
+      historicalRecord(15, intent),
+      historicalRecord(16, attempt),
+      historicalRecord(17, success)
+    ])
+    expect(successProjection.occurrences.at(-1)?._tag).toBe("TargetPromotionSucceeded")
+
+    const staleProjection = yield* projectWorkflowOccurrences([
+      ...prefix.records,
+      historicalRecord(15, intent),
+      historicalRecord(16, attempt),
+      historicalRecord(17, stale)
+    ])
+    expect(staleProjection.occurrences.at(-1)?._tag).toBe("TargetPromotionStale")
+
+    const nonConvergenceProjection = yield* projectWorkflowOccurrences([
+      ...prefix.records,
+      historicalRecord(15, intent),
+      historicalRecord(16, nonConvergenceAttempt),
+      historicalRecord(17, nonConvergence)
+    ])
+    expect(nonConvergenceProjection.occurrences.at(-1)?._tag).toBe("TargetPromotionNonConvergent")
+  })
+)
+
+it.effect("keeps non-occurrence journal events out of the occurrence projection", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        WorkflowRunBeganEvent.make({
+          initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+          occurrenceClassification: "InitiatedAction",
+          target: operation.target,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        2,
+        WorkflowRunTerminatedEvent.make({
+          disposition: "Completed",
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    expect(projection.occurrences).toEqual([])
+  })
+)
+
+it.effect("rejects historical outcomes when exact earlier correlation or chronology is missing", () =>
+  Effect.gen(function* () {
+    const fixture = integrationFinalityFixture
+    const prefix = historicalIntegrationPrefix()
+    const session = prefix.integratorRun.session
+    const fixed = IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })
+    const runStart = IntegratorRunStartedEvent.make({ run: prefix.integratorRun, version: workflowJournalEventVersion })
+    const runResult = IntegratorRunResultRecordedEvent.make({
+      result: IntegratorResult.cases.PreparedCandidate.make({
+        candidateText: prefix.candidateText,
+        correlation: session
+      }),
+      run: prefix.integratorRun,
+      version: workflowJournalEventVersion
+    })
+    const candidateIntent = IntegratorRunCandidateGitReadIntendedEvent.make({
+      candidateText: prefix.candidateText,
+      run: prefix.integratorRun,
+      version: workflowJournalEventVersion
+    })
+    const candidateObserved = IntegratorRunCandidateGitObservedEvent.make({
+      candidateText: prefix.candidateText,
+      observation: prefix.candidateObservation,
+      run: prefix.integratorRun,
+      version: workflowJournalEventVersion
+    })
+    const promotionIntent = TargetPromotionIntendedEvent.make({
+      correlation: prefix.promotionCorrelation,
+      version: workflowJournalEventVersion
+    })
+    const attempt = TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+      correlation: prefix.promotionCorrelation,
+      reason: { _tag: "Initial", observedHeadSha: session.expectedTargetHead },
+      version: workflowJournalEventVersion
+    })
+    const successAfterAttempt = TargetPromotionObservedSuccessEvent.make({
+      basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
+      correlation: prefix.promotionCorrelation,
+      observation: TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
+        candidateAncestry: "Current",
+        targetHeadSha: prefix.qualifiedCandidate.candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    })
+    const staleAfterAttempt = TargetPromotionStaleEvent.make({
+      basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
+      correlation: prefix.promotionCorrelation,
+      observation: { _tag: "CompareAndSetRejected", observedHeadSha: GitCommitSha.make("8".repeat(40)) },
+      version: workflowJournalEventVersion
+    })
+    const nonConvergence = TargetPromotionNonConvergenceEvent.make({
+      attemptLimit: TargetPromotionAttemptLimit.make(3),
+      attemptOrdinal: TargetPromotionAttemptOrdinal.make(3),
+      correlation: prefix.promotionCorrelation,
+      lastObservation: { _tag: "ExpectedHeadStillObserved", observedHeadSha: session.expectedTargetHead },
+      version: workflowJournalEventVersion
+    })
+    const quarantineBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+      detail: IntegrationQuarantineFailureDetail.make("historical invalid successor absence"),
+      ownedActivityProvenAbsentAt: JournalPosition.make(11)
+    })
+    const quarantine = IntegrationQuarantinedEvent.make({
+      basis: quarantineBasis,
+      correlation: session,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+    const directionFingerprint = IntegrationQuarantineDirectionFingerprint.make({
+      direction: "FullRerun",
+      quarantineAt: JournalPosition.make(11),
+      sessionId: session.sessionId
+    })
+    const direction = IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: directionFingerprint,
+      initiatedBy: WorkflowActor.cases.Operator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({
+        nonce: "historical-invalid-successor",
+        runId: fixture.runId
+      }),
+      version: workflowJournalEventVersion
+    })
+    const successorSession = IntegratorSessionCorrelation.make({
+      ...session,
+      candidateResource: IntegratorCandidateResourceLocator.make("historical-invalid-successor-resource"),
+      sessionId: IntegratorSessionId.make("historical-invalid-successor-session"),
+      targetLineageObservedAt: JournalPosition.make(14)
+    })
+    const successor = IntegratorSuccessorSessionFixedEvent.make({
+      direction: "FullRerun",
+      directionAppliedAt: JournalPosition.make(12),
+      predecessor: session,
+      quarantineAt: JournalPosition.make(11),
+      successor: successorSession,
+      successorGeneration: firstFullRerunSuccessorGeneration,
+      version: workflowJournalEventVersion
+    })
+    const missingPredecessor = IntegratorSuccessorSessionFixedEvent.make({
+      ...successor,
+      predecessor: IntegratorSessionCorrelation.make({
+        ...session,
+        candidateResource: IntegratorCandidateResourceLocator.make("historical-missing-predecessor-resource"),
+        sessionId: IntegratorSessionId.make("historical-missing-predecessor-session")
+      })
+    })
+    const expectHistoricalFailure = (records: ReadonlyArray<JournalRecord>) =>
+      Effect.gen(function* () {
+        const failure = yield* projectWorkflowOccurrences(records).pipe(Effect.flip)
+        expect(failure._tag).toBe("HistoricalOutcomeWithoutInitiatingAction")
+      })
+    const historicalFailures = [
+      [historicalRecord(10, fixed)],
+      [...prefix.records, historicalRecord(15, fixed)],
+      [historicalRecord(11, runStart)],
+      [...prefix.records.slice(0, 5), historicalRecord(11, runStart), historicalRecord(12, runStart)],
+      [historicalRecord(12, runResult)],
+      [historicalRecord(13, candidateIntent)],
+      [...prefix.records, historicalRecord(15, candidateIntent)],
+      [...prefix.records.slice(0, -1), historicalRecord(15, promotionIntent)],
+      [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, promotionIntent)],
+      [historicalRecord(15, attempt)],
+      [
+        ...prefix.records,
+        historicalRecord(15, promotionIntent),
+        historicalRecord(16, attempt),
+        historicalRecord(17, attempt)
+      ],
+      [historicalRecord(15, successAfterAttempt)],
+      [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, successAfterAttempt)],
+      [historicalRecord(15, staleAfterAttempt)],
+      [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, staleAfterAttempt)],
+      [historicalRecord(15, nonConvergence)],
+      [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, nonConvergence)],
+      [...prefix.records, historicalRecord(15, missingPredecessor)],
+      [...prefix.records, historicalRecord(13, successor)]
+    ]
+    for (const records of historicalFailures) yield* expectHistoricalFailure(records)
+
+    const duplicateSuccessor = [
+      ...prefix.records,
+      historicalRecord(11, quarantine),
+      historicalRecord(12, direction),
+      historicalRecord(13, successor),
+      historicalRecord(14, successor)
+    ]
+    yield* expectHistoricalFailure(duplicateSuccessor)
+
+    const claimFailure = yield* projectWorkflowOccurrences([
+      historicalRecord(
+        1,
+        TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion })
+      )
+    ]).pipe(Effect.flip)
+    expect(claimFailure._tag).toBe("TrackerOutcomeWithoutReadIntent")
+
+    const candidateObservationFailure = yield* projectWorkflowOccurrences([
+      ...prefix.records.slice(0, 7),
+      historicalRecord(15, candidateObserved)
+    ]).pipe(Effect.flip)
+    expect(candidateObservationFailure._tag).toBe("GitOutcomeWithoutReadIntent")
   })
 )
 

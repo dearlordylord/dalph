@@ -5,6 +5,7 @@ import {
   GitCommitSha,
   IntegrationTarget,
   IntegrationTargetRef,
+  makeTaskWorkSpecification,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -19,6 +20,7 @@ import { expect as vitestExpect } from "vitest"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../authorities/task-tracker/graph.js"
 import { TargetLineageObservation } from "../authorities/git/target-lineage.js"
+import { PlannedWorktreeReady } from "../authorities/git/worktree.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { ActiveTaskClaim, UnclaimedTask } from "../authorities/task-tracker/claim-mutation.js"
@@ -30,6 +32,7 @@ import {
   TaskAttemptPlannedEvent,
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
+  TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent,
   TargetLineageObservedEvent,
@@ -62,6 +65,8 @@ import { AttemptWorktreeLost } from "../workflow/protocols/planned-attempt-workt
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeCompletionTaskFactsObservationOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
@@ -102,7 +107,18 @@ import {
   TargetPromotionObservedSuccessEvent
 } from "../workflow/protocols/target-promotion/events.js"
 import {
+  IntegrationProviderRunActivityAbsentEvent,
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
+  IntegrationQuarantineFailureDetail,
+  IntegrationQuarantinedEvent
+} from "../workflow/protocols/integration-quarantine/events.js"
+import {
   CompletionClaimRequestOrdinal,
+  CompletionClaimCleanupReadOrdinal,
+  CompletionClaimDeletionReadPurpose,
+  CompletionClaimDeletionReadObservedEvent,
   CompletionClaimDeletedEvent,
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletionIntendedEvent,
@@ -121,6 +137,7 @@ import {
   completionTaskRequestFor,
   CompletionTaskIntendedEvent,
   CompletionTaskRequestOrdinal,
+  completionClaimDeletionRequestFor,
   IntegrationFinalitySettledEvent,
   PostPromotionBlockerCandidateAncestryObservedEvent,
   PostPromotionBlockerCandidateAncestryReadIntendedEvent,
@@ -130,16 +147,27 @@ import {
 import { completionTaskCandidateAncestryReadOperationIdFor } from "../workflow/protocols/integration-finality/completion-task-operation-identity.js"
 import { makeFocusedTaskCompletionFactsObserved } from "../workflow/task-tracker-facts/focused-completion-observation.js"
 import {
+  makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskClaimFactsUnreadable,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   makeCompleteTaskTrackerFactsObserved,
+  TaskTrackerFactsReadFailed,
   taskTrackerFactsObservedEvent
 } from "../workflow/task-tracker-facts/observation.js"
 import {
   TraceAtCursor,
   TraceCursor,
+  TraceHistoricalFacets,
+  TraceItemIdentity,
+  TraceIntegrationFact,
+  TraceObservationGap,
+  TracePreservationDisposition,
   TraceJournalPrefixInvalid,
   TraceProjectionInvalid,
+  TraceRetainedResponsibility,
   makeTraceReader
 } from "./trace-reader.js"
+import { traceHistoricalFacetsIssue, type HistoricalFacetFactories } from "./trace-reader-historical-facets.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import { projectWorkflowOccurrences } from "../workflow/registry/occurrence-projection.js"
 
@@ -187,6 +215,14 @@ const independentAttempt = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make("historical-81-82-independent-revision"),
   worktree: WorktreeLocator.make("/worktrees/historical-81-82-independent")
 })
+
+const historicalFacetFactories = {
+  observationGap: TraceObservationGap.cases,
+  preservationDisposition: TracePreservationDisposition.cases,
+  retainedResponsibility: TraceRetainedResponsibility.cases,
+  integrationFact: TraceIntegrationFact.cases,
+  facets: TraceHistoricalFacets
+} satisfies HistoricalFacetFactories
 
 const recoveryRecords = (): ReadonlyArray<JournalRecord> => {
   const claimOperation = makeTaskClaimAcquisitionOperation({
@@ -586,6 +622,52 @@ const integrationRecords = (): ReadonlyArray<JournalRecord> => {
       }),
       fixture.runId
     )
+  ]
+}
+
+const quarantineRecords = (): ReadonlyArray<JournalRecord> => {
+  const prefix = integrationRecords().slice(0, 9)
+  const startedRecord = Option.getOrThrow(
+    Option.fromUndefinedOr(prefix.find(({ event }) => event._tag === "IntegratorRunStarted"))
+  )
+  const started = Option.getOrThrow(
+    startedRecord.event._tag === "IntegratorRunStarted" ? Option.some(startedRecord.event) : Option.none()
+  )
+  const detail = IntegrationQuarantineFailureDetail.make("provider-owned activity was proved absent")
+  const quarantineAt = JournalPosition.make(11)
+  const absence = IntegrationProviderRunActivityAbsentEvent.make({
+    correlation: started.run.session,
+    detail,
+    occurrenceClassification: "NonActionOccurrence",
+    run: started.run,
+    version: workflowJournalEventVersion
+  })
+  const quarantine = IntegrationQuarantinedEvent.make({
+    basis: { _tag: "ProviderRunFailure", detail, ownedActivityProvenAbsentAt: JournalPosition.make(10) },
+    correlation: started.run.session,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+    direction: "Retry",
+    quarantineAt,
+    sessionId: started.run.session.sessionId
+  })
+  const direction = IntegrationQuarantineDirectionAppliedEvent.make({
+    fingerprint,
+    initiatedBy: WorkflowActor.cases.Operator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    requestId: IntegrationQuarantineDirectionRequestId.make({
+      nonce: "historical-quarantine-direction",
+      runId: integrationFinalityFixture.runId
+    }),
+    version: workflowJournalEventVersion
+  })
+  return [
+    ...prefix,
+    record(10, absence, integrationFinalityFixture.runId),
+    record(11, quarantine, integrationFinalityFixture.runId),
+    record(12, direction, integrationFinalityFixture.runId)
   ]
 }
 
@@ -1514,6 +1596,234 @@ it.effect("#81/#82 reject invalid historical relationship tables and property mu
 )
 
 it.effect(
+  "#81/#82 fail closed for every public recovery and integration facet variant when its source identity lies",
+  () =>
+    Effect.gen(function* () {
+      const records = finalityRecords()
+      const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(36), runId: integrationFinalityFixture.runId })
+      )
+      const beginning = view.items[0]
+      const accepted = view.facets.integration.facts.find(({ _tag }) => _tag === "AcceptedResult")
+      const responsibility = view.facets.integration.facts.find(({ _tag }) => _tag === "Responsibility")
+      const sessionStarted = view.facets.integration.facts.find(({ _tag }) => _tag === "SessionStarted")
+      const session = view.facets.integration.facts.find(({ _tag }) => _tag === "Session")
+      const integratorResult = view.facets.integration.facts.find(({ _tag }) => _tag === "IntegratorResult")
+      const candidateObserved = view.facets.integration.facts.find(({ _tag }) => _tag === "CandidateObserved")
+      const candidateQualification = view.facets.integration.facts.find(({ _tag }) => _tag === "CandidateQualification")
+      const promotionRequested = view.facets.integration.facts.find(({ _tag }) => _tag === "PromotionRequested")
+      const promotionAttempt = view.facets.integration.facts.find(({ _tag }) => _tag === "PromotionAttempt")
+      const promotionSucceeded = view.facets.integration.facts.find(({ _tag }) => _tag === "PromotionSucceeded")
+      const completion = view.facets.integration.facts.find(({ _tag }) => _tag === "FocusedCompletion")
+      const claimReplacement = view.facets.integration.facts.find(({ _tag }) => _tag === "ClaimReplacement")
+      const claimDeletion = view.facets.integration.facts.find(({ _tag }) => _tag === "ClaimDeletion")
+      const settlement = view.facets.integration.facts.find(({ _tag }) => _tag === "Settlement")
+      const dependantRelease = view.facets.integration.facts.find(({ _tag }) => _tag === "DependantRelease")
+      const plannedAttemptItem = view.items.find(({ occurrence }) => occurrence._tag === "TaskAttemptPlanned")
+      if (
+        beginning === undefined ||
+        accepted?._tag !== "AcceptedResult" ||
+        responsibility?._tag !== "Responsibility" ||
+        sessionStarted?._tag !== "SessionStarted" ||
+        session?._tag !== "Session" ||
+        integratorResult?._tag !== "IntegratorResult" ||
+        candidateObserved?._tag !== "CandidateObserved" ||
+        candidateQualification?._tag !== "CandidateQualification" ||
+        promotionRequested?._tag !== "PromotionRequested" ||
+        promotionAttempt?._tag !== "PromotionAttempt" ||
+        promotionSucceeded?._tag !== "PromotionSucceeded" ||
+        completion?._tag !== "FocusedCompletion" ||
+        claimReplacement?._tag !== "ClaimReplacement" ||
+        claimDeletion?._tag !== "ClaimDeletion" ||
+        settlement?._tag !== "Settlement" ||
+        dependantRelease?._tag !== "DependantRelease" ||
+        plannedAttemptItem?.occurrence._tag !== "TaskAttemptPlanned"
+      ) {
+        return yield* Effect.die("facet-validation matrix fixture did not produce every required source")
+      }
+
+      const reject = (facets: typeof view.facets): void => {
+        vitestExpect(() => Schema.decodeUnknownSync(TraceAtCursor)({ ...view, facets })).toThrow()
+      }
+      const recoveryWith = (recovery: typeof view.facets.recovery): void => reject({ ...view.facets, recovery })
+      const factsWith = (facts: ReadonlyArray<TraceIntegrationFact>): void =>
+        reject({ ...view.facets, integration: { facts } })
+
+      const invalidGapAction = beginning.identity
+      const candidateGap = TraceObservationGap.cases.CandidateQualification.make({
+        action: invalidGapAction,
+        candidateText: candidateQualification.candidateText,
+        run: candidateQualification.run
+      })
+      const executorGap = TraceObservationGap.cases.ExecutorReport.make({
+        action: invalidGapAction,
+        attemptId: plannedAttemptItem.occurrence.plannedAttempt.attemptId
+      })
+      const integratorResultGap = TraceObservationGap.cases.IntegratorResult.make({
+        action: invalidGapAction,
+        run: integratorResult.run
+      })
+      const promotionGap = TraceObservationGap.cases.PromotionResult.make({
+        action: invalidGapAction,
+        attemptOrdinal: promotionAttempt.attemptOrdinal,
+        correlation: promotionAttempt.correlation
+      })
+      const trackerGapTaskIds = [plannedAttemptItem.occurrence.plannedAttempt.taskId]
+      const trackerGap = (required: "TaskClaimAcquired" | "TaskClaimReleased" | "TaskTrackerFactsObserved") =>
+        TraceObservationGap.cases.TrackerObservation.make({
+          action: invalidGapAction,
+          operationId: OperationId.make(`facet-validation-${required}`),
+          required,
+          taskIds: trackerGapTaskIds
+        })
+      const gitGap = (required: "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" | "TaskWorktreeReady") =>
+        TraceObservationGap.cases.GitObservation.make({
+          action: invalidGapAction,
+          operationId: OperationId.make(`facet-validation-${required}`),
+          required,
+          taskIds: trackerGapTaskIds
+        })
+      for (const gap of [
+        candidateGap,
+        executorGap,
+        integratorResultGap,
+        promotionGap,
+        trackerGap("TaskClaimAcquired"),
+        trackerGap("TaskClaimReleased"),
+        trackerGap("TaskTrackerFactsObserved"),
+        gitGap("PlannedAttemptWorktreeObserved"),
+        gitGap("TargetLineageObserved"),
+        gitGap("TaskWorktreeReady")
+      ]) {
+        recoveryWith({ ...view.facets.recovery, observationGaps: [gap] })
+      }
+
+      const invalidRetainedSource = beginning.identity
+      const retainedWorktree = TraceRetainedResponsibility.cases.Worktree.make({
+        plannedAttempt: plannedAttemptItem.occurrence.plannedAttempt,
+        proof: {
+          baseSha: plannedAttemptItem.occurrence.plannedAttempt.baseSha,
+          branch: plannedAttemptItem.occurrence.plannedAttempt.branch,
+          headSha: plannedAttemptItem.occurrence.plannedAttempt.baseSha,
+          worktree: plannedAttemptItem.occurrence.plannedAttempt.worktree
+        },
+        source: invalidRetainedSource
+      })
+      const retainedExecutorWork = TraceRetainedResponsibility.cases.ExecutorWork.make({
+        plannedAttempt: plannedAttemptItem.occurrence.plannedAttempt,
+        source: invalidRetainedSource
+      })
+      const retainedTaskAttempt = TraceRetainedResponsibility.cases.TaskAttempt.make({
+        plannedAttempt: plannedAttemptItem.occurrence.plannedAttempt,
+        source: invalidRetainedSource
+      })
+      const retainedClaim = TraceRetainedResponsibility.cases.TaskClaim.make({
+        claim: {
+          _tag: "ActiveTaskClaim",
+          operationId: OperationId.make("facet-validation-claim"),
+          owner: ClaimOwner.make("dalph:facet-validation"),
+          taskId: plannedAttemptItem.occurrence.plannedAttempt.taskId,
+          token: ClaimToken.make("facet-validation-token")
+        },
+        source: invalidRetainedSource
+      })
+      for (const retained of [retainedExecutorWork, retainedTaskAttempt, retainedClaim, retainedWorktree]) {
+        recoveryWith({ ...view.facets.recovery, retainedResponsibilities: [retained] })
+      }
+
+      const preservationView = yield* makeTraceReader({ read: () => Effect.succeed(preservationRecords()) }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(8), runId })
+      )
+      const nonConvergentView = yield* makeTraceReader({
+        read: () => Effect.succeed(nonConvergentPromotionRecords())
+      }).readAt(TraceCursor.make({ position: JournalPosition.make(17), runId: integrationFinalityFixture.runId }))
+      for (const disposition of preservationView.facets.recovery.preservationDispositions) {
+        recoveryWith({
+          ...view.facets.recovery,
+          preservationDispositions: [{ ...disposition, source: invalidRetainedSource }]
+        })
+      }
+      const nonConvergent = nonConvergentView.facets.recovery.preservationDispositions.find(
+        ({ _tag }) => _tag === "NonConvergentPromotion"
+      )
+      if (nonConvergent?._tag !== "NonConvergentPromotion") {
+        return yield* Effect.die("facet-validation matrix missing non-convergent disposition")
+      }
+      recoveryWith({
+        ...view.facets.recovery,
+        preservationDispositions: [{ ...nonConvergent, source: invalidRetainedSource }]
+      })
+      const quarantineBasis = {
+        _tag: "ProviderRunFailure" as const,
+        detail: IntegrationQuarantineFailureDetail.make("provider activity was absent"),
+        ownedActivityProvenAbsentAt: JournalPosition.make(8)
+      }
+      const quarantineDisposition = TracePreservationDisposition.cases.IntegrationQuarantined.make({
+        basis: quarantineBasis,
+        correlation: session.correlation,
+        source: invalidRetainedSource
+      })
+      recoveryWith({ ...view.facets.recovery, preservationDispositions: [quarantineDisposition] })
+
+      const mismatchedSource = (fact: TraceIntegrationFact): TraceIntegrationFact => ({
+        ...fact,
+        source: beginning.identity
+      })
+      const staleView = yield* makeTraceReader({ read: () => Effect.succeed(stalePromotionRecords()) }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(15), runId: integrationFinalityFixture.runId })
+      )
+      const stale = staleView.facets.integration.facts.find(({ _tag }) => _tag === "PromotionStale")
+      const nonConvergentFact = nonConvergentView.facets.integration.facts.find(
+        ({ _tag }) => _tag === "PromotionNonConvergent"
+      )
+      if (stale?._tag !== "PromotionStale" || nonConvergentFact?._tag !== "PromotionNonConvergent") {
+        return yield* Effect.die("facet-validation matrix missing terminal promotion facts")
+      }
+      const quarantineFact = TraceIntegrationFact.cases.Quarantine.make({
+        basis: quarantineBasis,
+        correlation: session.correlation,
+        source: beginning.identity
+      })
+      const providerActivityAbsentFact = TraceIntegrationFact.cases.ProviderActivityAbsent.make({
+        correlation: session.correlation,
+        run: integratorResult.run,
+        source: beginning.identity
+      })
+      const quarantineDirectionFact = TraceIntegrationFact.cases.QuarantineDirection.make({
+        fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+          direction: "Retry",
+          quarantineAt: JournalPosition.make(8),
+          sessionId: session.correlation.sessionId
+        }),
+        source: beginning.identity
+      })
+      const invalidFacts: ReadonlyArray<TraceIntegrationFact> = [
+        mismatchedSource(accepted),
+        mismatchedSource(responsibility),
+        mismatchedSource(sessionStarted),
+        mismatchedSource(session),
+        mismatchedSource(integratorResult),
+        mismatchedSource(candidateObserved),
+        mismatchedSource(candidateQualification),
+        mismatchedSource(promotionRequested),
+        mismatchedSource(promotionAttempt),
+        mismatchedSource(promotionSucceeded),
+        mismatchedSource(stale),
+        mismatchedSource(nonConvergentFact),
+        mismatchedSource(completion),
+        mismatchedSource(claimReplacement),
+        mismatchedSource(claimDeletion),
+        mismatchedSource(settlement),
+        mismatchedSource(dependantRelease),
+        quarantineFact,
+        providerActivityAbsentFact,
+        quarantineDirectionFact
+      ]
+      for (const fact of invalidFacts) factsWith([fact])
+    })
+)
+
+it.effect(
   "#82 rejects contradictory integration prefixes for missing boundaries and wrong run/session/candidate correlations",
   () =>
     Effect.gen(function* () {
@@ -1626,6 +1936,270 @@ it.effect("#82 rejects a bare settlement and duplicate nested finality operation
       )
       vitestExpect(failure).toBeInstanceOf(TraceProjectionInvalid)
     }
+  })
+)
+
+it.effect("#82 retains the cleanup claim reread's deletion, replacement, and focused-read identities", () =>
+  Effect.gen(function* () {
+    const records = finalityRecords()
+    const deletion = records.find(({ position }) => position === JournalPosition.make(31))
+    const replacement = records.find(({ position }) => position === JournalPosition.make(19))
+    if (
+      deletion?.event._tag !== "CompletionClaimDeletionIntended" ||
+      replacement?.event._tag !== "CompletionClaimReplacementIntended"
+    ) {
+      return yield* Effect.die("cleanup reread fixture is missing its exact claim operations")
+    }
+    const reread = CompletionClaimDeletionReadObservedEvent.make({
+      observation: deletion.event.claim,
+      purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+      }),
+      replacementOperationId: replacement.event.operationId,
+      request: completionClaimDeletionRequestFor(
+        deletion.event.claim,
+        deletion.event.successObservation,
+        deletion.event.operationId
+      ),
+      version: workflowJournalEventVersion
+    })
+    const prefix = [...records.slice(0, 31), record(32, reread, integrationFinalityFixture.runId)]
+    const view = yield* makeTraceReader({ read: () => Effect.succeed(prefix) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(32), runId: integrationFinalityFixture.runId })
+    )
+    const rereadItem = view.items.find(
+      ({ occurrence }) =>
+        occurrence._tag === "IntegrationClaimDeletionOccurred" &&
+        occurrence.event._tag === "CompletionClaimDeletionReadObserved"
+    )
+    if (
+      rereadItem?.occurrence._tag !== "IntegrationClaimDeletionOccurred" ||
+      rereadItem.occurrence.event._tag !== "CompletionClaimDeletionReadObserved"
+    ) {
+      return yield* Effect.die("cleanup reread occurrence was not projected")
+    }
+    vitestExpect(rereadItem.operationIds).toEqual(
+      vitestExpect.arrayContaining([
+        deletion.event.operationId,
+        deletion.event.successObservation.operationId,
+        replacement.event.operationId
+      ])
+    )
+    vitestExpect(view.facets.integration.facts).toContainEqual(
+      vitestExpect.objectContaining({ _tag: "ClaimDeletion", source: rereadItem.identity })
+    )
+  })
+)
+
+it.effect("#81 names the exact operation family for unfinished tracker and Git reads", () =>
+  Effect.gen(function* () {
+    const rejectGapMutation = (
+      view: TraceAtCursor,
+      gap: Extract<TraceObservationGap, { readonly _tag: "GitObservation" | "TrackerObservation" }>
+    ): void => {
+      const taskIds = gap._tag === "TrackerObservation" && gap.taskIds.length === 0 ? [plannedAttempt.taskId] : []
+      const operationId =
+        gap._tag === "GitObservation" ? OperationId.make("facet-gap-wrong-operation") : gap.operationId
+      const invalidGap = { ...gap, operationId, ...(gap._tag === "TrackerObservation" ? { taskIds } : {}) }
+      vitestExpect(() =>
+        Schema.decodeUnknownSync(TraceAtCursor)({
+          ...view,
+          facets: { ...view.facets, recovery: { ...view.facets.recovery, observationGaps: [invalidGap] } }
+        })
+      ).toThrow()
+    }
+
+    const trackerOperations = [
+      makeTrackerGraphObservationOperation(OperationId.make("facet-gap-graph"), trackerTarget),
+      makeTaskClaimObservationOperation(OperationId.make("facet-gap-claim"), trackerTarget, plannedAttempt.taskId),
+      makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("facet-gap-specification"),
+        trackerTarget,
+        plannedAttempt.taskId
+      )
+    ]
+    for (const operation of trackerOperations) {
+      const records = [record(1, runBeginning), record(2, taskTrackerReadIntent(operation))]
+      const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(2), runId })
+      )
+      const gap = view.facets.recovery.observationGaps[0]
+      if (gap?._tag !== "TrackerObservation") return yield* Effect.die("tracker gap fixture is incomplete")
+      rejectGapMutation(view, gap)
+    }
+
+    const worktreePrefix = preservationRecords().slice(0, 2)
+    const worktreeView = yield* makeTraceReader({ read: () => Effect.succeed(worktreePrefix) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(2), runId })
+    )
+    const worktreeGap = worktreeView.facets.recovery.observationGaps[0]
+    if (worktreeGap?._tag !== "GitObservation") return yield* Effect.die("worktree Git gap fixture is incomplete")
+    rejectGapMutation(worktreeView, worktreeGap)
+
+    const lineagePrefix = integrationRecords().slice(0, 6)
+    const lineageView = yield* makeTraceReader({ read: () => Effect.succeed(lineagePrefix) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(6), runId: integrationFinalityFixture.runId })
+    )
+    const lineageGap = lineageView.facets.recovery.observationGaps[0]
+    if (lineageGap?._tag !== "GitObservation") return yield* Effect.die("lineage Git gap fixture is incomplete")
+    rejectGapMutation(lineageView, lineageGap)
+  })
+)
+
+it.effect("#81 preserves focused tracker task identity for specification claim unreadable and failed outcomes", () =>
+  Effect.gen(function* () {
+    const taskId = plannedAttempt.taskId
+    const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("historical-focused-specification"),
+      trackerTarget,
+      taskId
+    )
+    const claimOperation = makeTaskClaimObservationOperation(
+      OperationId.make("historical-focused-claim"),
+      trackerTarget,
+      taskId
+    )
+    const graphOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("historical-focused-failed-graph"),
+      trackerTarget
+    )
+    const specification = makeTaskWorkSpecification({ body: "retain exact instructions", taskId, title: "Focused" })
+    const cases = [
+      [
+        specificationOperation,
+        makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification),
+        [taskId]
+      ],
+      [claimOperation, makeFocusedTaskClaimFactsObserved(claimOperation, UnclaimedTask.make({ taskId })), [taskId]],
+      [claimOperation, makeFocusedTaskClaimFactsUnreadable(claimOperation), [taskId]],
+      [
+        graphOperation,
+        TaskTrackerFactsReadFailed.make({
+          completeness: "Unreadable",
+          failure: { _tag: "FixtureReadError", detail: "focused graph read failed" },
+          operationId: graphOperation.operationId,
+          target: trackerTarget
+        }),
+        []
+      ]
+    ] as const
+    for (const [operation, observation, expectedTaskIds] of cases) {
+      const records = [
+        record(1, runBeginning),
+        record(2, taskTrackerReadIntent(operation)),
+        record(3, taskTrackerFactsObservedEvent(operation.operationId, observation))
+      ]
+      const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(3), runId })
+      )
+      const observed = view.items.find(({ occurrence }) => occurrence._tag === "TaskTrackerFactsObserved")
+      if (observed?.occurrence._tag !== "TaskTrackerFactsObserved") {
+        return yield* Effect.die("focused tracker outcome was not projected")
+      }
+      vitestExpect(observed.taskIds).toEqual(expectedTaskIds)
+    }
+  })
+)
+
+it.effect("#81/#82 validates matching facet sources across recovery, promotion, and integration prefixes", () =>
+  Effect.gen(function* () {
+    const prefixes = [
+      { records: recoveryRecords(), position: 4, runId },
+      { records: integrationRecords().slice(0, 6), position: 6, runId: integrationFinalityFixture.runId },
+      { records: integrationRecords().slice(0, 11), position: 11, runId: integrationFinalityFixture.runId },
+      { records: integrationRecords().slice(0, 14), position: 14, runId: integrationFinalityFixture.runId },
+      { records: finalityRecords().slice(0, 22), position: 22, runId: integrationFinalityFixture.runId }
+    ]
+    for (const prefix of prefixes) {
+      const view = yield* makeTraceReader({ read: () => Effect.succeed(prefix.records) }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(prefix.position), runId: prefix.runId })
+      )
+      vitestExpect(() => Schema.decodeUnknownSync(TraceAtCursor)(view)).not.toThrow()
+    }
+
+    const recovery = yield* makeTraceReader({ read: () => Effect.succeed(recoveryRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(4), runId })
+    )
+    const executorGap = recovery.facets.recovery.observationGaps.find(({ _tag }) => _tag === "ExecutorReport")
+    if (executorGap?._tag !== "ExecutorReport") return yield* Effect.die("executor gap fixture is incomplete")
+    const missingItemAction = TraceItemIdentity.make({ position: JournalPosition.make(1), runId })
+    vitestExpect(() =>
+      Schema.decodeUnknownSync(TraceAtCursor)({
+        ...recovery,
+        facets: {
+          ...recovery.facets,
+          recovery: { ...recovery.facets.recovery, observationGaps: [{ ...executorGap, action: missingItemAction }] }
+        }
+      })
+    ).toThrow()
+
+    const preservation = yield* makeTraceReader({ read: () => Effect.succeed(preservationRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(8), runId })
+    )
+    const disposition = preservation.facets.recovery.preservationDispositions[0]
+    if (disposition === undefined) return yield* Effect.die("preservation disposition fixture is incomplete")
+    vitestExpect(() =>
+      Schema.decodeUnknownSync(TraceAtCursor)({
+        ...preservation,
+        facets: {
+          ...preservation.facets,
+          recovery: {
+            ...preservation.facets.recovery,
+            preservationDispositions: [{ ...disposition, source: missingItemAction }]
+          }
+        }
+      })
+    ).toThrow()
+
+    const nonConvergent = yield* makeTraceReader({
+      read: () => Effect.succeed(nonConvergentPromotionRecords())
+    }).readAt(TraceCursor.make({ position: JournalPosition.make(17), runId: integrationFinalityFixture.runId }))
+    const retryFact = nonConvergent.facets.integration.facts.find(
+      (fact) => fact._tag === "PromotionAttempt" && fact.attemptOrdinal === TargetPromotionAttemptOrdinal.make(2)
+    )
+    if (retryFact?._tag !== "PromotionAttempt" || retryFact.reason._tag !== "ReconciledExpectedHead") {
+      return yield* Effect.die("retry promotion fact fixture is incomplete")
+    }
+    const wrongRetryReason = {
+      ...retryFact,
+      reason: { _tag: "Initial" as const, observedHeadSha: retryFact.reason.observedHeadSha }
+    }
+    vitestExpect(() =>
+      Schema.decodeUnknownSync(TraceAtCursor)({
+        ...nonConvergent,
+        facets: {
+          ...nonConvergent.facets,
+          integration: {
+            facts: nonConvergent.facets.integration.facts.map((fact) => (fact === retryFact ? wrongRetryReason : fact))
+          }
+        }
+      })
+    ).toThrow()
+
+    const integration = yield* makeTraceReader({ read: () => Effect.succeed(integrationRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(15), runId: integrationFinalityFixture.runId })
+    )
+    const accepted = integration.facets.integration.facts.find(({ _tag }) => _tag === "AcceptedResult")
+    if (accepted?._tag !== "AcceptedResult") return yield* Effect.die("accepted-result fact fixture is incomplete")
+    vitestExpect(() =>
+      Schema.decodeUnknownSync(TraceAtCursor)({
+        ...integration,
+        facets: {
+          ...integration.facets,
+          integration: {
+            facts: integration.facets.integration.facts.map((fact) =>
+              fact === accepted
+                ? {
+                    ...fact,
+                    plannedAttempt: { ...fact.plannedAttempt, taskRevision: TaskRevision.make("wrong-revision") }
+                  }
+                : fact
+            )
+          }
+        }
+      })
+    ).toThrow()
   })
 )
 
@@ -1993,5 +2567,398 @@ it.effect("#81/#82 materialize one prefix view at every cursor without future fa
         }
       })
     ).toThrow()
+  })
+)
+
+it.effect("#81/#82 validate every remaining public facet relation against its exact historical source", () =>
+  Effect.gen(function* () {
+    const issue = (
+      view: TraceAtCursor,
+      facets: TraceAtCursor["facets"],
+      items: TraceAtCursor["items"] = view.items
+    ): string | undefined =>
+      traceHistoricalFacetsIssue({ cursor: view.cursor, items, facets }, historicalFacetFactories)
+    const expectValid = (view: TraceAtCursor): void => vitestExpect(issue(view, view.facets)).toBeUndefined()
+    const expectInvalid = (view: TraceAtCursor, facets: TraceAtCursor["facets"], items = view.items): void =>
+      vitestExpect(issue(view, facets, items)).toBeDefined()
+
+    const recovery = yield* makeTraceReader({ read: () => Effect.succeed(recoveryRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(4), runId })
+    )
+    expectValid(recovery)
+    const executorGap = recovery.facets.recovery.observationGaps.find(({ _tag }) => _tag === "ExecutorReport")
+    const retainedExecutor = recovery.facets.recovery.retainedResponsibilities.find(
+      ({ _tag }) => _tag === "ExecutorWork"
+    )
+    const retainedAttempt = recovery.facets.recovery.retainedResponsibilities.find(({ _tag }) => _tag === "TaskAttempt")
+    if (
+      executorGap?._tag !== "ExecutorReport" ||
+      retainedExecutor?._tag !== "ExecutorWork" ||
+      retainedAttempt?._tag !== "TaskAttempt"
+    ) {
+      return yield* Effect.die("recovery relation fixture is incomplete")
+    }
+    expectInvalid(recovery, {
+      ...recovery.facets,
+      recovery: {
+        ...recovery.facets.recovery,
+        observationGaps: [{ ...executorGap, attemptId: AttemptId.make("wrong-executor-attempt") }]
+      }
+    })
+    expectInvalid(recovery, {
+      ...recovery.facets,
+      recovery: {
+        ...recovery.facets.recovery,
+        retainedResponsibilities: [{ ...retainedExecutor, plannedAttempt: independentAttempt }]
+      }
+    })
+    expectInvalid(recovery, {
+      ...recovery.facets,
+      recovery: {
+        ...recovery.facets.recovery,
+        retainedResponsibilities: [{ ...retainedAttempt, plannedAttempt: independentAttempt }]
+      }
+    })
+    const missingItem = TraceItemIdentity.make({ runId, position: JournalPosition.make(1) })
+    expectInvalid(recovery, {
+      ...recovery.facets,
+      recovery: { ...recovery.facets.recovery, observationGaps: [{ ...executorGap, action: missingItem }] }
+    })
+    expectInvalid(recovery, {
+      ...recovery.facets,
+      recovery: {
+        ...recovery.facets.recovery,
+        retainedResponsibilities: [{ ...retainedExecutor, source: missingItem }]
+      }
+    })
+    const absentItem = TraceItemIdentity.make({ runId, position: JournalPosition.make(99) })
+    vitestExpect(
+      issue(recovery, {
+        ...recovery.facets,
+        recovery: { ...recovery.facets.recovery, observationGaps: [{ ...executorGap, action: absentItem }] }
+      })
+    ).toBe("Every historical facet source must resolve to an item in the cursor prefix")
+
+    const lineage = yield* makeTraceReader({ read: () => Effect.succeed(integrationRecords().slice(0, 6)) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(6), runId: integrationFinalityFixture.runId })
+    )
+    expectValid(lineage)
+    const gitGap = lineage.facets.recovery.observationGaps.find(({ _tag }) => _tag === "GitObservation")
+    if (gitGap?._tag !== "GitObservation") return yield* Effect.die("lineage gap fixture is incomplete")
+    expectInvalid(lineage, {
+      ...lineage.facets,
+      recovery: {
+        ...lineage.facets.recovery,
+        observationGaps: [{ ...gitGap, required: "PlannedAttemptWorktreeObserved" }]
+      }
+    })
+
+    const integration = yield* makeTraceReader({ read: () => Effect.succeed(integrationRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(15), runId: integrationFinalityFixture.runId })
+    )
+    expectValid(integration)
+    const accepted = integration.facets.integration.facts.find(({ _tag }) => _tag === "AcceptedResult")
+    const qualification = integration.facets.integration.facts.find(({ _tag }) => _tag === "CandidateQualification")
+    if (accepted?._tag !== "AcceptedResult" || qualification?._tag !== "CandidateQualification") {
+      return yield* Effect.die("integration relation fixture is incomplete")
+    }
+    const withoutPreparedResult = integration.items.map(({ occurrence, ...item }) =>
+      occurrence._tag === "IntegratorRunResultRecorded" && occurrence.result._tag === "PreparedCandidate"
+        ? {
+            ...item,
+            occurrence: {
+              ...occurrence,
+              result: IntegratorResult.cases.NotPrepared.make({
+                correlation: occurrence.run.session,
+                detail: IntegratorNotPreparedDetail.make("prepared result was not retained")
+              })
+            }
+          }
+        : { ...item, occurrence }
+    )
+    expectInvalid(integration, integration.facets, withoutPreparedResult)
+    expectInvalid(integration, {
+      ...integration.facets,
+      integration: {
+        facts: integration.facets.integration.facts.map((fact) =>
+          fact === accepted
+            ? { ...fact, plannedAttempt: { ...fact.plannedAttempt, taskRevision: TaskRevision.make("wrong") } }
+            : fact
+        )
+      }
+    })
+
+    const candidateRecord = integrationRecords().find(({ position }) => position === JournalPosition.make(12))
+    if (candidateRecord?.event._tag !== "IntegratorRunCandidateGitObserved") {
+      return yield* Effect.die("candidate observation fixture is missing")
+    }
+    const candidateEvent = candidateRecord.event
+    const nonCommitRecords = integrationRecords().map((item) =>
+      item.position === JournalPosition.make(12)
+        ? withEvent(
+            item,
+            IntegratorRunCandidateGitObservedEvent.make({
+              candidateText: candidateEvent.candidateText,
+              observation: IntegratorGitObservation.cases.NonCommit.make({
+                candidateText: candidateEvent.candidateText,
+                objectType: "tree"
+              }),
+              run: candidateEvent.run,
+              version: workflowJournalEventVersion
+            })
+          )
+        : item
+    )
+    const nonCommitView = yield* makeTraceReader({ read: () => Effect.succeed(nonCommitRecords) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(12), runId: integrationFinalityFixture.runId })
+    )
+    expectValid(nonCommitView)
+    const wrongParentRecords = integrationRecords().map((item) =>
+      item.position === JournalPosition.make(12)
+        ? withEvent(
+            item,
+            IntegratorRunCandidateGitObservedEvent.make({
+              candidateText: candidateEvent.candidateText,
+              observation: IntegratorGitObservation.cases.Commit.make({
+                candidateText: candidateEvent.candidateText,
+                commit: integrationFinalityFixture.qualifiedCandidate.candidateCommit,
+                directParents: [
+                  GitCommitSha.make("9".repeat(40)),
+                  integrationFinalityFixture.qualifiedCandidate.directParents[1]
+                ]
+              }),
+              run: candidateEvent.run,
+              version: workflowJournalEventVersion
+            })
+          )
+        : item
+    )
+    const wrongParentView = yield* makeTraceReader({ read: () => Effect.succeed(wrongParentRecords) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(12), runId: integrationFinalityFixture.runId })
+    )
+    expectValid(wrongParentView)
+
+    const firstAttempt = integration.facets.integration.facts.find(
+      (fact) => fact._tag === "PromotionAttempt" && fact.attemptOrdinal === TargetPromotionAttemptOrdinal.make(1)
+    )
+    if (firstAttempt?._tag !== "PromotionAttempt") return yield* Effect.die("first promotion attempt is missing")
+    const firstAttemptItem = integration.items.find(
+      ({ identity }) => identity.position === firstAttempt.source.position
+    )
+    if (firstAttemptItem?.occurrence._tag !== "TargetPromotionAttemptRequested") {
+      return yield* Effect.die("first promotion attempt item is missing")
+    }
+    const firstAttemptOccurrence = firstAttemptItem.occurrence
+    const invalidInitialItems = integration.items.map((item) =>
+      item.identity.position === firstAttempt.source.position
+        ? {
+            ...item,
+            occurrence: {
+              ...item.occurrence,
+              reason: {
+                _tag: "ReconciledExpectedHead" as const,
+                observedHeadSha: firstAttemptOccurrence.reason.observedHeadSha,
+                previousAttemptOrdinal: TargetPromotionAttemptOrdinal.make(1)
+              }
+            }
+          }
+        : item
+    )
+    const invalidInitialFact = {
+      ...firstAttempt,
+      reason: {
+        _tag: "ReconciledExpectedHead" as const,
+        observedHeadSha: firstAttempt.reason.observedHeadSha,
+        previousAttemptOrdinal: TargetPromotionAttemptOrdinal.make(1)
+      }
+    }
+    expectInvalid(
+      integration,
+      {
+        ...integration.facets,
+        integration: {
+          facts: integration.facets.integration.facts.map((fact) => (fact === firstAttempt ? invalidInitialFact : fact))
+        }
+      },
+      invalidInitialItems
+    )
+
+    const retried = yield* makeTraceReader({ read: () => Effect.succeed(nonConvergentPromotionRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(17), runId: integrationFinalityFixture.runId })
+    )
+    const retriedFact = retried.facets.integration.facts.find(
+      (fact) => fact._tag === "PromotionAttempt" && fact.attemptOrdinal === TargetPromotionAttemptOrdinal.make(2)
+    )
+    if (retriedFact?._tag !== "PromotionAttempt") return yield* Effect.die("retried promotion attempt is missing")
+    expectValid(retried)
+    const retriedItem = retried.items.find(({ identity }) => identity.position === retriedFact.source.position)
+    if (retriedItem?.occurrence._tag !== "TargetPromotionAttemptRequested") {
+      return yield* Effect.die("retried promotion item is missing")
+    }
+    const retriedOccurrence = retriedItem.occurrence
+    const wrongRetryItems = retried.items.map((item) =>
+      item.identity.position === retriedItem.identity.position
+        ? {
+            ...item,
+            occurrence: {
+              ...item.occurrence,
+              reason: { _tag: "Initial" as const, observedHeadSha: retriedOccurrence.reason.observedHeadSha }
+            }
+          }
+        : item
+    )
+    const wrongRetryFact = {
+      ...retriedFact,
+      reason: { _tag: "Initial" as const, observedHeadSha: retriedFact.reason.observedHeadSha }
+    }
+    expectInvalid(
+      retried,
+      {
+        ...retried.facets,
+        integration: {
+          facts: retried.facets.integration.facts.map((fact) => (fact === retriedFact ? wrongRetryFact : fact))
+        }
+      },
+      wrongRetryItems
+    )
+
+    const finality = yield* makeTraceReader({ read: () => Effect.succeed(finalityRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(36), runId: integrationFinalityFixture.runId })
+    )
+    expectValid(finality)
+    const dependant = finality.facets.integration.facts.find(({ _tag }) => _tag === "DependantRelease")
+    if (dependant?._tag !== "DependantRelease") return yield* Effect.die("dependant release fixture is missing")
+    const wrongSettlementSource = finality.items.find(({ identity }) => identity.position === JournalPosition.make(2))
+    if (wrongSettlementSource === undefined) return yield* Effect.die("settlement mismatch item is missing")
+    expectInvalid(finality, {
+      ...finality.facets,
+      integration: {
+        facts: finality.facets.integration.facts.map((fact) =>
+          fact === dependant ? { ...fact, settlementSource: wrongSettlementSource.identity } : fact
+        )
+      }
+    })
+
+    const quarantine = yield* makeTraceReader({ read: () => Effect.succeed(quarantineRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(12), runId: integrationFinalityFixture.runId })
+    )
+    expectValid(quarantine)
+    const quarantineFact = quarantine.facets.integration.facts.find(({ _tag }) => _tag === "Quarantine")
+    const absentFact = quarantine.facets.integration.facts.find(({ _tag }) => _tag === "ProviderActivityAbsent")
+    const directionFact = quarantine.facets.integration.facts.find(({ _tag }) => _tag === "QuarantineDirection")
+    const quarantineDisposition = quarantine.facets.recovery.preservationDispositions.find(
+      ({ _tag }) => _tag === "IntegrationQuarantined"
+    )
+    if (
+      quarantineFact?._tag !== "Quarantine" ||
+      absentFact?._tag !== "ProviderActivityAbsent" ||
+      directionFact?._tag !== "QuarantineDirection" ||
+      quarantineDisposition?._tag !== "IntegrationQuarantined"
+    ) {
+      return yield* Effect.die("quarantine fixture did not produce all boundary facets")
+    }
+    const wrongDetail = IntegrationQuarantineFailureDetail.make("different provider absence detail")
+    expectInvalid(quarantine, {
+      ...quarantine.facets,
+      integration: {
+        facts: quarantine.facets.integration.facts.map((fact) =>
+          fact === quarantineFact ? { ...fact, basis: { ...fact.basis, detail: wrongDetail } } : fact
+        )
+      }
+    })
+    expectInvalid(quarantine, {
+      ...quarantine.facets,
+      integration: {
+        facts: quarantine.facets.integration.facts.map((fact) =>
+          fact === absentFact ? { ...fact, run: { ...fact.run, ordinal: IntegratorRunOrdinal.make(2) } } : fact
+        )
+      }
+    })
+    expectInvalid(quarantine, {
+      ...quarantine.facets,
+      integration: {
+        facts: quarantine.facets.integration.facts.map((fact) =>
+          fact === directionFact
+            ? {
+                ...fact,
+                fingerprint: {
+                  ...fact.fingerprint,
+                  direction: fact.fingerprint.direction === "Retry" ? "FullRerun" : "Retry"
+                }
+              }
+            : fact
+        )
+      }
+    })
+    expectInvalid(quarantine, {
+      ...quarantine.facets,
+      recovery: {
+        ...quarantine.facets.recovery,
+        preservationDispositions: [
+          {
+            ...quarantineDisposition,
+            correlation: { ...quarantineDisposition.correlation, sessionId: IntegratorSessionId.make("wrong-session") }
+          }
+        ]
+      }
+    })
+
+    const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make("historical-ready-operation"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const worktreeProof = PlannedWorktreeReady.make({
+      baseSha: plannedAttempt.baseSha,
+      branch: plannedAttempt.branch,
+      headSha: plannedAttempt.baseSha,
+      worktree: plannedAttempt.worktree
+    })
+    const worktree = yield* makeTraceReader({
+      read: () =>
+        Effect.succeed([
+          record(1, runBeginning),
+          record(
+            2,
+            TaskWorktreeReconciliationIntendedEvent.make({
+              operation: worktreeOperation,
+              version: workflowJournalEventVersion
+            })
+          ),
+          record(
+            3,
+            TaskWorktreeReadyEvent.make({
+              operationId: worktreeOperation.operationId,
+              proof: worktreeProof,
+              version: workflowJournalEventVersion
+            })
+          )
+        ])
+    }).readAt(TraceCursor.make({ position: JournalPosition.make(3), runId }))
+    expectValid(worktree)
+
+    const completeReader = makeTraceReader({ read: () => Effect.succeed(integrationRecords()) })
+    const completeCursor = TraceCursor.make({
+      position: JournalPosition.make(15),
+      runId: integrationFinalityFixture.runId
+    })
+    const firstComplete = yield* completeReader.readAt(completeCursor)
+    const secondComplete = yield* completeReader.readAt(completeCursor)
+    vitestExpect(secondComplete).toEqual(firstComplete)
+    const committed = integrationRecords()
+    const duplicate = committed[1]
+    if (duplicate === undefined) return yield* Effect.die("cache fixture is missing a duplicateable record")
+    const malformed = [
+      ...committed,
+      { ...duplicate, key: JournalRecordKey.make("historical-cache-duplicate"), position: JournalPosition.make(16) }
+    ]
+    const fallbackReader = makeTraceReader({ read: () => Effect.succeed(malformed) })
+    const fallbackCursor = TraceCursor.make({
+      position: JournalPosition.make(15),
+      runId: integrationFinalityFixture.runId
+    })
+    const firstFallback = yield* fallbackReader.readAt(fallbackCursor)
+    const secondFallback = yield* fallbackReader.readAt(fallbackCursor)
+    vitestExpect(secondFallback).toEqual(firstFallback)
   })
 )
