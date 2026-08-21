@@ -1039,7 +1039,16 @@ it("requires a prior matching applied Operator direction for a reacquisition int
   expect(reduceWorkflowJournalHistory(runId, authorized)._tag).toBe("ValidWorkflowJournalHistory")
   expect(reduceWorkflowJournalHistory(runId, crossRunDirection)).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
-    issues: [expect.objectContaining({ detail: expect.stringContaining("binds run another-run") })]
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        detail: expect.stringContaining(
+          "task-claim reacquisition request history-reacquisition-request binds run another-run"
+        )
+      }),
+      expect.objectContaining({
+        detail: expect.stringContaining("task-claim reacquisition direction binds run another-run")
+      })
+    ])
   })
   expect(reduceWorkflowJournalHistory(runId, unauthorized)).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
