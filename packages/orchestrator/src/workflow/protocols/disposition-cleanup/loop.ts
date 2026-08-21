@@ -360,7 +360,11 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
  * shared execution path used by controlled cassettes and production callers.
  */
 export const activateDispositionCleanup = Effect.fn("DispositionCleanup.activate")(function* (runId: RunId) {
-  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "candidate"])
+  // A settled worktree is the durable predecessor for branch cleanup.  Keeping
+  // this in the same ordinary activation pass means a resumed Run can derive
+  // the branch authorization without a caller supplying one; the loop will
+  // execute it only when the settlement is already present.
+  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "branch", "candidate"])
   const journal = yield* InRunJournal
   return selectCleanupResponsibilitySet(yield* journal.read(runId))
 })

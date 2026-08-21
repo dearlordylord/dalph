@@ -23,7 +23,6 @@ import {
   IntegratorCandidateCleanupOwner,
   IntegratorCandidateCleanupAuthorization as IntegratorCandidateCleanupAuthorizationSchema,
   PlannedAttemptCleanupDisposition,
-  plannedAttemptCleanupDispositionEquals,
   WorktreeCleanupEvidenceRevision,
   WorktreeCleanupOwner,
   WorktreeCleanupAuthorization as WorktreeCleanupAuthorizationSchema
@@ -49,19 +48,25 @@ import {
  * disposition or resource locator never enters this module.
  */
 
-const operationFor = (family: string, identity: string, position: JournalPosition): OperationId =>
-  OperationId.make(`disposition-cleanup:${family}:${identity}:${position}`)
+const operationFor = (family: string, identity: string): OperationId =>
+  // The subject identity is durable across a store reopen.  Journal positions
+  // are local append coordinates and therefore cannot participate in an
+  // authorization identity: SQLite recovery legitimately assigns new ones.
+  OperationId.make(`disposition-cleanup:${family}:${identity}`)
 
-const candidateDispositionEquals = Schema.toEquivalence(IntegratorCandidateCleanupDisposition)
+const candidateAuthorizationEquals = Schema.toEquivalence(IntegratorCandidateCleanupAuthorizationSchema)
+
+const worktreeAuthorizationEquals = Schema.toEquivalence(WorktreeCleanupAuthorizationSchema)
+const branchAuthorizationEquals = Schema.toEquivalence(BranchCleanupAuthorizationSchema)
 
 const hasValidatedWorktreeAuthorization = (
   records: ReadonlyArray<JournalRecord>,
-  disposition: WorktreeCleanupAuthorization["disposition"]
+  authorization: WorktreeCleanupAuthorization
 ): boolean =>
   records.some(
     (candidate) =>
       candidate.event._tag === "WorktreeCleanupAuthorized" &&
-      plannedAttemptCleanupDispositionEquals(candidate.event.authorization.disposition, disposition) &&
+      worktreeAuthorizationEquals(candidate.event.authorization, authorization) &&
       candidate.runId === candidate.event.authorization.disposition.plannedAttempt.runId &&
       candidate.key === worktreeCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
       validateWorktreeCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
@@ -70,12 +75,12 @@ const hasValidatedWorktreeAuthorization = (
 
 const hasValidatedBranchAuthorization = (
   records: ReadonlyArray<JournalRecord>,
-  disposition: BranchCleanupAuthorization["disposition"]
+  authorization: BranchCleanupAuthorization
 ): boolean =>
   records.some(
     (candidate) =>
       candidate.event._tag === "BranchCleanupAuthorized" &&
-      plannedAttemptCleanupDispositionEquals(candidate.event.authorization.disposition, disposition) &&
+      branchAuthorizationEquals(candidate.event.authorization, authorization) &&
       candidate.runId === candidate.event.authorization.disposition.plannedAttempt.runId &&
       candidate.key === branchCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
       validateWorktreeCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
@@ -84,12 +89,12 @@ const hasValidatedBranchAuthorization = (
 
 const hasValidatedCandidateAuthorization = (
   records: ReadonlyArray<JournalRecord>,
-  disposition: IntegratorCandidateCleanupAuthorization["disposition"]
+  authorization: IntegratorCandidateCleanupAuthorization
 ): boolean =>
   records.some(
     (candidate) =>
       candidate.event._tag === "IntegratorCandidateCleanupAuthorized" &&
-      candidateDispositionEquals(candidate.event.authorization.disposition, disposition) &&
+      candidateAuthorizationEquals(candidate.event.authorization, authorization) &&
       candidate.runId === candidate.event.authorization.disposition.predecessor.plannedAttempt.runId &&
       candidate.key === integratorCandidateCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
       validateIntegratorCandidateCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
@@ -172,7 +177,7 @@ const worktreeAuthorizationFromReplacement = (
     locator: observation.worktree,
     observationAt: observationRecord.position,
     observationOperationId: event.witness.oldWorktreeObservationOperationId,
-    operationId: operationFor("worktree", plannedAttempt.attemptId, record.position),
+    operationId: operationFor("worktree", plannedAttempt.attemptId),
     owner: WorktreeCleanupOwner.make({ attemptId: plannedAttempt.attemptId, branch: plannedAttempt.branch }),
     writerQuiescent: true
   })
@@ -214,7 +219,7 @@ const worktreeAuthorizationFromAbandonment = (
     locator: plannedAttempt.worktree,
     observationAt: observationRecord.position,
     observationOperationId: observationRecord.event.operationId,
-    operationId: operationFor("worktree", plannedAttempt.attemptId, record.position),
+    operationId: operationFor("worktree", plannedAttempt.attemptId),
     owner: WorktreeCleanupOwner.make({ attemptId: plannedAttempt.attemptId, branch: plannedAttempt.branch }),
     writerQuiescent: true
   })
@@ -230,7 +235,7 @@ const worktreeAuthorizationsFromTerminalFacts = (
         ? worktreeAuthorizationFromAbandonment(records, record)
         : undefined
     if (authorization === undefined) return []
-    if (hasValidatedWorktreeAuthorization(records, authorization.disposition)) return []
+    if (hasValidatedWorktreeAuthorization(records, authorization)) return []
     const canonicalRecords = recordsWithoutAuthorizationTag(records, "WorktreeCleanupAuthorized")
     const provenance = validateWorktreeCleanupProvenance(canonicalRecords, authorization)
     const history = validateWorktreeCleanupHistory(canonicalRecords, authorization)
@@ -244,7 +249,7 @@ const branchAuthorizationsFromSettledWorktrees = (
   records.flatMap((record) => {
     if (record.event._tag !== "WorktreeCleanupSettled") return []
     const worktree = record.event.authorization
-    const operationId = operationFor("branch", worktree.disposition.plannedAttempt.attemptId, record.position)
+    const operationId = operationFor("branch", worktree.disposition.plannedAttempt.attemptId)
     const authorization = decodeBranchAuthorization({
       causalPredecessors: [worktree.operationId, ...worktree.causalPredecessors],
       disposition: worktree.disposition,
@@ -260,7 +265,7 @@ const branchAuthorizationsFromSettledWorktrees = (
     })
     if (authorization === undefined) return []
     if (validateSettledWorktreeForBranch(records, authorization)._tag === "Invalid") return []
-    if (hasValidatedBranchAuthorization(records, authorization.disposition)) return []
+    if (hasValidatedBranchAuthorization(records, authorization)) return []
     const canonicalRecords = recordsWithoutAuthorizationTag(records, "BranchCleanupAuthorized")
     const provenance = validateWorktreeCleanupProvenance(canonicalRecords, authorization)
     const history = validateBranchCleanupHistory(canonicalRecords, authorization)
@@ -308,12 +313,12 @@ const candidateAuthorizationsFromSuccessors = (
       locator: event.predecessor.candidateResource,
       observationAt: lineage.observation.position,
       observationOperationId: lineage.observation.event.operationId,
-      operationId: operationFor("integrator-candidate", event.predecessor.sessionId, record.position),
+      operationId: operationFor("integrator-candidate", event.predecessor.sessionId),
       owner: IntegratorCandidateCleanupOwner.make({ sessionId: event.predecessor.sessionId }),
       writerQuiescent: true
     })
     if (authorization === undefined) return []
-    if (hasValidatedCandidateAuthorization(records, authorization.disposition)) return []
+    if (hasValidatedCandidateAuthorization(records, authorization)) return []
     const canonicalRecords = recordsWithoutAuthorizationTag(records, "IntegratorCandidateCleanupAuthorized")
     const provenance = validateIntegratorCandidateCleanupProvenance(canonicalRecords, authorization)
     const history = validateIntegratorCandidateCleanupHistory(canonicalRecords, authorization)

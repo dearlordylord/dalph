@@ -27,12 +27,14 @@ import {
 import {
   BranchCleanupMutationResult,
   BranchCleanupObservation,
+  BranchCleanupAuthorizedEvent,
   branchCleanupTestLayer,
   runBranchCleanup,
   TestBranchCleanupBoundary
 } from "./branch.js"
 import {
   worktreeCleanupAuthorizedRecordKey,
+  branchCleanupAuthorizedRecordKey,
   worktreeCleanupAbsenceConfirmedRecordKey,
   worktreeCleanupObservationIntendedRecordKey,
   worktreeCleanupObservedRecordKey,
@@ -44,6 +46,7 @@ import {
   replacementPredecessorsFor,
   replacementWorktreeObservationOperationIdFor
 } from "./provenance-fixtures.js"
+import { activateDispositionCleanup } from "./loop.js"
 
 const branchAuthorization = BranchCleanupAuthorization.make({
   causalPredecessors: [authorization.operationId, ...replacementPredecessorsFor(attempt)],
@@ -205,6 +208,31 @@ it.effect("deletes a planned branch only after the exact worktree settlement", (
     ),
     Effect.provide(memoryJournalTestLayer)
   )
+)
+
+it.effect("does not let a self-consistent forged branch authorization suppress canonical derivation", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const journal = yield* JournalStore
+    const forged = BranchCleanupAuthorization.make({
+      ...branchAuthorization,
+      causalPredecessors: [OperationId.make("issue-69-foreign-branch-causal")],
+      operationId: OperationId.make("issue-69-forged-branch-authorization")
+    })
+    yield* journal.append(
+      runId,
+      branchCleanupAuthorizedRecordKey(forged.operationId),
+      BranchCleanupAuthorizedEvent.make({
+        authorization: forged,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    const activation = yield* activateDispositionCleanup(runId)
+    expect(activation.branch.map(({ operationId }) => operationId)).toEqual(["disposition-cleanup:branch:issue-69-p1"])
+    expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "BranchCleanupAuthorized")).toHaveLength(2)
+  }).pipe(Effect.provide(branchCleanupTestLayer({ observations: [] })), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("does not settle a branch removal with a stale revision", () =>

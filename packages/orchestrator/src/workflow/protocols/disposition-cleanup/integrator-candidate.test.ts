@@ -17,6 +17,7 @@ import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/ide
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
+import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
@@ -31,6 +32,7 @@ import {
 import {
   IntegratorCandidateCleanupMutationResult,
   IntegratorCandidateCleanupObservation,
+  IntegratorCandidateCleanupAuthorizedEvent,
   integratorCandidateCleanupTestLayer,
   runIntegratorCandidateCleanup,
   TestIntegratorCandidateCleanupBoundary
@@ -38,6 +40,8 @@ import {
 import { attempt, baseSha, runId } from "./fixtures.js"
 import { appendCandidateProvenance } from "./provenance-fixtures.js"
 import { validateIntegratorCandidateCleanupProvenance } from "./provenance.js"
+import { activateDispositionCleanup } from "./loop.js"
+import { integratorCandidateCleanupAuthorizedRecordKey } from "../../../workflow-journal/record-key.js"
 
 const acceptedResult = AcceptedResult.make({
   commit: baseSha,
@@ -407,5 +411,39 @@ it.effect("rejects a provider-failure quarantine without its activity-absence wi
     const records = yield* journal.read(runId)
     const incomplete = records.filter(({ event }) => event._tag !== "IntegrationProviderRunActivityAbsent")
     expect(validateIntegratorCandidateCleanupProvenance(incomplete, authorization)._tag).toBe("Invalid")
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("does not let a self-consistent forged candidate authorization suppress canonical derivation", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-forged-candidate-authorization"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const forged = IntegratorCandidateCleanupAuthorization.make({
+      ...authorization,
+      causalPredecessors: [OperationId.make("issue-69-foreign-candidate-causal")],
+      operationId: OperationId.make("issue-69-forged-candidate-authorization")
+    })
+    yield* journal.append(
+      runId,
+      integratorCandidateCleanupAuthorizedRecordKey(forged.operationId),
+      IntegratorCandidateCleanupAuthorizedEvent.make({
+        authorization: forged,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+    const activation = yield* activateDispositionCleanup(runId)
+    expect(activation.candidate.map(({ operationId }) => operationId)).toEqual([
+      "disposition-cleanup:integrator-candidate:session:issue-69-p1"
+    ])
+    expect(
+      (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
+    ).toHaveLength(2)
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )

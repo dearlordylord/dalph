@@ -21,7 +21,7 @@ import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
@@ -209,11 +209,16 @@ it.effect("ordinary activation selects two exact worktree operations independent
       FixtureTarget.make("issue-69-ordinary-cleanup-activation"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    const firstAuthorization = yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-valid-cleanup-1"))
-    const secondAuthorization = yield* appendAbandonedProvenance(
-      secondAttempt,
-      OperationId.make("issue-69-valid-cleanup-2")
-    )
+    const firstRaw = yield* appendAbandonedProvenance(attempt)
+    const secondRaw = yield* appendAbandonedProvenance(secondAttempt)
+    const firstAuthorization = WorktreeCleanupAuthorization.make({
+      ...firstRaw,
+      operationId: OperationId.make(`disposition-cleanup:worktree:${attempt.attemptId}`)
+    })
+    const secondAuthorization = WorktreeCleanupAuthorization.make({
+      ...secondRaw,
+      operationId: OperationId.make(`disposition-cleanup:worktree:${secondAttempt.attemptId}`)
+    })
     const contradictoryAuthorization = WorktreeCleanupAuthorization.make({
       ...firstAuthorization,
       expectedHead: GitCommitSha.make("2".repeat(40)),
@@ -367,11 +372,15 @@ it.effect("does not let a forged same-disposition authorization suppress canonic
       FixtureTarget.make("issue-69-forged-recovery-authorization"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    const canonical = yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-forged-recovery"))
-    const forged = WorktreeCleanupAuthorization.make({ ...canonical, expectedHead: GitCommitSha.make("2".repeat(40)) })
+    const canonical = yield* appendAbandonedProvenance(attempt)
+    const forged = WorktreeCleanupAuthorization.make({
+      ...canonical,
+      causalPredecessors: [OperationId.make("issue-69-foreign-causal-witness")],
+      operationId: OperationId.make("issue-69-forged-recovery")
+    })
     yield* journal.append(
       runId,
-      JournalRecordKey.make("issue-69-foreign-cleanup-key"),
+      worktreeCleanupAuthorizedRecordKey(forged.operationId),
       WorktreeCleanupAuthorizedEvent.make({
         authorization: forged,
         initiatedBy: { _tag: "DalphCoordinator" },
@@ -484,8 +493,11 @@ it.effect("converges past the three-responsibility activation cap", () =>
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
     const attempts = [attempt, ...fairnessAttempts]
-    for (const [index, plannedAttempt] of attempts.entries()) {
-      yield* appendAbandonedProvenance(plannedAttempt, OperationId.make(`issue-69-fourth-cap-${index + 1}`))
+    for (const plannedAttempt of attempts) {
+      yield* appendAbandonedProvenance(
+        plannedAttempt,
+        OperationId.make(`disposition-cleanup:worktree:${plannedAttempt.attemptId}`)
+      )
     }
 
     const first = yield* runDispositionCleanupLoop(runId)
@@ -576,8 +588,11 @@ it.effect("skips an exhausted operation so later responsibilities receive their 
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
     const attempts = [attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")]
-    const authorizations = yield* Effect.forEach(attempts, (plannedAttempt, index) =>
-      appendAbandonedProvenance(plannedAttempt, OperationId.make(`issue-69-fair-${index + 1}`))
+    const authorizations = yield* Effect.forEach(attempts, (plannedAttempt) =>
+      appendAbandonedProvenance(
+        plannedAttempt,
+        OperationId.make(`disposition-cleanup:worktree:${plannedAttempt.attemptId}`)
+      )
     )
     const exhausted = authorizations[0]
     if (exhausted === undefined) return yield* Effect.die("fairness fixture did not create its first authorization")
