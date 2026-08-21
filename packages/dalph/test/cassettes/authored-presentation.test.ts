@@ -81,22 +81,32 @@ describe("authored delivery landmarks", () => {
     const unpause = Object.values(maintainedAuthoredCassetteCatalog)
       .flatMap(({ story }) => story)
       .find(
-        (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting.Type =>
+        (
+          item
+        ): item is typeof AuthoredCassetteStoryItem.cases.OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting.Type =>
           item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting"
       )
-    if (unpause === undefined) throw new Error("maintained catalog lacks an in-flight Unpause story item")
+    if (unpause === undefined) return expect.fail("maintained catalog lacks an in-flight Unpause story item")
 
-    const beforeAdmissionTask = AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.make(
-      { direction: "Pause", subject: { _tag: "Task", taskId: TaskId.make("A") } }
-    )
-    const beforeAdmissionRun = AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.make(
-      { direction: "Unpause", subject: { _tag: "Run" } }
-    )
-    const cancellationWhileInFlight = AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellationWhileExecutorRequestInFlight.make(
-      { duringAttemptId: AttemptId.make("attempt:A:0") }
-    )
+    const beforeAdmissionTask =
+      AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.make({
+        direction: "Pause",
+        subject: { _tag: "Task", taskId: TaskId.make("A") }
+      })
+    const beforeAdmissionRun =
+      AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.make({
+        direction: "Unpause",
+        subject: { _tag: "Run" }
+      })
+    const cancellationWhileInFlight =
+      AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellationWhileExecutorRequestInFlight.make({
+        duringAttemptId: AttemptId.make("attempt:A:0")
+      })
     const notPrepared = AuthoredCassetteStoryItem.cases.IntegratorResultReturned.make({
-      result: { _tag: "NotPrepared", detail: IntegratorNotPreparedDetail.make("the provider did not prepare a candidate") }
+      result: {
+        _tag: "NotPrepared",
+        detail: IntegratorNotPreparedDetail.make("the provider did not prepare a candidate")
+      }
     })
     const prepared = AuthoredCassetteStoryItem.cases.IntegratorResultReturned.make({
       result: { _tag: "PreparedCandidate", candidateText: IntegratorCandidateText.make("refs/heads/candidate") }

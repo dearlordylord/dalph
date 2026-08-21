@@ -334,6 +334,7 @@ type SettlementPlannedTransition = Extract<
       | "SuspendPlannedAttemptExecutorWork"
       | "ObservePlannedAttemptContinuationExecutor"
       | "RelinquishCancelledAttemptImplementation"
+      | "RecordCancelledAttemptClaimNoRelease"
   }
 >
 
@@ -527,6 +528,10 @@ const unreadableClaimReadOperationId = OperationId.make("run-cancellation-unread
 const unreadableClaimReadOperation = makeTaskClaimObservationOperation(unreadableClaimReadOperationId, target, taskId, [
   claimReadOperationId
 ])
+const absentClaimReadOperationId = OperationId.make("run-cancellation-absent-claim-read")
+const absentClaimReadOperation = makeTaskClaimObservationOperation(absentClaimReadOperationId, target, taskId, [
+  activeClaim.operationId
+])
 const claimReleaseOperationId = OperationId.make("run-cancellation-claim-release")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
@@ -623,6 +628,7 @@ const makeRunCancellationActions = {
   recordClaimReleaseIntent: {},
   observeAndReleaseClaim: {},
   observeForeignClaim: {},
+  observeAbsentClaim: {},
   markClaimUnreadable: {},
   recordIntegrationIntent: {},
   observePromotedIntegration: {},
@@ -781,7 +787,7 @@ const makeCancellationDriverImplementation = () => {
   let effectivePause: "RunPaused" | "RunUnpaused" | undefined
   let executorAuthority: "Running" | "SafelySuspended" | "Unreadable" = "Running"
   let claimHeld = true
-  let claimObservationMode: "Exact" | "Foreign" | "Unreadable" = "Exact"
+  let claimObservationMode: "Absent" | "Exact" | "Foreign" | "Unreadable" = "Exact"
   let promotionReadCount = 0
   let promotionReadMode: "Exact" | "Unreadable" = "Exact"
   let graphLifecycle: "Open" | "CompletedSuccessfully" | "Unreadable" = "Open"
@@ -893,7 +899,7 @@ const makeCancellationDriverImplementation = () => {
           ? TaskClaimObservationUnreadable.make({ attempts: 3, taskId })
           : claimObservationMode === "Foreign"
             ? AuthoritativeTaskClaimObserved.make({ observation: foreignClaim })
-            : claimHeld
+            : claimObservationMode !== "Absent" && claimHeld
               ? AuthoritativeTaskClaimObserved.make({ observation: activeClaim })
               : AuthoritativeTaskClaimObserved.make({ observation: UnclaimedTask.make({ taskId }) })
       ),
@@ -1122,6 +1128,15 @@ const makeCancellationDriverImplementation = () => {
             return yield* Effect.die(
               `production cancellation finality classified ${"disposition" in proof ? proof.disposition : proof.decision._tag}, expected ${command.disposition}`
             )
+          }
+          const proofObservation = records.find(
+            ({ event, position }) =>
+              position === proof.evidence.observedAt &&
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.operationId === proof.evidence.operationId
+          )
+          if (proofObservation === undefined) {
+            return yield* Effect.die("production cancellation finality lost its exact observation position")
           }
           yield* Deferred.succeed(command.completed, proof.disposition)
           return proof
@@ -1777,7 +1792,7 @@ const makeCancellationDriverImplementation = () => {
   const observeClaimThroughProduction = (
     operation: typeof claimReadOperation,
     operationId: OperationId,
-    mode: "Foreign" | "Unreadable"
+    mode: "Absent" | "Foreign" | "Unreadable"
   ) =>
     Effect.gen(function* () {
       const transition = RunnableFrontierTransition.ObserveCancelledAttemptClaim({ operation, plannedAttempt })
@@ -1792,7 +1807,7 @@ const makeCancellationDriverImplementation = () => {
       if (observed?.event._tag !== "TaskTrackerFactsObserved") {
         return yield* Effect.die("production claim observation did not persist its focused facts")
       }
-      const expectedTag = mode === "Foreign" ? "FocusedTaskClaimFacts" : "FocusedTaskClaimFactsUnreadable"
+      const expectedTag = mode === "Unreadable" ? "FocusedTaskClaimFactsUnreadable" : "FocusedTaskClaimFacts"
       if (observed.event.observation._tag !== expectedTag) {
         return yield* Effect.die(`production claim observation returned ${observed.event.observation._tag}`)
       }
@@ -2044,6 +2059,34 @@ const makeCancellationDriverImplementation = () => {
           return yield* Effect.die("production foreign claim observation lost the foreign owner")
         }
         durable = { ...durable, claim: "ForeignClaim", claimReleaseObservations: 1 }
+        process = { ...process, responsibilitiesSettled: true }
+      }),
+    observeAbsentClaim: () =>
+      Effect.gen(function* () {
+        const observation = yield* observeClaimThroughProduction(
+          absentClaimReadOperation,
+          absentClaimReadOperationId,
+          "Absent"
+        )
+        if (observation._tag !== "FocusedTaskClaimFacts" || observation.observation._tag !== "UnclaimedTask") {
+          return yield* Effect.die("production absent claim observation did not retain the unclaimed disposition")
+        }
+        const transition = RunnableFrontierTransition.RecordCancelledAttemptClaimNoRelease({
+          observationOperationId: absentClaimReadOperationId,
+          plannedAttempt
+        })
+        yield* executePlannedSettlement(transition)
+        if (
+          !records.some(
+            ({ event }) =>
+              event._tag === "CancelledAttemptClaimNoReleaseObserved" &&
+              event.observationOperationId === absentClaimReadOperationId &&
+              event.observation._tag === "UnclaimedTask"
+          )
+        ) {
+          return yield* Effect.die("production absent claim disposition was not persisted")
+        }
+        durable = { ...durable, claim: "NoClaim", claimReleaseObservations: 1 }
         process = { ...process, responsibilitiesSettled: true }
       }),
     markClaimUnreadable: () =>
@@ -2530,7 +2573,7 @@ it.effect("keeps an unreadable integration read pending through the production G
   )
 )
 
-it.effect("observes foreign and unreadable claims without a forbidden release or terminal append", () =>
+it.effect("observes absent, foreign, and unreadable claims without a forbidden release", () =>
   withCancellationDriver((driver) =>
     Effect.gen(function* () {
       yield* driver.init()
@@ -2556,6 +2599,18 @@ it.effect("observes foreign and unreadable claims without a forbidden release or
       expect(unreadable.eventTags.filter((tag) => tag === "TaskClaimReleaseIntended")).toHaveLength(0)
       expect(unreadable.eventTags.filter((tag) => tag === "TaskClaimReleased")).toHaveLength(0)
       expect(unreadable.eventTags.filter((tag) => tag === "WorkflowRunTerminated")).toHaveLength(0)
+
+      yield* driver.init()
+      yield* driver.selectRunningExecutor()
+      yield* driver.applyCancellation()
+      yield* driver.recordExecutorStopIntent()
+      yield* driver.reportExecutorSafe()
+      yield* driver.recordClaimReleaseIntent()
+      yield* driver.observeAbsentClaim()
+      const absent = yield* driver.getProductionEvidence()
+      expect(absent.eventTags.filter((tag) => tag === "CancelledAttemptClaimNoReleaseObserved")).toHaveLength(1)
+      expect(absent.eventTags.filter((tag) => tag === "TaskClaimReleaseIntended")).toHaveLength(0)
+      expect(absent.eventTags.filter((tag) => tag === "TaskClaimReleased")).toHaveLength(0)
     })
   )
 )

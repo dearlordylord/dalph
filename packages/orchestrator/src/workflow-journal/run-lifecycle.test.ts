@@ -273,6 +273,44 @@ it("rejects a different parentless task standing in for the selected Run root", 
   }
 })
 
+it("rejects terminal evidence naming the graph intent position instead of its observation", () => {
+  const operation = makeTrackerGraphObservationOperation(OperationId.make("wrong-position-finality"), target)
+  const snapshot = validSnapshot({
+    revision: "wrong-position-finality",
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const records = [
+    began,
+    {
+      event: taskTrackerReadIntent(operation),
+      key: intentRecordKey(operation.operationId),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, snapshot)
+      ),
+      key: outcomeRecordKey(operation.operationId),
+      position: JournalPosition.make(3),
+      runId
+    }
+  ]
+  const evidence = RunFinalityEvidence.make({
+    ...makeRunFinalityEvidenceForTest(operation, snapshot),
+    observedAt: JournalPosition.make(2)
+  })
+  const decision = decideWorkflowRunTermination(records, runId, "Completed", evidence)
+
+  expect(decision).toMatchObject({
+    _tag: "LifecycleTransitionRejected",
+    failure: { _tag: "WorkflowRunTerminationEvidenceInvalid", detail: expect.stringContaining("observation position") }
+  })
+})
+
 const makeRunFinalityEvidenceForTest = (
   operation: ReturnType<typeof makeTrackerGraphObservationOperation>,
   snapshot: ReturnType<typeof validSnapshot>

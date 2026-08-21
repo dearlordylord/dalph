@@ -39,6 +39,7 @@ module runActivation {
         runId: RunId,
         target: TrackerTarget,
         operationOrdinal: int,
+        observedAt: int,
         graphOutcome: GraphOutcome,
         contentIdentity: TrackerContentIdentity,
         rootTaskId: TaskId,
@@ -151,6 +152,7 @@ module runActivation {
     responsibilitiesSettled: bool,
     graphOutcome: GraphOutcome,
     contentIdentity: TrackerContentIdentity,
+    observationPosition: int,
     rootTaskId: TaskId,
     coveredTaskIds: Set[TaskId],
     evidence: GraphReadEvidence,
@@ -159,6 +161,9 @@ module runActivation {
   pure val NO_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
   pure val INITIAL_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
   pure val EXACT_ROOT_TASK_ID: TaskId = TaskA
+  // The decisive observation's Journal position is identity evidence in its
+  // own right. It deliberately differs from the tracker operation ordinal.
+  pure val EXACT_OBSERVATION_POSITION: int = 17
 
   // CompleteTargetClosure covers the target transitively; this set records
   // only additional task IDs explicitly named by the read operation. The
@@ -184,6 +189,7 @@ module runActivation {
     runId: RunId,
     target: TrackerTarget,
     operationOrdinal: int,
+    observedAt: int,
     graphOutcome: GraphOutcome,
     contentIdentity: TrackerContentIdentity,
     rootTaskId: TaskId,
@@ -192,6 +198,7 @@ module runActivation {
     runId: runId,
     target: target,
     operationOrdinal: operationOrdinal,
+    observedAt: observedAt,
     graphOutcome: graphOutcome,
     contentIdentity: contentIdentity,
     rootTaskId: rootTaskId,
@@ -204,6 +211,7 @@ module runActivation {
     runId: RunId,
     target: TrackerTarget,
     operationOrdinal: int,
+    observedAt: int,
     graphOutcome: GraphOutcome,
     contentIdentity: TrackerContentIdentity,
     rootTaskId: TaskId,
@@ -213,6 +221,7 @@ module runActivation {
         facts.runId == runId,
         facts.target == target,
         facts.operationOrdinal == operationOrdinal,
+        facts.observedAt == observedAt,
         facts.graphOutcome == graphOutcome,
         facts.contentIdentity == contentIdentity,
         facts.rootTaskId == rootTaskId,
@@ -632,6 +641,7 @@ module runActivation {
             facts.runId == state.requestedRunId,
             facts.target == state.requestedTarget,
             facts.operationOrdinal == state.trace.trackerCalls,
+            facts.observedAt == state.trackerFinality.observationPosition,
             facts.graphOutcome == state.trackerFinality.graphOutcome,
             facts.contentIdentity == trackerContentIdentityFor(state.trackerFinality.graphOutcome),
             facts.rootTaskId == EXACT_ROOT_TASK_ID,
@@ -746,6 +756,7 @@ module runActivation {
     | ExactGraphReadEvidence(facts) => and {
         facts.graphOutcome == state.trackerFinality.graphOutcome,
         facts.contentIdentity == trackerContentIdentityFor(state.trackerFinality.graphOutcome),
+        facts.observedAt == state.trackerFinality.observationPosition,
         facts.rootTaskId == EXACT_ROOT_TASK_ID,
         facts.coveredTaskIds == state.trackerFinality.coveredTaskIds,
       }
@@ -774,6 +785,7 @@ module runActivation {
         responsibilitiesSettled: true,
         graphOutcome: GraphAllSucceeded,
         contentIdentity: ContentRevisionAllSucceeded,
+        observationPosition: EXACT_OBSERVATION_POSITION,
         rootTaskId: EXACT_ROOT_TASK_ID,
         coveredTaskIds: trackerCoverageFor(GraphAllSucceeded),
         evidence: INITIAL_GRAPH_EVIDENCE,
@@ -1283,6 +1295,7 @@ module runActivation {
           state.requestedRunId,
           state.requestedTarget,
           state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition,
           state.trackerFinality.graphOutcome,
           state.trackerFinality.contentIdentity,
           state.trackerFinality.rootTaskId,
@@ -1300,6 +1313,7 @@ module runActivation {
             state.requestedRunId,
             state.requestedTarget,
             state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition,
             state.trackerFinality.graphOutcome,
             state.trackerFinality.contentIdentity,
             state.trackerFinality.rootTaskId,
@@ -1331,6 +1345,7 @@ module runActivation {
       state.requestedRunId,
       state.requestedTarget,
       state.trace.trackerCalls,
+      state.trackerFinality.observationPosition,
       state.trackerFinality.graphOutcome,
       trackerContentIdentityFor(state.trackerFinality.graphOutcome),
       EXACT_ROOT_TASK_ID,

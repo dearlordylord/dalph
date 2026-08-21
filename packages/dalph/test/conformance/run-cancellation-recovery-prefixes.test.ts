@@ -262,6 +262,8 @@ const assertProductionRecovery = (
   if (terminal === undefined || terminal.event._tag !== "WorkflowRunTerminated") return
   expect(terminal.event.disposition).toBe("Cancelled")
   expect(terminal.event.evidence.operationId).toBe(freshOperationId)
+  expect(terminal.event.evidence.observedAt).toBe(observation.position)
+  expect(terminal.position).toBeGreaterThan(terminal.event.evidence.observedAt)
   expect(terminal.event.evidence.rootTaskId).toBe(graph.rootTaskId)
   expect(terminal.event.evidence.contentIdentity).toBe(graph.revision)
   expect(terminal.event.evidence.coverage.target).toEqual(expectedTarget.event.target)

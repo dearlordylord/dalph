@@ -306,6 +306,57 @@ module runActivationNegativeTest {
     },
   }
 
+  // Forbidden: the decisive tracker observation must be cited at its exact
+  // Journal position. Matching operation, revision, root, and coverage cannot
+  // substitute for that position identity.
+  action terminateWithMismatchedObservationPosition: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition + 1,
+          GraphBlocked,
+          ContentRevisionBlocked,
+          EXACT_ROOT_TASK_ID,
+          trackerCoverageFor(GraphBlocked),
+        ),
+      },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition + 1,
+            GraphBlocked,
+            ContentRevisionBlocked,
+            EXACT_ROOT_TASK_ID,
+            trackerCoverageFor(GraphBlocked),
+          ),
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
   // Forbidden: the terminal proof must bind the exact root task returned by
   // the tracker; a Boolean root-present flag cannot substitute for identity.
   action terminateWithWrongRootGraphEvidence: bool = all {
@@ -321,6 +372,7 @@ module runActivationNegativeTest {
           state.requestedRunId,
           state.requestedTarget,
           state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition,
           GraphBlocked,
           ContentRevisionBlocked,
           TaskB,
@@ -339,6 +391,7 @@ module runActivationNegativeTest {
             state.requestedRunId,
             state.requestedTarget,
             state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition,
             GraphBlocked,
             ContentRevisionBlocked,
             TaskB,
@@ -369,6 +422,7 @@ module runActivationNegativeTest {
           state.requestedRunId,
           state.requestedTarget,
           state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition,
           GraphBlocked,
           StaleContentRevision,
           EXACT_ROOT_TASK_ID,
@@ -387,6 +441,7 @@ module runActivationNegativeTest {
             state.requestedRunId,
             state.requestedTarget,
             state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition,
             GraphBlocked,
             StaleContentRevision,
             EXACT_ROOT_TASK_ID,
@@ -417,6 +472,7 @@ module runActivationNegativeTest {
           state.requestedRunId,
           state.requestedTarget,
           state.trace.trackerCalls + 1,
+          state.trackerFinality.observationPosition,
           GraphBlocked,
           ContentRevisionBlocked,
           EXACT_ROOT_TASK_ID,
@@ -435,6 +491,7 @@ module runActivationNegativeTest {
             state.requestedRunId,
             state.requestedTarget,
             state.trace.trackerCalls + 1,
+            state.trackerFinality.observationPosition,
             GraphBlocked,
             ContentRevisionBlocked,
             EXACT_ROOT_TASK_ID,
@@ -642,6 +699,13 @@ module runActivationNegativeTest {
     init.then(selectBlockedRunGraph).then(establishExistingHistory)
       .then(activateEstablishedRun).then(readInitialTrackerGraph)
       .then(reachQuiescence).then(terminateWithMismatchedGraphEvidence)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run mismatchedObservationPositionIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithMismatchedObservationPosition)
       .expect(not(terminationRequiresExactFreshGraphEvidence))
   }
 
