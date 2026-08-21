@@ -847,7 +847,22 @@ export const dispositionCleanupRecordedTranscriptCatalog = Object.freeze({
 })
 
 /** Observable result of one maintained cleanup cassette after its production loop. */
-export const DispositionCleanupCassetteRun = Schema.Struct({
+export interface DispositionCleanupCassetteRun {
+  readonly boundaryCalls: ReadonlyArray<DispositionCleanupBoundaryCall>
+  readonly forbiddenBoundaryCalls: ReadonlyArray<DispositionCleanupBoundaryCall>
+  readonly forbiddenJournalTags: ReadonlyArray<string>
+  readonly journalTags: ReadonlyArray<string>
+  readonly records: ReadonlyArray<JournalRecord>
+  readonly scenario: DispositionCleanupCassette["scenario"]
+  readonly sentinelsAfter: typeof DispositionCleanupSentinels.Type
+  readonly sentinelsBefore: typeof DispositionCleanupSentinels.Type
+  readonly terminalResult: string
+  readonly transcript: ReadonlyArray<typeof DispositionCleanupTranscriptEntry.Type>
+  readonly transcriptWitnesses: ReadonlyArray<typeof DispositionCleanupTranscriptWitness.Type>
+  readonly version: 1
+}
+
+export const DispositionCleanupCassetteRun: Schema.Schema<DispositionCleanupCassetteRun> = Schema.Struct({
   boundaryCalls: Schema.Array(DispositionCleanupBoundaryCall),
   forbiddenBoundaryCalls: Schema.Array(DispositionCleanupBoundaryCall),
   forbiddenJournalTags: Schema.Array(Schema.String),
@@ -867,13 +882,14 @@ export const DispositionCleanupCassetteRun = Schema.Struct({
   transcriptWitnesses: Schema.Array(DispositionCleanupTranscriptWitness),
   version: Schema.Literal(1)
 })
-export type DispositionCleanupCassetteRun = typeof DispositionCleanupCassetteRun.Type
 
 const recordsAreUnchanged = (before: ReadonlyArray<JournalRecord>, after: ReadonlyArray<JournalRecord>): boolean =>
   JSON.stringify(upstreamRecords(before)) === JSON.stringify(upstreamRecords(after))
 
 /** Runs one authored cleanup chronology through all applicable production protocol boundaries. */
-export const runDispositionCleanupCassette = Effect.fn("DispositionCleanupCassette.run")(function* (
+export const runDispositionCleanupCassette: (
+  cassette: DispositionCleanupCassette
+) => Effect.Effect<DispositionCleanupCassetteRun, unknown> = Effect.fn("DispositionCleanupCassette.run")(function* (
   cassette: DispositionCleanupCassette
 ) {
   const worktreeBoundaryInput =
