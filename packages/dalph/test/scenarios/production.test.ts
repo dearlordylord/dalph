@@ -31,6 +31,8 @@ import {
   ClaimOwner,
   ClaimToken,
   controlledTrackerMutationLayer,
+  EvidenceStore,
+  type EvidenceStoreService,
   FixtureTarget,
   freshWorkflowRunId,
   GitCommand,
@@ -141,7 +143,8 @@ const makePublicRunFixture = (
   projectionPlan: PublicExecutorProjectionPlan,
   projectionForApplication?: PublicExecutorProjectionForApplication,
   integratorCandidateProviderAuthority: IntegratorCandidateProviderAuthorityService = unavailableIntegratorCandidateProviderAuthority,
-  seedExecutorFacts = true
+  seedExecutorFacts = true,
+  acceptedResultEvidenceStore?: EvidenceStoreService
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem
@@ -331,7 +334,11 @@ const makePublicRunFixture = (
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
         Layer.succeed(PlannedAttemptExecutor, executorForApplication(applicationOrdinal)),
-        integratorCandidateProviderAuthority
+        integratorCandidateProviderAuthority,
+        undefined,
+        undefined,
+        undefined,
+        acceptedResultEvidenceStore
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -430,7 +437,16 @@ it.effect("ordinary production Run activation sends FullRerun cleanup through th
             )
           )
       } satisfies IntegratorCandidateProviderAuthorityService
-      const fixture = yield* makePublicRunFixture(() => [], undefined, provider)
+      const fixture = yield* makePublicRunFixture(
+        () => [],
+        undefined,
+        provider,
+        true,
+        EvidenceStore.of({
+          put: () => Effect.die("FullRerun cleanup does not write accepted-result evidence"),
+          read: () => Effect.die("FullRerun cleanup does not read accepted-result evidence")
+        })
+      )
       const acceptedResult = AcceptedResult.make({
         commit: fixture.attempt.baseSha,
         evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("b".repeat(64)) })

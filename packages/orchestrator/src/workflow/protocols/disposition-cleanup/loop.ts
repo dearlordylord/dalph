@@ -115,7 +115,7 @@ const familyAuthorizations = <Authorization extends { readonly operationId: Oper
     .reduce<ReadonlyArray<Authorization>>(
       (selected, authorization) =>
         selected.some((candidate) => candidate.operationId === authorization.operationId)
-          ? selected
+          ? /* v8 ignore next -- @preserve Each selected authorization validates against the complete family history, whose duplicate-authorization check rejects a repeated operation before reduction. */ selected
           : [...selected, authorization],
       []
     )
