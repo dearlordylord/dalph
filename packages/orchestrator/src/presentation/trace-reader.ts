@@ -2138,7 +2138,9 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
       Effect.flatMap((records) =>
         completeTraceIndexFor(cursor.runId, records).pipe(
           Effect.flatMap((index) => {
+            /* v8 ignore start -- @preserve completeTraceIndexFor installs this map before publishing the index. */
             const views = viewsByIndex.get(index) ?? new Map<JournalPosition, TraceAtCursor>()
+            /* v8 ignore stop */
             const cached = views.get(cursor.position)
             return cached === undefined
               ? atCursorFromCompleteIndex(cursor, index, graphByIndex.get(index) ?? new Map()).pipe(
