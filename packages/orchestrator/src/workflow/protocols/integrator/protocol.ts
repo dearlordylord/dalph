@@ -43,6 +43,7 @@ import {
   hasMatchingIntegratorTargetLineageObservation,
   IntegratorPreparationInput,
   integratorCorrelationFor,
+  integratorSuccessorCorrelationFor,
   integratorLineageIsCompatible,
   integratorRunCorrelationFor,
   integratorRunCorrelationForSession,
@@ -76,11 +77,13 @@ export type { IntegratorProtocolError } from "./errors.js"
 export {
   IntegratorPreparationInput,
   integratorCorrelationFor,
+  integratorSuccessorCorrelationFor,
   integratorRunCorrelationFor,
   integratorRunCorrelationForSession
 }
 export type {
   IntegratorPreparationInput as IntegratorPreparationInputType,
+  IntegratorSuccessorPreparationInput as IntegratorSuccessorPreparationInputType,
   IntegratorRunPreparationInput as IntegratorRunPreparationInputType
 } from "./session.js"
 

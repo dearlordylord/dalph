@@ -37,8 +37,7 @@ import {
   type CompletionTaskBoundaryService,
   gitDispositionCleanupBoundaryLayer,
   IntegratorCandidateProviderAuthority,
-  type IntegratorCandidateProviderAuthorityService,
-  unavailableIntegratorCandidateProviderAuthority
+  type IntegratorCandidateProviderAuthorityService
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Effect, Layer } from "effect"
@@ -62,16 +61,17 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   integrationTarget: IntegrationTarget,
   trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>,
   plannedAttemptExecutorLayer: Layer.Layer<PlannedAttemptExecutor>,
+  /**
+   * Provider-owned Integrator candidate authority. Production cannot infer
+   * predecessor ownership or writer quiescence from a Git locator. Callers
+   * must install the provider's exact ownership/quiescence adapter (or the
+   * explicit unavailable adapter while candidate cleanup is unsupported).
+   */
+  integratorCandidateProviderAuthority: IntegratorCandidateProviderAuthorityService,
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
   completionTask?: CompletionTaskBoundaryService,
-  acceptedResultEvidenceStore?: EvidenceStoreService,
-  /**
-   * Provider-owned Integrator candidate authority. Production cannot infer
-   * predecessor ownership or writer quiescence from a Git locator, so the
-   * absent adapter fails closed and performs no candidate mutation.
-   */
-  integratorCandidateProviderAuthority?: IntegratorCandidateProviderAuthorityService
+  acceptedResultEvidenceStore?: EvidenceStoreService
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
@@ -90,9 +90,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   )
   const candidateAuthorityLayer = Layer.succeed(
     IntegratorCandidateProviderAuthority,
-    IntegratorCandidateProviderAuthority.of(
-      integratorCandidateProviderAuthority ?? unavailableIntegratorCandidateProviderAuthority
-    )
+    IntegratorCandidateProviderAuthority.of(integratorCandidateProviderAuthority)
   )
   const cleanupBoundaryLayer = gitDispositionCleanupBoundaryLayer(target, candidateAuthorityLayer).pipe(
     Layer.provide(nodeGitCommandLayer),

@@ -155,6 +155,7 @@ export {
 export {
   GitTargetLineage,
   GitTargetLineageReadFailure,
+  TargetLineageObservation,
   gitTargetLineageTestLayer,
   nodeGitTargetLineageLayer,
   TestGitTargetLineage

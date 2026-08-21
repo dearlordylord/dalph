@@ -20,6 +20,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { CoordinatorOwnership, GitCommonDirectoryTarget } from "../../../authorities/coordinator-ownership/ownership.js"
+import { productionCoordinatorOwnershipLayer } from "../../../authorities/coordinator-ownership/live-task-work-start.js"
 import {
   GitCommand,
   GitCommandInvocationFailure,
@@ -384,6 +385,11 @@ it.effect("production SQLite cleanup reopens after a lost Git response without a
         runBytesInWorktree: () => Effect.die("byte command is outside production cleanup recovery")
       } satisfies GitCommandService)
       const target = GitCommonDirectoryTarget.make(`${root}/repository.git`)
+      yield* Effect.gen(function* () {
+        const git = yield* GitCommand
+        const initialized = yield* git.run(target, ["init", "--bare"])
+        expect(initialized.exitCode).toBe(0)
+      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
       const run = (seed: boolean) =>
         Effect.gen(function* () {
           const journal = yield* JournalStore
@@ -400,12 +406,7 @@ it.effect("production SQLite cleanup reopens after a lost Git response without a
           Effect.provide(sqliteJournalTestLayer({ filename })),
           Effect.provide(gitDispositionCleanupBoundaryLayer(target)),
           Effect.provide(Layer.succeed(GitCommand, commands)),
-          Effect.provide(
-            Layer.succeed(
-              CoordinatorOwnership,
-              CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
-            )
-          ),
+          Effect.provide(productionCoordinatorOwnershipLayer(target)),
           Effect.provide(NodeServices.layer)
         )
       const first = yield* Effect.scoped(run(true))
@@ -475,6 +476,11 @@ it.effect(
           })
         )
         const target = GitCommonDirectoryTarget.make(`${root}/repository.git`)
+        yield* Effect.gen(function* () {
+          const git = yield* GitCommand
+          const initialized = yield* git.run(target, ["init", "--bare"])
+          expect(initialized.exitCode).toBe(0)
+        }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
         const commands = GitCommand.of({
           run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
           runInWorktree: () => Effect.succeed({ exitCode: 1, stderr: "not a git repository", stdout: "" }),
@@ -501,12 +507,7 @@ it.effect(
             Effect.provide(sqliteJournalTestLayer({ filename })),
             Effect.provide(gitDispositionCleanupBoundaryLayer(target, providerAuthorityLayer)),
             Effect.provide(Layer.succeed(GitCommand, commands)),
-            Effect.provide(
-              Layer.succeed(
-                CoordinatorOwnership,
-                CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
-              )
-            ),
+            Effect.provide(productionCoordinatorOwnershipLayer(target)),
             Effect.provide(NodeServices.layer)
           )
         const first = yield* Effect.scoped(run(true))

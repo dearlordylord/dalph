@@ -515,7 +515,14 @@ const makeRunActivationDriverImplementation = () => {
             taskClaimReacquisitionControlLayer,
             taskWorkCapacityControlLayer
           )
-          return validatedRunActivationLayer(activeRunId, undefined, undefined, undefined, undefined, preservingDispositionCleanupBoundaryLayer).pipe(
+          return validatedRunActivationLayer(
+            activeRunId,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            preservingDispositionCleanupBoundaryLayer
+          ).pipe(
             Layer.provide(
               journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
             ),

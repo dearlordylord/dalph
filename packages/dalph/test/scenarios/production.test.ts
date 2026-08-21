@@ -1,6 +1,9 @@
 // @effect-diagnostics multipleEffectProvide:off
 import {
   AttemptId,
+  AcceptedResult,
+  EvidenceDigest,
+  EvidenceReference,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
@@ -40,6 +43,17 @@ import {
   JournaledRunBootstrap,
   JournalStore,
   InitialControlPolicy,
+  IntegratorCandidateCleanupMutationResult,
+  IntegratorCandidateCleanupObservation,
+  type IntegratorCandidateProviderAuthorityService,
+  IntegratorCandidateResourceLocator,
+  IntegratorSessionCorrelation,
+  IntegratorSessionId,
+  IntegratorBoundaryUnavailable,
+  TargetLineageObservation,
+  appendCandidateProvenance,
+  appendReplacementProvenance,
+  integratorSuccessorCorrelationFor,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorktreeReconciliationOperation,
@@ -78,9 +92,10 @@ import {
   TrackerRevision,
   WorkflowRunAlreadyTerminated,
   workflowJournalEventVersion,
-  WorkflowTrace
+  WorkflowTrace,
+  unavailableIntegratorCandidateProviderAuthority
 } from "@dalph/orchestrator"
-import { ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Option, Ref } from "effect"
+import { Cause, ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { taskTrackerGraphFactsObserved } from "../../../orchestrator/test/task-tracker-facts.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
@@ -109,6 +124,8 @@ interface PublicRunFixture {
   readonly applicationBuilds: () => number
   readonly projectionCalls: Effect.Effect<number>
   readonly readRecords: Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
+  readonly journalFilename: JournalDatabaseLocator
+  readonly repository: string
   readonly runId: RunId
   readonly target: FixtureTarget
 }
@@ -121,7 +138,9 @@ interface PublicRunFixture {
  */
 const makePublicRunFixture = (
   projectionPlan: PublicExecutorProjectionPlan,
-  projectionForApplication?: PublicExecutorProjectionForApplication
+  projectionForApplication?: PublicExecutorProjectionForApplication,
+  integratorCandidateProviderAuthority: IntegratorCandidateProviderAuthorityService = unavailableIntegratorCandidateProviderAuthority,
+  seedExecutorFacts = true
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem
@@ -196,6 +215,7 @@ const makePublicRunFixture = (
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
       )
+      if (!seedExecutorFacts) return
       yield* journal.append(
         runId,
         intentRecordKey(acquisition.operationId),
@@ -309,7 +329,8 @@ const makePublicRunFixture = (
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
-        Layer.succeed(PlannedAttemptExecutor, executorForApplication(applicationOrdinal))
+        Layer.succeed(PlannedAttemptExecutor, executorForApplication(applicationOrdinal)),
+        integratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -360,10 +381,197 @@ const makePublicRunFixture = (
       commandCalls: Ref.get(commandCallsRef),
       projectionCalls: Ref.get(projectionCallsRef),
       readRecords,
+      journalFilename: filename,
+      repository: directory,
       runId,
       target
     } satisfies PublicRunFixture
   })
+
+it.effect("ordinary production Run activation sends FullRerun cleanup through the provider authority", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const active = yield* Ref.make<ReadonlyMap<IntegratorCandidateResourceLocator, IntegratorSessionId>>(new Map())
+      const observed = yield* Ref.make<ReadonlyArray<IntegratorCandidateResourceLocator>>([])
+      const removed = yield* Ref.make<ReadonlyArray<IntegratorCandidateResourceLocator>>([])
+      const provider = {
+        observe: (authorization: Parameters<IntegratorCandidateProviderAuthorityService["observe"]>[0]) =>
+          Effect.gen(function* () {
+            yield* Ref.update(observed, (values) => [...values, authorization.locator])
+            const owner = (yield* Ref.get(active)).get(authorization.locator)
+            return owner === undefined
+              ? IntegratorCandidateCleanupObservation.cases.Absent.make({
+                  locator: authorization.locator,
+                  revision: authorization.evidenceRevision
+                })
+              : IntegratorCandidateCleanupObservation.cases.Present.make({
+                  locator: authorization.locator,
+                  revision: authorization.evidenceRevision,
+                  sessionId: owner,
+                  writerQuiescent: true
+                })
+          }),
+        remove: (authorization: Parameters<IntegratorCandidateProviderAuthorityService["remove"]>[0]) =>
+          Ref.update(removed, (values) => [...values, authorization.locator]).pipe(
+            Effect.andThen(
+              Ref.update(active, (resources) => {
+                const next = new Map(resources)
+                next.delete(authorization.locator)
+                return next
+              })
+            ),
+            Effect.as(
+              IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+                locator: authorization.locator,
+                revision: authorization.evidenceRevision,
+                sessionId: authorization.owner.sessionId
+              })
+            )
+          )
+      } satisfies IntegratorCandidateProviderAuthorityService
+      const fixture = yield* makePublicRunFixture(() => [], undefined, provider)
+      const acceptedResult = AcceptedResult.make({
+        commit: fixture.attempt.baseSha,
+        evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("b".repeat(64)) })
+      })
+      const candidateTarget = productionIntegrationTarget(`${fixture.repository}/.git`)
+      const predecessor = IntegratorSessionCorrelation.make({
+        acceptedResult,
+        candidateResource: IntegratorCandidateResourceLocator.make("candidate:ordinary-production-predecessor"),
+        expectedTargetHead: fixture.attempt.baseSha,
+        integrationTarget: candidateTarget,
+        plannedAttempt: fixture.attempt,
+        queuedAt: JournalPosition.make(12),
+        sessionId: IntegratorSessionId.make("session:ordinary-production-predecessor"),
+        startedAt: JournalPosition.make(13),
+        targetLineageObservedAt: JournalPosition.make(15)
+      })
+      const successor = integratorSuccessorCorrelationFor({
+        directionAppliedAt: JournalPosition.make(20),
+        predecessor,
+        quarantineAt: JournalPosition.make(19),
+        targetLineage: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: fixture.attempt.baseSha,
+          targetHeadSha: fixture.attempt.baseSha
+        }),
+        targetLineageObservedAt: JournalPosition.make(22)
+      })
+      yield* Ref.set(
+        active,
+        new Map([
+          [predecessor.candidateResource, predecessor.sessionId],
+          [successor.candidateResource, successor.sessionId]
+        ])
+      )
+
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+        yield* journal.append(
+          fixture.runId,
+          plannedAttemptExecutorWorkReportedRecordKey(fixture.attempt.attemptId, reportOrdinal),
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: reportOrdinal,
+            report: PlannedAttemptExecutorReport.cases.Terminal.make({
+              correlation: plannedAttemptExecutorCorrelation(fixture.attempt),
+              result: { _tag: "Accepted", acceptedResult }
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+        yield* appendCandidateProvenance(predecessor, successor, "ordinary-production-full-rerun", "StartupValid")
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename })))
+
+      const activation = yield* Effect.exit(fixture.activate())
+      // Cleanup is the qualified boundary under test. Delivery then reaches
+      // the deliberately absent Integrator, whose exact typed terminal
+      // failure is unrelated to cleanup.
+      expect(activation._tag).toBe("Failure")
+      if (activation._tag === "Failure") {
+        expect(Cause.findErrorOption(activation.cause)).toEqual(
+          Option.some(new IntegratorBoundaryUnavailable({ boundary: "Integrator" }))
+        )
+      }
+      const activationRecords = yield* fixture.readRecords
+      expect(
+        activationRecords.filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
+      ).toHaveLength(1)
+      expect(activationRecords.filter(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")).toHaveLength(
+        1
+      )
+      expect(yield* Ref.get(observed)).toEqual([predecessor.candidateResource, predecessor.candidateResource])
+      expect(yield* Ref.get(removed)).toEqual([predecessor.candidateResource])
+      const records = yield* fixture.readRecords
+      expect(records.some(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")).toBe(true)
+      expect(records.some(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")).toBe(true)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("ordinary production Run activation derives W1 then B1 cleanup and preserves unrelated P2", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* makePublicRunFixture(
+        () => [],
+        undefined,
+        unavailableIntegratorCandidateProviderAuthority,
+        false
+      )
+      const fileSystem = yield* FileSystem.FileSystem
+      const git = yield* GitCommand
+      const p2Worktree = WorktreeLocator.make(`${fixture.repository}/worktree-p2`)
+      const p2Branch = TaskBranchRef.make("refs/heads/dalph/production-executor-projection-p2")
+      const replacementSpecification = makeTaskWorkSpecification({
+        body: "cleanup provenance witness",
+        taskId: fixture.attempt.taskId,
+        title: "cleanup provenance witness"
+      })
+      yield* git.runInWorktree(fixture.repository, [
+        "worktree",
+        "add",
+        "-b",
+        p2Branch.slice("refs/heads/".length),
+        p2Worktree,
+        fixture.attempt.baseSha
+      ])
+      const successor = PlannedTaskAttempt.make({
+        ...fixture.attempt,
+        attemptId: AttemptId.make("production-executor-projection-successor"),
+        branch: p2Branch,
+        taskRevision: replacementSpecification.fingerprint,
+        worktree: p2Worktree
+      })
+      yield* Effect.gen(function* () {
+        yield* appendReplacementProvenance(fixture.attempt, successor, "StartupValid")
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename })))
+
+      const activation = yield* Effect.exit(fixture.activate())
+      expect(activation._tag).toBe("Failure")
+      if (activation._tag === "Failure") {
+        expect(Cause.findErrorOption(activation.cause)).toEqual(
+          Option.some(
+            new PlannedAttemptExecutorCommandFailure({
+              command: "StartOrContinue",
+              correlation: plannedAttemptExecutorCorrelation(successor),
+              detail: "public projection fixture has no StartOrContinue response"
+            })
+          )
+        )
+      }
+      const records = yield* fixture.readRecords
+      expect(records.filter(({ event }) => event._tag === "WorktreeCleanupAuthorized")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "WorktreeCleanupSettled")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "BranchCleanupAuthorized")).toHaveLength(1)
+      expect(records.filter(({ event }) => event._tag === "BranchCleanupSettled")).toHaveLength(1)
+      expect(yield* fileSystem.exists(fixture.attempt.worktree)).toBe(false)
+      expect(yield* fileSystem.exists(p2Worktree)).toBe(true)
+      expect((yield* git.runInWorktree(fixture.repository, ["show-ref", "--verify", p2Branch])).stdout).toContain(
+        p2Branch
+      )
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
 
 it.effect("reconciles an exact projected executor report through ordinary Run entry (Running)", () =>
   Effect.scoped(
@@ -734,7 +942,8 @@ it.effect(absentHistoryApplicationScenario, () =>
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -857,7 +1066,8 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -1034,7 +1244,8 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -1134,7 +1345,8 @@ it.effect("records an Operator capacity change through the production compositio
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -1238,7 +1450,8 @@ it.effect("terminates once only after G2 proves the target complete and responsi
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -1331,7 +1544,8 @@ it.effect(
           GitCommonDirectoryTarget.make(`${directory}/.git`),
           productionIntegrationTarget(`${directory}/.git`),
           controlledTrackerMutationLayer,
-          controlledFakePlannedAttemptExecutorLayer
+          controlledFakePlannedAttemptExecutorLayer,
+          unavailableIntegratorCandidateProviderAuthority
         ).pipe(
           Layer.provide(trackerReaderLayer),
           Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -1553,7 +1767,8 @@ it.effect("publishes each accepted executor report before continuing and stops a
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         continuationTarget,
         trackerLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -1686,7 +1901,8 @@ it.effect("blocks Run establishment before activation when preserved history has
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -1759,7 +1975,8 @@ it.effect(
           GitCommonDirectoryTarget.make(directory),
           productionIntegrationTarget(directory),
           controlledTrackerMutationLayer,
-          controlledFakePlannedAttemptExecutorLayer
+          controlledFakePlannedAttemptExecutorLayer,
+          unavailableIntegratorCandidateProviderAuthority
         ).pipe(
           Layer.provide(
             Layer.succeed(
@@ -1817,7 +2034,8 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -1897,7 +2115,8 @@ it.effect("establishes a Run when another Run's responsibility is completed", ()
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer
+        controlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
           Layer.succeed(

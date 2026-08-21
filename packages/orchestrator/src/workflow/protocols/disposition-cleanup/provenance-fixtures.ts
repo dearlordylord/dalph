@@ -111,11 +111,13 @@ export {
 
 const quarantinePositionOffset = 5
 const activityAbsencePositionOffset = 4
+const startupCleanupQuiescenceOrdinal = 2
 
 /** Builds the same typed P1 -> P2 terminal evidence used by cleanup tests and cassettes. */
 export const replacementProvenanceFor = (
   plannedAttempt: PlannedTaskAttempt,
-  successorAttempt: PlannedTaskAttempt
+  successorAttempt: PlannedTaskAttempt,
+  quiescenceReportOrdinal: PlannedAttemptExecutorReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
 ): PlannedAttemptReplacedEvent => {
   const ids = replacementFixtureIdsFor(plannedAttempt)
   const requestId = AttemptChoiceRequestId.make({ nonce: ids.requestNonce, runId: plannedAttempt.runId })
@@ -137,7 +139,7 @@ export const replacementProvenanceFor = (
       headSha: plannedAttempt.baseSha,
       worktree: plannedAttempt.worktree
     }),
-    quiescenceProof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+    quiescenceProof: { _tag: "CommandResponse", reportOrdinal: quiescenceReportOrdinal },
     specificationObservationOperationId: ids.specificationObservationOperationId,
     targetHeadSha: successorAttempt.baseSha,
     targetLineageObservationOperationId: ids.targetLineageObservationOperationId
@@ -161,10 +163,15 @@ export const replacementProvenanceFor = (
 /** Appends typed upstream replacement evidence to a test journal before cleanup starts. */
 export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.appendReplacementProvenance")(function* (
   plannedAttempt: PlannedTaskAttempt,
-  successorAttempt: PlannedTaskAttempt
+  successorAttempt: PlannedTaskAttempt,
+  chronology: "Cassette" | "StartupValid" = "Cassette"
 ) {
   const journal = yield* JournalStore
-  const event = replacementProvenanceFor(plannedAttempt, successorAttempt)
+  const quiescenceReportOrdinal =
+    chronology === "StartupValid"
+      ? PlannedAttemptExecutorReportOrdinal.make(startupCleanupQuiescenceOrdinal)
+      : PlannedAttemptExecutorReportOrdinal.make(1)
+  const event = replacementProvenanceFor(plannedAttempt, successorAttempt, quiescenceReportOrdinal)
   const ids = replacementFixtureIdsFor(plannedAttempt)
   const began = (yield* journal.read(plannedAttempt.runId)).find(
     ({ event: candidate }) => candidate._tag === "WorkflowRunBegan"
@@ -201,6 +208,22 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
     taskId: plannedAttempt.taskId,
     title: "cleanup provenance witness"
   })
+  // The Restart choice itself needs a prior graph/specification observation,
+  // while the replacement witness needs a fresh graph/specification read
+  // after that choice. Keep those authorities distinct so the startup
+  // reducer sees the same chronology as an ordinary coordinator.
+  const choiceGraphOperation = makeTrackerGraphObservationOperation(
+    OperationId.make(`${ids.graphObservationOperationId}:choice-authority`),
+    began.event.target,
+    [],
+    [plannedAttempt.taskId]
+  )
+  const choiceSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`${ids.specificationObservationOperationId}:choice-authority`),
+    began.event.target,
+    plannedAttempt.taskId,
+    [choiceGraphOperation.operationId]
+  )
   const claimObservationOperation = makeTaskClaimObservationOperation(
     ids.claimObservationOperationId,
     began.event.target,
@@ -254,6 +277,75 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
     attemptPlanRecordKey(plannedAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
   )
+  if (chronology === "StartupValid") {
+    // Startup recovery needs the earlier graph/specification facts before it
+    // can accept the persisted Restart choice.
+    yield* appendTrackerIntent(choiceGraphOperation)
+    yield* journal.append(
+      plannedAttempt.runId,
+      outcomeRecordKey(choiceGraphOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        choiceGraphOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(choiceGraphOperation, graphSnapshot)
+      )
+    )
+    yield* appendTrackerIntent(choiceSpecificationOperation)
+    yield* journal.append(
+      plannedAttempt.runId,
+      outcomeRecordKey(choiceSpecificationOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        choiceSpecificationOperation.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(choiceSpecificationOperation, specification)
+      )
+    )
+  }
+  const appendExecutorQuiescenceProof = (
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    reportOrdinal: PlannedAttemptExecutorReportOrdinal,
+    beginResponsibility: boolean
+  ) =>
+    Effect.gen(function* () {
+      if (beginResponsibility) {
+        yield* journal.append(
+          plannedAttempt.runId,
+          plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+          PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+      }
+      yield* journal.append(
+        plannedAttempt.runId,
+        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "StartOrContinue",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: commandOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: reportOrdinal,
+          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+    })
+  if (chronology === "StartupValid") {
+    yield* appendExecutorQuiescenceProof(
+      PlannedAttemptExecutorCommandOrdinal.make(1),
+      PlannedAttemptExecutorReportOrdinal.make(1),
+      true
+    )
+  }
   yield* journal.append(
     plannedAttempt.runId,
     attemptChoiceAppliedRecordKey(event.requestId),
@@ -266,35 +358,10 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
       version: workflowJournalEventVersion
     })
   )
-  yield* journal.append(
-    plannedAttempt.runId,
-    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-  )
-  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-  yield* journal.append(
-    plannedAttempt.runId,
-    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-    PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "StartOrContinue",
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      ordinal: commandOrdinal,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-  yield* journal.append(
-    plannedAttempt.runId,
-    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: reportOrdinal,
-      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
-      }),
-      version: workflowJournalEventVersion
-    })
+  yield* appendExecutorQuiescenceProof(
+    PlannedAttemptExecutorCommandOrdinal.make(chronology === "StartupValid" ? startupCleanupQuiescenceOrdinal : 1),
+    quiescenceReportOrdinal,
+    chronology === "Cassette"
   )
   yield* appendTrackerIntent(graphOperation)
   yield* journal.append(
@@ -542,7 +609,10 @@ interface CandidateAuthorityPrefix {
  * has no direction or successor event from which cleanup authority could be
  * reconstructed.
  */
-const appendCandidateAuthorityPrefix = (predecessor: IntegratorSessionCorrelation) =>
+const appendCandidateAuthorityPrefix = (
+  predecessor: IntegratorSessionCorrelation,
+  chronology: "Cassette" | "StartupValid" = "Cassette"
+) =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
     const runId = predecessor.plannedAttempt.runId
@@ -591,7 +661,14 @@ const appendCandidateAuthorityPrefix = (predecessor: IntegratorSessionCorrelatio
       version: workflowJournalEventVersion
     }
     const detail = IntegrationQuarantineFailureDetail.make("candidate cleanup fixture provider activity absent")
-    const quarantineAt = JournalPosition.make(Number(predecessor.targetLineageObservedAt) + quarantinePositionOffset)
+    // Startup recovery validates IntegrationStarted before the original
+    // lineage read. That moves the quarantine four records after the lineage
+    // observation; legacy cassettes retain their historical five-record
+    // offset because their started fact follows the read.
+    const quarantineAt = JournalPosition.make(
+      Number(predecessor.targetLineageObservedAt) +
+        (chronology === "StartupValid" ? quarantinePositionOffset - 1 : quarantinePositionOffset)
+    )
     const absence = IntegrationProviderRunActivityAbsentEvent.make({
       correlation: predecessor,
       detail,
@@ -603,19 +680,25 @@ const appendCandidateAuthorityPrefix = (predecessor: IntegratorSessionCorrelatio
       basis: IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
         detail,
         ownedActivityProvenAbsentAt: JournalPosition.make(
-          Number(predecessor.targetLineageObservedAt) + activityAbsencePositionOffset
+          Number(predecessor.targetLineageObservedAt) +
+            (chronology === "StartupValid" ? activityAbsencePositionOffset - 1 : activityAbsencePositionOffset)
         )
       }),
       correlation: predecessor,
       occurrenceClassification: "NonActionOccurrence",
       version: workflowJournalEventVersion
     })
-    yield* journal.append(
+    const appendResponsibility = journal.append(
       runId,
       integrationResponsibilityBeganRecordKey(predecessor.plannedAttempt.attemptId),
       responsibilityBegan
     )
-    yield* journal.append(
+    const appendStart = journal.append(
+      runId,
+      integrationStartedRecordKey(predecessor.plannedAttempt.attemptId),
+      started
+    )
+    const appendLineageIntent = journal.append(
       runId,
       intentRecordKey(predecessorLineageOperation.operationId),
       GitReadIntentRecordedEvent.make({
@@ -625,13 +708,23 @@ const appendCandidateAuthorityPrefix = (predecessor: IntegratorSessionCorrelatio
         version: workflowJournalEventVersion
       })
     )
-    yield* journal.append(runId, outcomeRecordKey(predecessorLineageOperation.operationId), predecessorLineage)
-    yield* journal.append(
+    const appendLineageObservation = journal.append(
+      runId,
+      outcomeRecordKey(predecessorLineageOperation.operationId),
+      predecessorLineage
+    )
+    const appendSession = journal.append(
       runId,
       integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(predecessor)),
       fixed
     )
-    yield* journal.append(runId, integrationStartedRecordKey(predecessor.plannedAttempt.attemptId), started)
+    yield* appendResponsibility
+    if (chronology === "StartupValid") yield* appendStart
+    yield* appendLineageIntent
+    yield* appendLineageObservation
+    if (chronology === "Cassette") yield* appendSession
+    if (chronology === "Cassette") yield* appendStart
+    if (chronology === "StartupValid") yield* appendSession
     yield* journal.append(runId, integratorRunStartedRecordKey(predecessorRun), runStarted)
     yield* journal.append(runId, integrationProviderRunActivityAbsentRecordKey(predecessorRun), absence)
     yield* journal.append(runId, integrationQuarantinedRecordKey(predecessor.sessionId, quarantine.basis), quarantine)
@@ -658,11 +751,12 @@ export const appendCurrentQuarantineProvenance = Effect.fn("DispositionCleanupTe
 export const appendCandidateProvenance = Effect.fn("DispositionCleanupTest.appendCandidateProvenance")(function* (
   predecessor: IntegratorSessionCorrelation,
   successor: IntegratorSessionCorrelation,
-  directionNonce: string
+  directionNonce: string,
+  chronology: "Cassette" | "StartupValid" = "Cassette"
 ) {
   const journal = yield* JournalStore
   const runId = predecessor.plannedAttempt.runId
-  const prefix = yield* appendCandidateAuthorityPrefix(predecessor)
+  const prefix = yield* appendCandidateAuthorityPrefix(predecessor, chronology)
   const successorLineageOperation = WorkflowOperation.cases.ReadTargetLineage.make({
     integrationTarget: successor.integrationTarget,
     operationId: OperationId.make(`${successor.sessionId}:successor-lineage`),
