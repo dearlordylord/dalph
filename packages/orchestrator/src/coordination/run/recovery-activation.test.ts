@@ -30,6 +30,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -112,8 +113,7 @@ import {
   integrationQuarantinedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
-  integratorSessionFixedRecordKey,
-  outcomeRecordKey
+  integratorSessionFixedRecordKey
 } from "../../workflow-journal/record-key.js"
 import {
   continuationDecisionFor,
@@ -145,7 +145,7 @@ const coveragePolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWo
 
 const coverageRecord = (position: number, event: JournalRecord["event"], runId = coverageRunId): JournalRecord => ({
   event,
-  key: outcomeRecordKey(OperationId.make(`recovery-activation-coverage-record-${position}`)),
+  key: describeJournalEvent(event).expectedKey,
   position: JournalPosition.make(position),
   runId
 })
