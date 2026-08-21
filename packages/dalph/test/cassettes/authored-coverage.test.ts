@@ -157,6 +157,7 @@ it.effect("runs the authored candidate and promotion outcomes through their prod
             runId: beginning.runId,
             target: beginning.event.target
           }).evidence
+          const unsettledResponsibilityIssue = "termination requires every journal responsibility to be settled"
           for (const [index, record] of exit.value.records.entries()) {
             if (
               ![
@@ -169,7 +170,16 @@ it.effect("runs the authored candidate and promotion outcomes through their prod
               continue
             for (const prefixLength of [index, index + 1]) {
               if (prefixLength > 0) {
-                terminationPreconditionIssues(exit.value.records.slice(0, prefixLength), beginning.runId, finality)
+                const issues = terminationPreconditionIssues(
+                  exit.value.records.slice(0, prefixLength),
+                  beginning.runId,
+                  finality
+                )
+                const settlementCompleted =
+                  prefixLength === index + 1 &&
+                  ["StoppedAttemptClaimNoReleaseObserved", "TaskClaimReleased"].includes(record.event._tag)
+                if (settlementCompleted) expect(issues).toEqual([])
+                else expect(issues).toContain(unsettledResponsibilityIssue)
               }
             }
           }
