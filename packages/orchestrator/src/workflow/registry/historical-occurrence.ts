@@ -54,7 +54,9 @@ import {
   CompletionTaskRequestLookupIntendedEvent,
   CompletionTaskRequestLookupObservedEvent,
   CompletionTaskResponseLostEvent,
-  IntegrationFinalitySettledEvent
+  IntegrationFinalitySettledEvent,
+  PostPromotionBlockerCandidateAncestryReadIntendedEvent,
+  PostPromotionBlockerCandidateAncestryObservedEvent
 } from "../protocols/integration-finality/events.js"
 
 const successorGeneration = 2 as const // eslint-disable-line no-magic-numbers
@@ -113,6 +115,15 @@ export const TaskAttemptPlanned = Schema.TaggedStruct("TaskAttemptPlanned", {
   runId: RunId
 })
 export type TaskAttemptPlanned = typeof TaskAttemptPlanned.Type
+
+/** Dalph recorded intent before reconciling the exact planned-attempt worktree. */
+export const TaskWorktreeReconciliationInitiated = Schema.TaggedStruct("TaskWorktreeReconciliationInitiated", {
+  ...initiatedByCoordinator,
+  operation: WorkflowOperation.cases.ReconcileTaskWorktree,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type TaskWorktreeReconciliationInitiated = typeof TaskWorktreeReconciliationInitiated.Type
 
 /** Git proved the exact planned worktree ready for the task attempt. */
 export const TaskWorktreeReady = Schema.TaggedStruct("TaskWorktreeReady", {
@@ -323,6 +334,8 @@ export const IntegrationFocusedCompletionOccurred = Schema.TaggedStruct("Integra
     CompletionTaskCandidateAncestryObservedEvent,
     CompletionTaskCandidateAncestryReadIntendedEvent,
     CompletionTaskIntendedEvent,
+    PostPromotionBlockerCandidateAncestryReadIntendedEvent,
+    PostPromotionBlockerCandidateAncestryObservedEvent,
     CompletionTaskRejectedEvent,
     CompletionTaskRequestLookupIntendedEvent,
     CompletionTaskRequestLookupObservedEvent,
@@ -407,6 +420,7 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   TaskClaimAcquisitionInitiated,
   TaskClaimReleased,
   TaskClaimReleaseInitiated,
-  TaskWorktreeReady
+  TaskWorktreeReady,
+  TaskWorktreeReconciliationInitiated
 ])
 export type HistoricalWorkflowOccurrence = typeof HistoricalWorkflowOccurrence.Type

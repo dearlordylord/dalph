@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data, max-lines -- Historical facet fold uses private mutable reducer state. */
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { IntegrationTarget, plannedTaskAttemptEquivalence, type AttemptId, type TaskId } from "@dalph/contracts"
 import type { OperationId } from "../workflow/identity.js"
 import { workflowOperationId } from "../workflow/registry/operation.js"
@@ -10,6 +10,9 @@ import {
 } from "../workflow/protocols/integrator/events.js"
 import { acceptedResultEquivalence } from "../workflow/protocols/integration-admission/responsibility.js"
 import { targetPromotionCorrelationEquals } from "../workflow/protocols/target-promotion/events.js"
+import { taskTrackerTargetKey } from "../authorities/task-tracker/target.js"
+import type { TaskDagSnapshot } from "../authorities/task-tracker/graph.js"
+import { reconstructedTaskGraphFor } from "../coordination/reconstruction/graph-knowledge.js"
 import type { JournalPosition } from "../workflow-journal/identity.js"
 import type { WorkflowOccurrence as WorkflowOccurrenceValue } from "../workflow/registry/occurrence-projection.js"
 import type {
@@ -27,6 +30,7 @@ import type {
   TracePreservationDisposition,
   TraceRetainedResponsibility
 } from "./trace-reader.js"
+import { sameJson } from "./trace-equality.js"
 
 type HistoricalCaseFactories<Union extends { readonly _tag: string }> = {
   readonly [Tag in Union["_tag"]]: {
@@ -52,8 +56,6 @@ export type HistoricalFacetFactories = {
     }) => TraceHistoricalFacets
   }
 }
-
-const sameJson = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right)
 
 const sortedUniqueTaskIds = (taskIds: ReadonlyArray<TaskId>): ReadonlyArray<TaskId> => [...new Set(taskIds)].sort()
 
@@ -144,18 +146,37 @@ const trackerObservationGapIssue = (
   return trackerReadGapIssue(gap, occurrence)
 }
 
-const gitObservationGapIssue = (
-  gap: Extract<TraceObservationGap, { readonly _tag: "GitObservation" }>,
-  occurrence: WorkflowOccurrenceValue
-): string | undefined => {
-  const expectedTag = gap.required === "PlannedAttemptWorktreeObserved" ? "ReadTaskWorktree" : "ReadTargetLineage"
-  return occurrence._tag === "GitReadInitiated" &&
-    occurrence.operation._tag === expectedTag &&
+type GitObservationGap = Extract<TraceObservationGap, { readonly _tag: "GitObservation" }>
+
+const worktreeReadyGapIssue = (gap: GitObservationGap, occurrence: WorkflowOccurrenceValue): string | undefined =>
+  occurrence._tag === "TaskWorktreeReconciliationInitiated" &&
+  workflowOperationId(occurrence.operation) === gap.operationId &&
+  exactTaskIds([occurrence.operation.plannedAttempt.taskId], gap.taskIds)
+    ? undefined
+    : "Git-observation gap must identify its exact worktree reconciliation intent"
+
+const gitReadOperationTagFor = (
+  required: GitObservationGap["required"]
+): "ReadTaskWorktree" | "ReadTargetLineage" | "ReconcileTaskWorktree" =>
+  required === "PlannedAttemptWorktreeObserved"
+    ? "ReadTaskWorktree"
+    : required === "TargetLineageObserved"
+      ? "ReadTargetLineage"
+      : "ReconcileTaskWorktree"
+
+const gitReadGapIssue = (gap: GitObservationGap, occurrence: WorkflowOccurrenceValue): string | undefined => {
+  if (occurrence._tag !== "GitReadInitiated") {
+    return "Git-observation gap must identify its exact Git read intent"
+  }
+  return occurrence.operation._tag === gitReadOperationTagFor(gap.required) &&
     workflowOperationId(occurrence.operation) === gap.operationId &&
     exactTaskIds([occurrence.operation.plannedAttempt.taskId], gap.taskIds)
     ? undefined
     : "Git-observation gap must identify its exact Git read intent"
 }
+
+const gitObservationGapIssue = (gap: GitObservationGap, occurrence: WorkflowOccurrenceValue): string | undefined =>
+  gap.required === "TaskWorktreeReady" ? worktreeReadyGapIssue(gap, occurrence) : gitReadGapIssue(gap, occurrence)
 
 const traceObservationGapIssue = (
   gap: TraceObservationGap,
@@ -327,6 +348,18 @@ type DependantReleaseFact = Extract<TraceIntegrationFact, { readonly _tag: "Depe
 type QuarantineFact = Extract<TraceIntegrationFact, { readonly _tag: "Quarantine" }>
 type ProviderActivityAbsentFact = Extract<TraceIntegrationFact, { readonly _tag: "ProviderActivityAbsent" }>
 type QuarantineDirectionFact = Extract<TraceIntegrationFact, { readonly _tag: "QuarantineDirection" }>
+
+type CompleteGraphObservationOccurrence = Extract<
+  WorkflowOccurrenceValue,
+  { readonly _tag: "TaskTrackerFactsObserved" }
+> & { readonly evidence: CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed }
+
+const isCompleteGraphObservation = (
+  occurrence: WorkflowOccurrenceValue
+): occurrence is CompleteGraphObservationOccurrence =>
+  occurrence._tag === "TaskTrackerFactsObserved" &&
+  (occurrence.evidence._tag === "CompleteTaskTrackerFacts" ||
+    occurrence.evidence._tag === "UnchangedTaskTrackerFactsReconfirmed")
 
 const integrationResponsibilityFactKinds = { Responsibility: true, Session: true, SessionStarted: true } as const
 
@@ -717,35 +750,85 @@ const dependantGraphObservationMatches = (
 ): sourceItem is TraceHistoryItem & {
   readonly occurrence: Extract<WorkflowOccurrenceValue, { readonly _tag: "TaskTrackerFactsObserved" }>
 } => {
-  if (
-    !sameTraceItemIdentity(sourceItem.identity, fact.source) ||
-    !sameTraceItemIdentity(sourceItem.identity, fact.graphSource)
-  ) {
-    return false
-  }
+  if (!sameTraceItemIdentity(sourceItem.identity, fact.source)) return false
+  if (!sameTraceItemIdentity(sourceItem.identity, fact.graphSource)) return false
   const source = sourceItem.occurrence
-  if (source._tag !== "TaskTrackerFactsObserved") return false
-  if (
-    source.evidence._tag !== "CompleteTaskTrackerFacts" &&
-    source.evidence._tag !== "UnchangedTaskTrackerFactsReconfirmed"
-  ) {
-    return false
-  }
-  return sameJson(source.evidence, fact.graphObservation)
+  return isCompleteGraphObservation(source) && sameJson(source.evidence, fact.graphObservation)
 }
+
+type SettledOccurrence = Extract<WorkflowOccurrenceValue, { readonly _tag: "IntegrationFinalitySettledOccurred" }>
+
+const dependantReleaseGraphIdentityMatches = (
+  fact: DependantReleaseFact,
+  graph: TraceHistoryItem | undefined
+): boolean => graph !== undefined && sameTraceItemIdentity(graph.identity, fact.graphSource)
+
+const dependantReleaseSettlementIdentityMatches = (
+  fact: DependantReleaseFact,
+  settlement: TraceHistoryItem | undefined
+): settlement is TraceHistoryItem & { readonly occurrence: SettledOccurrence } =>
+  settlement !== undefined &&
+  settlement.occurrence._tag === "IntegrationFinalitySettledOccurred" &&
+  sameTraceItemIdentity(settlement.identity, fact.settlementSource)
+
+const completeLifecycle = (lifecycle: Option.Option<{ readonly _tag: string }>): boolean =>
+  Option.isSome(lifecycle) && lifecycle.value._tag === "CompletedSuccessfully"
+
+const dependantReleaseGraphProvesSettledTask = (graph: TaskDagSnapshot, taskId: TaskId): boolean =>
+  completeLifecycle(graph.lifecycleOf(taskId)) &&
+  graph.prerequisitesOf(taskId).every((prerequisite) => completeLifecycle(graph.lifecycleOf(prerequisite)))
+
+const dependantReleaseGraphObservationsThrough = (
+  items: ReadonlyArray<TraceHistoryItem>,
+  position: JournalPosition
+): ReadonlyArray<TaskTrackerFactsObservation> =>
+  items.flatMap(({ occurrence }) =>
+    occurrence._tag === "TaskTrackerFactsObserved" && occurrence.recordedAt <= position ? [occurrence.evidence] : []
+  )
+
+const dependantReleaseGraphFor = (
+  source: Extract<WorkflowOccurrenceValue, { readonly _tag: "TaskTrackerFactsObserved" }>,
+  settlement: SettledOccurrence,
+  items: ReadonlyArray<TraceHistoryItem>
+): Option.Option<TaskDagSnapshot> =>
+  reconstructedTaskGraphFor(
+    { taskTrackerFacts: dependantReleaseGraphObservationsThrough(items, source.recordedAt) },
+    settlement.event.successObservation.target
+  )
+
+const dependantReleaseSettlementProofMatches = (
+  source: CompleteGraphObservationOccurrence,
+  settlement: SettledOccurrence
+): boolean =>
+  taskTrackerTargetKey(source.evidence.target) === taskTrackerTargetKey(settlement.event.successObservation.target)
+
+const dependantReleaseFactMatchesSettlement = (
+  fact: DependantReleaseFact,
+  source: CompleteGraphObservationOccurrence,
+  settlement: SettledOccurrence
+): boolean =>
+  sameJson(settlement.event, fact.settlement) &&
+  taskIdsOfObservation(source.evidence).includes(settlement.event.claim.plannedAttempt.taskId) &&
+  fact.settlementSource.position < fact.graphSource.position &&
+  source.recordedAt === fact.graphSource.position
 
 const dependantReleaseSettlementMatches = (
   fact: DependantReleaseFact,
   source: Extract<WorkflowOccurrenceValue, { readonly _tag: "TaskTrackerFactsObserved" }>,
   graph: TraceHistoryItem | undefined,
-  settlement: TraceHistoryItem | undefined
+  settlement: TraceHistoryItem | undefined,
+  items: ReadonlyArray<TraceHistoryItem>
 ): boolean => {
-  if (graph?.occurrence._tag !== "TaskTrackerFactsObserved") return false
-  if (settlement?.occurrence._tag !== "IntegrationFinalitySettledOccurred") return false
+  if (!dependantReleaseGraphIdentityMatches(fact, graph)) return false
+  if (!dependantReleaseSettlementIdentityMatches(fact, settlement)) return false
+  if (!isCompleteGraphObservation(source)) return false
+  if (!dependantReleaseSettlementProofMatches(source, settlement.occurrence)) return false
+  const reconstructed = dependantReleaseGraphFor(source, settlement.occurrence, items)
+  if (Option.isNone(reconstructed)) return false
+  const taskId = settlement.occurrence.event.claim.plannedAttempt.taskId
   return (
-    sameJson(settlement.occurrence.event, fact.settlement) &&
-    taskIdsOfObservation(source.evidence).includes(fact.settlement.claim.plannedAttempt.taskId) &&
-    fact.settlementSource.position < fact.graphSource.position
+    dependantReleaseGraphProvesSettledTask(reconstructed.value, taskId) &&
+    dependantReleaseFactMatchesSettlement(fact, source, settlement.occurrence)
   )
 }
 
@@ -759,7 +842,7 @@ const dependantReleaseFactIssue = (
   if (!dependantGraphObservationMatches(fact, sourceItem)) {
     return "Dependant-release evidence must bind the exact later complete graph and earlier settlement"
   }
-  return dependantReleaseSettlementMatches(fact, sourceItem.occurrence, graph, settlement)
+  return dependantReleaseSettlementMatches(fact, sourceItem.occurrence, graph, settlement, items)
     ? undefined
     : "Dependant-release evidence must bind the exact later complete graph and earlier settlement"
 }
@@ -920,29 +1003,36 @@ const taskIdsOfObservation = (observation: TaskTrackerFactsObservation): Readonl
   }
 }
 
-const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<OperationId> => {
-  if (
-    occurrence._tag === "PlannedAttemptWorktreeObserved" ||
-    occurrence._tag === "TargetLineageObserved" ||
-    occurrence._tag === "AttemptRestartAuthorityReadFailed" ||
-    occurrence._tag === "TaskClaimAcquired" ||
-    occurrence._tag === "TaskClaimReleased" ||
-    occurrence._tag === "TaskTrackerFactsObserved"
-  ) {
-    return [occurrence.originatingActionOperationId]
-  }
-  return []
+const operationIdsOfHistoricalWorktreeOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined => {
+  if (occurrence._tag === "TaskWorktreeReconciliationInitiated") return [workflowOperationId(occurrence.operation)]
+  return occurrence._tag === "TaskWorktreeReady" ? [occurrence.operationId] : undefined
 }
+
+const operationIdsOfObservedOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined => {
+  if (
+    occurrence._tag !== "PlannedAttemptWorktreeObserved" &&
+    occurrence._tag !== "TargetLineageObserved" &&
+    occurrence._tag !== "AttemptRestartAuthorityReadFailed" &&
+    occurrence._tag !== "TaskClaimAcquired" &&
+    occurrence._tag !== "TaskClaimReleased" &&
+    occurrence._tag !== "TaskTrackerFactsObserved"
+  ) {
+    return undefined
+  }
+  return [occurrence.originatingActionOperationId]
+}
+
+const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<OperationId> =>
+  operationIdsOfHistoricalWorktreeOccurrence(occurrence) ?? operationIdsOfObservedOccurrence(occurrence) ?? []
 
 type ExecutorReportOccurrence = Extract<
   WorkflowOccurrenceValue,
   { readonly _tag: "PlannedAttemptExecutorWorkReported" }
 >
-
-type CompleteGraphObservationOccurrence = Extract<
-  WorkflowOccurrenceValue,
-  { readonly _tag: "TaskTrackerFactsObserved" }
-> & { readonly evidence: CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed }
 
 type HistoricalFacetReductionState = {
   readonly factories: HistoricalFacetFactories
@@ -989,13 +1079,6 @@ const historicalFacetTaskIdsOfTrackerOperation = (
   return operation._tag === "ReadCompletionTaskFacts" ? [operation.request.taskId] : [operation.taskId]
 }
 
-const isCompleteGraphObservation = (
-  occurrence: WorkflowOccurrenceValue
-): occurrence is CompleteGraphObservationOccurrence =>
-  occurrence._tag === "TaskTrackerFactsObserved" &&
-  (occurrence.evidence._tag === "CompleteTaskTrackerFacts" ||
-    occurrence.evidence._tag === "UnchangedTaskTrackerFactsReconfirmed")
-
 const reduceDependantReleaseFact = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
   const occurrence = item.occurrence
   if (!isCompleteGraphObservation(occurrence)) return
@@ -1007,15 +1090,15 @@ const reduceDependantReleaseFact = (item: TraceHistoryItem, state: HistoricalFac
       graphTaskIds.includes(candidate.event.claim.plannedAttempt.taskId)
   )
   if (settlement?.occurrence._tag !== "IntegrationFinalitySettledOccurred") return
-  state.integrationFacts.push(
-    state.factories.integrationFact.DependantRelease.make({
-      graphObservation: occurrence.evidence,
-      graphSource: item.identity,
-      settlement: settlement.occurrence.event,
-      settlementSource: settlement.identity,
-      source: item.identity
-    })
-  )
+  const fact = state.factories.integrationFact.DependantRelease.make({
+    graphObservation: occurrence.evidence,
+    graphSource: item.identity,
+    settlement: settlement.occurrence.event,
+    settlementSource: settlement.identity,
+    source: item.identity
+  })
+  if (dependantReleaseFactIssue(fact, item, state.items) !== undefined) return
+  state.integrationFacts.push(fact)
 }
 
 const reduceTrackerReadGap = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
@@ -1064,6 +1147,21 @@ const reduceGitReadGap = (item: TraceHistoryItem, state: HistoricalFacetReductio
   )
 }
 
+const reduceTaskWorktreeReconciliationGap = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
+  const occurrence = item.occurrence
+  if (occurrence._tag !== "TaskWorktreeReconciliationInitiated") return
+  const operationId = workflowOperationId(occurrence.operation)
+  if (historicalFacetHasObservationFor(state.items, operationId, ["TaskWorktreeReady"])) return
+  state.observationGaps.push(
+    state.factories.observationGap.GitObservation.make({
+      action: item.identity,
+      operationId,
+      required: "TaskWorktreeReady",
+      taskIds: [occurrence.operation.plannedAttempt.taskId]
+    })
+  )
+}
+
 const reduceClaimAcquisitionGap = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
   const occurrence = item.occurrence
   if (occurrence._tag !== "TaskClaimAcquisitionInitiated") return
@@ -1097,6 +1195,7 @@ const reduceClaimReleaseGap = (item: TraceHistoryItem, state: HistoricalFacetRed
 const reduceObservationGaps = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
   reduceTrackerReadGap(item, state)
   reduceGitReadGap(item, state)
+  reduceTaskWorktreeReconciliationGap(item, state)
   reduceClaimAcquisitionGap(item, state)
   reduceClaimReleaseGap(item, state)
 }

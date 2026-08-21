@@ -48,7 +48,7 @@ import {
 } from "../workflow-journal/record-key.js"
 import { memoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
 import { sqliteJournalStoreLayer } from "../workflow-journal/adapters/sqlite-store.js"
-import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition } from "../workflow-journal/identity.js"
 import { JournalReadSource } from "../workflow-journal/read-source.js"
 import { InRunJournal, JournalStore, RunLifecycleJournal, type JournalRecord } from "../workflow-journal/store.js"
 import { OperationId } from "../workflow/identity.js"
@@ -68,6 +68,7 @@ import {
   makeTrackerGraphObservationOperation
 } from "../workflow/registry/operation.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task-tracker-read/protocol.js"
+import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import {
   TraceCausalPredecessorMissing,
   TraceCausalPredecessorContradiction,
@@ -172,26 +173,20 @@ const appendIncompleteGraphObservation = Effect.fn("TraceReaderTest.appendIncomp
 const appendIntegrationStart = Effect.fn("TraceReaderTest.appendIntegrationStart")(function* (
   journal: JournalStore["Service"]
 ) {
-  yield* journal.append(
-    runId,
-    JournalRecordKey.make("executor-responsibility-began"),
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-      plannedAttempt: integrationPlannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  yield* journal.append(
-    runId,
-    JournalRecordKey.make("executor-report-accepted"),
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-      report: PlannedAttemptExecutorReport.cases.Terminal.make({
-        correlation: { attemptId: integrationPlannedAttempt.attemptId, runId },
-        result: { _tag: "Accepted", acceptedResult: integrationAcceptedResult }
-      }),
-      version: workflowJournalEventVersion
-    })
-  )
+  const responsibility = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+    plannedAttempt: integrationPlannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  yield* journal.append(runId, describeJournalEvent(responsibility).expectedKey, responsibility)
+  const report = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+    report: PlannedAttemptExecutorReport.cases.Terminal.make({
+      correlation: { attemptId: integrationPlannedAttempt.attemptId, runId },
+      result: { _tag: "Accepted", acceptedResult: integrationAcceptedResult }
+    }),
+    version: workflowJournalEventVersion
+  })
+  yield* journal.append(runId, describeJournalEvent(report).expectedKey, report)
   yield* journal.append(
     runId,
     integrationResponsibilityBeganRecordKey(integrationPlannedAttempt.attemptId),
@@ -372,13 +367,18 @@ it.effect("keeps process-local integration serialization separate from other tra
 it.effect("rejects duplicate OperationIds as visible causal contradictions", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    const beginning = yield* journal.beginRun(runId, target, initialPolicy)
     const duplicateOperationId = OperationId.make("duplicate-operation")
     const operation = makeTrackerGraphObservationOperation(duplicateOperationId, target)
-    yield* journal.append(runId, JournalRecordKey.make("duplicate-operation-first"), taskTrackerReadIntent(operation))
-    yield* journal.append(runId, JournalRecordKey.make("duplicate-operation-second"), taskTrackerReadIntent(operation))
+    const first = taskTrackerReadIntent(operation)
+    const second = taskTrackerReadIntent(operation)
+    const records: ReadonlyArray<JournalRecord> = [
+      beginning,
+      { event: first, key: describeJournalEvent(first).expectedKey, position: JournalPosition.make(2), runId },
+      { event: second, key: describeJournalEvent(second).expectedKey, position: JournalPosition.make(3), runId }
+    ]
 
-    const failure = yield* Effect.flip((yield* TraceReader).read(runId))
+    const failure = yield* Effect.flip(makeTraceReader({ read: () => Effect.succeed(records) }).read(runId))
     expect(failure).toBeInstanceOf(TraceCausalPredecessorContradiction)
     expect(failure).toMatchObject({
       predecessorOperationId: duplicateOperationId,
@@ -392,15 +392,30 @@ it.effect("rejects duplicate OperationIds as visible causal contradictions", () 
 it.effect("rejects a predecessor recorded after its successor as a visible causal contradiction", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    const beginning = yield* journal.beginRun(runId, target, initialPolicy)
     const predecessorOperationId = OperationId.make("recorded-later")
     const successorOperationId = OperationId.make("recorded-first")
     const successor = makeTrackerGraphObservationOperation(successorOperationId, target, [predecessorOperationId])
     const predecessor = makeTrackerGraphObservationOperation(predecessorOperationId, target)
-    yield* journal.append(runId, JournalRecordKey.make("non-earlier-successor"), taskTrackerReadIntent(successor))
-    yield* journal.append(runId, JournalRecordKey.make("non-earlier-predecessor"), taskTrackerReadIntent(predecessor))
+    const successorEvent = taskTrackerReadIntent(successor)
+    const predecessorEvent = taskTrackerReadIntent(predecessor)
+    const records: ReadonlyArray<JournalRecord> = [
+      beginning,
+      {
+        event: successorEvent,
+        key: describeJournalEvent(successorEvent).expectedKey,
+        position: JournalPosition.make(2),
+        runId
+      },
+      {
+        event: predecessorEvent,
+        key: describeJournalEvent(predecessorEvent).expectedKey,
+        position: JournalPosition.make(3),
+        runId
+      }
+    ]
 
-    const failure = yield* Effect.flip((yield* TraceReader).read(runId))
+    const failure = yield* Effect.flip(makeTraceReader({ read: () => Effect.succeed(records) }).read(runId))
     expect(failure).toBeInstanceOf(TraceCausalPredecessorContradiction)
     expect(failure).toMatchObject({ predecessorOperationId, reason: "NotEarlier", runId, successorOperationId })
   }).pipe(Effect.provide(readerLayer))

@@ -75,7 +75,8 @@ import {
   TaskClaimAcquisitionInitiated,
   TaskClaimReleased,
   TaskClaimReleaseInitiated,
-  TaskWorktreeReady
+  TaskWorktreeReady,
+  TaskWorktreeReconciliationInitiated
 } from "./historical-occurrence.js"
 import {
   targetPromotionCorrelationEquals,
@@ -325,7 +326,7 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
-export const workflowOccurrenceProjectionVersion = 8 as const // eslint-disable-line no-magic-numbers
+export const workflowOccurrenceProjectionVersion = 9 as const // eslint-disable-line no-magic-numbers
 
 const relationshipKey = (runId: RunId, relatedId: string): string => JSON.stringify([runId, relatedId])
 
@@ -679,7 +680,9 @@ const historicalFocusedCompletionEventKinds = {
   CompletionTaskRejected: true,
   CompletionTaskRequestLookupIntended: true,
   CompletionTaskRequestLookupObserved: true,
-  CompletionTaskResponseLost: true
+  CompletionTaskResponseLost: true,
+  PostPromotionBlockerCandidateAncestryReadIntended: true,
+  PostPromotionBlockerCandidateAncestryObserved: true
 } as const
 
 const historicalClaimReplacementEventKinds = {
@@ -879,11 +882,16 @@ type IntegratorCandidateIntentJournalEvent = Extract<
 const historicalRunKey = (run: {
   readonly session: { readonly sessionId: string }
   readonly ordinal: number
-}): string => `${run.session.sessionId}:${run.ordinal}`
+}): string => JSON.stringify([run.session.sessionId, run.ordinal])
 
 const integratorSessionKey = (session: { readonly sessionId: string }): string => session.sessionId
 
-const promotionAttemptKey = (requestId: string, ordinal: number): string => `${requestId}:${ordinal}`
+const promotionAttemptKey = (requestId: string, ordinal: number): string => JSON.stringify([requestId, ordinal])
+
+const historicalCandidateKey = (
+  run: { readonly session: { readonly sessionId: string }; readonly ordinal: number },
+  candidateText: string
+): string => JSON.stringify([run.session.sessionId, run.ordinal, candidateText])
 
 const integratorSessionCorrelationsEqual = Schema.toEquivalence(IntegratorSessionCorrelation)
 
@@ -986,7 +994,9 @@ const historicalFinalityStepEventKinds = {
   CompletionTaskRequestLookupIntended: true,
   CompletionTaskRequestLookupObserved: true,
   CompletionTaskResponseLost: true,
-  IntegrationFinalitySettled: true
+  IntegrationFinalitySettled: true,
+  PostPromotionBlockerCandidateAncestryReadIntended: true,
+  PostPromotionBlockerCandidateAncestryObserved: true
 } as const
 
 type HistoricalTaskClaimEvent = Extract<
@@ -1153,7 +1163,15 @@ const projectHistoricalAttemptWorktree = (
   }
   if (event._tag === "TaskWorktreeReconciliationIntended") {
     context.taskWorktreeIntents.set(relationshipKey(record.runId, event.operation.operationId), event.operation)
-    return Effect.void
+    return Effect.succeed(
+      TaskWorktreeReconciliationInitiated.make({
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        operation: event.operation,
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
   }
   if (event._tag === "AttemptStoppageIntended") {
     return Effect.succeed(
@@ -1341,7 +1359,7 @@ const projectHistoricalCandidateIntent = (
   if (start === undefined || !Schema.toEquivalence(IntegratorRunCorrelation)(start.run, event.run)) {
     return historicalFailure(record, "candidate qualification " + event.candidateText + " has no earlier run start")
   }
-  const candidateKey = historicalRunKey(event.run) + ":" + event.candidateText
+  const candidateKey = historicalCandidateKey(event.run, event.candidateText)
   if (context.integratorCandidateIntents.has(candidateKey)) {
     return historicalFailure(record, "duplicate candidate qualification intent " + candidateKey)
   }
@@ -1363,7 +1381,7 @@ const projectHistoricalCandidateObserved = (
   event: Extract<HistoricalCandidateEvent, { readonly _tag: "IntegratorRunCandidateGitObserved" }>,
   context: HistoricalProjectionContext
 ): HistoricalProjectionResult => {
-  const key = historicalRunKey(event.run) + ":" + event.candidateText
+  const key = historicalCandidateKey(event.run, event.candidateText)
   const intent = context.integratorCandidateIntents.get(key)
   if (
     intent === undefined ||

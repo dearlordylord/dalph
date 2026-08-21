@@ -11,7 +11,7 @@ import {
 } from "@dalph/contracts"
 import { TaskDagWire } from "../authorities/task-tracker/graph.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tracker/target.js"
-import { JournalPosition } from "../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../workflow-journal/identity.js"
 import {
   JournalReadSource,
   journalReadSourceLayer,
@@ -20,6 +20,7 @@ import {
 import type { JournalRecord, JournalStoreError } from "../workflow-journal/store.js"
 import { OperationId } from "../workflow/identity.js"
 import { WorkflowRunBeganEvent, type WorkflowJournalEvent } from "../workflow/registry/event.js"
+import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import {
   projectWorkflowOccurrences,
@@ -54,7 +55,9 @@ import {
   CompletionTaskRequestLookupIntendedEvent,
   CompletionTaskRequestLookupObservedEvent,
   CompletionTaskResponseLostEvent,
-  IntegrationFinalitySettledEvent
+  IntegrationFinalitySettledEvent,
+  PostPromotionBlockerCandidateAncestryReadIntendedEvent,
+  PostPromotionBlockerCandidateAncestryObservedEvent
 } from "../workflow/protocols/integration-finality/events.js"
 import type { IntegrationFinalityJournalEvent } from "../workflow/protocols/integration-finality/events.js"
 import type { CompletionSuccessObservation } from "../workflow/protocols/integration-finality/completion-claim.js"
@@ -90,16 +93,16 @@ import {
 } from "../workflow/protocols/integration-finality/history.js"
 import { validateIntegrationHistoryRecord } from "../coordination/reconstruction/integration-history-validation.js"
 import { makeIntegrationHistoryIndexes } from "../coordination/reconstruction/integration-history.js"
-import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { CurrentSignal } from "../coordination/delivery/relations.js"
 import {
   traceHistoricalFacetsAt,
   traceHistoricalFacetsIssue,
   type HistoricalFacetFactories
 } from "./trace-reader-historical-facets.js"
+import { sameJson } from "./trace-equality.js"
 
 /** Version of the immutable production trace contract consumed by presentation. */
-export const traceReaderSchemaVersion = 2 as const // eslint-disable-line no-magic-numbers
+export const traceReaderSchemaVersion = 3 as const // eslint-disable-line no-magic-numbers
 
 /**
  * Identifies one exact committed journal position in one Run. Cursors and
@@ -184,7 +187,7 @@ export const TraceObservationGap = Schema.TaggedUnion({
   GitObservation: {
     action: TraceItemIdentity,
     operationId: OperationId,
-    required: Schema.Literals(["PlannedAttemptWorktreeObserved", "TargetLineageObserved"]),
+    required: Schema.Literals(["PlannedAttemptWorktreeObserved", "TargetLineageObserved", "TaskWorktreeReady"]),
     taskIds: Schema.Array(TaskId)
   },
   IntegratorResult: { action: TraceItemIdentity, run: IntegratorRunCorrelation },
@@ -271,7 +274,9 @@ export const TraceIntegrationFact = Schema.TaggedUnion({
       CompletionTaskRejectedEvent,
       CompletionTaskRequestLookupIntendedEvent,
       CompletionTaskRequestLookupObservedEvent,
-      CompletionTaskResponseLostEvent
+      CompletionTaskResponseLostEvent,
+      PostPromotionBlockerCandidateAncestryReadIntendedEvent,
+      PostPromotionBlockerCandidateAncestryObservedEvent
     ]),
     source: TraceItemIdentity
   },
@@ -610,6 +615,7 @@ export type TraceAtCursor = typeof TraceAtCursor.Type
 export const TracePrefixIssue = Schema.TaggedUnion({
   FirstRecordNotRunBeginning: { position: JournalPosition },
   PositionGap: { actualPosition: JournalPosition, expectedPosition: JournalPosition },
+  RecordKeyMismatch: { actualKey: JournalRecordKey, expectedKey: JournalRecordKey, position: JournalPosition },
   RunMismatch: { actualRunId: RunId, expectedRunId: RunId, position: JournalPosition }
 })
 export type TracePrefixIssue = typeof TracePrefixIssue.Type
@@ -753,6 +759,12 @@ type FinalityClaimDeletionEvent = Extract<
   }
 >
 type FinalitySettledEvent = Extract<IntegrationFinalityJournalEvent, { readonly _tag: "IntegrationFinalitySettled" }>
+type FinalityPostPromotionBlockerAncestryEvent = Extract<
+  IntegrationFinalityJournalEvent,
+  {
+    readonly _tag: "PostPromotionBlockerCandidateAncestryReadIntended" | "PostPromotionBlockerCandidateAncestryObserved"
+  }
+>
 
 const isFinalityCompletionTaskReadEvent = (
   event: IntegrationFinalityJournalEvent
@@ -812,16 +824,42 @@ const completionClaimOperationIds = (
 const finalitySettledOperationIds = (event: FinalitySettledEvent): ReadonlyArray<OperationId> =>
   uniqueOperationIds([event.replacementOperationId, event.deletionOperationId, event.successObservation.operationId])
 
-/** Collects every operation identity carried by one finality event, including nested reads and claim-release requests. */
-const operationIdsOfFinalityEvent = (event: IntegrationFinalityJournalEvent): ReadonlyArray<OperationId> => {
+const postPromotionBlockerAncestryOperationIds = (
+  event: FinalityPostPromotionBlockerAncestryEvent
+): ReadonlyArray<OperationId> => [event.operationId]
+
+const operationIdsOfFinalityCompletionEvent = (
+  event: IntegrationFinalityJournalEvent
+): ReadonlyArray<OperationId> | undefined => {
   if (event._tag === "CompletionTaskAttemptIntended") return completionTaskAttemptOperationIds(event)
   if (isFinalityCompletionTaskReadEvent(event)) return completionTaskReadOperationIds(event)
   if (isFinalityCompletionTaskOutcomeEvent(event)) return completionTaskOutcomeOperationIds(event)
+  return undefined
+}
+
+const operationIdsOfFinalityClaimEvent = (
+  event: IntegrationFinalityJournalEvent
+): ReadonlyArray<OperationId> | undefined => {
   if (event._tag === "CompletionClaimDeletionReadObserved") return completionClaimDeletionReadOperationIds(event)
   if (isFinalityClaimReplacementEvent(event) || isFinalityClaimDeletionEvent(event)) {
     return completionClaimOperationIds(event)
   }
+  return undefined
+}
+
+/** Collects every operation identity carried by one finality event, including nested reads and claim-release requests. */
+const operationIdsOfFinalityEvent = (event: IntegrationFinalityJournalEvent): ReadonlyArray<OperationId> => {
+  const completion = operationIdsOfFinalityCompletionEvent(event)
+  if (completion !== undefined) return completion
+  const claim = operationIdsOfFinalityClaimEvent(event)
+  if (claim !== undefined) return claim
   if (event._tag === "IntegrationFinalitySettled") return finalitySettledOperationIds(event)
+  if (
+    event._tag === "PostPromotionBlockerCandidateAncestryReadIntended" ||
+    event._tag === "PostPromotionBlockerCandidateAncestryObserved"
+  ) {
+    return postPromotionBlockerAncestryOperationIds(event)
+  }
   return []
 }
 
@@ -968,17 +1006,49 @@ const finalitySettledReferences = (event: FinalitySettledEvent): ReadonlyArray<N
   }
 ]
 
+const postPromotionBlockerAncestryReferences = (
+  event: FinalityPostPromotionBlockerAncestryEvent
+): ReadonlyArray<NestedOperationReference> => [
+  {
+    id: event.operationId,
+    payload: { authorization: event.authorization },
+    role: "completion.post-promotion-blocker-ancestry-read"
+  }
+]
+
+const nestedOperationReferencesOfCompletionEvent = (
+  event: IntegrationFinalityJournalEvent
+): ReadonlyArray<NestedOperationReference> | undefined => {
+  if (event._tag === "CompletionTaskAttemptIntended") return completionTaskAttemptReferences(event)
+  if (isFinalityCompletionTaskReadEvent(event)) return completionTaskReadReferences(event)
+  if (isFinalityCompletionTaskOutcomeEvent(event)) return completionTaskOutcomeReferences(event)
+  return undefined
+}
+
+const nestedOperationReferencesOfClaimEvent = (
+  event: IntegrationFinalityJournalEvent
+): ReadonlyArray<NestedOperationReference> | undefined => {
+  if (event._tag === "CompletionClaimDeletionReadObserved") return completionClaimDeletionReadReferences(event)
+  if (isFinalityClaimReplacementEvent(event)) return completionClaimReplacementReferences(event)
+  if (isFinalityClaimDeletionEvent(event)) return completionClaimDeletionReferences(event)
+  return undefined
+}
+
 /** Names every nested finality operation so one id cannot silently serve two boundaries. */
 const nestedOperationReferencesOfFinalityEvent = (
   event: IntegrationFinalityJournalEvent
 ): ReadonlyArray<NestedOperationReference> => {
-  if (event._tag === "CompletionTaskAttemptIntended") return completionTaskAttemptReferences(event)
-  if (isFinalityCompletionTaskReadEvent(event)) return completionTaskReadReferences(event)
-  if (isFinalityCompletionTaskOutcomeEvent(event)) return completionTaskOutcomeReferences(event)
-  if (event._tag === "CompletionClaimDeletionReadObserved") return completionClaimDeletionReadReferences(event)
-  if (isFinalityClaimReplacementEvent(event)) return completionClaimReplacementReferences(event)
-  if (isFinalityClaimDeletionEvent(event)) return completionClaimDeletionReferences(event)
+  const completion = nestedOperationReferencesOfCompletionEvent(event)
+  if (completion !== undefined) return completion
+  const claim = nestedOperationReferencesOfClaimEvent(event)
+  if (claim !== undefined) return claim
   if (event._tag === "IntegrationFinalitySettled") return finalitySettledReferences(event)
+  if (
+    event._tag === "PostPromotionBlockerCandidateAncestryReadIntended" ||
+    event._tag === "PostPromotionBlockerCandidateAncestryObserved"
+  ) {
+    return postPromotionBlockerAncestryReferences(event)
+  }
   return []
 }
 
@@ -1048,6 +1118,11 @@ const operationIdsOfReplacementOccurrence = (
 ): ReadonlyArray<OperationId> | undefined =>
   occurrence._tag === "PlannedAttemptReplaced" ? [workflowOperationId(occurrence.successorPlan)] : undefined
 
+const operationIdsOfHistoricalAttemptOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined =>
+  occurrence._tag === "TaskWorktreeReconciliationInitiated" ? [workflowOperationId(occurrence.operation)] : undefined
+
 const operationIdsOfFinalityOccurrence = (
   occurrence: WorkflowOccurrenceValue
 ): ReadonlyArray<OperationId> | undefined =>
@@ -1057,6 +1132,7 @@ const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): Readonly
   operationIdsOfOperationOccurrence(occurrence) ??
   operationIdsOfObservedOccurrence(occurrence) ??
   operationIdsOfReplacementOccurrence(occurrence) ??
+  operationIdsOfHistoricalAttemptOccurrence(occurrence) ??
   operationIdsOfFinalityOccurrence(occurrence) ??
   []
 
@@ -1131,18 +1207,30 @@ const taskIdsOfHistoricalTaskClaim = (occurrence: WorkflowOccurrenceValue): Read
   return occurrence._tag === "TaskClaimReleased" ? [occurrence.release.claim.taskId] : undefined
 }
 
+const historicalAttemptWorktreeOccurrenceKinds = {
+  AttemptImplementationAbandoned: true,
+  AttemptStoppageIntended: true,
+  StoppedAttemptClaimPreserved: true,
+  TaskAttemptPlanned: true,
+  TaskWorktreeReady: true,
+  TaskWorktreeReconciliationInitiated: true
+} as const
+
+type HistoricalAttemptWorktreeOccurrence = Extract<
+  WorkflowOccurrenceValue,
+  { readonly _tag: keyof typeof historicalAttemptWorktreeOccurrenceKinds }
+>
+
+const isHistoricalAttemptWorktreeOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): occurrence is HistoricalAttemptWorktreeOccurrence =>
+  Object.hasOwn(historicalAttemptWorktreeOccurrenceKinds, occurrence._tag)
+
 const taskIdsOfHistoricalAttemptWorktree = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
-  if (
-    occurrence._tag !== "TaskAttemptPlanned" &&
-    occurrence._tag !== "TaskWorktreeReady" &&
-    occurrence._tag !== "AttemptStoppageIntended" &&
-    occurrence._tag !== "AttemptImplementationAbandoned" &&
-    occurrence._tag !== "StoppedAttemptClaimPreserved"
-  ) {
-    return undefined
-  }
+  if (!isHistoricalAttemptWorktreeOccurrence(occurrence)) return undefined
   if (occurrence._tag === "TaskWorktreeReady") return [occurrence.operation.plannedAttempt.taskId]
   if (occurrence._tag === "TaskAttemptPlanned") return [occurrence.plannedAttempt.taskId]
+  if (occurrence._tag === "TaskWorktreeReconciliationInitiated") return [occurrence.operation.plannedAttempt.taskId]
   return [occurrence.subject.plannedAttempt.taskId]
 }
 
@@ -1202,7 +1290,7 @@ const taskIdsOfHistoricalPreservation = (occurrence: WorkflowOccurrenceValue): R
   if (occurrence._tag === "IntegrationQuarantined" || occurrence._tag === "IntegrationProviderRunActivityAbsent") {
     return [occurrence.correlation.plannedAttempt.taskId]
   }
-  return occurrence._tag === "IntegrationQuarantineDirectionApplied" ? undefined : undefined
+  return undefined
 }
 
 const isHistoricalFinalityOccurrence = (
@@ -1225,6 +1313,7 @@ const isHistoricalFinalityOccurrence = (
 const taskIdsOfHistoricalFinality = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined => {
   if (!isHistoricalFinalityOccurrence(occurrence)) return undefined
   const event = occurrence.event
+  if ("authorization" in event) return [event.authorization.claim.plannedAttempt.taskId]
   if ("claim" in event) return [event.claim.plannedAttempt.taskId]
   if ("request" in event && "claim" in event.request) return [event.request.claim.plannedAttempt.taskId]
   return []
@@ -1264,6 +1353,12 @@ const prefixIssues = (runId: RunId, records: ReadonlyArray<JournalRecord>): Read
     if (record.position !== expectedPosition) {
       issues.push(TracePrefixIssue.cases.PositionGap.make({ actualPosition: record.position, expectedPosition }))
     }
+    const expectedKey = describeJournalEvent(record.event).expectedKey
+    if (record.key !== expectedKey) {
+      issues.push(
+        TracePrefixIssue.cases.RecordKeyMismatch.make({ actualKey: record.key, expectedKey, position: record.position })
+      )
+    }
     if (index === 0 && record.event._tag !== "WorkflowRunBegan") {
       issues.push(TracePrefixIssue.cases.FirstRecordNotRunBeginning.make({ position: record.position }))
     }
@@ -1301,7 +1396,9 @@ const indexedFinalityEventKinds = {
   CompletionTaskRequestLookupIntended: true,
   CompletionTaskRequestLookupObserved: true,
   CompletionTaskResponseLost: true,
-  IntegrationFinalitySettled: true
+  IntegrationFinalitySettled: true,
+  PostPromotionBlockerCandidateAncestryReadIntended: true,
+  PostPromotionBlockerCandidateAncestryObserved: true
 } as const
 
 type IndexedFinalityEvent = Extract<WorkflowJournalEvent, { readonly _tag: keyof typeof indexedFinalityEventKinds }>
@@ -1439,14 +1536,9 @@ const finalityHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord
   return undefined
 }
 
-/** Trace fixtures may use reader-local record keys; canonical validators need event-derived keys. */
-const recordsForCanonicalValidation = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalRecord> =>
-  records.map((record) => ({ ...record, key: describeJournalEvent(record.event).expectedKey }))
-
 const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
   const indexes = makeIntegrationHistoryIndexes()
-  const canonicalRecords = recordsForCanonicalValidation(records)
-  for (const record of canonicalRecords) {
+  for (const record of records) {
     let issue: string | undefined
     validateIntegrationHistoryRecord(
       record,
@@ -1458,7 +1550,7 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
       (detail) => {
         issue ??= detail
       },
-      canonicalRecords
+      records
     )
     if (issue !== undefined) return issue
     if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
@@ -1612,7 +1704,6 @@ const relationshipsAt = (
   workflowCausalEdges: workflowCausalEdgesOf(operationIndex)
 })
 
-const sameJson = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right)
 const cursorPrefixOf = (
   cursor: TraceCursor,
   records: ReadonlyArray<JournalRecord>
