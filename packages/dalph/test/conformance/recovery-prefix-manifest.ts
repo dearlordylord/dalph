@@ -22,6 +22,7 @@ const recoveryPrefixBoundaryIds = [
   "control-direction",
   "attempt-choice",
   "run-establishment",
+  "run-cancellation-finality",
   "application-exit"
 ] as const
 const RecoveryPrefixBoundaryId = Schema.Literals(recoveryPrefixBoundaryIds)
@@ -153,6 +154,23 @@ const metadataReasonFor = (family: string): typeof RecoveryPrefixQualification.T
   metadataOnly(
     `${family} is inventory metadata only; #142 qualifies both physical stores through tracker completion and claims no dual-store matrix for this row.`
   )
+
+const runCancellationEvidence: ReadonlyArray<RecoveryPrefixEvidenceReference> = [
+  { _tag: "WorkflowEventTag", tag: "RunCancellationApplied" },
+  { _tag: "WorkflowEventTag", tag: "TaskTrackerReadIntentRecorded" },
+  { _tag: "WorkflowEventTag", tag: "TaskTrackerFactsObserved" },
+  { _tag: "WorkflowEventTag", tag: "WorkflowRunTerminated" },
+  {
+    _tag: "FocusedTestSeam",
+    path: "packages/dalph/test/cassettes/run-cancellation.test.ts",
+    reference: "re-enters once after an unacknowledged cancellation termination append"
+  },
+  {
+    _tag: "FocusedTestSeam",
+    path: "packages/dalph/test/conformance/run-cancellation-recovery-prefixes.test.ts",
+    reference: "replays cancellation recovery prefixes P0-P6 through memory and SQLite"
+  }
+]
 
 const sourceManifest = {
   schemaVersion: 1,
@@ -320,6 +338,25 @@ const sourceManifest = {
       endpoints: { P0: "the empty journal before WorkflowRunBegan", P6: "WorkflowRunBegan or WorkflowRunTerminated" },
       notApplicableReason: (cut) => noEndpointReasonFor("Run establishment", cut),
       qualification: metadataReasonFor("Run establishment")
+    }),
+    boundary({
+      id: "run-cancellation-finality",
+      family: "Run cancellation finality",
+      description: "Fresh G2 graph recovery, terminal append acknowledgement loss, and exactly-once re-entry.",
+      evidence: runCancellationEvidence,
+      endpoints: {
+        P0: "the record before RunCancellationApplied",
+        P1: "RunCancellationApplied",
+        P2: "fresh G2 graph read intent before the first recovery crash",
+        P3: "fresh G2 graph observation before the first recovery crash",
+        P4: "fresh G2 graph read intent after coordinator re-entry",
+        P5: "fresh G2 graph observation proving cancellation finality",
+        P6: "WorkflowRunTerminated"
+      },
+      notApplicableReason: (cut) => noEndpointReasonFor("Run cancellation finality", cut),
+      qualification: metadataOnly(
+        "Run cancellation finality is covered by focused production runner/bootstrap recovery tests; #142 remains the manifest's representative dual-store qualification."
+      )
     }),
     boundary({
       id: "application-exit",

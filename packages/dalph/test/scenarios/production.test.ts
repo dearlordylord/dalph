@@ -1212,6 +1212,7 @@ it.effect("terminates once only after G2 proves the target complete and responsi
       const runId = yield* freshWorkflowRunId(target)
       const projected = projectTrackerSnapshot({
         revision: "production-single-start-snapshot",
+        rootTaskId: TaskId.make("A"),
         tasks: [
           {
             id: TaskId.make("A"),
@@ -1297,6 +1298,7 @@ it.effect("rejects re-entry after fresh tracker facts conclusively block the Run
       const runId = yield* freshWorkflowRunId(target)
       const projected = projectTrackerSnapshot({
         revision: "production-incomplete-snapshot",
+        rootTaskId: TaskId.make("A"),
         tasks: [
           {
             id: TaskId.make("A"),

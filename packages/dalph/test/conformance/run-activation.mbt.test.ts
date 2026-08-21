@@ -74,8 +74,7 @@ import {
   attemptPlanRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
-  runCancellationAppliedRecordKey
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import {
   type JournalStoreService,
@@ -101,7 +100,6 @@ import { taskWorkCapacityControlLayer } from "../../../orchestrator/src/control/
 import { PlannedAttemptProtocolController } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { continuePlannedAttemptExecutorWork } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { RunFinalityDecision } from "../../../orchestrator/src/coordination/frontier/frontier.js"
-import { RunCancellationAppliedEvent } from "../../../orchestrator/src/workflow/protocols/run-cancellation/events.js"
 import {
   executeFreshTrackerGraphRead,
   executeTrackerGraphRead
@@ -173,6 +171,16 @@ const GraphOutcome = Schema.Struct({
   tag: Schema.Literals(["GraphAllSucceeded", "GraphBlocked", "GraphUnsettled"]),
   value: Schema.Unknown
 })
+const TaskIdVariant = Schema.Struct({ tag: Schema.Literals(["TaskA", "TaskB", "TaskC"]), value: Schema.Unknown })
+const TrackerContentIdentityVariant = Schema.Struct({
+  tag: Schema.Literals([
+    "ContentRevisionAllSucceeded",
+    "ContentRevisionBlocked",
+    "ContentRevisionUnsettled",
+    "StaleContentRevision"
+  ]),
+  value: Schema.Unknown
+})
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
     durable: Schema.Struct({
@@ -183,7 +191,12 @@ const SpecProjection = Schema.Struct({
     }),
     requestedRunId: RunIdVariant,
     requestedTarget: TargetVariant,
-    trackerFinality: Schema.Struct({ targetSettled: Schema.Boolean, graphOutcome: GraphOutcome }),
+    trackerFinality: Schema.Struct({
+      targetSettled: Schema.Boolean,
+      graphOutcome: GraphOutcome,
+      contentIdentity: TrackerContentIdentityVariant,
+      rootTaskId: TaskIdVariant
+    }),
     process: Schema.Struct({
       establishedRun: EstablishedRunVariant,
       entryFailure: EntryFailureVariant,
@@ -269,6 +282,13 @@ const snapshotForGraphOutcome = (outcome: "GraphAllSucceeded" | "GraphBlocked" |
   return projected.snapshot
 }
 
+const trackerContentIdentityFor = (outcome: GraphOutcomeTag): TrackerContentIdentityTag =>
+  outcome === "GraphAllSucceeded"
+    ? "ContentRevisionAllSucceeded"
+    : outcome === "GraphBlocked"
+      ? "ContentRevisionBlocked"
+      : "ContentRevisionUnsettled"
+
 const finalityEvidenceFor = (
   eventRunId: RunId,
   eventTarget: TrackerTarget,
@@ -311,6 +331,12 @@ type EntryFailureTag =
   | "TerminatedRunFailure"
 type TerminalDispositionTag = "NoTerminal" | "Completed" | "Blocked" | "Cancelled"
 type GraphOutcomeTag = "GraphAllSucceeded" | "GraphBlocked" | "GraphUnsettled"
+type TaskIdTag = "TaskA" | "TaskB" | "TaskC"
+type TrackerContentIdentityTag =
+  | "ContentRevisionAllSucceeded"
+  | "ContentRevisionBlocked"
+  | "ContentRevisionUnsettled"
+  | "StaleContentRevision"
 type ActivationCommandTag =
   | "ActivateEstablishedRun"
   | "ApplyCancellation"
@@ -365,6 +391,8 @@ interface DriverProjection {
   readonly terminationDisposition: TerminalDispositionTag
   readonly terminalDisposition: TerminalDispositionTag
   readonly graphOutcome: GraphOutcomeTag
+  readonly trackerContentIdentity: TrackerContentIdentityTag
+  readonly trackerRootTaskId: TaskIdTag
   readonly trackerCalls: number
   readonly trackerSettled: boolean
 }
@@ -438,6 +466,8 @@ const makeRunActivationDriverImplementation = () => {
   let processLosses = 0
   let trackerSettled = false
   let graphOutcome: GraphOutcomeTag = "GraphAllSucceeded"
+  let trackerRootTaskId: TaskIdTag = "TaskA"
+  let trackerContentIdentity: TrackerContentIdentityTag = "ContentRevisionAllSucceeded"
   let cancellationApplied = false
   let cancellationAppends = 0
   let cancellationRedeliveries = 0
@@ -907,15 +937,17 @@ const makeRunActivationDriverImplementation = () => {
                     if (cancellationApplied || cancellationAppends !== 0) {
                       return yield* Effect.die("duplicate Run cancellation crossed the idempotent journal boundary")
                     }
-                    yield* journal.append(
-                      runId,
-                      runCancellationAppliedRecordKey,
-                      RunCancellationAppliedEvent.make({
-                        initiatedBy: { _tag: "Operator" },
-                        occurrenceClassification: "InitiatedAction",
-                        version: workflowJournalEventVersion
-                      })
-                    )
+                    const result = yield* service.operatorControl.applyRunCancellation({ runId })
+                    if (result._tag !== "RunCancellationApplied") {
+                      return yield* Effect.die(`Run cancellation was not applied: ${result._tag}`)
+                    }
+                    const reduced = reduceWorkflowJournalHistory(runId, records)
+                    if (
+                      reduced._tag !== "ValidWorkflowJournalHistory" ||
+                      reduced.runState.cancellation._tag !== "RunCancellationApplied"
+                    ) {
+                      return yield* Effect.die("production cancellation control did not publish its durable fact")
+                    }
                     cancellationApplied = true
                     cancellationAppends += 1
                     yield* Deferred.succeed(command.acknowledged, undefined)
@@ -1044,6 +1076,10 @@ const makeRunActivationDriverImplementation = () => {
                     if (!cancellationApplied || cancellationAppends !== 1 || cancellationRedeliveries !== 0) {
                       return yield* Effect.die("Run cancellation redelivery lacked one durable applied event")
                     }
+                    const result = yield* service.operatorControl.applyRunCancellation({ runId })
+                    if (result._tag !== "RunCancellationAlreadyApplied") {
+                      return yield* Effect.die(`Run cancellation redelivery was not idempotent: ${result._tag}`)
+                    }
                     if (records.filter(({ event }) => event._tag === "RunCancellationApplied").length !== 1) {
                       return yield* Effect.die("Run cancellation redelivery changed durable history")
                     }
@@ -1061,9 +1097,10 @@ const makeRunActivationDriverImplementation = () => {
                       !("disposition" in proof) ||
                       !("evidence" in proof) ||
                       proof.evidence.rootTaskId !== taskA ||
-                      !proof.evidence.rootPresent
+                      !proof.evidence.rootPresent ||
+                      proof.evidence.contentIdentity !== snapshotForGraphOutcome(graphOutcome).revision
                     )
-                      return yield* Effect.die("terminal classification lacked graph evidence")
+                      return yield* Effect.die("terminal classification lacked exact graph identity evidence")
                     const disposition = proof.disposition
                     terminalDisposition = disposition
                     terminationDisposition = disposition
@@ -1121,6 +1158,8 @@ const makeRunActivationDriverImplementation = () => {
         processLosses = 0
         trackerSettled = false
         graphOutcome = "GraphAllSucceeded"
+        trackerRootTaskId = "TaskA"
+        trackerContentIdentity = trackerContentIdentityFor(graphOutcome)
         cancellationApplied = false
         cancellationAppends = 0
         cancellationRedeliveries = 0
@@ -1224,6 +1263,8 @@ const makeRunActivationDriverImplementation = () => {
         history = "OneUnfinishedHistory"
         latestCapacity = 2
         graphOutcome = "GraphBlocked"
+        trackerRootTaskId = "TaskA"
+        trackerContentIdentity = trackerContentIdentityFor(graphOutcome)
         trackerSettled = true
       }),
     selectCancelledRunGraph: () =>
@@ -1233,6 +1274,8 @@ const makeRunActivationDriverImplementation = () => {
         history = "OneUnfinishedHistory"
         latestCapacity = 2
         graphOutcome = "GraphBlocked"
+        trackerRootTaskId = "TaskA"
+        trackerContentIdentity = trackerContentIdentityFor(graphOutcome)
         trackerSettled = true
       }),
     establishAbsentHistory: () =>
@@ -1498,6 +1541,8 @@ const makeRunActivationDriverImplementation = () => {
         terminationDisposition,
         terminalDisposition,
         graphOutcome,
+        trackerContentIdentity,
+        trackerRootTaskId,
         trackerCalls,
         trackerSettled
       } satisfies DriverProjection)
@@ -1648,7 +1693,9 @@ quintIt(
               trackerSettled: state.trackerFinality.targetSettled,
               terminationDisposition: state.durable.terminationDisposition.tag,
               terminalDisposition: state.process.terminalDisposition.tag,
-              graphOutcome: state.trackerFinality.graphOutcome.tag
+              graphOutcome: state.trackerFinality.graphOutcome.tag,
+              trackerContentIdentity: state.trackerFinality.contentIdentity.tag,
+              trackerRootTaskId: state.trackerFinality.rootTaskId.tag
             })
           ),
           Effect.orDie
@@ -1684,6 +1731,8 @@ quintIt(
         spec.terminationDisposition === implementation.terminationDisposition &&
         spec.terminalDisposition === implementation.terminalDisposition &&
         spec.graphOutcome === implementation.graphOutcome &&
+        spec.trackerContentIdentity === implementation.trackerContentIdentity &&
+        spec.trackerRootTaskId === implementation.trackerRootTaskId &&
         spec.trackerCalls === implementation.trackerCalls &&
         spec.trackerSettled === implementation.trackerSettled
     )

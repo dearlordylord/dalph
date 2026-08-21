@@ -444,7 +444,7 @@ module runCancellation {
     state.process.phase == Active,
     state' = {
       ...state,
-      durable: { ...state.durable, terminalHistory: Cancelled },
+      durable: { ...state.durable, terminalHistory: Completed },
       process: { ...state.process, phase: TerminalHistory, admissionOpen: false },
     },
   }

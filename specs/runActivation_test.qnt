@@ -320,6 +320,23 @@ module runActivationTest {
       })
   }
 
+  run freshGraphEvidenceBindsExactRootAndIndependentContentIdentityTest = {
+    init
+      .then(selectBlockedRunGraph)
+      .then(establishExistingHistory)
+      .then(activateEstablishedRun)
+      .then(readInitialTrackerGraph)
+      .then(reachQuiescence)
+      .then(readPostQuiescenceTrackerGraph)
+      .expect(and {
+        state.trace.trackerCalls == 2,
+        state.trackerFinality.rootTaskId == EXACT_ROOT_TASK_ID,
+        state.trackerFinality.contentIdentity == ContentRevisionBlocked,
+        exactGraphEvidenceReached,
+        exactGraphIdentityReached,
+      })
+  }
+
   run cancellationSettlesBeforeCancelledClassificationTest = {
     init
       .then(selectCancelledRunGraph)

@@ -207,7 +207,12 @@ module runActivationNegativeTest {
       process: {
         ...state.process,
         postQuiescenceReads: 1,
-        finalityObservation: PostQuiescenceObservation(state.trackerFinality),
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: state.trackerFinality.targetSettled,
+          responsibilitiesSettled: state.trackerFinality.responsibilitiesSettled,
+          graphOutcome: state.trackerFinality.graphOutcome,
+          evidence: state.trackerFinality.evidence,
+        }),
       },
       trace: { ...state.trace, trackerCalls: state.trace.trackerCalls + 1 },
     },
@@ -291,6 +296,98 @@ module runActivationNegativeTest {
           responsibilitiesSettled: true,
           graphOutcome: GraphBlocked,
           evidence: MismatchedGraphReadEvidence,
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: the terminal proof must bind the exact root task returned by
+  // the tracker; a Boolean root-present flag cannot substitute for identity.
+  action terminateWithWrongRootGraphEvidence: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          GraphBlocked,
+          ContentRevisionBlocked,
+          TaskB,
+        ),
+      },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            GraphBlocked,
+            ContentRevisionBlocked,
+            TaskB,
+          ),
+        }),
+      },
+      trace: {
+        ...state.trace,
+        trackerCalls: state.trace.trackerCalls + 1,
+        terminationAppends: state.trace.terminationAppends + 1,
+      },
+    },
+  }
+
+  // Forbidden: a fresh read's content identity must be independent of the
+  // operation ordinal and must match the exact graph revision being classified.
+  action terminateWithStaleContentIdentity: bool = all {
+    state.process.phase == ActivatingRun,
+    state.process.quiescent,
+    state.process.postQuiescenceReads == 0,
+    state.trackerFinality.graphOutcome == GraphBlocked,
+    state' = {
+      ...state,
+      trackerFinality: {
+        ...state.trackerFinality,
+        evidence: exactGraphEvidenceFor(
+          state.requestedRunId,
+          state.requestedTarget,
+          state.trace.trackerCalls + 1,
+          GraphBlocked,
+          StaleContentRevision,
+          EXACT_ROOT_TASK_ID,
+        ),
+      },
+      process: {
+        ...state.process,
+        postQuiescenceReads: 1,
+        terminalDisposition: Blocked,
+        finalityObservation: PostQuiescenceObservation({
+          targetSettled: true,
+          responsibilitiesSettled: true,
+          graphOutcome: GraphBlocked,
+          evidence: exactGraphEvidenceFor(
+            state.requestedRunId,
+            state.requestedTarget,
+            state.trace.trackerCalls + 1,
+            GraphBlocked,
+            StaleContentRevision,
+            EXACT_ROOT_TASK_ID,
+          ),
         }),
       },
       trace: {
@@ -493,6 +590,20 @@ module runActivationNegativeTest {
     init.then(selectBlockedRunGraph).then(establishExistingHistory)
       .then(activateEstablishedRun).then(readInitialTrackerGraph)
       .then(reachQuiescence).then(terminateWithMismatchedGraphEvidence)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run wrongRootIdentityIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithWrongRootGraphEvidence)
+      .expect(not(terminationRequiresExactFreshGraphEvidence))
+  }
+
+  run staleContentIdentityIsDetectedTest = {
+    init.then(selectBlockedRunGraph).then(establishExistingHistory)
+      .then(activateEstablishedRun).then(readInitialTrackerGraph)
+      .then(reachQuiescence).then(terminateWithStaleContentIdentity)
       .expect(not(terminationRequiresExactFreshGraphEvidence))
   }
 

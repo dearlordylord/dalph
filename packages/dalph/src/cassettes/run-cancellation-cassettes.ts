@@ -7,6 +7,11 @@ import { deliveryFinalitySpineAuthoredCassette, singletonTaskCompletesAuthoredCa
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItemSchema)
 const lastStoryItemOffset = -1
 const missingStoryItemIndex = -1
+const initialGraphStoryStart = 2
+const initialGraphStoryEnd = 4
+const postCancellationGraphStoryEnd = 7
+const postCancellationGraphSelectionAt = 5
+const finalGraphReturnAt = 6
 const singletonCancellationGraph = {
   ...singletonTaskCompletesAuthoredCassette.startingFacts.trackerGraph,
   rootTaskId: "A" as const
@@ -87,6 +92,50 @@ export const idleRunCancellationAuthoredCassette = Schema.decodeUnknownSync(Auth
       }
     }
   ]
+})
+
+const idleCancellationRecoveryStory = [
+  ...idleRunCancellationAuthoredCassette.story.slice(0, postCancellationGraphStoryEnd),
+  decodeStoryItem({ _tag: "CoordinatorProcessDies" }),
+  ...idleRunCancellationAuthoredCassette.story.slice(initialGraphStoryStart, initialGraphStoryEnd),
+  decodeStoryItem({ _tag: "CoordinatorProcessDies" }),
+  ...idleRunCancellationAuthoredCassette.story.slice(initialGraphStoryStart, initialGraphStoryEnd),
+  ...idleRunCancellationAuthoredCassette.story.slice(
+    postCancellationGraphSelectionAt,
+    postCancellationGraphSelectionAt + 1
+  ),
+  decodeStoryItem({
+    _tag: "RunActivationFinalTrackerGraphReadReturned",
+    graph: Option.getOrThrow(
+      Option.fromUndefinedOr(idleRunCancellationAuthoredCassette.story.at(finalGraphReturnAt)).pipe(
+        Option.filter(
+          (item): item is Extract<AuthoredCassetteStoryItem, { readonly _tag: "TrackerGraphReadReturned" }> =>
+            item._tag === "TrackerGraphReadReturned"
+        ),
+        Option.map((item) => item.graph)
+      )
+    )
+  }),
+  { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
+  Option.getOrThrow(
+    Option.fromUndefinedOr(idleRunCancellationAuthoredCassette.story.at(lastStoryItemOffset)).pipe(
+      Option.filter(
+        (item): item is Extract<AuthoredCassetteStoryItem, { readonly _tag: "ExpectedBehavior" }> =>
+          item._tag === "ExpectedBehavior"
+      )
+    )
+  )
+]
+
+/**
+ * Alice cancels an idle Run, then loses the coordinator before the fresh G2
+ * observation and again after that observation.  A third activation must
+ * rediscover the durable cancellation and append exactly one terminal fact.
+ */
+export const idleRunCancellationRecoveryAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...idleRunCancellationAuthoredCassette,
+  name: "Alice cancels an idle Run across fresh G2 crash recovery",
+  story: idleCancellationRecoveryStory
 })
 
 const singletonRunningExecutorReportAt = singletonTaskCompletesAuthoredCassette.story.findIndex(

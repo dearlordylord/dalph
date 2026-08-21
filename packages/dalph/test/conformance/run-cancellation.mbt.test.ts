@@ -47,6 +47,7 @@ import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracke
 import type { TrackerTarget } from "../../../orchestrator/src/authorities/task-tracker/target.js"
 import { TrackerReadError } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
+import type { TaskDagSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import {
   type ApplicationExitShell,
   makeApplicationExitShell as makeExitShell
@@ -57,6 +58,13 @@ import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordinati
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { RunnableFrontierTransition } from "../../../orchestrator/src/coordination/frontier/frontier.js"
+import {
+  makeRunFinalityEvidence,
+  RunFinalityDecision,
+  RunFinalityReadShape,
+  type RunFinalityProof,
+  type RunTerminationDisposition
+} from "../../../orchestrator/src/coordination/frontier/run-finality.js"
 import { executePlannedAttemptTransition } from "../../../orchestrator/src/coordination/delivery/planned-attempt-delivery-action-adapter.js"
 import { executeNewRecoveredAction } from "../../../orchestrator/src/coordination/delivery/recovered-delivery-action-adapter.js"
 import {
@@ -105,8 +113,7 @@ import {
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   GitReadIntentRecordedEvent,
-  TargetLineageObservedEvent,
-  taskTrackerReadIntent
+  TargetLineageObservedEvent
 } from "../../../orchestrator/src/workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
 import {
@@ -121,10 +128,6 @@ import {
   IntegrationStartedEvent
 } from "../../../orchestrator/src/workflow/protocols/integration-admission/events.js"
 import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
-import {
-  taskTrackerFactsObservedEvent,
-  makeCompleteTaskTrackerFactsObserved
-} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import {
   attemptPlanRecordKey,
   integrationResponsibilityBeganRecordKey,
@@ -146,12 +149,15 @@ import {
   Integrator,
   IntegratorGit,
   IntegratorResult,
+  IntegratorNotPreparedDetail,
   IntegratorPreparationInput,
-  integratorCorrelationFor
+  integratorCorrelationFor,
+  prepareIntegrationCandidateRun
 } from "../../../orchestrator/src/workflow/protocols/integrator/protocol.js"
 import {
   TargetPromotionGitReadObservation,
-  TargetPromotionCompareAndSetFailure
+  TargetPromotionCompareAndSetFailure,
+  TargetPromotionGitReadFailure
 } from "../../../orchestrator/src/workflow/protocols/target-promotion/events.js"
 import { TargetPromotionRuntime } from "../../../orchestrator/src/workflow/protocols/target-promotion/runtime.js"
 import { StartedIntegrationResponsibility } from "../../../orchestrator/src/workflow/protocols/integration-admission/protocol.js"
@@ -352,7 +358,18 @@ type RuntimeCommand =
   | { readonly _tag: "PrepareIntegrationQualification"; readonly completed: Deferred.Deferred<void> }
   | { readonly _tag: "RunIntegrationPromotion"; readonly completed: Deferred.Deferred<void> }
   | { readonly _tag: "ObserveIntegrationPromotion"; readonly completed: Deferred.Deferred<void> }
+  | { readonly _tag: "ObserveUnreadableExecutor"; readonly completed: Deferred.Deferred<void> }
+  | { readonly _tag: "ObserveUnreadableIntegration"; readonly completed: Deferred.Deferred<void> }
+  | { readonly _tag: "RecordIntegrationQuarantine"; readonly completed: Deferred.Deferred<void> }
   | { readonly _tag: "ReleaseIntegration"; readonly completed: Deferred.Deferred<void> }
+  | {
+      readonly _tag: "TerminateWithGraph"
+      readonly completed: Deferred.Deferred<RunTerminationDisposition>
+      readonly disposition: RunTerminationDisposition
+      readonly graphLifecycle: "Open" | "CompletedSuccessfully"
+      readonly operationNumber: number
+      readonly useExistingRead: boolean
+    }
 
 const runId = RunId.make("run-cancellation-R1")
 const target = FixtureTarget.make("run-cancellation-T1")
@@ -390,6 +407,20 @@ const integrationAcceptedResult = AcceptedResult.make({
   commit: GitCommitSha.make("2".repeat(40)),
   evidenceManifest: { byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) }
 })
+const quarantinePlannedAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("run-cancellation-quarantine-attempt"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/run-cancellation-quarantine-task"),
+  executor: TaskExecutorLocator.make("executor:run-cancellation-quarantine-fake"),
+  runId,
+  taskId: TaskId.make("run-cancellation-quarantine-task"),
+  taskRevision: taskSpecification.fingerprint,
+  worktree: WorktreeLocator.make("/tmp/dalph-run-cancellation-quarantine-task")
+})
+const quarantineAcceptedResult = AcceptedResult.make({
+  commit: GitCommitSha.make("4".repeat(40)),
+  evidenceManifest: { byteLength: 1, digest: EvidenceDigest.make("b".repeat(64)) }
+})
 const integrationExpectedTargetHead = GitCommitSha.make("1".repeat(40))
 const integrationCandidateCommit = GitCommitSha.make("3".repeat(40))
 const integrationCandidateText = IntegratorCandidateText.make("refs/heads/dalph/run-cancellation-candidate")
@@ -408,6 +439,12 @@ const integrationRunTransitionFor = (fixture: IntegrationFixture) =>
     responsibility: fixture.responsibility,
     run: fixture.run
   })
+
+type ClassificationGraph = {
+  readonly operation: ReturnType<typeof makeTrackerGraphObservationOperation>
+  readonly snapshot: TaskDagSnapshot
+  readonly observedAt: JournalPosition
+}
 
 const identityFreeIntegrationActionFor = (
   transition: RunnableFrontierTransition,
@@ -457,6 +494,11 @@ const planOperation = makeTaskAttemptPlanOperation({
 const integrationPlanOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("run-cancellation-integration-attempt-plan"),
   plannedAttempt: integrationPlannedAttempt,
+  predecessorOperationIds: []
+})
+const quarantineIntegrationPlanOperation = makeTaskAttemptPlanOperation({
+  operationId: OperationId.make("run-cancellation-quarantine-attempt-plan"),
+  plannedAttempt: quarantinePlannedAttempt,
   predecessorOperationIds: []
 })
 const claimReadOperationId = OperationId.make("run-cancellation-claim-read")
@@ -709,10 +751,14 @@ const makeCancellationDriverImplementation = () => {
   let durable = makeInitialDurable()
   let process = makeInitialProcess()
   let effectivePause: "RunPaused" | "RunUnpaused" | undefined
-  let executorAuthority: "Running" | "SafelySuspended" = "Running"
+  let executorAuthority: "Running" | "SafelySuspended" | "Unreadable" = "Running"
   let claimHeld = true
   let claimObservationMode: "Exact" | "Foreign" | "Unreadable" = "Exact"
   let promotionReadCount = 0
+  let promotionReadMode: "Exact" | "Unreadable" = "Exact"
+  let graphLifecycle: "Open" | "CompletedSuccessfully" | "Unreadable" = "Open"
+  let latestClassificationGraph: ClassificationGraph | undefined
+  let integratorOutcomeMode: "Prepared" | "NotPrepared" = "Prepared"
   let integrationFixture: IntegrationFixture | undefined
 
   const targetPromotionGit: TargetPromotionRuntime["Service"]["git"] = {
@@ -726,23 +772,42 @@ const makeCancellationDriverImplementation = () => {
         })
       ),
     read: (request) =>
-      Effect.sync(() => {
-        promotionReadCount += 1
-        return promotionReadCount === 1
-          ? TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
-              currentHeadSha: request.expectedTargetHead
+      promotionReadMode === "Unreadable"
+        ? Effect.fail(
+            new TargetPromotionGitReadFailure({
+              candidateCommit: request.candidateCommit,
+              detail: "controlled cancellation conformance promotion read is unreadable",
+              target: request.integrationTarget
             })
-          : TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: request.candidateCommit })
-      })
+          )
+        : Effect.sync(() => {
+            promotionReadCount += 1
+            return promotionReadCount === 1
+              ? TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+                  currentHeadSha: request.expectedTargetHead
+                })
+              : TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+                  currentHeadSha: request.candidateCommit
+                })
+          })
   }
   const integrator = Integrator.of({
     prepare: (request) =>
-      Effect.succeed(
-        IntegratorResult.cases.PreparedCandidate.make({
-          candidateText: integrationCandidateText,
-          correlation: request.correlation
-        })
-      )
+      integratorOutcomeMode === "NotPrepared"
+        ? Effect.succeed(
+            IntegratorResult.cases.NotPrepared.make({
+              correlation: request.correlation,
+              detail: IntegratorNotPreparedDetail.make(
+                "controlled cancellation conformance Integrator run was not prepared"
+              )
+            })
+          )
+        : Effect.succeed(
+            IntegratorResult.cases.PreparedCandidate.make({
+              candidateText: integrationCandidateText,
+              correlation: request.correlation
+            })
+          )
   })
   const integratorGit = IntegratorGit.of({
     readCandidate: (_target, candidateText) =>
@@ -762,13 +827,22 @@ const makeCancellationDriverImplementation = () => {
 
   const executorForSettlement = PlannedAttemptExecutor.of({
     project: (correlation) =>
-      Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report: executorReportFor(correlation) })),
+      executorAuthority === "Unreadable"
+        ? Effect.succeed(PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }))
+        : Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report: executorReportFor(correlation) })),
     requestSuspension: (attempt) =>
       Effect.succeed(
         PlannedAttemptExecutorReport.cases.Running.make({ correlation: plannedAttemptExecutorCorrelation(attempt) })
       ),
     startOrContinue: () => Effect.die("cancellation conformance must not continue executor work")
   })
+
+  const graphSnapshotFor = (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+    projectTrackerSnapshot({
+      revision: operation.operationId,
+      rootTaskId: taskId,
+      tasks: [{ id: taskId, lifecycle: { _tag: graphLifecycle }, parentTaskId: null, prerequisiteIds: [] }]
+    })
 
   const workflowInterpreterForSettlement = WorkflowInterpreter.of({
     acquireTaskClaim: () => Effect.die("cancellation conformance must not acquire a successor claim"),
@@ -784,13 +858,19 @@ const makeCancellationDriverImplementation = () => {
       ),
     readTaskWorktree: () => Effect.die("cancellation conformance does not read worktrees"),
     readTargetLineage: () => Effect.die("cancellation conformance does not read target lineage"),
-    readTrackerGraph: () =>
-      Effect.fail(
+    readTrackerGraph: (operation) => {
+      if (graphLifecycle === "Open" || graphLifecycle === "CompletedSuccessfully") {
+        const projected = graphSnapshotFor(operation)
+        if (projected._tag === "Valid") return Effect.succeed(projected.snapshot)
+        return Effect.die("cancellation graph fixture was invalid")
+      }
+      return Effect.fail(
         new TrackerReadError({
           operation: "TrackerGraphReader.decode",
           detail: "controlled cancellation conformance graph response is unreadable"
         })
-      ),
+      )
+    },
     readTaskWorkSpecification: () => Effect.succeed(taskSpecification),
     releaseTaskClaim: (operation) =>
       Effect.sync(() => {
@@ -858,6 +938,62 @@ const makeCancellationDriverImplementation = () => {
         yield* runtimeResources.integrationTargets.acquire(fixture.responsibility)
         yield* runtimeResources.integrationTargets.publishAcceptedOwnership(fixture.responsibility)
       })
+      const readGraphThroughProduction = (operationNumber: number, lifecycle: "Open" | "CompletedSuccessfully") =>
+        Effect.gen(function* () {
+          graphLifecycle = lifecycle
+          const operation = makeTrackerGraphObservationOperation(
+            OperationId.make(`run-cancellation-graph-${operationNumber}`),
+            target,
+            [],
+            [taskId]
+          )
+          const snapshot = yield* (yield* WorkflowInterpreter).readTrackerGraph(operation)
+          const observed = (yield* journal.read(runId)).findLast(
+            ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
+          )
+          if (observed?.event._tag !== "TaskTrackerFactsObserved") {
+            return yield* Effect.die("production graph read did not persist its observation")
+          }
+          if (observed.event.observation._tag !== "CompleteTaskTrackerFacts") {
+            return yield* Effect.die("production graph read did not persist complete facts")
+          }
+          if (
+            observed.event.observation.rootTaskId !== taskId ||
+            observed.event.observation.factFamilies.some(
+              (family) =>
+                family.coverage.explicitlyCoveredTaskIds.length !== 1 ||
+                family.coverage.explicitlyCoveredTaskIds[0] !== taskId
+            ) ||
+            snapshot.rootTaskId !== taskId
+          ) {
+            return yield* Effect.die("production graph read lost the exact Run root or closure coverage")
+          }
+          const result = { operation, snapshot, observedAt: observed.position } satisfies ClassificationGraph
+          latestClassificationGraph = result
+          return result
+        })
+      const finalityProofFor = (
+        graph: ClassificationGraph,
+        disposition: RunTerminationDisposition
+      ): RunFinalityProof => {
+        if (graph.snapshot.rootTaskId !== taskId) {
+          return expect.fail("production finality graph did not retain the exact Run root")
+        }
+        return {
+          acceptedAt: graph.observedAt,
+          decision: RunFinalityDecision.RunMayTerminate(),
+          disposition,
+          evidence: makeRunFinalityEvidence({
+            operationId: graph.operation.operationId,
+            observedAt: graph.observedAt,
+            readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [taskId] }),
+            rootTaskId: taskId,
+            runId,
+            snapshot: graph.snapshot,
+            target
+          })
+        }
+      }
       yield* Deferred.succeed(ready, undefined)
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- the runtime remains leased until crash or init.
       while (true) {
@@ -897,33 +1033,7 @@ const makeCancellationDriverImplementation = () => {
           }
           yield* Deferred.succeed(command.completed, undefined)
         } else if (command._tag === "PublishGraph") {
-          const operation = makeTrackerGraphObservationOperation(
-            OperationId.make(`run-cancellation-graph-${command.operationNumber}`),
-            target,
-            [],
-            [TaskId.make("run-cancellation-root")]
-          )
-          const snapshotResult = projectTrackerSnapshot({
-            revision: `run-cancellation-graph-${command.operationNumber}`,
-            tasks: [
-              {
-                id: TaskId.make("run-cancellation-root"),
-                lifecycle: { _tag: "Open" as const },
-                parentTaskId: null,
-                prerequisiteIds: []
-              }
-            ]
-          })
-          if (snapshotResult._tag !== "Valid") return yield* Effect.die("cancellation graph fixture was invalid")
-          yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(operation.operationId),
-            taskTrackerFactsObservedEvent(
-              operation.operationId,
-              makeCompleteTaskTrackerFactsObserved(operation, snapshotResult.snapshot)
-            )
-          )
+          yield* readGraphThroughProduction(command.operationNumber, "Open")
           const current = yield* journal.state.get
           const frame = yield* journaledCurrentDeliveryFrameOf(current)
           effectivePause = frame.pause.run._tag
@@ -933,10 +1043,41 @@ const makeCancellationDriverImplementation = () => {
             OperationId.make(`run-cancellation-unreadable-graph-${command.operationNumber}`),
             target,
             [],
-            [TaskId.make("run-cancellation-root")]
+            [taskId]
           )
+          graphLifecycle = "Unreadable"
           const result = yield* Effect.exit((yield* WorkflowInterpreter).readTrackerGraph(operation))
           if (Exit.isSuccess(result)) return yield* Effect.die("unreadable graph fixture unexpectedly succeeded")
+          graphLifecycle = "Open"
+          const observed = (yield* journal.read(runId)).findLast(
+            ({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.operationId === operation.operationId &&
+              event.observation._tag === "TaskTrackerFactsReadFailed"
+          )
+          if (observed === undefined)
+            return yield* Effect.die("production unreadable graph did not persist its failure")
+          yield* Deferred.succeed(command.completed, undefined)
+        } else if (command._tag === "TerminateWithGraph") {
+          const graph = command.useExistingRead
+            ? latestClassificationGraph
+            : yield* readGraphThroughProduction(command.operationNumber, command.graphLifecycle)
+          if (graph === undefined) return yield* Effect.die("production finality handoff had no graph read")
+          const proof = finalityProofFor(graph, command.disposition)
+          yield* Deferred.succeed(command.completed, command.disposition)
+          return proof
+        } else if (command._tag === "ObserveUnreadableExecutor") {
+          const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt })
+          const result = yield* executePlannedAttemptTransition(
+            identityFreeActionFor(transition),
+            transition,
+            settlementLease
+          ).pipe(
+            Effect.as("completed" as const),
+            Effect.catchTag("PlannedAttemptExecutorStateUnreadable", () => Effect.succeed("unreadable" as const))
+          )
+          if (result !== "unreadable")
+            return yield* Effect.die("production executor unreadable observation unexpectedly completed")
           yield* Deferred.succeed(command.completed, undefined)
         } else if (command._tag === "ExecutePlannedSettlement") {
           yield* executePlannedAttemptTransition(command.action, command.transition, settlementLease)
@@ -1107,6 +1248,29 @@ const makeCancellationDriverImplementation = () => {
             yield* ensureIntegrationTarget
           }
           yield* Deferred.succeed(command.completed, undefined)
+        } else if (command._tag === "ObserveUnreadableIntegration") {
+          const fixture = integrationFixture
+          if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
+          yield* ensureIntegrationTarget
+          promotionReadMode = "Unreadable"
+          const transition = RunnableFrontierTransition.RunTargetPromotion({
+            candidate: fixture.candidate,
+            responsibility: fixture.responsibility
+          })
+          const result = yield* executeIntegrationAction(
+            identityFreeIntegrationActionFor(transition, fixture.responsibility),
+            transition,
+            integrationLease,
+            target
+          ).pipe(
+            Effect.as("completed" as const),
+            Effect.catchTag("TargetPromotionGitReadFailure", () => Effect.succeed("unreadable" as const))
+          )
+          promotionReadMode = "Exact"
+          if (result !== "unreadable") {
+            return yield* Effect.die("production integration unreadable read unexpectedly completed")
+          }
+          yield* Deferred.succeed(command.completed, undefined)
         } else if (command._tag === "RunIntegrationPromotion" || command._tag === "ObserveIntegrationPromotion") {
           const fixture = integrationFixture
           if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
@@ -1128,6 +1292,165 @@ const makeCancellationDriverImplementation = () => {
           )
           if (result._tag !== "ActionCompleted") {
             return yield* Effect.die(`production integration promotion was not completed: ${result._tag}`)
+          }
+          yield* Deferred.succeed(command.completed, undefined)
+        } else if (command._tag === "RecordIntegrationQuarantine") {
+          const fixture = integrationFixture
+          if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
+          /*
+           * The normal integration fixture has already recorded a prepared
+           * result, so provider-absence recovery would correctly reject it.
+           * Exercise the initial conclusive quarantine boundary with a second
+           * exact responsibility/session whose real Integrator call records
+           * NotPrepared first; no Q event is assembled by this adapter.
+           */
+          yield* journal.append(
+            runId,
+            attemptPlanRecordKey(quarantinePlannedAttempt.attemptId),
+            TaskAttemptPlannedEvent.make({
+              operation: quarantineIntegrationPlanOperation,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorWorkResponsibilityBeganRecordKey(quarantinePlannedAttempt.attemptId),
+            PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+              plannedAttempt: quarantinePlannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorCommandIntendedRecordKey(
+              quarantinePlannedAttempt.attemptId,
+              PlannedAttemptExecutorCommandOrdinal.make(1)
+            ),
+            PlannedAttemptExecutorCommandIntendedEvent.make({
+              command: "StartOrContinue",
+              initiatedBy: { _tag: "DalphCoordinator" },
+              occurrenceClassification: "InitiatedAction",
+              ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+              plannedAttempt: quarantinePlannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorWorkReportedRecordKey(
+              quarantinePlannedAttempt.attemptId,
+              PlannedAttemptExecutorReportOrdinal.make(1)
+            ),
+            PlannedAttemptExecutorWorkReportedEvent.make({
+              ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+              report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                correlation: plannedAttemptExecutorCorrelation(quarantinePlannedAttempt),
+                result: { _tag: "Accepted", acceptedResult: quarantineAcceptedResult }
+              }),
+              version: workflowJournalEventVersion
+            })
+          )
+          const quarantineBegan = yield* journal.append(
+            runId,
+            integrationResponsibilityBeganRecordKey(quarantinePlannedAttempt.attemptId),
+            IntegrationResponsibilityBeganEvent.make({
+              acceptedResult: quarantineAcceptedResult,
+              integrationTarget,
+              plannedAttempt: quarantinePlannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          const quarantineStarted = yield* journal.append(
+            runId,
+            integrationStartedRecordKey(quarantinePlannedAttempt.attemptId),
+            IntegrationStartedEvent.make({
+              acceptedResult: quarantineAcceptedResult,
+              integrationTarget,
+              plannedAttempt: quarantinePlannedAttempt,
+              responsibilityBeganAt: quarantineBegan.position,
+              version: workflowJournalEventVersion
+            })
+          )
+          const quarantineLineageOperation = makeTargetLineageObservationOperation({
+            integrationTarget,
+            operationId: OperationId.make("run-cancellation-quarantine-lineage"),
+            plannedAttempt: quarantinePlannedAttempt,
+            predecessorOperationIds: []
+          })
+          yield* journal.append(
+            runId,
+            intentRecordKey(quarantineLineageOperation.operationId),
+            GitReadIntentRecordedEvent.make({
+              initiatedBy: { _tag: "DalphCoordinator" },
+              occurrenceClassification: "InitiatedAction",
+              operation: quarantineLineageOperation,
+              version: workflowJournalEventVersion
+            })
+          )
+          const quarantineLineageObserved = yield* journal.append(
+            runId,
+            outcomeRecordKey(quarantineLineageOperation.operationId),
+            TargetLineageObservedEvent.make({
+              observation: fixture.lineage,
+              occurrenceClassification: "NonActionOccurrence",
+              operationId: quarantineLineageOperation.operationId,
+              plannedAttempt: quarantinePlannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          const quarantineResponsibility = StartedIntegrationResponsibility.make({
+            acceptedResult: quarantineAcceptedResult,
+            integrationTarget: fixture.responsibility.integrationTarget,
+            plannedAttempt: quarantinePlannedAttempt,
+            queuedAt: quarantineBegan.position,
+            startedAt: quarantineStarted.position
+          })
+          const quarantinePreparation = IntegratorPreparationInput.make({
+            responsibility: quarantineResponsibility,
+            targetLineage: fixture.lineage,
+            targetLineageObservedAt: quarantineLineageObserved.position
+          })
+          const quarantineRun = {
+            ordinal: IntegratorRunOrdinal.make(1),
+            session: integratorCorrelationFor(quarantinePreparation)
+          }
+          const previousIntegratorOutcomeMode = integratorOutcomeMode
+          integratorOutcomeMode = "NotPrepared"
+          const protocolResult = yield* prepareIntegrationCandidateRun({
+            preparation: quarantinePreparation,
+            run: quarantineRun
+          }).pipe(Effect.ensuring(Effect.sync(() => (integratorOutcomeMode = previousIntegratorOutcomeMode))))
+          if (protocolResult._tag !== "NotPrepared") {
+            return yield* Effect.die(
+              `production Integrator quarantine setup was not conclusive: ${protocolResult._tag}`
+            )
+          }
+          yield* ensureIntegrationTarget
+          const transition = RunnableFrontierTransition.RecordInitialConclusiveIntegrationQuarantine({
+            result: protocolResult,
+            responsibility: quarantineResponsibility
+          })
+          const result = yield* executeIntegrationAction(
+            identityFreeIntegrationActionFor(transition, quarantineResponsibility),
+            transition,
+            integrationLease,
+            target
+          )
+          if (result._tag !== "ActionCompleted") {
+            return yield* Effect.die(`production integration quarantine was not completed: ${result._tag}`)
+          }
+          if (
+            !(yield* journal.read(runId)).some(
+              ({ event }) =>
+                event._tag === "IntegrationQuarantined" &&
+                event.correlation.sessionId === quarantineRun.session.sessionId
+            )
+          ) {
+            return yield* Effect.die(
+              `production integration quarantine did not persist its exact record: ${JSON.stringify(
+                (yield* journal.read(runId)).map(({ event }) => event._tag)
+              )}`
+            )
           }
           yield* Deferred.succeed(command.completed, undefined)
         } else {
@@ -1216,6 +1539,50 @@ const makeCancellationDriverImplementation = () => {
           )
         )
   }
+
+  const awaitTerminalCommand = (completed: Deferred.Deferred<RunTerminationDisposition>) => {
+    const fiber = runtimeFiber
+    return fiber === undefined
+      ? Deferred.await(completed)
+      : Effect.raceFirst(Deferred.await(completed), Fiber.join(fiber).pipe(Effect.andThen(Deferred.await(completed))))
+  }
+
+  const terminateWithGraph = (input: {
+    readonly disposition: RunTerminationDisposition
+    readonly graphLifecycle: "Open" | "CompletedSuccessfully"
+    readonly operationNumber: number
+    readonly useExistingRead: boolean
+  }) =>
+    Effect.gen(function* () {
+      const commands = runtimeCommands
+      if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
+      const completed = yield* Deferred.make<RunTerminationDisposition>()
+      yield* Queue.offer(commands, { _tag: "TerminateWithGraph", completed, ...input })
+      const disposition = yield* awaitTerminalCommand(completed)
+      const fiber = runtimeFiber
+      if (fiber !== undefined) yield* Fiber.join(fiber)
+      const terminal = records.findLast(({ event }) => event._tag === "WorkflowRunTerminated")
+      if (terminal?.event._tag !== "WorkflowRunTerminated" || terminal.event.disposition !== disposition) {
+        return yield* Effect.die("production finality handoff did not append its exact terminal record")
+      }
+      return disposition
+    })
+
+  const observeUnreadableExecutor = Effect.gen(function* () {
+    const commands = runtimeCommands
+    if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
+    const completed = yield* Deferred.make<void>()
+    yield* Queue.offer(commands, { _tag: "ObserveUnreadableExecutor", completed })
+    yield* awaitSettlementCommand(completed)
+  })
+
+  const observeUnreadableIntegration = Effect.gen(function* () {
+    const commands = runtimeCommands
+    if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
+    const completed = yield* Deferred.make<void>()
+    yield* Queue.offer(commands, { _tag: "ObserveUnreadableIntegration", completed })
+    yield* awaitSettlementCommand(completed)
+  })
 
   const executePlannedSettlement = (transition: SettlementPlannedTransition) =>
     Effect.gen(function* () {
@@ -1383,6 +1750,10 @@ const makeCancellationDriverImplementation = () => {
         claimHeld = true
         claimObservationMode = "Exact"
         promotionReadCount = 0
+        promotionReadMode = "Exact"
+        graphLifecycle = "Open"
+        latestClassificationGraph = undefined
+        integratorOutcomeMode = "Prepared"
         integrationFixture = undefined
         yield* startRuntime
       }),
@@ -1433,8 +1804,14 @@ const makeCancellationDriverImplementation = () => {
       }),
     selectForeignRunRequest: () => Effect.sync(() => (process = { ...process, requestedRunId: "R2" })),
     selectTerminalHistory: () =>
-      Effect.sync(() => {
-        durable = { ...durable, terminalHistory: "Cancelled" }
+      Effect.gen(function* () {
+        yield* terminateWithGraph({
+          disposition: "Completed",
+          graphLifecycle: "CompletedSuccessfully",
+          operationNumber: durable.classificationReads + 1,
+          useExistingRead: false
+        })
+        durable = { ...durable, terminalHistory: "Completed" }
         process = { ...process, phase: "TerminalHistory", admissionOpen: false }
       }),
     applyCancellation: () =>
@@ -1641,7 +2018,16 @@ const makeCancellationDriverImplementation = () => {
         durable = { ...durable, classificationReads: number }
         process = { ...process, graphRead: true }
       }),
-    handoffToFreshClassification: () => Effect.sync(() => (process = { ...process, phase: "ReadyForClassification" })),
+    handoffToFreshClassification: () =>
+      Effect.gen(function* () {
+        yield* terminateWithGraph({
+          disposition: "Cancelled",
+          graphLifecycle: "Open",
+          operationNumber: durable.classificationReads,
+          useExistingRead: true
+        })
+        process = { ...process, phase: "ReadyForClassification" }
+      }),
     crashBeforeSettlement: () =>
       Effect.gen(function* () {
         const before = records
@@ -1720,12 +2106,32 @@ const makeCancellationDriverImplementation = () => {
       }),
     settleAfterIdleCancellation: () => Effect.sync(() => (process = { ...process, responsibilitiesSettled: true })),
     markExecutorUnreadable: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        executorAuthority = "Unreadable"
+        yield* observeUnreadableExecutor
+        if (
+          !records.some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorStateObserved" &&
+              event.observation._tag === "ExecutorStateUnreadable" &&
+              event.plannedAttempt.attemptId === plannedAttempt.attemptId
+          )
+        ) {
+          return yield* Effect.die("production executor unreadable boundary did not persist its observation")
+        }
         durable = { ...durable, executor: "ExecutorUnreadable" }
         process = { ...process, executorPositionHeld: true, responsibilitiesSettled: false }
       }),
     markIntegrationUnreadable: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        yield* observeUnreadableIntegration
+        if (
+          records.some(
+            ({ event }) => event._tag === "TargetPromotionObservedSuccess" || event._tag === "TargetPromotionStale"
+          )
+        ) {
+          return yield* Effect.die("production unreadable integration boundary published a terminal result")
+        }
         durable = { ...durable, integration: "IntegrationUnreadable" }
         process = { ...process, responsibilitiesSettled: false }
       }),
@@ -1762,7 +2168,15 @@ const makeCancellationDriverImplementation = () => {
         process = { ...process, phase: "Rejected", cancellationRejected: true }
       }),
     rejectTerminalHistory: () =>
-      Effect.sync(() => (process = { ...process, phase: "TerminalHistory", cancellationRejected: true })),
+      Effect.gen(function* () {
+        const installed = bootstrap
+        if (installed === undefined) return yield* Effect.die("cancellation bootstrap was not installed")
+        const result = yield* installed.operatorControl.applyRunCancellation({ runId })
+        if (result._tag !== "RunCancellationRunTerminated" || result.disposition !== "Completed") {
+          return yield* Effect.die(`production terminal-history rejection returned ${result._tag}`)
+        }
+        process = { ...process, phase: "TerminalHistory", cancellationRejected: true }
+      }),
     admitForwardWork: () =>
       Effect.gen(function* () {
         yield* seedRunningAttempt
@@ -1776,6 +2190,7 @@ const makeCancellationDriverImplementation = () => {
       }),
     getProductionEvidence: () => {
       const reconstructed = reduceWorkflowJournalHistory(runId, records)
+      const terminated = records.findLast(({ event }) => event._tag === "WorkflowRunTerminated")
       return Effect.succeed({
         eventTags: records.map(({ event }) => event._tag),
         observationTags: records.flatMap(({ event }) =>
@@ -1783,6 +2198,14 @@ const makeCancellationDriverImplementation = () => {
         ),
         cancellation:
           reconstructed._tag === "ValidWorkflowJournalHistory" ? reconstructed.runState.cancellation._tag : "Invalid",
+        termination:
+          terminated?.event._tag === "WorkflowRunTerminated"
+            ? {
+                disposition: terminated.event.disposition,
+                evidence: terminated.event.evidence,
+                position: terminated.position
+              }
+            : undefined,
         effectivePause
       })
     },
@@ -1872,10 +2295,14 @@ it.effect("uses the production cancellation journal boundary and effective Pause
       yield* driver.applyCancellation()
       yield* driver.redeliverCancellation()
       yield* driver.readFreshClassificationGraph()
+      yield* driver.handoffToFreshClassification()
       const evidence = yield* driver.getProductionEvidence()
       expect(evidence.eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(1)
       expect(evidence.cancellation).toBe("RunCancellationApplied")
       expect(evidence.effectivePause).toBe("RunPaused")
+      expect(evidence.termination?.disposition).toBe("Cancelled")
+      expect(evidence.termination?.evidence.rootTaskId).toBe(taskId)
+      expect(evidence.termination?.evidence.coverage.explicitlyCoveredTaskIds).toEqual([taskId])
     })
   )
 )
@@ -1887,11 +2314,13 @@ it.effect("cancels an already-paused Run through production Pause, cancellation,
       yield* driver.selectAlreadyPausedRun()
       yield* driver.applyCancellation()
       yield* driver.readFreshClassificationGraph()
+      yield* driver.handoffToFreshClassification()
       const evidence = yield* driver.getProductionEvidence()
       expect(evidence.eventTags.filter((tag) => tag === "ControlDirectionApplied")).toHaveLength(1)
       expect(evidence.eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(1)
       expect(evidence.eventTags.filter((tag) => tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(0)
       expect(evidence.effectivePause).toBe("RunPaused")
+      expect(evidence.termination?.evidence.rootTaskId).toBe(taskId)
     })
   )
 )
@@ -1909,6 +2338,21 @@ it.effect("orders the production cancellation request behind the real applicatio
   )
 )
 
+it.effect("records an unreadable executor projection through the production observation protocol", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectRunningExecutor()
+      yield* driver.applyCancellation()
+      yield* driver.recordExecutorStopIntent()
+      yield* driver.markExecutorUnreadable()
+      const evidence = yield* driver.getProductionEvidence()
+      expect(evidence.eventTags).toContain("PlannedAttemptExecutorStateObserved")
+      expect(evidence.eventTags).not.toContain("WorkflowRunTerminated")
+    })
+  )
+)
+
 it.effect("settles an admitted integration responsibility through the production Git boundary", () =>
   withCancellationDriver((driver) =>
     Effect.gen(function* () {
@@ -1922,6 +2366,23 @@ it.effect("settles an admitted integration responsibility through the production
       expect(evidence.eventTags).toContain("TargetPromotionIntended")
       expect(evidence.eventTags).toContain("TargetPromotionObservedSuccess")
       expect(evidence.effectivePause).toBeUndefined()
+      expect(evidence.termination?.evidence.rootTaskId).toBeUndefined()
+    })
+  )
+)
+
+it.effect("keeps an unreadable integration read pending through the production Git protocol", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectIntegrationOwned()
+      yield* driver.applyCancellation()
+      yield* driver.recordIntegrationIntent()
+      yield* driver.markIntegrationUnreadable()
+      const evidence = yield* driver.getProductionEvidence()
+      expect(evidence.eventTags).toContain("TargetPromotionIntended")
+      expect(evidence.eventTags).not.toContain("TargetPromotionObservedSuccess")
+      expect(evidence.eventTags).not.toContain("WorkflowRunTerminated")
     })
   )
 )
@@ -1966,6 +2427,22 @@ it.effect("retains an unreadable graph read without terminal classification", ()
       const evidence = yield* driver.getProductionEvidence()
       expect(evidence.observationTags).toContain("TaskTrackerFactsReadFailed")
       expect(evidence.eventTags.filter((tag) => tag === "WorkflowRunTerminated")).toHaveLength(0)
+    })
+  )
+)
+
+it.effect("rejects cancellation against an existing terminal Run through production finality", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectTerminalHistory()
+      yield* driver.rejectTerminalHistory()
+      const evidence = yield* driver.getProductionEvidence()
+      expect(evidence.termination?.disposition).toBe("Completed")
+      expect(evidence.termination?.evidence.rootTaskId).toBe(taskId)
+      expect(evidence.termination?.evidence.coverage.explicitlyCoveredTaskIds).toEqual([taskId])
+      expect(evidence.eventTags.filter((tag) => tag === "WorkflowRunTerminated")).toHaveLength(1)
+      expect(evidence.eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(0)
     })
   )
 )

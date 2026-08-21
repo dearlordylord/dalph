@@ -85,6 +85,7 @@ it.effect("lets the public controlled workflow terminate from its settled curren
   Effect.gen(function* () {
     const projected = projectTrackerSnapshot({
       revision: "controlled-settled",
+      rootTaskId: TaskId.make("controlled-settled-root"),
       tasks: [
         {
           id: TaskId.make("controlled-settled-root"),

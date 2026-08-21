@@ -2626,15 +2626,20 @@ const completeSingletonDeliveryCassette = (() => {
   const promoted = maintainedAuthoredCassetteCatalog.targetPromotionSuccess
   const completedGraph = {
     revision: "authored-finality-success",
+    rootTaskId: "A",
     tasks: [{ id: "A", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
   } as const
   const settledGraph = { ...completedGraph, revision: "authored-finality-settled" } as const
   return Schema.decodeUnknownSync(AuthoredScenarioCassette)({
     ...promoted,
+    startingFacts: {
+      ...promoted.startingFacts,
+      trackerGraph: { ...promoted.startingFacts.trackerGraph, rootTaskId: "A" }
+    },
     story: promoted.story.flatMap(
       (item): ReadonlyArray<unknown> =>
         item._tag !== "ExpectedBehavior"
-          ? [item]
+          ? [item._tag === "TrackerGraphReadReturned" ? { ...item, graph: { ...item.graph, rootTaskId: "A" } } : item]
           : [
               { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
               { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
@@ -3696,6 +3701,7 @@ it.effect("performs one final tracker read before the current bounded activation
     if (command?._tag !== "RunCoordinator") return yield* Effect.die("singleton has no coordinator command")
     const terminalGraph = {
       revision: TrackerRevision.make("activation-final-completed-target"),
+      rootTaskId: "A" as const,
       tasks: [
         { id: "A", lifecycle: { _tag: "CompletedSuccessfully" as const }, parentTaskId: null, prerequisiteIds: [] }
       ]

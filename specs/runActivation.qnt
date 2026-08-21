@@ -23,15 +23,26 @@ module runActivation {
   // graph facts.
   type GraphOutcome = GraphAllSucceeded | GraphBlocked | GraphUnsettled
 
+  // Tracker content identity is a provider revision/fingerprint, not the
+  // operation ordinal used to count this activation's boundary calls. The
+  // stale variant exists only for mutation controls that must make an invalid
+  // terminal proof reachable.
+  type TrackerContentIdentity =
+    | ContentRevisionAllSucceeded
+    | ContentRevisionBlocked
+    | ContentRevisionUnsettled
+    | StaleContentRevision
+
   type GraphReadEvidence =
     | NoGraphReadEvidence
     | ExactGraphReadEvidence({
         runId: RunId,
         target: TrackerTarget,
         operationOrdinal: int,
-        revision: int,
+        graphOutcome: GraphOutcome,
+        contentIdentity: TrackerContentIdentity,
+        rootTaskId: TaskId,
         complete: bool,
-        rootPresent: bool,
       })
     | MismatchedGraphReadEvidence
     | IncompleteGraphReadEvidence
@@ -138,11 +149,20 @@ module runActivation {
     targetSettled: bool,
     responsibilitiesSettled: bool,
     graphOutcome: GraphOutcome,
+    contentIdentity: TrackerContentIdentity,
+    rootTaskId: TaskId,
     evidence: GraphReadEvidence,
   }
 
   pure val NO_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
   pure val INITIAL_GRAPH_EVIDENCE: GraphReadEvidence = NoGraphReadEvidence
+  pure val EXACT_ROOT_TASK_ID: TaskId = TaskA
+
+  pure def trackerContentIdentityFor(outcome: GraphOutcome): TrackerContentIdentity = match outcome {
+    | GraphAllSucceeded => ContentRevisionAllSucceeded
+    | GraphBlocked => ContentRevisionBlocked
+    | GraphUnsettled => ContentRevisionUnsettled
+  }
 
   pure def terminalDispositionFor(
     graphOutcome: GraphOutcome,
@@ -156,13 +176,17 @@ module runActivation {
     runId: RunId,
     target: TrackerTarget,
     operationOrdinal: int,
+    graphOutcome: GraphOutcome,
+    contentIdentity: TrackerContentIdentity,
+    rootTaskId: TaskId,
   ): GraphReadEvidence = ExactGraphReadEvidence({
     runId: runId,
     target: target,
     operationOrdinal: operationOrdinal,
-    revision: operationOrdinal,
+    graphOutcome: graphOutcome,
+    contentIdentity: contentIdentity,
+    rootTaskId: rootTaskId,
     complete: true,
-    rootPresent: true,
   })
 
   pure def evidenceIsExactFor(
@@ -170,14 +194,18 @@ module runActivation {
     runId: RunId,
     target: TrackerTarget,
     operationOrdinal: int,
+    graphOutcome: GraphOutcome,
+    contentIdentity: TrackerContentIdentity,
+    rootTaskId: TaskId,
   ): bool = match evidence {
     | ExactGraphReadEvidence(facts) => and {
         facts.runId == runId,
         facts.target == target,
         facts.operationOrdinal == operationOrdinal,
-        facts.revision == operationOrdinal,
+        facts.graphOutcome == graphOutcome,
+        facts.contentIdentity == contentIdentity,
+        facts.rootTaskId == rootTaskId,
         facts.complete,
-        facts.rootPresent,
       }
     | _ => false
   }
@@ -400,7 +428,12 @@ module runActivation {
         facts.targetSettled,
         facts.responsibilitiesSettled,
         match facts.evidence {
-          | ExactGraphReadEvidence(evidence) => evidence.complete and evidence.rootPresent
+          | ExactGraphReadEvidence(evidence) => and {
+              evidence.graphOutcome == facts.graphOutcome,
+              evidence.contentIdentity == trackerContentIdentityFor(facts.graphOutcome),
+              evidence.rootTaskId == EXACT_ROOT_TASK_ID,
+              evidence.complete,
+            }
           | _ => false
         },
       }
@@ -586,9 +619,10 @@ module runActivation {
             facts.runId == state.requestedRunId,
             facts.target == state.requestedTarget,
             facts.operationOrdinal == state.trace.trackerCalls,
-            facts.revision == state.trace.trackerCalls,
+            facts.graphOutcome == state.trackerFinality.graphOutcome,
+            facts.contentIdentity == trackerContentIdentityFor(state.trackerFinality.graphOutcome),
+            facts.rootTaskId == EXACT_ROOT_TASK_ID,
             facts.complete,
-            facts.rootPresent,
           }
         | _ => false
       }
@@ -694,6 +728,14 @@ module runActivation {
     | ExactGraphReadEvidence(_) => true
     | _ => false
   }
+  val exactGraphIdentityReached: bool = match state.trackerFinality.evidence {
+    | ExactGraphReadEvidence(facts) => and {
+        facts.graphOutcome == state.trackerFinality.graphOutcome,
+        facts.contentIdentity == trackerContentIdentityFor(state.trackerFinality.graphOutcome),
+        facts.rootTaskId == EXACT_ROOT_TASK_ID,
+      }
+    | _ => false
+  }
   val blockedGraphReadReached: bool = state.trackerFinality.graphOutcome == GraphBlocked
   val cancellationAppliedReached: bool = state.durable.cancellationApplied
   val cancellationRedeliveredReached: bool = state.trace.cancellationRedeliveries == 1
@@ -716,6 +758,8 @@ module runActivation {
         targetSettled: false,
         responsibilitiesSettled: true,
         graphOutcome: GraphAllSucceeded,
+        contentIdentity: ContentRevisionAllSucceeded,
+        rootTaskId: EXACT_ROOT_TASK_ID,
         evidence: INITIAL_GRAPH_EVIDENCE,
       },
       process: {
@@ -880,6 +924,8 @@ module runActivation {
         targetSettled: true,
         responsibilitiesSettled: true,
         graphOutcome: GraphBlocked,
+        contentIdentity: ContentRevisionBlocked,
+        rootTaskId: EXACT_ROOT_TASK_ID,
         evidence: NO_GRAPH_EVIDENCE,
       },
     },
@@ -902,6 +948,8 @@ module runActivation {
         targetSettled: true,
         responsibilitiesSettled: true,
         graphOutcome: GraphBlocked,
+        contentIdentity: ContentRevisionBlocked,
+        rootTaskId: EXACT_ROOT_TASK_ID,
         evidence: NO_GRAPH_EVIDENCE,
       },
     },
@@ -1217,6 +1265,9 @@ module runActivation {
           state.requestedRunId,
           state.requestedTarget,
           state.trace.trackerCalls + 1,
+          state.trackerFinality.graphOutcome,
+          state.trackerFinality.contentIdentity,
+          state.trackerFinality.rootTaskId,
         ),
       },
       process: {
@@ -1230,6 +1281,9 @@ module runActivation {
             state.requestedRunId,
             state.requestedTarget,
             state.trace.trackerCalls + 1,
+            state.trackerFinality.graphOutcome,
+            state.trackerFinality.contentIdentity,
+            state.trackerFinality.rootTaskId,
           ),
         }),
       },
@@ -1257,6 +1311,9 @@ module runActivation {
       state.requestedRunId,
       state.requestedTarget,
       state.trace.trackerCalls,
+      state.trackerFinality.graphOutcome,
+      trackerContentIdentityFor(state.trackerFinality.graphOutcome),
+      EXACT_ROOT_TASK_ID,
     ),
     state.process.heldPosition == NoTaskPosition,
     state.process.otherHeldPosition == NoTaskPosition,
