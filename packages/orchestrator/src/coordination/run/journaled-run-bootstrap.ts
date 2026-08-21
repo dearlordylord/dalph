@@ -138,6 +138,7 @@ const terminalGraphReadFor = (proof: TerminalRunFinalityProof, state: JournalSta
   }
   if (graph._tag !== "GraphEstablished") return undefined
   if (operation === undefined) return undefined
+  /* v8 ignore next -- @preserve Production terminal evidence is generated only from the exact tracker-graph read operation. */
   if (!isTrackerGraphReadIntentEvent(operation)) return undefined
   return { graph, operation }
 }
@@ -150,6 +151,7 @@ const terminalProofMatchesGraphRead = (
 ): boolean => {
   if (graphRead === undefined) return false
   const rootTaskId = graphRead.graph.observation.snapshot.rootTaskId
+  /* v8 ignore next -- @preserve A production RunMayTerminate proof requires a tracker-selected root in its complete graph. */
   if (rootTaskId === undefined) return false
   return (
     runFinalityEvidenceMatches(proof.evidence, {
@@ -375,7 +377,9 @@ export const journaledRunBootstrapLayer = (
       ) {
         const { proof, state } = result
         if (proof.decision._tag !== "RunMayTerminate") return proof.decision
+        /* v8 ignore next -- @preserve runWithJournal always returns its final immutable state with the proof. */
         if (state === undefined) return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+        /* v8 ignore next -- @preserve The RunFinalityProof union requires evidence whenever its decision may terminate. */
         if (!("evidence" in proof)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
         }
@@ -488,6 +492,7 @@ export const journaledRunBootstrapLayer = (
                 lifecycle.read(expectedRunId).pipe(
                   Effect.flatMap((records) => {
                     const terminated = records.find(({ event }) => event._tag === "WorkflowRunTerminated")
+                    /* v8 ignore next -- @preserve The find predicate admits only WorkflowRunTerminated records. */
                     return terminated?.event._tag === "WorkflowRunTerminated"
                       ? Effect.succeed(
                           AppliedRunCancellation.cases.RunCancellationRunTerminated.make({

@@ -148,6 +148,49 @@ const completedFinalityProof = (runId: RunId, target: ReturnType<typeof FixtureT
     } as const
   })
 
+it.effect("fails closed when a terminal proof does not name its established graph read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-unfounded-terminal-proof")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const operation = makeTrackerGraphObservationOperation(OperationId.make("unrecorded-finality-read"), target)
+      const evidence = makeRunFinalityEvidence({
+        observedAt: JournalPosition.make(2),
+        operationId: operation.operationId,
+        readShape: operation.readShape,
+        rootTaskId: TaskId.make("bootstrap-control-root"),
+        runId,
+        snapshot: settledGraph.snapshot,
+        target
+      })
+      const proof = {
+        acceptedAt: JournalPosition.make(2),
+        decision: RunFinalityDecision.RunMayTerminate(),
+        disposition: "Completed" as const,
+        evidence
+      }
+      expect(yield* bootstrap.activate(target, Effect.succeed(initialPolicy), runId, Effect.succeed(proof))).toEqual({
+        _tag: "RunMustRemainActive",
+        reason: "TrackerTargetUnsettled"
+      })
+
+      const mismatched = completedFinalityProof(runId, target).pipe(
+        Effect.map((result) => ({
+          ...result,
+          evidence: { ...result.evidence, operationId: OperationId.make("foreign-established-finality-read") }
+        }))
+      )
+      expect(yield* bootstrap.activate(target, Effect.succeed(initialPolicy), runId, mismatched)).toEqual({
+        _tag: "RunMustRemainActive",
+        reason: "TrackerTargetUnsettled"
+      })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 const unpausedRuntimeEvaluation = Effect.gen(function* () {
   const runtime = yield* deliveryRuntime.pipe(
     Effect.provide(
@@ -255,6 +298,12 @@ it.effect("records Alice's Run cancellation once and coalesces semantic redelive
         )
         .pipe(Effect.forkChild)
       yield* Deferred.await(runtimeActive)
+
+      expect(
+        yield* bootstrap.operatorControl
+          .applyRunCancellation({ runId: RunId.make("foreign-cancellation-control-run") })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId })
 
       expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId })).toMatchObject({
         _tag: "RunCancellationApplied",
@@ -1305,6 +1354,16 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
       expect(applied.application.event.fingerprint.direction).toBe("Retry")
       expect(yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)).toEqual(applied)
       expect(yield* bootstrap.operatorControl.readIntegrationQuarantineDirection({ requestId })).toEqual(applied)
+      expect(
+        yield* bootstrap.operatorControl
+          .readIntegrationQuarantineDirection({
+            requestId: IntegrationQuarantineDirectionRequestId.make({
+              nonce: "foreign-read-bootstrap",
+              runId: RunId.make("foreign-quarantine-read-run")
+            })
+          })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId })
       expect(
         yield* bootstrap.operatorControl
           .applyIntegrationQuarantineDirection({

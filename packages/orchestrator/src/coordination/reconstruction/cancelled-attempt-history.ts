@@ -172,6 +172,7 @@ const claimReadIntentFor = (
         event.operation.taskId === taskId
     )
     if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") return undefined
+    /* v8 ignore next -- @preserve The find predicate admits only ReadTaskClaim intent records. */
     return intent.event.operation._tag === "ReadTaskClaim" ? intent.event.operation : undefined
   })()
 
@@ -295,6 +296,7 @@ const integrationResponsibilityWasBeganBeforeCancellation = (
   cancellationAt: JournalPosition
 ): boolean => {
   const started = record.event
+  /* v8 ignore next -- @preserve postCancellationForwardWork calls this helper only for IntegrationStarted records. */
   if (started._tag !== "IntegrationStarted") return false
   return records.some((candidate) => {
     const began = candidate.event
@@ -487,6 +489,7 @@ const noReleaseObservationMatchesEvent = (
   expected: NoReleaseEvent["observation"],
   observed: NoReleaseEvent["observation"] | undefined
 ): boolean => {
+  /* v8 ignore next -- @preserve noReleaseObservationIsValid calls this only after proving a focused absent-or-foreign observation. */
   if (observed === undefined) return false
   if (observed._tag === "UnclaimedTask") {
     return expected._tag === "UnclaimedTask" && expected.taskId === observed.taskId
@@ -521,6 +524,7 @@ const noReleaseObservationIsValid = (
   if (!readIntent.predecessorOperationIds.includes(relinquished.event.authorizedClaim.operationId)) return false
   if (!taskTrackerObservationMatchesRead(observation.event.observation, readIntent)) return false
   if (!claimObservationIsAbsentOrForeign(observation, event.expectedClaim)) return false
+  /* v8 ignore next -- @preserve claimObservationIsAbsentOrForeign above rejects unreadable focused observations. */
   const observedClaim =
     observation.event.observation._tag === "FocusedTaskClaimFacts"
       ? observation.event.observation.observation

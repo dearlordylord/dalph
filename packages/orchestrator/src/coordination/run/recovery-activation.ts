@@ -579,6 +579,7 @@ const cancellationClaimReadIntentFor = (
       candidate.event._tag === "TaskTrackerReadIntentRecorded" &&
       candidate.event.operation.operationId === observation.event.operationId
   )
+  /* v8 ignore next -- @preserve The find predicate admits only TaskTrackerReadIntentRecorded records. */
   return intent?.event._tag === "TaskTrackerReadIntentRecorded" ? intent.event.operation : undefined
 }
 
@@ -749,6 +750,7 @@ const cancelledAttemptClaimObservationDisposition = (
   }
   if (releaseIntent !== undefined) {
     const authority = releaseIntent.event.operation.authority
+    /* v8 ignore next -- @preserve cancellationReleaseIntentFor admits only this cancellation authority variant. */
     if (authority._tag !== "CancelledAttemptClaimReleaseAuthority") {
       return ResponsibilityDisposition.CancelledAttemptClaimPlanningWait({ reason: "FocusedObservationContradiction" })
     }

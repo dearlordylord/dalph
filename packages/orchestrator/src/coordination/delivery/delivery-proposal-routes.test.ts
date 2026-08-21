@@ -80,7 +80,11 @@ import { describeJournalEvent } from "../../workflow/registry/event-descriptor.j
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -889,6 +893,7 @@ effectIt.effect("revalidates cancellation quiescence while holding the attempt p
       plannedAttempt,
       proof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(5) }
     })
+    const cancellationRecords = yield* Ref.get(records)
     yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, staleTransition, lease).pipe(
       Effect.provideService(InRunJournal, appendableJournalFor(records)),
       Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
@@ -922,6 +927,83 @@ effectIt.effect("revalidates cancellation quiescence while holding the attempt p
         ({ event }) => event._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
       )
     ).toBe(true)
+
+    const executeAgainst = (candidateRecords: ReadonlyArray<JournalRecord>, candidateTransition = transition) =>
+      Effect.gen(function* () {
+        const journalRecords = yield* Ref.make(candidateRecords)
+        yield* executePlannedAttemptTransition(
+          { _tag: "IdentityFreeAction", proposal },
+          candidateTransition,
+          lease
+        ).pipe(
+          Effect.provideService(InRunJournal, appendableJournalFor(journalRecords)),
+          Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
+        )
+        return yield* Ref.get(journalRecords)
+      })
+    const settledRecords = yield* Ref.get(records)
+    const projectionProof = RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+      plannedAttempt,
+      proof: {
+        _tag: "CommandProjection",
+        commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(7),
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(7)
+      }
+    })
+    const stateProof = RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+      plannedAttempt,
+      proof: { _tag: "StateProjection", observationOrdinal: PlannedAttemptExecutorStateObservationOrdinal.make(7) }
+    })
+    const projectedSafeReport = PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+      correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+    })
+    const projectionEvidence: JournalRecord = {
+      event: PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+        commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(7),
+        observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+          report: projectedSafeReport
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(7),
+        version: workflowJournalEventVersion
+      }),
+      key: JournalRecordKey.make("route-matrix-cancellation-projection-evidence"),
+      position: JournalPosition.make(7),
+      runId
+    }
+    const projectionRecords = [
+      ...cancellationRecords.filter(({ event }) => event._tag !== "PlannedAttemptExecutorWorkReported"),
+      projectionEvidence
+    ]
+    const terminalEvidence = {
+      ...cancellationRecords.findLast(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"),
+      event: PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(7),
+        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+          correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+          result: { _tag: "Completed" }
+        }),
+        version: workflowJournalEventVersion
+      })
+    } as JournalRecord
+    for (const [candidateRecords, candidateTransition] of [
+      [settledRecords, transition],
+      [cancellationRecords.filter(({ event }) => event._tag !== "RunCancellationApplied"), transition],
+      [cancellationRecords.filter(({ event }) => event._tag !== "TaskClaimAcquired"), transition],
+      [cancellationRecords.filter(({ event }) => event._tag !== "PlannedAttemptExecutorWorkReported"), transition],
+      [projectionRecords, projectionProof],
+      [
+        [
+          ...cancellationRecords.filter(({ event }) => event._tag !== "PlannedAttemptExecutorWorkReported"),
+          terminalEvidence
+        ],
+        transition
+      ],
+      [cancellationRecords, stateProof]
+    ] as const) {
+      yield* executeAgainst(candidateRecords, candidateTransition)
+    }
   })
 )
 

@@ -22,6 +22,7 @@ import {
   taskTrackerFactsObservedEvent
 } from "../workflow/task-tracker-facts/observation.js"
 import { taskTrackerReadIntent } from "../workflow/registry/event.js"
+import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task-tracker-read/protocol.js"
 import { makeTrackerGraphObservationOperation } from "../workflow/registry/operation.js"
 import { decideWorkflowRunTermination, makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
@@ -386,8 +387,28 @@ it("rejects every independently mismatched terminal evidence dimension at storag
         coverage: { ...fixture.evidence.coverage, explicitlyCoveredTaskIds: [TaskId.make("other")] }
       }
     },
+    {
+      name: "fact-family manifest",
+      evidence: {
+        ...fixture.evidence,
+        requiredFactFamilies: [
+          fixture.evidence.requiredFactFamilies[1],
+          fixture.evidence.requiredFactFamilies[0],
+          fixture.evidence.requiredFactFamilies[2],
+          fixture.evidence.requiredFactFamilies[3],
+          fixture.evidence.requiredFactFamilies[4]
+        ]
+      }
+    },
+    { name: "root membership", evidence: { ...fixture.evidence, rootTaskId: TaskId.make("other") } },
     { name: "terminal task set", evidence: { ...fixture.evidence, terminalTaskIds: [TaskId.make("root")] } },
     { name: "blocked task set", evidence: { ...fixture.evidence, blockedTaskIds: [TaskId.make("root")] } },
+    {
+      name: "blocked graph outcome",
+      disposition: "Blocked",
+      evidence: { ...fixture.evidence, graphOutcome: "Blocked" }
+    },
+    { name: "unsettled graph outcome", evidence: { ...fixture.evidence, graphOutcome: "Unsettled" } },
     { name: "blocked disposition", disposition: "Blocked", evidence: fixture.evidence },
     { name: "cancelled disposition", disposition: "Cancelled", evidence: fixture.evidence }
   ]
@@ -404,4 +425,125 @@ it("rejects every independently mismatched terminal evidence dimension at storag
       failure: { _tag: "WorkflowRunTerminationEvidenceInvalid" }
     })
   }
+})
+
+it("rejects finality evidence superseded by a later complete graph observation", () => {
+  const operation = makeTrackerGraphObservationOperation(
+    OperationId.make("lifecycle-initial-complete-observation"),
+    target
+  )
+  const snapshot = validSnapshot({
+    revision: "lifecycle-later-complete-observation",
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const laterOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("lifecycle-later-complete-observation"),
+    target,
+    [operation.operationId]
+  )
+  const initialObservation = taskTrackerFactsObservedEvent(
+    operation.operationId,
+    makeCompleteTaskTrackerFactsObserved(operation, snapshot)
+  )
+  const records: ReadonlyArray<JournalRecord> = [
+    makeWorkflowRunBeganRecord(runId, target, policy),
+    {
+      event: taskTrackerReadIntent(operation),
+      key: intentRecordKey(operation.operationId),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: initialObservation,
+      key: outcomeRecordKey(operation.operationId),
+      position: JournalPosition.make(3),
+      runId
+    },
+    {
+      event: taskTrackerReadIntent(laterOperation),
+      key: intentRecordKey(laterOperation.operationId),
+      position: JournalPosition.make(4),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        laterOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(laterOperation, snapshot)
+      ),
+      key: outcomeRecordKey(laterOperation.operationId),
+      position: JournalPosition.make(5),
+      runId
+    }
+  ]
+
+  expect(
+    decideWorkflowRunTermination(
+      records,
+      runId,
+      "Completed",
+      RunFinalityEvidence.make({
+        ...makeRunFinalityEvidenceForTest(operation, snapshot),
+        observedAt: JournalPosition.make(3)
+      })
+    )
+  ).toMatchObject({
+    _tag: "LifecycleTransitionRejected",
+    failure: {
+      _tag: "WorkflowRunTerminationEvidenceInvalid",
+      detail: expect.stringContaining("latest complete graph observation")
+    }
+  })
+})
+
+it("rejects unchanged finality evidence whose named complete observation is absent", () => {
+  const fullOperation = makeTrackerGraphObservationOperation(OperationId.make("lifecycle-absent-full-read"), target)
+  const unchangedOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("lifecycle-unfounded-reconfirmation"),
+    target,
+    [fullOperation.operationId]
+  )
+  const snapshot = validSnapshot({
+    revision: "lifecycle-unfounded-reconfirmation",
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const fullObservation = taskTrackerFactsObservedEvent(
+    fullOperation.operationId,
+    makeCompleteTaskTrackerFactsObserved(fullOperation, snapshot)
+  )
+  const reconfirmation = makeTaskTrackerFactsObservedFromRead(
+    [{ event: taskTrackerReadIntent(fullOperation) }, { event: fullObservation }],
+    unchangedOperation,
+    snapshot
+  )
+  const unchangedEvidence = RunFinalityEvidence.make({
+    ...makeRunFinalityEvidenceForTest(unchangedOperation, snapshot),
+    observedAt: JournalPosition.make(3)
+  })
+  expect(
+    decideWorkflowRunTermination(
+      [
+        makeWorkflowRunBeganRecord(runId, target, policy),
+        {
+          event: taskTrackerReadIntent(unchangedOperation),
+          key: intentRecordKey(unchangedOperation.operationId),
+          position: JournalPosition.make(2),
+          runId
+        },
+        {
+          event: reconfirmation,
+          key: outcomeRecordKey(unchangedOperation.operationId),
+          position: JournalPosition.make(3),
+          runId
+        }
+      ],
+      runId,
+      "Completed",
+      unchangedEvidence
+    )
+  ).toMatchObject({
+    _tag: "LifecycleTransitionRejected",
+    failure: { detail: expect.stringContaining("link to its earlier complete tracker observation") }
+  })
 })

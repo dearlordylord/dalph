@@ -42,6 +42,7 @@ import {
 import {
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskClaimFactsUnreadable,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
@@ -109,6 +110,7 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimReleaseIntendedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
@@ -1221,6 +1223,25 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
       correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
     })
   )
+  const admittedIntegration = pausedIntegrationScenario("cancellation-started-branch", 5)
+  const integrationStartedBeforeCancellation = coverageRecord(
+    5,
+    IntegrationStartedEvent.make({
+      acceptedResult: admittedIntegration.responsibility.acceptedResult,
+      integrationTarget: admittedIntegration.responsibility.integrationTarget,
+      plannedAttempt: coverageAttempt,
+      responsibilityBeganAt: JournalPosition.make(4),
+      version: workflowJournalEventVersion
+    })
+  )
+  expect(
+    deriveJournalResponsibilityFacts(
+      coverageRunState(
+        [...coveragePlanRecords(), integrationStartedBeforeCancellation, cancellation, safeReport],
+        [coverageResponsibility]
+      )
+    )[0]
+  ).not.toMatchObject({ disposition: { _tag: "CancelledAttemptRelinquishmentRequired" } })
   const state = coverageRunState([...coveragePlanRecords(), cancellation, safeReport], [coverageResponsibility])
   const [relinquishmentFacts] = deriveJournalResponsibilityFacts(state)
   expect(relinquishmentFacts).toMatchObject({
@@ -1242,6 +1263,25 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
       proof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(7) }
     })
   ])
+  const lateForwardCommand = coverageRecord(
+    8,
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "StartOrContinue",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(8),
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  expect(
+    deriveJournalResponsibilityFacts(
+      coverageRunState(
+        [...coveragePlanRecords(), cancellation, safeReport, lateForwardCommand],
+        [coverageResponsibility]
+      )
+    )[0]
+  ).not.toMatchObject({ disposition: { _tag: "CancelledAttemptRelinquishmentRequired" } })
 
   const relinquished = coverageRecord(
     8,
@@ -1297,6 +1337,53 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
   )
   const [unrelatedObservationFacts] = deriveJournalResponsibilityFacts(unrelatedObservationState)
   expect(unrelatedObservationFacts).toMatchObject({ disposition: { _tag: "CancelledAttemptClaimObservationRequired" } })
+  const [missingTargetFacts] = deriveJournalResponsibilityFacts(
+    coverageRunState([...coveragePlanRecords(), cancellation, safeReport, relinquished], [coverageResponsibility])
+  )
+  expect(missingTargetFacts).toMatchObject({ disposition: { _tag: "CancelledAttemptClaimPlanningWait" } })
+  const unreadableObservation = coverageRecord(
+    10,
+    taskTrackerFactsObservedEvent(claimRead.operationId, makeFocusedTaskClaimFactsUnreadable(claimRead))
+  )
+  const [unreadableFacts] = deriveJournalResponsibilityFacts(
+    coverageRunState(
+      [
+        ...coveragePlanRecords(),
+        cancellation,
+        safeReport,
+        relinquished,
+        coverageRecord(9, taskTrackerReadIntent(claimRead)),
+        unreadableObservation
+      ],
+      [coverageResponsibility]
+    )
+  )
+  expect(unreadableFacts).toMatchObject({ disposition: { _tag: "CancelledAttemptClaimUnreadableWait" } })
+  const mismatchedClaimReads = [
+    makeTrackerGraphObservationOperation(claimRead.operationId, coverageTarget),
+    makeTaskClaimObservationOperation(claimRead.operationId, coverageTarget, TaskId.make("other"), [
+      coverageClaim.operationId
+    ]),
+    makeTaskClaimObservationOperation(claimRead.operationId, coverageTarget, coverageAttempt.taskId)
+  ]
+  for (const mismatchedRead of mismatchedClaimReads) {
+    const [mismatchedFacts] = deriveJournalResponsibilityFacts(
+      coverageRunState(
+        [
+          ...coveragePlanRecords(),
+          cancellation,
+          safeReport,
+          relinquished,
+          coverageRecord(9, taskTrackerReadIntent(mismatchedRead)),
+          exactObservation
+        ],
+        [coverageResponsibility]
+      )
+    )
+    expect(mismatchedFacts).toMatchObject({
+      disposition: { _tag: expect.stringMatching(/^CancelledAttemptClaim(?:ObservationRequired|PlanningWait)$/) }
+    })
+  }
   const [releaseFacts] = deriveJournalResponsibilityFacts(
     coverageRunState(
       [
@@ -1325,8 +1412,94 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
       }
     }
   })
+  expect(
+    deriveJournalResponsibilityFacts(
+      coverageRunState(
+        [
+          ...coveragePlanRecords(),
+          cancellation,
+          safeReport,
+          relinquished,
+          coverageRecord(9, taskTrackerReadIntent(claimRead)),
+          exactObservation,
+          coverageRecord(11, coverageGraphEvent)
+        ],
+        [coverageResponsibility]
+      )
+    )[0]
+  ).toMatchObject({ disposition: { _tag: "CancelledAttemptClaimReleaseRequired" } })
   if (releaseFacts?._tag !== "PlannedAttemptExecutorFreshFacts") return
   if (releaseFacts.disposition._tag !== "CancelledAttemptClaimReleaseRequired") return
+  const releaseIntent = coverageRecord(
+    11,
+    TaskClaimReleaseIntendedEvent.make({
+      operation: releaseFacts.disposition.operation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const retryClaimRead = makeTaskClaimObservationOperation(
+    OperationId.make("cancelled-attempt-claim-release-retry-observation"),
+    coverageTarget,
+    coverageAttempt.taskId,
+    [coverageClaim.operationId, releaseFacts.disposition.operation.release.operationId]
+  )
+  const retryObservation = coverageRecord(
+    13,
+    taskTrackerFactsObservedEvent(
+      retryClaimRead.operationId,
+      makeFocusedTaskClaimFactsObserved(retryClaimRead, coverageClaim)
+    )
+  )
+  const retryReadWithoutReleasePredecessor = makeTaskClaimObservationOperation(
+    OperationId.make("cancelled-attempt-claim-release-missing-predecessor"),
+    coverageTarget,
+    coverageAttempt.taskId,
+    [coverageClaim.operationId]
+  )
+  expect(
+    deriveJournalResponsibilityFacts(
+      coverageRunState(
+        [
+          ...coveragePlanRecords(),
+          cancellation,
+          safeReport,
+          relinquished,
+          coverageRecord(9, taskTrackerReadIntent(claimRead)),
+          exactObservation,
+          releaseIntent,
+          coverageRecord(12, taskTrackerReadIntent(retryReadWithoutReleasePredecessor)),
+          coverageRecord(
+            13,
+            taskTrackerFactsObservedEvent(
+              retryReadWithoutReleasePredecessor.operationId,
+              makeFocusedTaskClaimFactsObserved(retryReadWithoutReleasePredecessor, coverageClaim)
+            )
+          )
+        ],
+        [coverageResponsibility]
+      )
+    )[0]
+  ).toMatchObject({
+    disposition: { _tag: expect.stringMatching(/^CancelledAttemptClaim(?:ObservationRequired|PlanningWait)$/) }
+  })
+  expect(
+    deriveJournalResponsibilityFacts(
+      coverageRunState(
+        [
+          ...coveragePlanRecords(),
+          cancellation,
+          safeReport,
+          relinquished,
+          coverageRecord(9, taskTrackerReadIntent(claimRead)),
+          exactObservation,
+          releaseIntent,
+          coverageRecord(12, taskTrackerReadIntent(retryClaimRead)),
+          retryObservation
+        ],
+        [coverageResponsibility]
+      )
+    )[0]
+  ).toMatchObject({ disposition: { _tag: "CancelledAttemptClaimReleaseRetryRequired" } })
   expect(
     deriveRunnableFrontier({
       freshEligibleTasks: [],
@@ -1658,6 +1831,44 @@ it("reconciles an integration intent admitted before cancellation but filters a 
     new Set()
   )
   expect(frontier.transitions).toEqual([beforeTransition])
+})
+
+it("uses the later of Pause and cancellation as the integration reconciliation boundary", () => {
+  const integration = pausedIntegrationScenario("pause-cancel-boundary", 8)
+  const after = pausedIntegrationScenario("pause-cancel-after", 12)
+  const beforeTransition = Option.getOrThrow(Option.fromUndefinedOr(integration.transitions[0]))
+  const afterTransition = Option.getOrThrow(Option.fromUndefinedOr(after.transitions[0]))
+  for (const [pauseAt, cancellationAt] of [
+    [5, 10],
+    [10, 5]
+  ] as const) {
+    const state: ReconstructedRunState = {
+      ...coverageRunState([
+        coverageRecord(1, integration.intents[0]),
+        coverageRecord(pauseAt, runPause(1)),
+        coverageRecord(
+          cancellationAt,
+          RunCancellationAppliedEvent.make({
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            version: workflowJournalEventVersion
+          })
+        ),
+        coverageRecord(12, after.intents[0])
+      ]),
+      cancellation: { _tag: "RunCancellationApplied", appliedAt: JournalPosition.make(cancellationAt) },
+      pause: { run: { _tag: "RunPaused" }, tasks: { _tag: "NoTaskPauses" } }
+    }
+    expect(
+      filterFrontierForActivePauses(
+        { explanations: [], transitions: [beforeTransition, afterTransition] },
+        state,
+        undefined,
+        new Set(),
+        new Set()
+      ).transitions
+    ).toEqual([beforeTransition])
+  }
 })
 
 it("reacquires an integration responsibility that started before cancellation", () => {

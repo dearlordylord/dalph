@@ -21,9 +21,11 @@ import {
   InRunJournal,
   JournalStorageUnavailable,
   JournalStore,
+  type JournalRecord,
   journalStoreCapabilities,
   RunLifecycleJournal
 } from "../../../orchestrator/src/workflow-journal/store.js"
+import { terminationPreconditionIssues } from "../../../orchestrator/src/workflow-journal/termination-preconditions.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
@@ -69,6 +71,23 @@ const projectedCancellationGraph = TaskDagSnapshot.project(
 const cancellationGraph = Option.getOrThrow(
   projectedCancellationGraph._tag === "Valid" ? Option.some(projectedCancellationGraph) : Option.none()
 )
+
+const expectCancellationTerminationFailsClosedForDamagedPrefixes = (records: ReadonlyArray<JournalRecord>): void => {
+  const termination = records.findLast(({ event }) => event._tag === "WorkflowRunTerminated")
+  if (termination?.event._tag !== "WorkflowRunTerminated") return expect.fail("cancellation fixture did not terminate")
+  const evidence = termination.event.evidence
+  const terminatedRunId = termination.runId
+  const prefix = records.filter(({ event }) => event._tag !== "WorkflowRunTerminated")
+  expect(terminationPreconditionIssues(prefix, terminatedRunId, evidence)).toEqual([])
+  const damagedIssues = prefix.flatMap((_, index) =>
+    terminationPreconditionIssues(
+      prefix.filter((__, candidateIndex) => candidateIndex !== index),
+      terminatedRunId,
+      evidence
+    )
+  )
+  expect(damagedIssues.length).toBeGreaterThan(0)
+}
 
 const cancellationOwnership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 
@@ -173,6 +192,7 @@ it.effect("cancels a running exact attempt through suspension, claim release, an
     expect(run.records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Cancelled" })
     expect(eventTags).not.toContain("AttemptImplementationAbandoned")
     expect(eventTags).not.toContain("PlannedAttemptReplaced")
+    expectCancellationTerminationFailsClosedForDamagedPrefixes(run.records)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
@@ -190,6 +210,7 @@ it.effect("cancels after admitted integration settles without rollback or replac
     expect(eventTags).not.toContain("PlannedAttemptReplaced")
     expect(eventTags).not.toContain("IntegrationRollbackStarted")
     expect(run.records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Cancelled" })
+    expectCancellationTerminationFailsClosedForDamagedPrefixes(run.records)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
@@ -206,6 +227,7 @@ it.effect("cancels a running exact attempt without releasing a foreign claim", (
     expect(eventTags).not.toContain("AttemptImplementationAbandoned")
     expect(eventTags).not.toContain("PlannedAttemptReplaced")
     expect(run.records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Cancelled" })
+    expectCancellationTerminationFailsClosedForDamagedPrefixes(run.records)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 

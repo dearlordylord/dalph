@@ -86,6 +86,7 @@ const graphObservationFor = (
     ({ observation: candidate, operationId }) =>
       operationId === observation.priorFullObservationOperationId && candidate._tag === "CompleteTaskTrackerFacts"
   )
+  /* v8 ignore next -- @preserve The find predicate admits only complete graph observations. */
   return prior?.observation._tag === "CompleteTaskTrackerFacts" ? prior.observation : undefined
 }
 

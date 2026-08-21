@@ -123,6 +123,7 @@ export const decideWorkflowRunTermination = (
     return {
       _tag: "LifecycleTransitionRejected",
       failure: new WorkflowRunTerminationEvidenceInvalid({
+        /* v8 ignore next -- @preserve The enclosing branch proves one of the two issue values is defined. */
         detail: invalidEvidence ?? invalidPrecondition ?? "termination evidence is invalid",
         runId
       })
@@ -170,6 +171,7 @@ const completeObservationFor = (
       event.observation._tag === "CompleteTaskTrackerFacts"
     )
   })
+  /* v8 ignore next -- @preserve The find predicate admits only complete TaskTrackerFactsObserved records. */
   return complete?.event._tag === "TaskTrackerFactsObserved" &&
     complete.event.observation._tag === "CompleteTaskTrackerFacts"
     ? complete.event.observation
@@ -261,6 +263,7 @@ const completeGraphOutcomeIssues = (
     lifecycles.lifecycles.map(({ lifecycle, taskId }) => ({
       id: taskId,
       lifecycle,
+      /* v8 ignore next -- @preserve Complete graph observations carry prerequisite facts for every lifecycle task. */
       prerequisiteIds: prerequisitesByTaskId.get(taskId) ?? []
     }))
   )
@@ -336,6 +339,7 @@ const initialTerminationEvidence = (
   terminationPosition: JournalPosition
 ) => {
   const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  /* v8 ignore next -- @preserve The public lifecycle decision rejects a missing beginning before evidence validation. */
   if (began?.event._tag !== "WorkflowRunBegan") {
     return { issues: ["termination evidence requires the exact Run beginning"] }
   }
@@ -365,6 +369,7 @@ const terminationEvidenceIssues = (
   evidence: RunFinalityEvidence | undefined,
   terminationPosition: JournalPosition
 ): ReadonlyArray<string> => {
+  /* v8 ignore next -- @preserve Every decoded WorkflowRunTerminated event and public termination decision carries evidence. */
   if (evidence === undefined) return ["termination evidence is required"]
   const initial = initialTerminationEvidence(records, runId, evidence, terminationPosition)
   if (initial.observed === undefined) return initial.issues

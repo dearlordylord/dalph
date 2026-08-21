@@ -33,6 +33,7 @@ const passiveCancellationApplied = (quiescence: DeliveryRuntimeQuiescence): bool
 
 const establishedGraphOf = (quiescence: DeliveryRuntimeQuiescence): EstablishedTrackerGraph | undefined => {
   const graph = quiescence.current.trackerGraph
+  /* v8 ignore next -- @preserve A terminal delivery decision requires an established graph; nonterminal callers retain undefined. */
   return graph._tag === "GraphEstablished" ? graph : undefined
 }
 
@@ -42,6 +43,7 @@ const rootTaskIdOf = (
   const taskIds = graph.observation.snapshot.taskIds()
   if (taskIds.length === 0) return undefined
   const rootTaskId = graph.observation.snapshot.rootTaskId
+  /* v8 ignore next -- @preserve TaskDagSnapshot projection retains only a root that belongs to its task set. */
   return rootTaskId !== undefined && taskIds.includes(rootTaskId) ? rootTaskId : undefined
 }
 
@@ -57,6 +59,7 @@ const finalityInputsOf = (
   | undefined => {
   if (quiescence.acceptedAt === null || quiescence.current.runId === undefined) return undefined
   const graph = establishedGraphOf(quiescence)
+  /* v8 ignore next -- @preserve deliveryFinalityOf cannot return RunMayTerminate without an established graph. */
   if (graph === undefined) return undefined
   const rootTaskId = rootTaskIdOf(graph)
   if (rootTaskId === undefined) return undefined
@@ -71,6 +74,7 @@ const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): 
     cancellationAppliedWhilePassive ? { _tag: "TrackerReconfirmationAllowed" } : quiescence.disposition
   )
   if (decision._tag === "RunMustRemainActive") return { acceptedAt: quiescence.acceptedAt, decision }
+  /* v8 ignore next -- @preserve Non-cancelled passive quiescence is classified RunMustRemainActive before this terminal-proof path. */
   if (quiescence._tag === "PassiveRuntimeQuiescence" && !cancellationAppliedWhilePassive) {
     return unsettledProof(quiescence.acceptedAt)
   }
@@ -91,6 +95,7 @@ const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): 
     evidence.graphOutcome,
     quiescence.current.cancellationApplied === true
   )
+  /* v8 ignore next -- @preserve RunMayTerminate plus valid finality inputs always yields Completed, Blocked, or Cancelled. */
   return disposition === undefined
     ? unsettledProof(inputs.acceptedAt)
     : { acceptedAt: inputs.acceptedAt, decision, disposition, evidence }
@@ -173,6 +178,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         return proofOf(target, firstQuiescence)
       }
       const currentGraph = establishedGraphOf(firstQuiescence)
+      /* v8 ignore next -- @preserve shouldReturnInitialProof accepts every first phase without an established graph. */
       if (currentGraph === undefined) return proofOf(target, firstQuiescence)
 
       const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
