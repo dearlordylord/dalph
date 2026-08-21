@@ -10,6 +10,7 @@ import {
   type IntegratorCandidateCleanupAuthorization,
   type WorktreeCleanupAuthorization,
   branchCleanupAuthorizationEquals,
+  cleanupMutationRequestLimit,
   integratorCandidateCleanupAuthorizationEquals,
   worktreeCleanupAuthorizationEquals
 } from "./disposition.js"
@@ -165,6 +166,43 @@ const hasTerminalCleanupEvent = (
     return false
   })
 
+/** Count only mutation intents for the exact authorized subject and operation. */
+const mutationAttemptCount = (
+  records: ReadonlyArray<JournalRecord>,
+  authorization: BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization | WorktreeCleanupAuthorization
+): number =>
+  records.filter((record) => {
+    if (record.event._tag === "WorktreeCleanupMutationIntended") {
+      return (
+        "expectedHead" in authorization &&
+        !("worktreeCleanupOperationId" in authorization) &&
+        record.event.authorization.operationId === authorization.operationId &&
+        worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
+      )
+    }
+    if (record.event._tag === "BranchCleanupMutationIntended") {
+      return (
+        "worktreeCleanupOperationId" in authorization &&
+        record.event.authorization.operationId === authorization.operationId &&
+        branchCleanupAuthorizationEquals(record.event.authorization, authorization)
+      )
+    }
+    if (record.event._tag === "IntegratorCandidateCleanupMutationIntended") {
+      return (
+        !("expectedHead" in authorization) &&
+        !("worktreeCleanupOperationId" in authorization) &&
+        record.event.authorization.operationId === authorization.operationId &&
+        integratorCandidateCleanupAuthorizationEquals(record.event.authorization, authorization)
+      )
+    }
+    return false
+  }).length
+
+const hasMutationBudget = (
+  records: ReadonlyArray<JournalRecord>,
+  authorization: BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization | WorktreeCleanupAuthorization
+): boolean => mutationAttemptCount(records, authorization) < cleanupMutationRequestLimit
+
 const validWorktree = (records: ReadonlyArray<JournalRecord>, authorization: WorktreeCleanupAuthorization): boolean =>
   validateWorktreeCleanupProvenance(records, authorization)._tag === "Valid" &&
   validateWorktreeCleanupHistory(records, authorization)._tag === "Valid"
@@ -212,7 +250,9 @@ export const selectCleanupResponsibilitySet = (
       "BranchCleanupAuthorized",
       (record) => (record.event._tag === "BranchCleanupAuthorized" ? record.event.authorization : undefined),
       (authorization) => validBranch(records, authorization)
-    ).filter((authorization) => !hasTerminalCleanupEvent(records, authorization))
+    ).filter(
+      (authorization) => !hasTerminalCleanupEvent(records, authorization) && hasMutationBudget(records, authorization)
+    )
   ),
   candidate: bounded(
     familyAuthorizations(
@@ -221,7 +261,9 @@ export const selectCleanupResponsibilitySet = (
       (record) =>
         record.event._tag === "IntegratorCandidateCleanupAuthorized" ? record.event.authorization : undefined,
       (authorization) => validCandidate(records, authorization)
-    ).filter((authorization) => !hasTerminalCleanupEvent(records, authorization))
+    ).filter(
+      (authorization) => !hasTerminalCleanupEvent(records, authorization) && hasMutationBudget(records, authorization)
+    )
   ),
   worktree: bounded(
     familyAuthorizations(
@@ -229,7 +271,9 @@ export const selectCleanupResponsibilitySet = (
       "WorktreeCleanupAuthorized",
       (record) => (record.event._tag === "WorktreeCleanupAuthorized" ? record.event.authorization : undefined),
       (authorization) => validWorktree(records, authorization)
-    ).filter((authorization) => !hasTerminalCleanupEvent(records, authorization))
+    ).filter(
+      (authorization) => !hasTerminalCleanupEvent(records, authorization) && hasMutationBudget(records, authorization)
+    )
   )
 })
 
@@ -253,7 +297,11 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
     ),
     worktree: proposals.worktree.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId)
   } satisfies DispositionCleanupProposals
-  const worktreeCandidates = bounded(byOperation([...selectedSet.worktree, ...scopedProposals.worktree]))
+  const worktreeCandidates = bounded(
+    byOperation([...selectedSet.worktree, ...scopedProposals.worktree]).filter((authorization) =>
+      hasMutationBudget(initialRecords, authorization)
+    )
+  )
   const worktreeOutcomes = yield* Effect.forEach(worktreeCandidates, (authorization) =>
     isCleanupEligibleDisposition(authorization.disposition)
       ? runWorktreeCleanup(authorization)
@@ -262,7 +310,12 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
 
   yield* appendDerivedCleanupAuthorizations(runId, ["branch"])
   selectedSet = selectCleanupResponsibilitySet(yield* journal.read(runId))
-  const branchCandidates = bounded(byOperation([...selectedSet.branch, ...scopedProposals.branch]))
+  const branchRecords = yield* journal.read(runId)
+  const branchCandidates = bounded(
+    byOperation([...selectedSet.branch, ...scopedProposals.branch]).filter((authorization) =>
+      hasMutationBudget(branchRecords, authorization)
+    )
+  )
   const branchOutcomes = yield* Effect.forEach(branchCandidates, (authorization) =>
     isCleanupEligibleDisposition(authorization.disposition)
       ? runBranchCleanup(authorization)
@@ -270,7 +323,12 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   )
 
   selectedSet = selectCleanupResponsibilitySet(yield* journal.read(runId))
-  const candidateCandidates = bounded(byOperation([...selectedSet.candidate, ...scopedProposals.candidate]))
+  const candidateRecords = yield* journal.read(runId)
+  const candidateCandidates = bounded(
+    byOperation([...selectedSet.candidate, ...scopedProposals.candidate]).filter((authorization) =>
+      hasMutationBudget(candidateRecords, authorization)
+    )
+  )
   const candidateOutcomes = yield* Effect.forEach(candidateCandidates, (authorization) =>
     isCleanupEligibleDisposition(authorization.disposition)
       ? runIntegratorCandidateCleanup(authorization)
@@ -369,7 +427,10 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
     })
     for (const family of families) {
       const authorizations = derived[family]
-        .filter((authorization) => !hasTerminalCleanupEvent(records, authorization))
+        .filter(
+          (authorization) =>
+            !hasTerminalCleanupEvent(records, authorization) && hasMutationBudget(records, authorization)
+        )
         .slice(0, cleanupResponsibilitySelectionLimit)
       for (const authorization of authorizations) yield* appendOne(authorization)
     }

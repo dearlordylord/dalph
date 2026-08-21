@@ -168,6 +168,43 @@ it.effect("removes only a quarantined predecessor candidate", () =>
   )
 )
 
+it.effect("does not settle a candidate removal with a stale revision", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-candidate-stale-revision"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const result = yield* runIntegratorCandidateCleanup(authorization)
+    const records = yield* journal.read(runId)
+    expect(result._tag).toBe("Preserved")
+    expect(records.map(({ event }) => event._tag)).toContain("IntegratorCandidateCleanupContradicted")
+    expect(records.map(({ event }) => event._tag)).not.toContain("IntegratorCandidateCleanupSettled")
+  }).pipe(
+    Effect.provide(
+      integratorCandidateCleanupTestLayer({
+        observations: [
+          present,
+          IntegratorCandidateCleanupObservation.cases.Absent.make({
+            locator: predecessor.candidateResource,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+            locator: predecessor.candidateResource,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+            sessionId: predecessor.sessionId
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
 it.effect("replays a settled predecessor candidate twice without a boundary call or journal write", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
@@ -348,8 +385,9 @@ it.effect("rejects a FullRerun direction or target-lineage intent under a foreig
     expect(validateIntegratorCandidateCleanupProvenance(foreignDirection, authorization)._tag).toBe("Invalid")
 
     const foreignLineageIntent = records.map((record) =>
-      record.event._tag === "GitReadIntentRecorded" && record.event.operation._tag === "ReadTargetLineage" &&
-          record.event.operation.operationId === authorization.observationOperationId
+      record.event._tag === "GitReadIntentRecorded" &&
+      record.event.operation._tag === "ReadTargetLineage" &&
+      record.event.operation.operationId === authorization.observationOperationId
         ? { ...record, key: JournalRecordKey.make("foreign-target-lineage-intent-key") }
         : record
     )

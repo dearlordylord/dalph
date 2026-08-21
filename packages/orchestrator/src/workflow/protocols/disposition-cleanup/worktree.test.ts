@@ -60,7 +60,7 @@ import {
   replacementPredecessorsFor,
   replacementWorktreeObservationOperationIdFor
 } from "./provenance-fixtures.js"
-import { validateWorktreeCleanupHistory } from "./provenance.js"
+import { validateWorktreeCleanupHistory, validateWorktreeCleanupProvenance } from "./provenance.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal
@@ -147,6 +147,8 @@ const loopAttempt = (suffix: string) =>
     worktree: WorktreeLocator.make(`/tmp/issue-69-${suffix}`)
   })
 
+const fairnessAttempts = [secondAttempt, loopAttempt("p3"), loopAttempt("p4")]
+
 it.effect("removes the exact superseded worktree after fresh matching facts", () =>
   setup(
     [
@@ -167,6 +169,32 @@ it.effect("removes the exact superseded worktree after fresh matching facts", ()
     Effect.tap(({ calls, result }) =>
       Effect.sync(() => {
         expect(result._tag).toBe("Settled")
+        expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+      })
+    )
+  )
+)
+
+it.effect("does not settle a removal whose revision predates the fresh absence", () =>
+  setup(
+    [
+      present,
+      WorktreeCleanupObservation.cases.Absent.make({
+        locator: attempt.worktree,
+        revision: WorktreeCleanupEvidenceRevision.make(2)
+      })
+    ],
+    [
+      WorktreeCleanupMutationResult.cases.Removed.make({
+        branch: attempt.branch,
+        locator: attempt.worktree,
+        revision: WorktreeCleanupEvidenceRevision.make(1)
+      })
+    ]
+  ).pipe(
+    Effect.tap(({ calls, result }) =>
+      Effect.sync(() => {
+        expect(result._tag).toBe("Preserved")
         expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
       })
     )
@@ -419,7 +447,7 @@ it.effect("converges past the three-responsibility activation cap", () =>
       FixtureTarget.make("issue-69-more-than-three-responsibilities"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    const attempts = [attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")]
+    const attempts = [attempt, ...fairnessAttempts]
     for (const [index, plannedAttempt] of attempts.entries()) {
       yield* appendAbandonedProvenance(plannedAttempt, OperationId.make(`issue-69-fourth-cap-${index + 1}`))
     }
@@ -498,6 +526,82 @@ it.effect("converges past the three-responsibility activation cap", () =>
         ]
       })
     ),
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("skips an exhausted operation so later responsibilities receive their bounded turn", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-fairness"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const attempts = [attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")]
+    const authorizations = yield* Effect.forEach(attempts, (plannedAttempt, index) =>
+      appendAbandonedProvenance(plannedAttempt, OperationId.make(`issue-69-fair-${index + 1}`))
+    )
+    const exhausted = authorizations[0]
+    if (exhausted === undefined) return yield* Effect.die("fairness fixture did not create its first authorization")
+    for (let index = 0; index < 3; index += 1) {
+      const result = yield* runWorktreeCleanup(exhausted)
+      expect(result._tag).toBe("Pending")
+    }
+
+    const loop = yield* runDispositionCleanupLoop(runId)
+    expect(loop.worktreeOutcomes).toHaveLength(3)
+    expect(loop.worktreeOutcomes.every(({ _tag }) => _tag === "Settled")).toBe(true)
+    const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
+    const removals = calls.filter((call) => call._tag === "Remove")
+    expect(removals.slice(0, 3).map((call) => call.operationId)).toEqual([
+      exhausted.operationId,
+      exhausted.operationId,
+      exhausted.operationId
+    ])
+    expect(removals.slice(3).map((call) => call.operationId)).toEqual(
+      loop.worktreeOutcomes.map(({ authorization }) => authorization.operationId)
+    )
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          ...[0, 1, 2].map(() => present),
+          ...fairnessAttempts.flatMap((plannedAttempt) => [
+            WorktreeCleanupObservation.cases.Present.make({
+              attemptId: plannedAttempt.attemptId,
+              branch: plannedAttempt.branch,
+              headSha: plannedAttempt.baseSha,
+              locator: plannedAttempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(1),
+              writerQuiescent: true
+            }),
+            WorktreeCleanupObservation.cases.Absent.make({
+              locator: plannedAttempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(1)
+            })
+          ])
+        ],
+        mutations: [
+          ...[0, 1, 2].map(() =>
+            WorktreeCleanupMutationResult.cases.Unknown.make({
+              branch: attempt.branch,
+              detail: "response lost while exhausting the first operation",
+              locator: attempt.worktree
+            })
+          ),
+          ...fairnessAttempts.map((plannedAttempt) =>
+            WorktreeCleanupMutationResult.cases.Removed.make({
+              branch: plannedAttempt.branch,
+              locator: plannedAttempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(1)
+            })
+          )
+        ]
+      })
+    ),
+    Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
     Effect.provide(memoryJournalTestLayer)
   )
@@ -1036,5 +1140,25 @@ it.effect("preserves an authorization whose observation provenance is forged", (
     const result = yield* runWorktreeCleanup(forged)
     expect(result._tag).toBe("Preserved")
     expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
+  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("rejects a replacement when a same-operation tracker read names a foreign target", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-foreign-tracker-target"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendReplacementProvenance(attempt, successor)
+    const records = yield* journal.read(runId)
+    const foreignTarget = FixtureTarget.make("issue-69-foreign-tracker-read")
+    const foreignRecords = records.map((record) =>
+      record.event._tag === "TaskTrackerReadIntentRecorded" && record.event.operation._tag === "ReadTrackerGraph"
+        ? { ...record, event: { ...record.event, operation: { ...record.event.operation, target: foreignTarget } } }
+        : record
+    )
+    expect(validateWorktreeCleanupProvenance(foreignRecords, authorization)._tag).toBe("Invalid")
   }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
 )

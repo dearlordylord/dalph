@@ -62,6 +62,7 @@ import {
   validateProviderRunActivityAbsent
 } from "../integration-quarantine/canonical-provenance.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
+import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
 import {
@@ -254,6 +255,11 @@ const validateReplacementWitnessRecords = (
   const graphIntentIsExact =
     graphIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
     graphIntent.event.operation._tag === "ReadTrackerGraph"
+  const graphObservationMatchesRead =
+    graphIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+    graphIntent.event.operation._tag === "ReadTrackerGraph" &&
+    graphOutcome?.event._tag === "TaskTrackerFactsObserved" &&
+    taskTrackerObservationMatchesRead(graphOutcome.event.observation, graphIntent.event.operation)
   if (
     graphOutcome === undefined ||
     graphOutcome.runId !== runId ||
@@ -263,7 +269,8 @@ const validateReplacementWitnessRecords = (
     graphOutcome.event._tag !== "TaskTrackerFactsObserved" ||
     graphOutcome.event.observation._tag !== "CompleteTaskTrackerFacts" ||
     !graphOutcome.event.observation.factFamilies[0].taskIds.includes(replacement.subject.plannedAttempt.taskId) ||
-    !graphIntentIsExact
+    !graphIntentIsExact ||
+    !graphObservationMatchesRead
   ) {
     return "replacement provenance lacks the exact graph read intent and complete facts outcome"
   }
@@ -281,6 +288,11 @@ const validateReplacementWitnessRecords = (
   const specificationIntentIsExact =
     specificationIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
     specificationIntent.event.operation._tag === "ReadTaskWorkSpecification"
+  const specificationObservationMatchesRead =
+    specificationIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+    specificationIntent.event.operation._tag === "ReadTaskWorkSpecification" &&
+    specificationOutcome?.event._tag === "TaskTrackerFactsObserved" &&
+    taskTrackerObservationMatchesRead(specificationOutcome.event.observation, specificationIntent.event.operation)
   if (
     specificationOutcome === undefined ||
     specificationOutcome.runId !== runId ||
@@ -291,7 +303,8 @@ const validateReplacementWitnessRecords = (
     specificationOutcome.event.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
     specificationOutcome.event.observation.factFamily.taskId !== replacement.subject.plannedAttempt.taskId ||
     specificationOutcome.event.observation.factFamily.fingerprint !== replacement.subject.observedTaskRevision ||
-    !specificationIntentIsExact
+    !specificationIntentIsExact ||
+    !specificationObservationMatchesRead
   ) {
     return "replacement provenance lacks the exact authored specification read witness"
   }
@@ -309,6 +322,11 @@ const validateReplacementWitnessRecords = (
   const claimObservationIntentIsExact =
     claimObservationIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
     claimObservationIntent.event.operation._tag === "ReadTaskClaim"
+  const claimObservationMatchesRead =
+    claimObservationIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+    claimObservationIntent.event.operation._tag === "ReadTaskClaim" &&
+    claimObservationOutcome?.event._tag === "TaskTrackerFactsObserved" &&
+    taskTrackerObservationMatchesRead(claimObservationOutcome.event.observation, claimObservationIntent.event.operation)
   if (
     claimObservationOutcome === undefined ||
     claimObservationOutcome.runId !== runId ||
@@ -318,7 +336,8 @@ const validateReplacementWitnessRecords = (
     claimObservationOutcome.event._tag !== "TaskTrackerFactsObserved" ||
     claimObservationOutcome.event.observation._tag !== "FocusedTaskClaimFacts" ||
     !structuralEqual(claimObservationOutcome.event.observation.observation, replacement.witness.expectedClaim) ||
-    !claimObservationIntentIsExact
+    !claimObservationIntentIsExact ||
+    !claimObservationMatchesRead
   ) {
     return "replacement provenance lacks the exact claim observation read witness"
   }

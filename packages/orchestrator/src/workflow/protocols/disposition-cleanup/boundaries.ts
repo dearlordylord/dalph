@@ -1,91 +1,27 @@
-import { Context, Effect, Layer, Option, Schema } from "effect"
-import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
+import { Context, Effect, FileSystem, Layer, Option, Schema } from "effect"
+import { GitCommitSha, WorktreeLocator } from "@dalph/contracts"
 import {
   CoordinatorOwnership,
   type GitCommonDirectoryTarget
 } from "../../../authorities/coordinator-ownership/ownership.js"
-import { GitCommand, type GitCommandInvocationFailure } from "../../../authorities/git/command.js"
+import { GitCommand } from "../../../authorities/git/command.js"
 import { BranchCleanupBoundary, BranchCleanupMutationResult, BranchCleanupObservation } from "./branch.js"
 import {
   IntegratorCandidateCleanupBoundary,
   IntegratorCandidateCleanupMutationResult,
-  IntegratorCandidateCleanupObservation,
   unavailableIntegratorCandidateProviderAuthority
 } from "./integrator-candidate.js"
 import { WorktreeCleanupBoundary, WorktreeCleanupMutationResult, WorktreeCleanupObservation } from "./worktree.js"
+import { BranchCleanupEvidenceRevision, WorktreeCleanupEvidenceRevision } from "./disposition.js"
 import {
-  BranchCleanupEvidenceRevision,
-  type BranchCleanupAuthorization,
-  IntegratorCandidateCleanupEvidenceRevision,
-  type IntegratorCandidateCleanupAuthorization,
-  type WorktreeCleanupAuthorization,
-  WorktreeCleanupEvidenceRevision
-} from "./disposition.js"
-
-/**
- * Explicitly installed provider-neutral fallbacks for compositions that do
- * not own a Git repository (controlled workflow and authored cassettes). They
- * preserve every subject and cannot cross a mutation boundary.
- */
-export const preservingDispositionCleanupBoundaryLayer = Layer.effectContext(
-  Effect.gen(function* () {
-    const ownership = yield* CoordinatorOwnership
-    const preservingMutation = <A>(makeResult: () => A) =>
-      ownership.runMutation(Effect.suspend(() => Effect.succeed(makeResult())))
-    return Context.empty().pipe(
-      Context.add(WorktreeCleanupBoundary, {
-        observe: (authorization: WorktreeCleanupAuthorization) =>
-          Effect.succeed(
-            WorktreeCleanupObservation.cases.Unreadable.make({
-              detail: "no Git worktree boundary is installed for this composition",
-              locator: authorization.locator
-            })
-          ),
-        remove: (authorization: WorktreeCleanupAuthorization) =>
-          preservingMutation(() =>
-            WorktreeCleanupMutationResult.cases.Unknown.make({
-              branch: authorization.owner.branch,
-              detail: "no Git worktree boundary is installed for this composition",
-              locator: authorization.locator
-            })
-          )
-      }),
-      Context.add(BranchCleanupBoundary, {
-        observe: (authorization: BranchCleanupAuthorization) =>
-          Effect.succeed(
-            BranchCleanupObservation.cases.Unreadable.make({
-              branch: authorization.locator,
-              detail: "no Git branch boundary is installed for this composition"
-            })
-          ),
-        remove: (authorization: BranchCleanupAuthorization) =>
-          preservingMutation(() =>
-            BranchCleanupMutationResult.cases.Unknown.make({
-              branch: authorization.locator,
-              detail: "no Git branch boundary is installed for this composition"
-            })
-          )
-      }),
-      Context.add(IntegratorCandidateCleanupBoundary, {
-        observe: (authorization: IntegratorCandidateCleanupAuthorization) =>
-          Effect.succeed(
-            IntegratorCandidateCleanupObservation.cases.Unreadable.make({
-              detail: "no Git candidate boundary is installed for this composition",
-              locator: authorization.locator
-            })
-          ),
-        remove: (authorization: IntegratorCandidateCleanupAuthorization) =>
-          preservingMutation(() =>
-            IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
-              detail: "no Git candidate boundary is installed for this composition",
-              locator: authorization.locator,
-              sessionId: authorization.owner.sessionId
-            })
-          )
-      })
-    )
-  })
-)
+  commandFailure,
+  missingReference,
+  nonGitPath,
+  parseWorktreeRecords,
+  probePath,
+  resultDetail
+} from "./boundary-evidence.js"
+export { preservingDispositionCleanupBoundaryLayer } from "./preserving-boundary.js"
 
 export type DispositionCleanupBoundaryServices =
   | WorktreeCleanupBoundary
@@ -94,45 +30,12 @@ export type DispositionCleanupBoundaryServices =
 
 const revisionOneWorktree = WorktreeCleanupEvidenceRevision.make(1)
 const revisionOneBranch = BranchCleanupEvidenceRevision.make(1)
-const revisionOneCandidate = IntegratorCandidateCleanupEvidenceRevision.make(1)
 
-const GitWorktreeRecord = Schema.Struct({
-  branch: Schema.optionalKey(TaskBranchRef),
-  head: GitCommitSha,
-  worktree: WorktreeLocator
-})
-type GitWorktreeRecord = typeof GitWorktreeRecord.Type
-
-const parseWorktreeRecords = (stdout: string): ReadonlyArray<GitWorktreeRecord> =>
-  stdout.split(/\n\n/u).flatMap((block) => {
-    const fields = block
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf(" ")
-        return separator < 0 ? [line, ""] : [line.slice(0, separator), line.slice(separator + 1)]
-      })
-      .filter(([name]) => name === "worktree" || name === "HEAD" || name === "branch")
-    const values = Object.fromEntries(fields)
-    const decoded = Option.getOrUndefined(
-      Schema.decodeUnknownOption(GitWorktreeRecord)({
-        ...(values["branch"] === undefined ? {} : { branch: values["branch"] }),
-        head: values["HEAD"],
-        worktree: values["worktree"]
-      })
-    )
-    return decoded === undefined ? [] : [decoded]
-  })
-
-const commandFailure = (failure: GitCommandInvocationFailure): string => failure.detail
-const resultDetail = (stderr: string, exitCode: number): string => stderr.trim() || `git exited ${exitCode}`
-const missingReference = (stderr: string): boolean =>
-  /(?:unknown revision|needed a single revision|not a valid object name|does not exist|not found)/iu.test(stderr)
-
-/** Real Git-backed cleanup boundaries used by ordinary production Run activation. */
 export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTarget) =>
   Layer.effectContext(
     Effect.gen(function* () {
       const commands = yield* GitCommand
+      const fileSystem = yield* FileSystem.FileSystem
       const ownership = yield* CoordinatorOwnership
       const readWorktrees = commands.run(target, ["worktree", "list", "--porcelain"])
       const worktree = WorktreeCleanupBoundary.of({
@@ -156,32 +59,45 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
                 locator: authorization.locator
               })
             }
-            const exact = parseWorktreeRecords(listed.result.stdout).find(
-              (record) => record.worktree === authorization.locator
-            )
+            const parsed = parseWorktreeRecords(listed.result.stdout)
+            if (parsed._tag === "Malformed") {
+              return WorktreeCleanupObservation.cases.Unreadable.make({
+                detail: parsed.detail,
+                locator: authorization.locator
+              })
+            }
+            const exact = parsed.records.find((record) => record.worktree === authorization.locator)
             if (exact === undefined) {
-              const pathProbe = yield* commands
-                .runInWorktree(authorization.locator, ["rev-parse", "--is-inside-work-tree"])
-                .pipe(
-                  Effect.map((result) => ({ result })),
-                  Effect.catchTag("GitCommandInvocationFailure", (failure) =>
-                    Effect.succeed({ failure: commandFailure(failure) })
-                  )
-                )
-              if ("failure" in pathProbe) {
+              const pathProbe = yield* probePath(fileSystem, commands, authorization.locator, [
+                "rev-parse",
+                "--is-inside-work-tree"
+              ])
+              if (pathProbe._tag === "Absent") {
+                return WorktreeCleanupObservation.cases.Absent.make({
+                  locator: authorization.locator,
+                  revision: revisionOneWorktree
+                })
+              }
+              if (pathProbe._tag === "Unreadable") {
                 return WorktreeCleanupObservation.cases.Unreadable.make({
-                  detail: pathProbe.failure,
+                  detail: pathProbe.detail,
                   locator: authorization.locator
                 })
               }
-              return pathProbe.result.exitCode === 0
+              if ("failure" in pathProbe.result) {
+                return WorktreeCleanupObservation.cases.Unreadable.make({
+                  detail: pathProbe.result.failure,
+                  locator: authorization.locator
+                })
+              }
+              return nonGitPath(pathProbe.result.stderr) || pathProbe.result.exitCode === 0
                 ? WorktreeCleanupObservation.cases.Unregistered.make({
                     locator: authorization.locator,
                     revision: revisionOneWorktree
                   })
-                : WorktreeCleanupObservation.cases.Absent.make({
-                    locator: authorization.locator,
-                    revision: revisionOneWorktree
+                : WorktreeCleanupObservation.cases.Unreadable.make({
+                    detail: resultDetail(pathProbe.result.stderr, pathProbe.result.exitCode),
+                    locator: authorization.locator
                   })
             }
             if (exact.branch === authorization.owner.branch && exact.head === authorization.expectedHead) {
@@ -254,21 +170,28 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
                   detail: resultDetail(ref.result.stderr, ref.result.exitCode)
                 })
               }
-              const pathProbe = yield* commands
-                .runInWorktree(authorization.disposition.plannedAttempt.worktree, [
-                  "rev-parse",
-                  "--is-inside-work-tree"
-                ])
-                .pipe(
-                  Effect.map((result) => ({ result })),
-                  Effect.catchTag("GitCommandInvocationFailure", (failure) =>
-                    Effect.succeed({ failure: commandFailure(failure) })
-                  )
-                )
-              if ("failure" in pathProbe) {
+              const pathProbe = yield* probePath(
+                fileSystem,
+                commands,
+                authorization.disposition.plannedAttempt.worktree,
+                ["rev-parse", "--is-inside-work-tree"]
+              )
+              if (pathProbe._tag === "Absent") {
+                return BranchCleanupObservation.cases.Absent.make({
+                  branch: authorization.locator,
+                  revision: revisionOneBranch
+                })
+              }
+              if (pathProbe._tag === "Unreadable") {
                 return BranchCleanupObservation.cases.Unreadable.make({
                   branch: authorization.locator,
-                  detail: pathProbe.failure
+                  detail: pathProbe.detail
+                })
+              }
+              if ("failure" in pathProbe.result) {
+                return BranchCleanupObservation.cases.Unreadable.make({
+                  branch: authorization.locator,
+                  detail: pathProbe.result.failure
                 })
               }
               return pathProbe.result.exitCode === 0
@@ -276,9 +199,11 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
                     branch: authorization.locator,
                     detail: "branch ref is absent but its planned worktree path is still registered"
                   })
-                : BranchCleanupObservation.cases.Absent.make({
+                : BranchCleanupObservation.cases.Unreadable.make({
                     branch: authorization.locator,
-                    revision: revisionOneBranch
+                    detail: nonGitPath(pathProbe.result.stderr)
+                      ? "branch ref is absent but its planned path still exists"
+                      : resultDetail(pathProbe.result.stderr, pathProbe.result.exitCode)
                   })
             }
             const head = Option.getOrUndefined(Schema.decodeUnknownOption(GitCommitSha)(ref.result.stdout.trim()))
@@ -306,10 +231,15 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
                 detail: resultDetail(worktreeResult.result.stderr, worktreeResult.result.exitCode)
               })
             }
+            const parsed = parseWorktreeRecords(worktreeResult.result.stdout)
+            if (parsed._tag === "Malformed") {
+              return BranchCleanupObservation.cases.Unreadable.make({
+                branch: authorization.locator,
+                detail: parsed.detail
+              })
+            }
             const registered =
-              parseWorktreeRecords(worktreeResult.result.stdout).find(
-                (record) => record.branch === authorization.locator
-              )?.worktree ?? null
+              parsed.records.find((record) => record.branch === authorization.locator)?.worktree ?? null
             if (registered !== null) {
               return BranchCleanupObservation.cases.Foreign.make({
                 branch: authorization.locator,
@@ -319,18 +249,38 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
                 revision: revisionOneBranch
               })
             }
-            const pathProbe = yield* commands
-              .runInWorktree(authorization.disposition.plannedAttempt.worktree, ["rev-parse", "--is-inside-work-tree"])
-              .pipe(
-                Effect.map((result) => ({ result })),
-                Effect.catchTag("GitCommandInvocationFailure", (failure) =>
-                  Effect.succeed({ failure: commandFailure(failure) })
-                )
-              )
-            if ("failure" in pathProbe) {
+            const pathProbe = yield* probePath(
+              fileSystem,
+              commands,
+              authorization.disposition.plannedAttempt.worktree,
+              ["rev-parse", "--is-inside-work-tree"]
+            )
+            if (pathProbe._tag === "Absent") {
+              return head === authorization.expectedHead
+                ? BranchCleanupObservation.cases.Present.make({
+                    branch: authorization.locator,
+                    headSha: head,
+                    registeredWorktree: null,
+                    revision: revisionOneBranch
+                  })
+                : BranchCleanupObservation.cases.Foreign.make({
+                    branch: authorization.locator,
+                    observedHead: head,
+                    observedWorktree: WorktreeLocator.make("<unregistered>"),
+                    reason: "DifferentHead",
+                    revision: revisionOneBranch
+                  })
+            }
+            if (pathProbe._tag === "Unreadable") {
               return BranchCleanupObservation.cases.Unreadable.make({
                 branch: authorization.locator,
-                detail: pathProbe.failure
+                detail: pathProbe.detail
+              })
+            }
+            if ("failure" in pathProbe.result) {
+              return BranchCleanupObservation.cases.Unreadable.make({
+                branch: authorization.locator,
+                detail: pathProbe.result.failure
               })
             }
             if (pathProbe.result.exitCode === 0) {
@@ -342,19 +292,24 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
                 revision: revisionOneBranch
               })
             }
-            return head === authorization.expectedHead
-              ? BranchCleanupObservation.cases.Present.make({
+            return nonGitPath(pathProbe.result.stderr)
+              ? head === authorization.expectedHead
+                ? BranchCleanupObservation.cases.Present.make({
+                    branch: authorization.locator,
+                    headSha: head,
+                    registeredWorktree: null,
+                    revision: revisionOneBranch
+                  })
+                : BranchCleanupObservation.cases.Foreign.make({
+                    branch: authorization.locator,
+                    observedHead: head,
+                    observedWorktree: WorktreeLocator.make("<unregistered>"),
+                    reason: "DifferentHead",
+                    revision: revisionOneBranch
+                  })
+              : BranchCleanupObservation.cases.Unreadable.make({
                   branch: authorization.locator,
-                  headSha: head,
-                  registeredWorktree: null,
-                  revision: revisionOneBranch
-                })
-              : BranchCleanupObservation.cases.Foreign.make({
-                  branch: authorization.locator,
-                  observedHead: head,
-                  observedWorktree: WorktreeLocator.make("<unregistered>"),
-                  reason: "DifferentHead",
-                  revision: revisionOneBranch
+                  detail: resultDetail(pathProbe.result.stderr, pathProbe.result.exitCode)
                 })
           }),
         remove: (authorization) =>
@@ -384,37 +339,15 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
             )
           )
       })
-      const providerAuthority = unavailableIntegratorCandidateProviderAuthority
       const candidate = IntegratorCandidateCleanupBoundary.of({
-        observe: providerAuthority.observe,
+        observe: unavailableIntegratorCandidateProviderAuthority.observe,
         remove: (authorization) =>
-          ownership.runMutation(
-            Effect.suspend(() =>
-              commands.run(target, ["update-ref", "-d", "--", authorization.locator]).pipe(
-                Effect.map((result) =>
-                  result.exitCode === 0
-                    ? IntegratorCandidateCleanupMutationResult.cases.Removed.make({
-                        locator: authorization.locator,
-                        revision: revisionOneCandidate,
-                        sessionId: authorization.owner.sessionId
-                      })
-                    : IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
-                        detail: resultDetail(result.stderr, result.exitCode),
-                        locator: authorization.locator,
-                        sessionId: authorization.owner.sessionId
-                      })
-                ),
-                Effect.catchTag("GitCommandInvocationFailure", (failure) =>
-                  Effect.succeed(
-                    IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
-                      detail: commandFailure(failure),
-                      locator: authorization.locator,
-                      sessionId: authorization.owner.sessionId
-                    })
-                  )
-                )
-              )
-            )
+          Effect.succeed(
+            IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+              detail: "provider candidate authority is unavailable in the provider-neutral Git boundary",
+              locator: authorization.locator,
+              sessionId: authorization.owner.sessionId
+            })
           )
       })
       return Context.empty().pipe(

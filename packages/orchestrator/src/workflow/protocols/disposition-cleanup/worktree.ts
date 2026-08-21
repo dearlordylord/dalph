@@ -438,6 +438,19 @@ const settleFromAbsence = Effect.fn("WorktreeCleanup.settleFromAbsence")(functio
 ) {
   if (observation._tag !== "Absent")
     return yield* Effect.die("worktree absence settlement requires an Absent observation")
+  if (result.revision !== observation.revision) {
+    yield* appendContradiction(
+      authorization,
+      observation,
+      operationId,
+      "worktree mutation result revision did not match the latest absence observation",
+      records
+    )
+    return WorktreeCleanupOutcome.cases.Preserved.make({
+      authorization,
+      reason: "worktree mutation result was stale relative to the latest absence proof"
+    })
+  }
   const runId = authorization.disposition.plannedAttempt.runId
   const mutationExists = records.some(
     (record) =>

@@ -207,6 +207,37 @@ it.effect("deletes a planned branch only after the exact worktree settlement", (
   )
 )
 
+it.effect("does not settle a branch removal with a stale revision", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const result = yield* runBranchCleanup(branchAuthorization)
+    const journal = yield* JournalStore
+    const records = yield* journal.read(runId)
+    expect(result._tag).toBe("Preserved")
+    expect(records.map(({ event }) => event._tag)).toContain("BranchCleanupContradicted")
+    expect(records.map(({ event }) => event._tag)).not.toContain("BranchCleanupSettled")
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          present,
+          BranchCleanupObservation.cases.Absent.make({
+            branch: attempt.branch,
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          BranchCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            revision: BranchCleanupEvidenceRevision.make(1)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
 it.effect("replays a settled branch twice without a boundary call or journal write", () =>
   Effect.gen(function* () {
     yield* begin()

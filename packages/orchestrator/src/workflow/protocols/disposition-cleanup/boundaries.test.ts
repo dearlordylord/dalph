@@ -1,3 +1,4 @@
+import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
@@ -7,9 +8,10 @@ import {
   EvidenceReference,
   GitRepositoryLocator,
   IntegrationTarget,
-  IntegrationTargetRef
+  IntegrationTargetRef,
+  WorktreeLocator
 } from "@dalph/contracts"
-import { GitCommand } from "../../../authorities/git/command.js"
+import { GitCommand, type GitCommandService } from "../../../authorities/git/command.js"
 import {
   CoordinatorOwnership,
   CoordinatorOwnershipLost,
@@ -69,6 +71,34 @@ const releasedOwnershipLayer = (released: Ref.Ref<boolean>) =>
           return yield* mutation
         })
     })
+  )
+
+const boundaryServices = (
+  calls: Ref.Ref<number>,
+  commands: GitCommandService = {
+    run: () => Ref.update(calls, (count) => count + 1).pipe(Effect.as({ exitCode: 0, stderr: "", stdout: "" })),
+    runInWorktree: () =>
+      Ref.update(calls, (count) => count + 1).pipe(
+        Effect.as({ exitCode: 1, stderr: "fatal: not a git repository", stdout: "" })
+      ),
+    runBytesInWorktree: () => Effect.die("byte command is outside this boundary test")
+  }
+) =>
+  Effect.gen(function* () {
+    const worktree = yield* WorktreeCleanupBoundary
+    const branch = yield* BranchCleanupBoundary
+    const candidate = yield* IntegratorCandidateCleanupBoundary
+    return { branch, candidate, worktree }
+  }).pipe(
+    Effect.provide(gitDispositionCleanupBoundaryLayer(target)),
+    Effect.provide(Layer.succeed(GitCommand, commands)),
+    Effect.provide(
+      Layer.succeed(
+        CoordinatorOwnership,
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (effect) => effect })
+      )
+    ),
+    Effect.provide(NodeServices.layer)
   )
 
 const candidatePredecessor = IntegratorSessionCorrelation.make({
@@ -135,14 +165,16 @@ it.effect("does not cross any cleanup mutation boundary after coordinator owners
     }).pipe(
       Effect.provide(gitDispositionCleanupBoundaryLayer(target)),
       Effect.provide(commandLayer(calls)),
-      Effect.provide(failingOwnershipLayer)
+      Effect.provide(failingOwnershipLayer),
+      Effect.provide(NodeServices.layer)
     )
     const failures = yield* Effect.all([
       boundaries.worktree.remove(authorization, CleanupMutationOrdinal.make(1)).pipe(Effect.flip),
-      boundaries.branch.remove(branchAuthorization, CleanupMutationOrdinal.make(1)).pipe(Effect.flip),
-      boundaries.candidate.remove(candidateAuthorization, CleanupMutationOrdinal.make(1)).pipe(Effect.flip)
+      boundaries.branch.remove(branchAuthorization, CleanupMutationOrdinal.make(1)).pipe(Effect.flip)
     ])
     for (const failure of failures) expect(failure).toBeInstanceOf(CoordinatorOwnershipLost)
+    const candidateResult = yield* boundaries.candidate.remove(candidateAuthorization, CleanupMutationOrdinal.make(1))
+    expect(candidateResult._tag).toBe("Unknown")
     expect(yield* Ref.get(calls)).toBe(0)
   })
 )
@@ -159,10 +191,83 @@ it.effect("does not cross a cleanup mutation boundary after explicit ownership r
     }).pipe(
       Effect.provide(gitDispositionCleanupBoundaryLayer(target)),
       Effect.provide(commandLayer(calls)),
-      Effect.provide(releasedOwnershipLayer(released))
+      Effect.provide(releasedOwnershipLayer(released)),
+      Effect.provide(NodeServices.layer)
     )
     const failure = yield* boundary.remove(authorization, CleanupMutationOrdinal.make(1)).pipe(Effect.flip)
     expect(failure).toBeInstanceOf(CoordinatorOwnershipLost)
+    expect(yield* Ref.get(calls)).toBe(0)
+  })
+)
+
+it.effect("classifies an existing non-worktree directory as unregistered, not absent", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const boundaries = yield* boundaryServices(calls)
+    const observed = yield* boundaries.worktree.observe({ ...authorization, locator: WorktreeLocator.make("/tmp") })
+    expect(observed._tag).toBe("Unregistered")
+    expect(yield* Ref.get(calls)).toBe(2)
+  })
+)
+
+it.effect("classifies a missing branch ref reported as not a valid ref as absent", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const commands: GitCommandService = {
+      run: (_directory, args) =>
+        args[0] === "show-ref"
+          ? Ref.update(calls, (count) => count + 1).pipe(
+              Effect.as({ exitCode: 1, stderr: "fatal: refs/heads/missing is not a valid ref", stdout: "" })
+            )
+          : Ref.update(calls, (count) => count + 1).pipe(Effect.as({ exitCode: 0, stderr: "", stdout: "" })),
+      runInWorktree: () =>
+        Ref.update(calls, (count) => count + 1).pipe(
+          Effect.as({
+            exitCode: 1,
+            stderr: "fatal: cannot change to '/tmp/issue-69-p1': No such file or directory",
+            stdout: ""
+          })
+        ),
+      runBytesInWorktree: () => Effect.die("byte command is outside this boundary test")
+    }
+    const boundaries = yield* boundaryServices(calls, commands)
+    const observed = yield* boundaries.branch.observe(branchAuthorization)
+    expect(observed._tag).toBe("Absent")
+  })
+)
+
+it.effect("rejects malformed or ambiguous porcelain blocks as unreadable", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const commands: GitCommandService = {
+      run: (_directory, args) =>
+        args[0] === "worktree"
+          ? Ref.update(calls, (count) => count + 1).pipe(
+              Effect.as({
+                exitCode: 0,
+                stderr: "",
+                stdout:
+                  "worktree /tmp/issue-69-p1\nHEAD 1111111111111111111111111111111111111111\n\nworktree /tmp/issue-69-p2\n"
+              })
+            )
+          : Ref.update(calls, (count) => count + 1).pipe(
+              Effect.as({ exitCode: 0, stderr: "", stdout: "1111111111111111111111111111111111111111" })
+            ),
+      runInWorktree: () => Effect.die("malformed list must stop before path probing"),
+      runBytesInWorktree: () => Effect.die("byte command is outside this boundary test")
+    }
+    const boundaries = yield* boundaryServices(calls, commands)
+    const observed = yield* boundaries.worktree.observe(authorization)
+    expect(observed._tag).toBe("Unreadable")
+  })
+)
+
+it.effect("does not expose a provider-neutral candidate remove command", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0)
+    const boundaries = yield* boundaryServices(calls)
+    const result = yield* boundaries.candidate.remove(candidateAuthorization, CleanupMutationOrdinal.make(1))
+    expect(result._tag).toBe("Unknown")
     expect(yield* Ref.get(calls)).toBe(0)
   })
 )

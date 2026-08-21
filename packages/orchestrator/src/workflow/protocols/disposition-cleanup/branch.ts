@@ -422,6 +422,19 @@ const settleFromAbsence = Effect.fn("BranchCleanup.settleFromAbsence")(function*
 ) {
   if (observation._tag !== "Absent")
     return yield* Effect.die("branch absence settlement requires an Absent observation")
+  if (result.revision !== observation.revision) {
+    yield* appendContradiction(
+      authorization,
+      observation,
+      operationId,
+      "branch mutation result revision did not match the latest absence observation",
+      records
+    )
+    return BranchCleanupOutcome.cases.Preserved.make({
+      authorization,
+      reason: "branch mutation result was stale relative to the latest absence proof"
+    })
+  }
   const runId = authorization.disposition.plannedAttempt.runId
   const mutationExists = records.some(
     (record) =>
