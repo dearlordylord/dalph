@@ -52,7 +52,16 @@ import {
   IntegrationStarted,
   projectIntegrationOccurrence
 } from "./integration-occurrence.js"
+import * as HistoricalOccurrence from "./historical-occurrence.js"
 import {
+  targetPromotionCorrelationEquals,
+  type TargetPromotionAttemptIntendedEvent,
+  type TargetPromotionIntendedEvent
+} from "../protocols/target-promotion/events.js"
+export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integration-occurrence.js"
+export { WorkflowActor } from "./actor.js"
+
+const {
   AttemptImplementationAbandoned,
   AttemptStoppageIntended,
   HistoricalWorkflowOccurrence,
@@ -61,8 +70,8 @@ import {
   IntegrationFinalitySettledOccurred,
   IntegrationFocusedCompletionOccurred,
   IntegrationProviderRunActivityAbsent,
-  IntegrationQuarantineDirectionApplied,
   IntegrationQuarantined,
+  IntegrationQuarantineDirectionApplied,
   IntegratorCandidateQualificationInitiated,
   IntegratorCandidateQualificationObserved,
   IntegratorRunResultRecorded,
@@ -82,14 +91,8 @@ import {
   TaskClaimReleaseInitiated,
   TaskWorktreeReady,
   TaskWorktreeReconciliationInitiated
-} from "./historical-occurrence.js"
-import {
-  targetPromotionCorrelationEquals,
-  type TargetPromotionAttemptIntendedEvent,
-  type TargetPromotionIntendedEvent
-} from "../protocols/target-promotion/events.js"
-export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integration-occurrence.js"
-export { WorkflowActor } from "./actor.js"
+} = HistoricalOccurrence
+type HistoricalWorkflowOccurrence = HistoricalOccurrence.HistoricalWorkflowOccurrence
 
 const initiatedActionFields = {
   initiatedBy: WorkflowActor,
