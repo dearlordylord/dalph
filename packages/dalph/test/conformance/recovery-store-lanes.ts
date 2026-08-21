@@ -114,6 +114,41 @@ const replaySqlite = Effect.fn("RecoveryStoreLanes.replaySqlite")(function* (pre
   )
 })
 
+/**
+ * Installs one retained prefix in one fresh physical store and keeps that
+ * store alive while a production recovery/bootstrap callback runs.
+ *
+ * The callback receives the same JournalStore service that owns the retained
+ * prefix, so callers can install the production RunLifecycleJournal and
+ * journaled bootstrap against this exact memory or SQLite boundary.
+ */
+export const withRecoveryPrefixStore = <A, E, R>(
+  prefix: RecoveryPrefix,
+  lane: RecoveryStoreLane,
+  use: (journal: JournalStore["Service"]) => Effect.Effect<A, E, R>
+): Effect.Effect<A, unknown, R> => {
+  const replay = (storeLayer: Layer.Layer<JournalStore, unknown, never>) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* appendRetainedPrefix(journal, prefix.records)
+        return yield* use(journal)
+      }).pipe(Effect.provide(storeLayer))
+    )
+
+  if (lane === "memory") return replay(memoryJournalStoreLayer)
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-recovery-prefix-" })
+      const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+      return yield* replay(sqliteJournalStoreLayer({ filename }))
+    }).pipe(Effect.provide(nodePathAndFileSystemLayer))
+  )
+}
+
 /** Replays one retained prefix through exactly one fresh physical store lane. */
 export const replayRecoveryPrefix = (
   prefix: RecoveryPrefix,
