@@ -331,7 +331,7 @@ type OccurrenceRelationshipIndexes = {
   /** Every exact Restart application, retained with its journal position so a later occurrence cannot satisfy an earlier one. */
   readonly appliedRestartChoices: Map<string, Array<JournalPosition>>
   readonly executorResponsibilities: Map<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>
-  readonly gitReads: Map<string, Array<GitReadInitiated>>
+  readonly gitReads: Map<string, IndexedRelationship<GitReadInitiated>>
   readonly integrationResponsibilities: Map<JournalPosition, IntegrationResponsibilityBegan>
   readonly trackerActions: Map<string, IndexedRelationship<TaskTrackerReadInitiated>>
 }
@@ -405,11 +405,10 @@ const exactGitReadForRestartFailure = (
 ): boolean => {
   if (occurrence.failure._tag === "AttemptRestartTaskFactsReadFailure") return false
   const key = relationshipKey(occurrence.runId, occurrence.originatingActionOperationId)
-  const actions = indexes.gitReads.get(key)?.filter(({ recordedAt }) => recordedAt < occurrence.recordedAt) ?? []
-  if (actions.length !== 1) return false
-  const action = actions[0]
-  /* v8 ignore next -- @preserve The exact-one filter always supplies a schema-valid action. */
-  if (action === undefined) return false
+  const action = indexes.gitReads.get(key)
+  if (action === undefined || action === ambiguousRelationship || action.recordedAt >= occurrence.recordedAt) {
+    return false
+  }
   return restartAuthorityReadOperationMatches(action.operation, occurrence.failure, occurrence.subject)
 }
 
@@ -488,8 +487,8 @@ const invalidGitObservationRelationship = (
   occurrence: PlannedAttemptWorktreeObserved | TargetLineageObserved,
   index: number
 ) => {
-  const actions = indexes.gitReads.get(relationshipKey(occurrence.runId, occurrence.originatingActionOperationId)) ?? []
-  return actions.some(({ recordedAt }) => recordedAt < occurrence.recordedAt)
+  const action = indexes.gitReads.get(relationshipKey(occurrence.runId, occurrence.originatingActionOperationId))
+  return action !== undefined && action !== ambiguousRelationship && isOriginatingGitReadFor(occurrence)(action)
     ? undefined
     : {
         issue: `Git worktree observation must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
@@ -548,10 +547,11 @@ const rememberRestartChoice = (occurrence: WorkflowOccurrence, indexes: Occurren
 
 const rememberGitRead = (occurrence: WorkflowOccurrence, indexes: OccurrenceRelationshipIndexes): boolean => {
   if (occurrence._tag !== "GitReadInitiated") return false
-  const key = relationshipKey(occurrence.runId, occurrence.operation.operationId)
-  const actions = indexes.gitReads.get(key) ?? []
-  actions.push(occurrence)
-  indexes.gitReads.set(key, actions)
+  rememberUniqueRelationship(
+    indexes.gitReads,
+    relationshipKey(occurrence.runId, occurrence.operation.operationId),
+    occurrence
+  )
   return true
 }
 

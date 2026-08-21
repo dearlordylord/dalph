@@ -748,6 +748,60 @@ it.effect("rejects an already projected Git observation when its initiating acti
   })
 )
 
+it.effect("rejects a Git observation when two earlier reads share its same-run operation identity", () =>
+  Effect.gen(function* () {
+    const gitRead = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("ambiguous-worktree-observation"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const intent = GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: gitRead,
+      version: workflowJournalEventVersion
+    })
+    const valid = yield* projectWorkflowOccurrences([
+      record(1, intent),
+      record(
+        3,
+        PlannedAttemptWorktreeObservedEvent.make({
+          observation: AttemptWorktreeLost.make({ plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: gitRead.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+    ])
+    const action = valid.occurrences.find(({ _tag }) => _tag === "GitReadInitiated")
+    const observation = valid.occurrences.find(({ _tag }) => _tag === "PlannedAttemptWorktreeObserved")
+    if (action?._tag !== "GitReadInitiated" || observation?._tag !== "PlannedAttemptWorktreeObserved") {
+      return expect.fail("expected Git read and worktree observation occurrences")
+    }
+    const equivalentFailure = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+      occurrences: [action, { ...action, recordedAt: JournalPosition.make(2) }, observation],
+      version: valid.version
+    }).pipe(Effect.flip)
+    expect(equivalentFailure._tag).toBe("SchemaError")
+
+    const failure = yield* projectWorkflowOccurrences([
+      record(1, intent),
+      { ...record(2, intent), key: JournalRecordKey.make("ambiguous-worktree-observation-intent") },
+      record(
+        3,
+        PlannedAttemptWorktreeObservedEvent.make({
+          observation: AttemptWorktreeLost.make({ plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: gitRead.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+    ]).pipe(Effect.flip)
+
+    expect(failure._tag).toBe("SchemaError")
+  })
+)
+
 it.effect("rejects focused task-work facts attached to a graph read or the wrong focused task", () =>
   Effect.gen(function* () {
     const focusedRead = makeTaskWorkSpecificationObservationOperation(
