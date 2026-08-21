@@ -92,6 +92,7 @@ import {
   validateIntegrationFinalityHistoryRecord
 } from "../workflow/protocols/integration-finality/history.js"
 import { validateIntegrationHistoryRecord } from "../coordination/reconstruction/integration-history-validation.js"
+import { invalidWorkflowRunBinding } from "../coordination/reconstruction/integration-history-run-binding.js"
 import { makeIntegrationHistoryIndexes } from "../coordination/reconstruction/integration-history.js"
 import type { CurrentSignal } from "../coordination/delivery/relations.js"
 import {
@@ -1607,10 +1608,11 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
     if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
       indexes = {
         ...indexes,
-        executorResponsibilitiesBegan: HashMap.set(indexes.executorResponsibilitiesBegan, record.event.plannedAttempt.attemptId, {
-          plannedAttempt: record.event.plannedAttempt,
-          position: record.position
-        })
+        executorResponsibilitiesBegan: HashMap.set(
+          indexes.executorResponsibilitiesBegan,
+          record.event.plannedAttempt.attemptId,
+          { plannedAttempt: record.event.plannedAttempt, position: record.position }
+        )
       }
     }
     if (
@@ -1626,11 +1628,24 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
           attemptId,
           record.event.report.result.acceptedResult
         ),
-        acceptedExecutorResultPositions: HashMap.set(indexes.acceptedExecutorResultPositions, attemptId, record.position)
+        acceptedExecutorResultPositions: HashMap.set(
+          indexes.acceptedExecutorResultPositions,
+          attemptId,
+          record.position
+        )
       }
     }
   }
   return undefined
+}
+
+/** Validates all nested Run identities before any complete or cursor trace is presented. */
+const fullHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+  for (const record of records) {
+    const bindingIssue = invalidWorkflowRunBinding(record.event, runId)
+    if (bindingIssue !== undefined) return `${bindingIssue} at journal position ${record.position}`
+  }
+  return integrationHistoryIssue(runId, records) ?? finalityHistoryIssue(runId, records)
 }
 
 type CompleteGraphObservation = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
@@ -1798,13 +1813,9 @@ const historyFromRecords = Effect.fn("TraceReader.historyFromRecords")(function*
   records: ReadonlyArray<JournalRecord>
 ) {
   yield* validateRecords(runId, records)
-  const integrationIssue = integrationHistoryIssue(runId, records)
-  if (integrationIssue !== undefined) {
-    return yield* new TraceProjectionInvalid({ detail: integrationIssue, runId })
-  }
-  const finalityIssue = finalityHistoryIssue(runId, records)
-  if (finalityIssue !== undefined) {
-    return yield* new TraceProjectionInvalid({ detail: finalityIssue, runId })
+  const historyIssue = fullHistoryIssue(runId, records)
+  if (historyIssue !== undefined) {
+    return yield* new TraceProjectionInvalid({ detail: historyIssue, runId })
   }
   yield* operationIndexOf(runId, records)
   const projection = yield* projectWorkflowOccurrences(records).pipe(
@@ -1842,13 +1853,9 @@ const completeTraceIndexFromRecords = (
 ): Effect.Effect<CompleteTraceIndex, TraceReaderError> =>
   Effect.gen(function* () {
     yield* validateRecords(runId, records)
-    const integrationIssue = integrationHistoryIssue(runId, records)
-    if (integrationIssue !== undefined) {
-      return yield* new TraceProjectionInvalid({ detail: integrationIssue, runId })
-    }
-    const finalityIssue = finalityHistoryIssue(runId, records)
-    if (finalityIssue !== undefined) {
-      return yield* new TraceProjectionInvalid({ detail: finalityIssue, runId })
+    const historyIssue = fullHistoryIssue(runId, records)
+    if (historyIssue !== undefined) {
+      return yield* new TraceProjectionInvalid({ detail: historyIssue, runId })
     }
     const operationIndex = yield* operationIndexOf(runId, records)
     const projection = yield* projectWorkflowOccurrences(records).pipe(
@@ -2009,13 +2016,9 @@ const atCursorFromRecords = Effect.fn("TraceReader.atCursorFromRecords")(functio
 ) {
   const prefix = yield* cursorPrefixOf(cursor, records)
   yield* validateRecords(cursor.runId, prefix)
-  const integrationIssue = integrationHistoryIssue(cursor.runId, prefix)
-  if (integrationIssue !== undefined) {
-    return yield* new TraceProjectionInvalid({ detail: integrationIssue, runId: cursor.runId })
-  }
-  const finalityIssue = finalityHistoryIssue(cursor.runId, prefix)
-  if (finalityIssue !== undefined) {
-    return yield* new TraceProjectionInvalid({ detail: finalityIssue, runId: cursor.runId })
+  const historyIssue = fullHistoryIssue(cursor.runId, prefix)
+  if (historyIssue !== undefined) {
+    return yield* new TraceProjectionInvalid({ detail: historyIssue, runId: cursor.runId })
   }
   const operationIndex = yield* operationIndexOf(cursor.runId, prefix)
   const projection = yield* projectWorkflowOccurrences(prefix).pipe(

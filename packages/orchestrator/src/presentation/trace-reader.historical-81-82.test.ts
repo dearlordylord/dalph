@@ -21,6 +21,7 @@ import { projectTrackerSnapshot } from "../authorities/task-tracker/graph.js"
 import { TargetLineageObservation } from "../authorities/git/target-lineage.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
+import { ActiveTaskClaim, UnclaimedTask } from "../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import { WorkflowActor } from "../workflow/registry/actor.js"
 import {
@@ -34,7 +35,14 @@ import {
   TargetLineageObservedEvent,
   WorkflowRunBeganEvent
 } from "../workflow/registry/event.js"
-import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
+import {
+  AttemptChoiceAppliedEvent,
+  AttemptChoiceRequestId,
+  AttemptImplementationAbandonedEvent,
+  type AttemptQuiescenceProof,
+  AttemptStoppageIntendedEvent,
+  StoppedAttemptClaimNoReleaseObservedEvent
+} from "../workflow/protocols/attempt-choice/events.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
@@ -45,6 +53,8 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
+  PlannedAttemptReplacedEvent,
+  PlannedAttemptReplacementWitness,
   AttemptRestartAuthorityReadFailedEvent,
   AttemptRestartTaskFactsReadFailure
 } from "../workflow/protocols/attempt-choice/replacement-events.js"
@@ -300,6 +310,126 @@ const preservationRecords = (): ReadonlyArray<JournalRecord> => {
     record(8, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion }))
   ]
 }
+
+it.effect("#81 rejects foreign nested Run identities before exposing recovery history", () =>
+  Effect.gen(function* () {
+    const foreignRunId = RunId.make("historical-81-82-foreign-run")
+    const foreignAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: foreignRunId })
+    const foreignReconciliation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make("historical-81-82-foreign-reconciliation"),
+      plannedAttempt: foreignAttempt,
+      predecessorOperationIds: []
+    })
+    const foreignRequestId = AttemptChoiceRequestId.make({
+      nonce: "historical-81-82-foreign-choice",
+      runId: foreignRunId
+    })
+    const foreignSubject = {
+      observedTaskRevision: TaskRevision.make("historical-81-82-foreign-observed"),
+      plannedAttempt: foreignAttempt
+    }
+    const foreignClaim = ActiveTaskClaim.make({
+      operationId: OperationId.make("historical-81-82-foreign-claim"),
+      owner: ClaimOwner.make("dalph:historical-81-82"),
+      taskId: foreignAttempt.taskId,
+      token: ClaimToken.make("historical-81-82-foreign-token")
+    })
+    const quiescenceProof: AttemptQuiescenceProof = {
+      _tag: "CommandResponse",
+      reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1)
+    }
+    const foreignSuccessor = PlannedTaskAttempt.make({
+      ...foreignAttempt,
+      attemptId: AttemptId.make("historical-81-82-foreign-successor"),
+      baseSha: GitCommitSha.make("2".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/historical-81-82-foreign-successor"),
+      taskRevision: foreignSubject.observedTaskRevision,
+      worktree: WorktreeLocator.make("/worktrees/historical-81-82-foreign-successor")
+    })
+    const witness = PlannedAttemptReplacementWitness.make({
+      claimObservationOperationId: OperationId.make("historical-81-82-foreign-claim-observation"),
+      expectedClaim: foreignClaim,
+      graphObservationOperationId: OperationId.make("historical-81-82-foreign-graph-observation"),
+      oldWorktreeObservationOperationId: OperationId.make("historical-81-82-foreign-worktree-observation"),
+      oldWorktreeProof: {
+        baseSha: foreignAttempt.baseSha,
+        branch: foreignAttempt.branch,
+        headSha: foreignAttempt.baseSha,
+        worktree: foreignAttempt.worktree
+      },
+      quiescenceProof,
+      specificationObservationOperationId: OperationId.make("historical-81-82-foreign-specification-observation"),
+      targetHeadSha: foreignSuccessor.baseSha,
+      targetLineageObservationOperationId: OperationId.make("historical-81-82-foreign-lineage-observation")
+    })
+    const successorPlan = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("historical-81-82-foreign-successor-plan"),
+      plannedAttempt: foreignSuccessor,
+      predecessorOperationIds: [
+        foreignClaim.operationId,
+        witness.claimObservationOperationId,
+        witness.graphObservationOperationId,
+        witness.oldWorktreeObservationOperationId,
+        witness.specificationObservationOperationId,
+        witness.targetLineageObservationOperationId
+      ]
+    })
+    const foreignReplacement = PlannedAttemptReplacedEvent.make({
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      requestId: foreignRequestId,
+      subject: foreignSubject,
+      successorPlan,
+      version: workflowJournalEventVersion,
+      witness
+    })
+    const malformedEvents: ReadonlyArray<JournalRecord["event"]> = [
+      TaskAttemptPlannedEvent.make({
+        operation: makeTaskAttemptPlanOperation({
+          operationId: OperationId.make("historical-81-82-foreign-plan"),
+          plannedAttempt: foreignAttempt,
+          predecessorOperationIds: []
+        }),
+        version: workflowJournalEventVersion
+      }),
+      TaskWorktreeReconciliationIntendedEvent.make({
+        operation: foreignReconciliation,
+        version: workflowJournalEventVersion
+      }),
+      AttemptStoppageIntendedEvent.make({
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        requestId: foreignRequestId,
+        subject: foreignSubject,
+        version: workflowJournalEventVersion
+      }),
+      AttemptImplementationAbandonedEvent.make({
+        expectedClaim: foreignClaim,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        proof: quiescenceProof,
+        requestId: foreignRequestId,
+        subject: foreignSubject,
+        version: workflowJournalEventVersion
+      }),
+      StoppedAttemptClaimNoReleaseObservedEvent.make({
+        expectedClaim: foreignClaim,
+        observation: UnclaimedTask.make({ taskId: foreignAttempt.taskId }),
+        observationOperationId: OperationId.make("historical-81-82-foreign-claim-read"),
+        occurrenceClassification: "NonActionOccurrence",
+        requestId: foreignRequestId,
+        subject: foreignSubject,
+        version: workflowJournalEventVersion
+      }),
+      foreignReplacement
+    ]
+    for (const event of malformedEvents) {
+      const records = [record(1, runBeginning), record(2, event)]
+      const failure = yield* Effect.flip(makeTraceReader({ read: () => Effect.succeed(records) }).read(runId))
+      vitestExpect(failure).toBeInstanceOf(TraceProjectionInvalid)
+    }
+  })
+)
 
 const integrationRecords = (): ReadonlyArray<JournalRecord> => {
   const fixture = integrationFinalityFixture

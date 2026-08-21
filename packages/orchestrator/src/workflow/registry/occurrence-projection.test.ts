@@ -36,7 +36,13 @@ import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journa
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskClaimReleasedEvent,
+  TaskClaimReleaseIntendedEvent,
   TaskWorkCapacityChangedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   TargetLineageObservedEvent,
   taskTrackerReadIntent,
   WorkflowJournalEvent,
@@ -71,10 +77,14 @@ import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../protocols/ta
 import {
   makeTargetLineageObservationOperation,
   makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
+  makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTaskWorktreeObservationOperation,
-  makeTrackerGraphObservationOperation
+  makeTrackerGraphObservationOperation,
+  TaskClaimReleaseAuthority
 } from "./operation.js"
 import { AttemptWorktreeLost } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interpreter.js"
@@ -96,7 +106,7 @@ import { expect } from "vitest"
 import { invalidIntegrationOccurrenceRelationship, projectIntegrationOccurrence } from "./integration-occurrence.js"
 import { GitTargetLineageReadFailure } from "../../authorities/git/target-lineage.js"
 import { GitWorktreeReadFailure, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
-import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import {
   IntegrationResponsibilityBeganEvent,
@@ -706,6 +716,107 @@ it.effect("rejects each Git outcome without its distinct earlier same-run read i
 
     expect(worktreeFailure._tag).toBe("GitOutcomeWithoutReadIntent")
     expect(lineageFailure._tag).toBe("GitOutcomeWithoutReadIntent")
+  })
+)
+
+it.effect("requires exact claim and worktree payloads at historical outcome boundaries", () =>
+  Effect.gen(function* () {
+    const acquisition = {
+      operationId: OperationId.make("exact-claim-acquisition"),
+      owner: ClaimOwner.make("dalph:exact-boundary"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("exact-claim-token")
+    }
+    const acquisitionOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+    const acquisitionIntent = record(
+      1,
+      TaskClaimAcquisitionIntendedEvent.make({ operation: acquisitionOperation, version: workflowJournalEventVersion })
+    )
+    const validClaim = TaskClaimAcquiredEvent.make({
+      claim: ActiveTaskClaim.make(acquisition),
+      version: workflowJournalEventVersion
+    })
+    const mismatchedClaim = TaskClaimAcquiredEvent.make({
+      claim: ActiveTaskClaim.make({ ...acquisition, token: ClaimToken.make("foreign-claim-token") }),
+      version: workflowJournalEventVersion
+    })
+
+    const validClaimProjection = yield* projectWorkflowOccurrences([acquisitionIntent, record(2, validClaim)])
+    expect(validClaimProjection.occurrences.map(({ _tag }) => _tag)).toEqual([
+      "TaskClaimAcquisitionInitiated",
+      "TaskClaimAcquired"
+    ])
+    const claimFailure = yield* projectWorkflowOccurrences([acquisitionIntent, record(2, mismatchedClaim)]).pipe(
+      Effect.flip
+    )
+    expect(claimFailure).toMatchObject({ _tag: "TrackerOutcomeWithoutReadIntent" })
+
+    const release = TaskClaimRelease.make({
+      claim: ActiveTaskClaim.make(acquisition),
+      operationId: OperationId.make("exact-claim-release")
+    })
+    const releaseOperation = makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+      predecessorOperationIds: [acquisition.operationId],
+      release
+    })
+    const releaseIntent = record(
+      1,
+      TaskClaimReleaseIntendedEvent.make({ operation: releaseOperation, version: workflowJournalEventVersion })
+    )
+    const releaseOutcome = TaskClaimReleasedEvent.make({ release, version: workflowJournalEventVersion })
+    const mismatchedRelease = TaskClaimReleasedEvent.make({
+      release: TaskClaimRelease.make({
+        ...release,
+        claim: ActiveTaskClaim.make({ ...acquisition, token: ClaimToken.make("foreign-release-token") })
+      }),
+      version: workflowJournalEventVersion
+    })
+    const releaseProjection = yield* projectWorkflowOccurrences([releaseIntent, record(2, releaseOutcome)])
+    expect(releaseProjection.occurrences.map(({ _tag }) => _tag)).toEqual([
+      "TaskClaimReleaseInitiated",
+      "TaskClaimReleased"
+    ])
+    const releaseFailure = yield* projectWorkflowOccurrences([releaseIntent, record(2, mismatchedRelease)]).pipe(
+      Effect.flip
+    )
+    expect(releaseFailure).toMatchObject({ _tag: "TrackerOutcomeWithoutReadIntent" })
+
+    const reconciliation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make("exact-worktree-reconciliation"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const reconciliationIntent = record(
+      1,
+      TaskWorktreeReconciliationIntendedEvent.make({ operation: reconciliation, version: workflowJournalEventVersion })
+    )
+    const validProof = PlannedWorktreeReady.make({
+      baseSha: plannedAttempt.baseSha,
+      branch: plannedAttempt.branch,
+      headSha: plannedAttempt.baseSha,
+      worktree: plannedAttempt.worktree
+    })
+    const mismatchedProof = PlannedWorktreeReady.make({
+      ...validProof,
+      branch: TaskBranchRef.make("refs/heads/dalph/foreign-worktree-proof")
+    })
+    const ready = (proof: typeof validProof) =>
+      TaskWorktreeReadyEvent.make({
+        operationId: reconciliation.operationId,
+        proof,
+        version: workflowJournalEventVersion
+      })
+    const worktreeProjection = yield* projectWorkflowOccurrences([reconciliationIntent, record(2, ready(validProof))])
+    expect(worktreeProjection.occurrences.map(({ _tag }) => _tag)).toEqual([
+      "TaskWorktreeReconciliationInitiated",
+      "TaskWorktreeReady"
+    ])
+    const worktreeFailure = yield* projectWorkflowOccurrences([
+      reconciliationIntent,
+      record(2, ready(mismatchedProof))
+    ]).pipe(Effect.flip)
+    expect(worktreeFailure).toMatchObject({ _tag: "GitOutcomeWithoutReadIntent" })
   })
 )
 

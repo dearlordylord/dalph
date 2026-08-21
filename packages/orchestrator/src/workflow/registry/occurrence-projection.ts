@@ -15,11 +15,18 @@ import type { WorkflowJournalEvent } from "./event.js"
 import { PlannedAttemptExecutorReportOrdinal } from "../protocols/planned-attempt-executor-work/events.js"
 import { TaskTrackerFactsObservation } from "../task-tracker-facts/observation.js"
 import { taskTrackerObservationMatchesRead } from "../task-tracker-facts/observation-match.js"
-import { acceptedResultEquivalence } from "../protocols/integration-admission/responsibility.js"
+import {
+  acceptedResultEquivalence,
+  integrationResponsibilityEquivalence
+} from "../protocols/integration-admission/responsibility.js"
 import { IntegratorRunCorrelation, IntegratorSessionCorrelation } from "../protocols/integrator/events.js"
 import { WorkflowOperation } from "./operation.js"
 import { WorkflowActor } from "./actor.js"
-import { PlannedAttemptWorktreeObservation } from "../protocols/planned-attempt-worktree-observation/protocol.js"
+import {
+  PlannedAttemptWorktreeObservation,
+  plannedAttemptWorktreeObservationMatchesPlan
+} from "../protocols/planned-attempt-worktree-observation/protocol.js"
+import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
@@ -81,7 +88,6 @@ import {
   type TargetPromotionAttemptIntendedEvent,
   type TargetPromotionIntendedEvent
 } from "../protocols/target-promotion/events.js"
-import { integrationResponsibilityEquivalence } from "../protocols/integration-admission/responsibility.js"
 export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integration-occurrence.js"
 export { WorkflowActor } from "./actor.js"
 
@@ -1149,6 +1155,57 @@ type HistoricalProjectionResult = Effect.Effect<
 const historicalFailure = (record: JournalRecord, detail: string): HistoricalProjectionResult =>
   Effect.fail(new HistoricalOutcomeWithoutInitiatingAction({ detail, position: record.position, runId: record.runId }))
 
+const projectHistoricalTaskClaimAcquired = (
+  record: JournalRecord,
+  event: Extract<HistoricalTaskClaimEvent, { readonly _tag: "TaskClaimAcquired" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const operationId = event.claim.operationId
+  const intent = context.taskClaimAcquisitionIntents.get(relationshipKey(record.runId, operationId))
+  const intendedClaim = intent === undefined ? undefined : ActiveTaskClaim.make(intent.operation.acquisition)
+  if (intent === undefined || intendedClaim === undefined || !isExactTaskClaim(event.claim, intendedClaim)) {
+    return Effect.fail(
+      new TrackerOutcomeWithoutReadIntent({ operationId, position: record.position, runId: record.runId })
+    )
+  }
+  return Effect.succeed(
+    TaskClaimAcquired.make({
+      claim: event.claim,
+      occurrenceClassification: "NonActionOccurrence",
+      originatingActionOperationId: operationId,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalTaskClaimReleased = (
+  record: JournalRecord,
+  event: Extract<HistoricalTaskClaimEvent, { readonly _tag: "TaskClaimReleased" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const operationId = event.release.operationId
+  const intent = context.taskClaimReleaseIntents.get(relationshipKey(record.runId, operationId))
+  if (
+    intent === undefined ||
+    intent.operation.release.operationId !== event.release.operationId ||
+    !isExactTaskClaim(event.release.claim, intent.operation.release.claim)
+  ) {
+    return Effect.fail(
+      new TrackerOutcomeWithoutReadIntent({ operationId, position: record.position, runId: record.runId })
+    )
+  }
+  return Effect.succeed(
+    TaskClaimReleased.make({
+      occurrenceClassification: "NonActionOccurrence",
+      originatingActionOperationId: operationId,
+      recordedAt: record.position,
+      release: event.release,
+      runId: record.runId
+    })
+  )
+}
+
 const projectHistoricalTaskClaim = (
   record: JournalRecord,
   event: HistoricalTaskClaimEvent,
@@ -1169,23 +1226,7 @@ const projectHistoricalTaskClaim = (
       })
     )
   }
-  if (event._tag === "TaskClaimAcquired") {
-    const operationId = event.claim.operationId
-    if (!context.taskClaimAcquisitionIntents.has(relationshipKey(record.runId, operationId))) {
-      return Effect.fail(
-        new TrackerOutcomeWithoutReadIntent({ operationId, position: record.position, runId: record.runId })
-      )
-    }
-    return Effect.succeed(
-      TaskClaimAcquired.make({
-        claim: event.claim,
-        occurrenceClassification: "NonActionOccurrence",
-        originatingActionOperationId: operationId,
-        recordedAt: record.position,
-        runId: record.runId
-      })
-    )
-  }
+  if (event._tag === "TaskClaimAcquired") return projectHistoricalTaskClaimAcquired(record, event, context)
   if (event._tag === "TaskClaimReleaseIntended") {
     context.taskClaimReleaseIntents.set(relationshipKey(record.runId, event.operation.release.operationId), event)
     return Effect.succeed(
@@ -1198,21 +1239,7 @@ const projectHistoricalTaskClaim = (
       })
     )
   }
-  const operationId = event.release.operationId
-  if (!context.taskClaimReleaseIntents.has(relationshipKey(record.runId, operationId))) {
-    return Effect.fail(
-      new TrackerOutcomeWithoutReadIntent({ operationId, position: record.position, runId: record.runId })
-    )
-  }
-  return Effect.succeed(
-    TaskClaimReleased.make({
-      occurrenceClassification: "NonActionOccurrence",
-      originatingActionOperationId: operationId,
-      recordedAt: record.position,
-      release: event.release,
-      runId: record.runId
-    })
-  )
+  return projectHistoricalTaskClaimReleased(record, event, context)
 }
 
 const projectHistoricalAttemptWorktree = (
@@ -1234,7 +1261,7 @@ const projectHistoricalAttemptWorktree = (
   }
   if (event._tag === "TaskWorktreeReady") {
     const intent = context.taskWorktreeIntents.get(relationshipKey(record.runId, event.operationId))
-    if (intent === undefined) {
+    if (intent === undefined || !plannedAttemptWorktreeObservationMatchesPlan(event.proof, intent.plannedAttempt)) {
       return Effect.fail(
         new GitOutcomeWithoutReadIntent({
           operationId: event.operationId,

@@ -11,7 +11,7 @@ import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../../../p
 import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette-domain.ts"
 import { maintainedApplicationExitProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette-domain.ts"
 import { maintainedCodexPlannedAttemptExecutorCassetteCatalog } from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette-domain.ts"
-import { deliveryProposalOrderTaskId } from "@dalph/orchestrator"
+import { deliveryProposalOrderTaskId, traceReaderSchemaVersion } from "@dalph/orchestrator"
 import { parseHTML } from "linkedom"
 import {
   cassetteSettledEvent,
@@ -250,7 +250,7 @@ await scenario("drives Reducer Lab durable history, graph, and causal navigation
   assert(traceHistories.length === result.journalRecordCount, "The Lab must materialize one production view for every committed journal position")
   assert(
     traceHistories.every((history, index) =>
-      history.version === 2
+      history.version === traceReaderSchemaVersion
       && history.cursor.runId === result.runId
       && history.cursor.position === index + 1
       && history.items.every(({ identity }) => identity.runId === result.runId)
