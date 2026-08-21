@@ -22,12 +22,14 @@ import {
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
   integrationQuarantinedRecordKey,
+  intentRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
-  integratorSuccessorSessionFixedRecordKey
+  integratorSuccessorSessionFixedRecordKey,
+  outcomeRecordKey
 } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../workflow/registry/event.js"
@@ -244,7 +246,7 @@ const lineageRecords = (position: number, targetLineage: TargetLineageObservatio
         plannedAttempt,
         version: workflowJournalEventVersion
       }),
-      `integration-frontier-retry:${suffix}:observation`
+      outcomeRecordKey(operationId)
     ),
     intent: record(
       position - 1,
@@ -254,7 +256,7 @@ const lineageRecords = (position: number, targetLineage: TargetLineageObservatio
         operation,
         version: workflowJournalEventVersion
       }),
-      `integration-frontier-retry:${suffix}:intent`
+      intentRecordKey(operationId)
     )
   }
 }

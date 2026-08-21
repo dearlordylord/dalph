@@ -848,7 +848,7 @@ describe("delivery proposal route matrix", () => {
             operation: lineageOperation,
             version: workflowJournalEventVersion
           }),
-          key: JournalRecordKey.make("route-matrix-integrator-lineage:intent"),
+          key: intentRecordKey(lineageOperationId),
           position: JournalPosition.make(18),
           runId
         },
@@ -860,7 +860,7 @@ describe("delivery proposal route matrix", () => {
             plannedAttempt: started.plannedAttempt,
             version: workflowJournalEventVersion
           }),
-          key: JournalRecordKey.make("route-matrix-integrator-lineage:observed"),
+          key: outcomeRecordKey(lineageOperationId),
           position: JournalPosition.make(19),
           runId
         },
@@ -1090,7 +1090,7 @@ describe("delivery proposal route matrix", () => {
       })
       yield* integratorJournal.append(
         runId,
-        JournalRecordKey.make("route-matrix-retry-lineage:intent"),
+        intentRecordKey(retryLineageOperationId),
         GitReadIntentRecordedEvent.make({
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
@@ -1100,7 +1100,7 @@ describe("delivery proposal route matrix", () => {
       )
       const retryLineageRecord = yield* integratorJournal.append(
         runId,
-        JournalRecordKey.make("route-matrix-retry-lineage:observed"),
+        outcomeRecordKey(retryLineageOperationId),
         TargetLineageObservedEvent.make({
           observation: lineage,
           occurrenceClassification: "NonActionOccurrence",
@@ -1213,7 +1213,7 @@ describe("delivery proposal route matrix", () => {
       })
       yield* integratorJournal.append(
         runId,
-        JournalRecordKey.make("route-matrix-successor-lineage:intent"),
+        intentRecordKey(successorLineageOperationId),
         GitReadIntentRecordedEvent.make({
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
@@ -1223,7 +1223,7 @@ describe("delivery proposal route matrix", () => {
       )
       const successorLineageRecord = yield* integratorJournal.append(
         runId,
-        JournalRecordKey.make("route-matrix-successor-lineage:observed"),
+        outcomeRecordKey(successorLineageOperationId),
         TargetLineageObservedEvent.make({
           observation: successorLineage,
           occurrenceClassification: "NonActionOccurrence",
