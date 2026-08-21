@@ -25,7 +25,9 @@ import {
   cancelledAttemptImplementationResponsibilityRelinquishedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorCommandProjectionObservedRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   runCancellationAppliedRecordKey,
@@ -52,6 +54,7 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskClaimAcquisitionRejectedEvent,
   TaskClaimReleaseIntendedEvent,
   TaskClaimReleasedEvent,
   taskTrackerReadIntent,
@@ -63,10 +66,13 @@ import {
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   TaskClaimReleaseAuthority,
-  WorkflowOperation
+  WorkflowOperation,
+  makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
   makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskClaimFactsUnreadable,
+  makeCompleteTaskTrackerFactsObserved,
   CompleteTargetClosureCoverage,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
@@ -76,15 +82,23 @@ import {
   RunCancellationAppliedEvent
 } from "../../workflow/protocols/run-cancellation/events.js"
 import {
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { validateCancelledAttemptHistory } from "./cancelled-attempt-history.js"
 import { reduceWorkflowJournalHistory } from "./history.js"
 import { terminationPreconditionIssues } from "../../workflow-journal/termination-preconditions.js"
+import { completedRunFinalityFixture } from "../../../test/run-finality.js"
+import { validSnapshot } from "../../../test/task-dag.js"
 
 const runId = RunId.make("cancelled-history-test-run")
 const taskId = TaskId.make("cancelled-history-test-task")
@@ -405,6 +419,85 @@ it("accepts a safe executor proof observed before cancellation", () => {
   expect(invalidDetailsFor(record, baseRecords)).toEqual([])
 })
 
+it("accepts command and state projection executor proof provenance", () => {
+  const commandProjectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
+  const stateObservationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+  const safeReport = PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId }
+  })
+  const projectionRecord = {
+    event: PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+      commandOrdinal: laterCommandOrdinal,
+      observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+        report: safeReport
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      projectionOrdinal: commandProjectionOrdinal,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorCommandProjectionObservedRecordKey(
+      plannedAttempt.attemptId,
+      laterCommandOrdinal,
+      commandProjectionOrdinal
+    )
+  }
+  const stateRecord = {
+    event: PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: safeReport }),
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: stateObservationOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, stateObservationOrdinal)
+  }
+  const relinquishment = baseRecords.at(-1)
+  if (relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
+    return expect.fail("test fixture lacks relinquishment")
+  }
+  const projectionRelinquishmentEvent = relinquishment.event
+  const cancellationRow = rows[9]
+  const relinquishmentRow = rows[10]
+  if (
+    cancellationRow === undefined ||
+    relinquishmentRow === undefined ||
+    cancellationRow.event._tag !== "RunCancellationApplied" ||
+    relinquishmentRow.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished"
+  ) {
+    return expect.fail("test fixture lacks cancellation settlement rows")
+  }
+  const rowsFor = (
+    proof: typeof projectionRelinquishmentEvent.proof,
+    evidenceRecord: Pick<JournalRecord, "event" | "key">
+  ): ReadonlyArray<JournalRecord> =>
+    recordsFrom([
+      ...rows.slice(0, 9),
+      evidenceRecord,
+      cancellationRow,
+      {
+        ...relinquishmentRow,
+        event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+          ...projectionRelinquishmentEvent,
+          cancellationAppliedAt: JournalPosition.make(11),
+          proof
+        })
+      }
+    ])
+  const projectionRecords = rowsFor(
+    { _tag: "CommandProjection", commandOrdinal: laterCommandOrdinal, projectionOrdinal: commandProjectionOrdinal },
+    projectionRecord
+  )
+  const projectionRelinquishment = projectionRecords.at(-1)
+  if (projectionRelinquishment === undefined) return expect.fail("projection fixture lacks relinquishment")
+  expect(invalidDetailsFor(projectionRelinquishment, projectionRecords)).toEqual([])
+
+  const stateRecords = rowsFor({ _tag: "StateProjection", observationOrdinal: stateObservationOrdinal }, stateRecord)
+  const stateRelinquishment = stateRecords.at(-1)
+  if (stateRelinquishment === undefined) return expect.fail("state fixture lacks relinquishment")
+  expect(invalidDetailsFor(stateRelinquishment, stateRecords)).toEqual([])
+})
+
 it("requires no-release event observation to equal the focused tracker observation", () => {
   const observationRecord: JournalRecord = {
     event: noReleaseObservation,
@@ -440,6 +533,38 @@ it("requires no-release event observation to equal the focused tracker observati
   ).toContain("cancelled-attempt claim disposition is already terminal")
 })
 
+it("rejects unreadable or absent focused claim evidence for cancellation no-release", () => {
+  const readIntentRecord: JournalRecord = {
+    event: taskTrackerReadIntent(readOperation),
+    key: intentRecordKey(readOperation.operationId),
+    position: JournalPosition.make(12),
+    runId
+  }
+  const unreadableObservation: JournalRecord = {
+    event: taskTrackerFactsObservedEvent(readOperation.operationId, makeFocusedTaskClaimFactsUnreadable(readOperation)),
+    key: outcomeRecordKey(readOperation.operationId),
+    position: JournalPosition.make(13),
+    runId
+  }
+  const validNoReleaseRecord: JournalRecord = {
+    event: noRelease,
+    key: cancelledAttemptClaimNoReleaseRecordKey(plannedAttempt.attemptId),
+    position: JournalPosition.make(14),
+    runId
+  }
+  expect(invalidDetailsFor(validNoReleaseRecord, [...baseRecords, validNoReleaseRecord])).toContain(
+    "cancelled-attempt no-release requires an exact absent or foreign focused claim observation"
+  )
+  expect(
+    invalidDetailsFor(validNoReleaseRecord, [
+      ...baseRecords,
+      readIntentRecord,
+      unreadableObservation,
+      validNoReleaseRecord
+    ])
+  ).toContain("cancelled-attempt no-release requires an exact absent or foreign focused claim observation")
+})
+
 it("rejects a StartOrContinue command after cancellation", () => {
   const lateOrdinal = PlannedAttemptExecutorCommandOrdinal.make(3)
   const lateCommand: JournalRecord = {
@@ -457,6 +582,51 @@ it("rejects a StartOrContinue command after cancellation", () => {
   }
   expect(invalidDetailsFor(lateCommand, [...baseRecords, lateCommand])).toContain(
     "post-cancellation history cannot record forward-work event PlannedAttemptExecutorCommandIntended"
+  )
+})
+
+it("classifies post-cancellation claim rejection by its pre-cancellation intent", () => {
+  const foreignClaim = ActiveTaskClaim.make({
+    ...exactClaim,
+    operationId: OperationId.make("cancelled-history-late-rejection-foreign")
+  })
+  const acceptedPreCancellationRejection: JournalRecord = {
+    event: TaskClaimAcquisitionRejectedEvent.make({
+      observed: foreignClaim,
+      operationId: exactClaim.operationId,
+      reason: "ForeignClaim",
+      version: workflowJournalEventVersion
+    }),
+    key: outcomeRecordKey(exactClaim.operationId),
+    position: JournalPosition.make(12),
+    runId
+  }
+  expect(
+    invalidDetailsFor(acceptedPreCancellationRejection, [...baseRecords, acceptedPreCancellationRejection])
+  ).toEqual([])
+
+  const lateOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("cancelled-history-late-rejection"),
+      owner: ClaimOwner.make("dalph"),
+      taskId,
+      token: ClaimToken.make("cancelled-history-late-rejection-token")
+    },
+    predecessorOperationIds: []
+  })
+  const lateRejection: JournalRecord = {
+    event: TaskClaimAcquisitionRejectedEvent.make({
+      observed: foreignClaim,
+      operationId: lateOperation.acquisition.operationId,
+      reason: "ForeignClaim",
+      version: workflowJournalEventVersion
+    }),
+    key: outcomeRecordKey(lateOperation.acquisition.operationId),
+    position: JournalPosition.make(12),
+    runId
+  }
+  expect(invalidDetailsFor(lateRejection, [...baseRecords, lateRejection])).toContain(
+    "post-cancellation history cannot record forward-work event TaskClaimAcquisitionRejected"
   )
 })
 
@@ -634,6 +804,124 @@ it("requires cancellation authority for a release after relinquishment and valid
   expect(invalidDetailsFor(mismatchedOutcome, [...prefix, mismatchedOutcome])).toContain(
     "cancelled-attempt claim release outcome contradicts its exact intent"
   )
+
+  const missingReadOperation = makeTaskClaimObservationOperation(
+    OperationId.make("cancelled-history-release-missing-read"),
+    target,
+    taskId,
+    [exactClaim.operationId]
+  )
+  const missingReadAuthority = TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+    ...cancellationReleaseAuthority,
+    observationOperationId: missingReadOperation.operationId
+  })
+  const missingReadRelease = makeTaskClaimReleaseOperation({
+    authority: missingReadAuthority,
+    predecessorOperationIds: [exactClaim.operationId, missingReadOperation.operationId],
+    release: cancellationReleaseOperation.release
+  })
+  const missingReadIntent: JournalRecord = {
+    ...intentRecord,
+    event: TaskClaimReleaseIntendedEvent.make({ operation: missingReadRelease, version: workflowJournalEventVersion })
+  }
+  expect(invalidDetailsFor(missingReadIntent, [...baseRecords, missingReadIntent])).toContain(
+    "cancelled-attempt claim release requires a fresh exact focused claim observation"
+  )
+
+  const noPredecessorReadOperation = makeTaskClaimObservationOperation(
+    OperationId.make("cancelled-history-release-no-predecessor"),
+    target,
+    taskId,
+    []
+  )
+  const noPredecessorAuthority = TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+    ...cancellationReleaseAuthority,
+    observationOperationId: noPredecessorReadOperation.operationId
+  })
+  const noPredecessorRelease = makeTaskClaimReleaseOperation({
+    authority: noPredecessorAuthority,
+    predecessorOperationIds: [exactClaim.operationId, noPredecessorReadOperation.operationId],
+    release: { ...cancellationReleaseOperation.release, operationId: OperationId.make("release-no-predecessor") }
+  })
+  const noPredecessorIntent: JournalRecord = {
+    ...intentRecord,
+    event: TaskClaimReleaseIntendedEvent.make({ operation: noPredecessorRelease, version: workflowJournalEventVersion })
+  }
+  const noPredecessorObservation: JournalRecord = {
+    event: taskTrackerFactsObservedEvent(
+      noPredecessorReadOperation.operationId,
+      makeFocusedTaskClaimFactsObserved(noPredecessorReadOperation, exactClaim)
+    ),
+    key: outcomeRecordKey(noPredecessorReadOperation.operationId),
+    position: JournalPosition.make(13),
+    runId
+  }
+  const noPredecessorReadIntent: JournalRecord = {
+    event: taskTrackerReadIntent(noPredecessorReadOperation),
+    key: intentRecordKey(noPredecessorReadOperation.operationId),
+    position: JournalPosition.make(12),
+    runId
+  }
+  expect(
+    invalidDetailsFor(noPredecessorIntent, [
+      ...baseRecords,
+      noPredecessorReadIntent,
+      noPredecessorObservation,
+      noPredecessorIntent
+    ])
+  ).toContain("cancelled-attempt claim release requires a fresh exact focused claim observation")
+
+  const wrongTargetReadOperation = makeTaskClaimObservationOperation(
+    OperationId.make("cancelled-history-release-wrong-target"),
+    FixtureTarget.make("cancelled-history-release-wrong-target"),
+    taskId,
+    [exactClaim.operationId]
+  )
+  const wrongTargetAuthority = TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+    ...cancellationReleaseAuthority,
+    observationOperationId: wrongTargetReadOperation.operationId
+  })
+  const wrongTargetRelease = makeTaskClaimReleaseOperation({
+    authority: wrongTargetAuthority,
+    predecessorOperationIds: [exactClaim.operationId, wrongTargetReadOperation.operationId],
+    release: { ...cancellationReleaseOperation.release, operationId: OperationId.make("release-wrong-target") }
+  })
+  const wrongTargetIntent: JournalRecord = {
+    ...intentRecord,
+    event: TaskClaimReleaseIntendedEvent.make({ operation: wrongTargetRelease, version: workflowJournalEventVersion })
+  }
+  const wrongTargetReadIntent: JournalRecord = {
+    event: taskTrackerReadIntent(wrongTargetReadOperation),
+    key: intentRecordKey(wrongTargetReadOperation.operationId),
+    position: JournalPosition.make(12),
+    runId
+  }
+  const wrongTargetObservation: JournalRecord = {
+    event: { ...releaseObservation, operationId: wrongTargetReadOperation.operationId },
+    key: outcomeRecordKey(wrongTargetReadOperation.operationId),
+    position: JournalPosition.make(13),
+    runId
+  }
+  expect(
+    invalidDetailsFor(wrongTargetIntent, [
+      ...baseRecords,
+      wrongTargetReadIntent,
+      wrongTargetObservation,
+      wrongTargetIntent
+    ])
+  ).toContain("cancelled-attempt claim release requires a fresh exact focused claim observation")
+
+  const duplicateIntentRecord: JournalRecord = { ...intentRecord, position: JournalPosition.make(16) }
+  expect(invalidDetailsFor(duplicateIntentRecord, [...prefix, duplicateIntentRecord])).toContain(
+    "cancelled-attempt claim disposition is already terminal"
+  )
+  expect(
+    invalidDetailsFor(outcomeRecord, [readIntentRecord, observationRecord, intentRecord, outcomeRecord])
+  ).toContain("cancelled-attempt claim release outcome requires its exact prior relinquishment")
+  const duplicateOutcomeRecord: JournalRecord = { ...outcomeRecord, position: JournalPosition.make(16) }
+  expect(invalidDetailsFor(duplicateOutcomeRecord, [...prefix, outcomeRecord, duplicateOutcomeRecord])).toContain(
+    "cancelled-attempt claim disposition is already terminal"
+  )
 })
 
 it("does not let a terminal report and pre-cancellation claim release bypass cancellation relinquishment", () => {
@@ -702,4 +990,226 @@ it("does not let a terminal report and pre-cancellation claim release bypass can
   expect(terminationPreconditionIssues(terminalRecords, runId, evidence)).toContain(
     "termination requires every journal responsibility to be settled"
   )
+})
+
+it("covers termination responsibility settlement and graph comparability controls", () => {
+  const evidence = completedRunFinalityFixture({ runId, target }).evidence
+  const unsettledPrefix = baseRecords.slice(0, 9)
+  expect(terminationPreconditionIssues(unsettledPrefix, runId, evidence)).toContain(
+    "termination requires every journal responsibility to be settled"
+  )
+
+  const foreignClaim = ActiveTaskClaim.make({
+    ...exactClaim,
+    operationId: OperationId.make("cancelled-history-rejected-foreign")
+  })
+  const rejected = TaskClaimAcquisitionRejectedEvent.make({
+    observed: foreignClaim,
+    operationId: exactClaim.operationId,
+    reason: "ForeignClaim",
+    version: workflowJournalEventVersion
+  })
+  const acquiredRecord = baseRecords[2]
+  if (acquiredRecord === undefined) return expect.fail("test fixture lacks acquisition outcome")
+  const rejectedRecords = [
+    ...baseRecords.slice(0, 2),
+    { ...acquiredRecord, event: rejected },
+    ...baseRecords.slice(3, 9)
+  ] as ReadonlyArray<JournalRecord>
+  expect(terminationPreconditionIssues(rejectedRecords, runId, evidence)).toEqual([
+    "termination requires every journal responsibility to be settled"
+  ])
+
+  const releaseRows = [
+    {
+      event: taskTrackerReadIntent(releaseReadOperation),
+      key: intentRecordKey(releaseReadOperation.operationId),
+      position: JournalPosition.make(12),
+      runId
+    },
+    {
+      event: releaseObservation,
+      key: outcomeRecordKey(releaseReadOperation.operationId),
+      position: JournalPosition.make(13),
+      runId
+    },
+    {
+      event: cancellationReleaseIntent,
+      key: intentRecordKey(cancellationReleaseOperation.release.operationId),
+      position: JournalPosition.make(14),
+      runId
+    }
+  ]
+  expect(terminationPreconditionIssues([...baseRecords, ...releaseRows], runId, evidence)).toContain(
+    "termination requires every journal responsibility to be settled"
+  )
+  expect(
+    terminationPreconditionIssues(
+      [
+        ...baseRecords,
+        ...releaseRows,
+        {
+          event: cancellationReleaseOutcome,
+          key: outcomeRecordKey(cancellationReleaseOperation.release.operationId),
+          position: JournalPosition.make(15),
+          runId
+        }
+      ],
+      runId,
+      evidence
+    )
+  ).toEqual([])
+
+  const noReleaseRecords = [
+    ...baseRecords,
+    {
+      event: taskTrackerReadIntent(readOperation),
+      key: intentRecordKey(readOperation.operationId),
+      position: JournalPosition.make(12),
+      runId
+    },
+    {
+      event: noReleaseObservation,
+      key: outcomeRecordKey(readOperation.operationId),
+      position: JournalPosition.make(13),
+      runId
+    },
+    {
+      event: noRelease,
+      key: cancelledAttemptClaimNoReleaseRecordKey(plannedAttempt.attemptId),
+      position: JournalPosition.make(14),
+      runId
+    }
+  ] as ReadonlyArray<JournalRecord>
+  expect(terminationPreconditionIssues(noReleaseRecords, runId, evidence)).toEqual([])
+
+  const laterReportRecord = baseRecords[8]
+  if (laterReportRecord === undefined) return expect.fail("test fixture lacks later executor report")
+  const terminalReport: JournalRecord = {
+    ...laterReportRecord,
+    event: PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: laterReportOrdinal,
+      report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        result: { _tag: "Completed" }
+      }),
+      version: workflowJournalEventVersion
+    })
+  }
+  expect(terminationPreconditionIssues([...baseRecords.slice(0, 8), terminalReport], runId, evidence)).toContain(
+    "termination requires every journal responsibility to be settled"
+  )
+
+  const graphFixture = completedRunFinalityFixture({ runId, target })
+  const beginningRecord = baseRecords[0]
+  if (beginningRecord === undefined) return expect.fail("test fixture lacks workflow beginning")
+  const graphRecordsFor = (
+    reads: ReadonlyArray<{
+      readonly operation: ReturnType<typeof makeTrackerGraphObservationOperation>
+      readonly snapshot: ReturnType<typeof validSnapshot>
+    }>
+  ): ReadonlyArray<JournalRecord> => [
+    beginningRecord,
+    ...reads.flatMap(({ operation, snapshot }, index) => [
+      {
+        event: taskTrackerReadIntent(operation),
+        key: intentRecordKey(operation.operationId),
+        position: JournalPosition.make(index * 2 + 2),
+        runId
+      },
+      {
+        event: taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, snapshot)
+        ),
+        key: outcomeRecordKey(operation.operationId),
+        position: JournalPosition.make(index * 2 + 3),
+        runId
+      }
+    ])
+  ]
+  const firstGraphOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("cancelled-history-precondition-graph-first"),
+    target
+  )
+  const secondGraphOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("cancelled-history-precondition-graph-second"),
+    target
+  )
+  const firstGraphSnapshot = validSnapshot({
+    revision: "cancelled-history-precondition-graph-first-revision",
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const secondGraphSnapshot = validSnapshot({
+    revision: "cancelled-history-precondition-graph-second-revision",
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const contradictoryGraphRecords = graphRecordsFor([
+    { operation: firstGraphOperation, snapshot: firstGraphSnapshot },
+    { operation: secondGraphOperation, snapshot: secondGraphSnapshot }
+  ])
+  expect(terminationPreconditionIssues(contradictoryGraphRecords, runId, graphFixture.evidence)).toContain(
+    "termination requires tracker graph observations to be causally comparable"
+  )
+
+  const causallyRelatedSecond = makeTrackerGraphObservationOperation(
+    OperationId.make("cancelled-history-precondition-graph-causal-second"),
+    target,
+    [firstGraphOperation.operationId]
+  )
+  expect(
+    terminationPreconditionIssues(
+      graphRecordsFor([
+        { operation: firstGraphOperation, snapshot: firstGraphSnapshot },
+        { operation: causallyRelatedSecond, snapshot: secondGraphSnapshot }
+      ]),
+      runId,
+      graphFixture.evidence
+    )
+  ).toEqual([])
+
+  const foreignTargetOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("cancelled-history-precondition-graph-foreign-target"),
+    FixtureTarget.make("cancelled-history-precondition-foreign-target")
+  )
+  expect(
+    terminationPreconditionIssues(
+      graphRecordsFor([
+        { operation: firstGraphOperation, snapshot: firstGraphSnapshot },
+        { operation: foreignTargetOperation, snapshot: secondGraphSnapshot }
+      ]),
+      runId,
+      graphFixture.evidence
+    )
+  ).toEqual([])
+
+  const disjointFirst = makeTrackerGraphObservationOperation(
+    OperationId.make("cancelled-history-precondition-graph-disjoint-first"),
+    target,
+    [],
+    [TaskId.make("root")]
+  )
+  const disjointSecond = makeTrackerGraphObservationOperation(
+    OperationId.make("cancelled-history-precondition-graph-disjoint-second"),
+    target,
+    [],
+    [TaskId.make("other")]
+  )
+  const disjointSecondSnapshot = validSnapshot({
+    revision: "cancelled-history-precondition-graph-disjoint-revision",
+    rootTaskId: "other",
+    tasks: [{ id: "other", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  expect(
+    terminationPreconditionIssues(
+      graphRecordsFor([
+        { operation: disjointFirst, snapshot: firstGraphSnapshot },
+        { operation: disjointSecond, snapshot: disjointSecondSnapshot }
+      ]),
+      runId,
+      graphFixture.evidence
+    )
+  ).toEqual([])
 })

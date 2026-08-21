@@ -12,8 +12,9 @@ import {
   WorktreeLocator,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
+import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
@@ -58,6 +59,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { completedRunFinalityFixture } from "../../../test/run-finality.js"
+import { RunFinalityReadShape } from "../../coordination/frontier/run-finality.js"
 
 const runId = RunId.make("duplicate-attempt-run")
 const taskId = TaskId.make("A")
@@ -101,6 +103,13 @@ const completedHistory = (target: ReturnType<typeof FixtureTarget.make>): Readon
       runId
     }
   ]
+}
+
+const historyDetailsFor = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> => {
+  const reduction = reduceWorkflowJournalHistory(runId, records)
+  return reduction._tag === "InvalidWorkflowJournalHistory"
+    ? reduction.issues.flatMap((issue) => ("detail" in issue ? [issue.detail] : []))
+    : []
 }
 
 it("folds nonconsecutive task-work capacity revisions into history issues", () => {
@@ -508,4 +517,243 @@ it("folds the executor command, projection, response, state, and report evidence
   for (const { expected, rows } of histories) {
     expect(reduceWorkflowJournalHistory(runId, recordsFor(rows))).toMatchObject({ _tag: expected })
   }
+})
+
+it("covers terminal evidence validation boundaries as a table", () => {
+  const target = FixtureTarget.make("terminal-validation-matrix")
+  const valid = completedHistory(target)
+  const terminationCandidate = valid.at(-1)
+  const observationCandidate = valid[2]
+  if (
+    terminationCandidate?.event._tag !== "WorkflowRunTerminated" ||
+    observationCandidate?.event._tag !== "TaskTrackerFactsObserved" ||
+    observationCandidate.event.observation._tag !== "CompleteTaskTrackerFacts"
+  ) {
+    return expect.fail("completed history fixture is incomplete")
+  }
+  type TerminationRecord = JournalRecord & {
+    readonly event: Extract<JournalRecord["event"], { readonly _tag: "WorkflowRunTerminated" }>
+  }
+  type CompleteObservationRecord = JournalRecord & {
+    readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }> & {
+      readonly observation: Extract<
+        Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
+        { readonly _tag: "CompleteTaskTrackerFacts" }
+      >
+    }
+  }
+  const termination = terminationCandidate as TerminationRecord
+  const observationRecord = observationCandidate as CompleteObservationRecord
+
+  type EvidenceChange = (evidence: typeof termination.event.evidence) => object
+  const withEvidence = (change: EvidenceChange): ReadonlyArray<JournalRecord> => [
+    ...valid.slice(0, -1),
+    {
+      ...termination,
+      event: {
+        ...termination.event,
+        evidence: { ...termination.event.evidence, ...change(termination.event.evidence) }
+      }
+    }
+  ]
+  const withObservation = (change: (observation: typeof observationRecord.event.observation) => object) =>
+    [
+      ...valid.slice(0, 2),
+      {
+        ...observationRecord,
+        event: {
+          ...observationRecord.event,
+          observation: { ...observationRecord.event.observation, ...change(observationRecord.event.observation) }
+        }
+      },
+      termination
+    ] as ReadonlyArray<JournalRecord>
+
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly records: ReadonlyArray<JournalRecord>
+    readonly detail: string
+  }> = [
+    {
+      name: "missing observed record",
+      records: withEvidence(() => ({ observedAt: JournalPosition.make(99) })),
+      detail: "termination evidence must name one earlier complete or unchanged tracker observation position"
+    },
+    {
+      name: "observed record is the termination",
+      records: withEvidence(() => ({ observedAt: JournalPosition.make(4) })),
+      detail: "termination evidence must name one earlier complete or unchanged tracker observation position"
+    },
+    {
+      name: "observed record is not a tracker observation",
+      records: withEvidence(() => ({ observedAt: JournalPosition.make(2) })),
+      detail: "termination evidence must name one earlier complete or unchanged tracker observation position"
+    },
+    {
+      name: "unchanged observation has no earlier complete observation",
+      records: withObservation(() => ({
+        _tag: "UnchangedTaskTrackerFactsReconfirmed",
+        priorFullObservationOperationId: OperationId.make("missing-terminal-complete")
+      })),
+      detail: "unchanged termination evidence must link to its earlier complete tracker observation"
+    },
+    {
+      name: "unknown graph intent",
+      records: withEvidence(() => ({ operationId: OperationId.make("missing-terminal-intent") })),
+      detail: "termination evidence must name the exact complete graph-read intent"
+    },
+    {
+      name: "graph intent read shape differs",
+      records: withEvidence(() => ({
+        readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [TaskId.make("root")] })
+      })),
+      detail: "termination evidence read shape or target does not match its graph-read intent"
+    },
+    {
+      name: "fresh observation operation differs",
+      records: withObservation(() => ({ operationId: OperationId.make("different-terminal-observation") })),
+      detail: "termination evidence operation or target does not match the observed graph"
+    },
+    {
+      name: "fresh observation coverage differs",
+      records: withObservation((observation) => ({
+        factFamilies: observation.factFamilies.map((family: (typeof observation.factFamilies)[number]) => ({
+          ...family,
+          coverage: { ...family.coverage, target: FixtureTarget.make("different-terminal-coverage") }
+        }))
+      })),
+      detail: "termination evidence does not match the fresh observation's identity and coverage"
+    },
+    {
+      name: "required family order differs",
+      records: withEvidence(() => ({
+        requiredFactFamilies: [
+          "TaskLifecycles",
+          "TaskLifecycles",
+          "TaskPrerequisites",
+          "TaskGroupings",
+          "TaskTargetMembership"
+        ]
+      })),
+      detail: "termination evidence must retain every required graph fact family in order"
+    },
+    {
+      name: "root differs from observation",
+      records: withEvidence(() => ({ rootTaskId: TaskId.make("different-terminal-root") })),
+      detail: "termination evidence must retain the exact tracker-selected Run root"
+    },
+    {
+      name: "root is absent from grouping facts",
+      records: [
+        ...valid.slice(0, 2),
+        {
+          ...observationRecord,
+          event: {
+            ...observationRecord.event,
+            observation: {
+              ...observationRecord.event.observation,
+              factFamilies: observationRecord.event.observation.factFamilies.map((family, index) =>
+                index === 3 ? { ...family, groupings: [] } : family
+              )
+            }
+          }
+        },
+        termination
+      ] as ReadonlyArray<JournalRecord>,
+      detail: "termination evidence Run root must belong to the complete grouping facts"
+    },
+    {
+      name: "graph revision differs",
+      records: withObservation((observation) => ({
+        factFamilies: observation.factFamilies.map((family: (typeof observation.factFamilies)[number]) => ({
+          ...family,
+          contentIdentity: TrackerRevision.make("different-terminal-revision")
+        }))
+      })),
+      detail: "termination evidence revision or graph outcome is not current"
+    },
+    {
+      name: "terminal task facts differ",
+      records: withEvidence(() => ({ terminalTaskIds: [TaskId.make("root")] })),
+      detail: "termination evidence terminal task facts do not match the graph"
+    },
+    {
+      name: "dependency blockage facts differ",
+      records: withEvidence(() => ({ blockedTaskIds: [TaskId.make("root")] })),
+      detail: "termination evidence dependency blockage facts do not match the graph"
+    },
+    {
+      name: "disposition precedence differs",
+      records: [
+        ...valid.slice(0, -1),
+        { ...termination, event: { ...termination.event, disposition: "Blocked" } }
+      ] as ReadonlyArray<JournalRecord>,
+      detail: "termination disposition does not follow graph evidence and cancellation precedence"
+    },
+    {
+      name: "an earlier complete observation is not latest",
+      records: [
+        ...valid.slice(0, -1),
+        {
+          ...observationRecord,
+          key: JournalRecordKey.make("later-terminal-observation"),
+          position: JournalPosition.make(4)
+        },
+        { ...termination, position: JournalPosition.make(5) }
+      ],
+      detail: "termination evidence must use the latest complete graph observation"
+    },
+    {
+      name: "termination names another run",
+      records: withEvidence(() => ({ runId: RunId.make("different-terminal-run") })),
+      detail: "termination evidence must name the journal Run"
+    },
+    {
+      name: "termination names another target",
+      records: withEvidence(() => ({ target: FixtureTarget.make("different-terminal-target") })),
+      detail: "termination evidence must name the beginning target"
+    },
+    {
+      name: "termination evidence is incomplete",
+      records: withEvidence(() => ({ complete: false })),
+      detail: "termination evidence must prove complete root coverage"
+    }
+  ]
+
+  for (const { detail, name, records } of cases) {
+    expect(historyDetailsFor(records), name).toContain(detail)
+  }
+
+  const beginningRecord = valid[0]
+  if (beginningRecord === undefined) return expect.fail("completed history fixture lacks beginning")
+  const duplicateCancellation: JournalRecord = {
+    ...beginningRecord,
+    event: RunCancellationAppliedEvent.make({
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    key: JournalRecordKey.make("terminal-validation-duplicate-cancellation"),
+    position: JournalPosition.make(2)
+  }
+  const cancellationBeforeBeginning: JournalRecord = {
+    ...beginningRecord,
+    event: duplicateCancellation.event,
+    key: JournalRecordKey.make("terminal-validation-cancellation-before-beginning"),
+    position: JournalPosition.make(1)
+  }
+  expect(historyDetailsFor([cancellationBeforeBeginning, beginningRecord])).toContain(
+    "RunCancellationApplied requires prior WorkflowRunBegan"
+  )
+  expect(
+    historyDetailsFor([
+      ...valid.slice(0, 3),
+      { ...duplicateCancellation, position: JournalPosition.make(4) },
+      {
+        ...duplicateCancellation,
+        position: JournalPosition.make(5),
+        key: JournalRecordKey.make("terminal-validation-second-cancellation")
+      }
+    ])
+  ).toContain("RunCancellationApplied may occur only once")
 })
