@@ -1,5 +1,5 @@
-import { RunId } from "@dalph/contracts"
-import { HashMap, Match, Schema } from "effect"
+import type { RunId } from "@dalph/contracts"
+import { HashMap, Match } from "effect"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import { targetPromotionRunIdOf } from "../../workflow/protocols/target-promotion/events.js"
 
@@ -42,11 +42,6 @@ const invalidAttemptChoiceRunBinding = (
   label: string
 ): string | undefined =>
   invalidNestedRunBinding(label, [event.requestId.runId, event.subject.plannedAttempt.runId], runId)
-
-const StructuredRequestIdentity = Schema.Struct({ runId: RunId })
-
-const runIdOfStructuredRequestIdentity = (requestId: unknown): RunId | undefined =>
-  Schema.is(StructuredRequestIdentity)(requestId) ? requestId.runId : undefined
 
 const invalidCompletionTaskClaimRunBinding = (
   claim: { readonly plannedAttempt: { readonly runId: RunId } },
@@ -117,16 +112,9 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
         invalidNestedRunBinding("task-claim reacquisition direction", [candidate.subject.runId], runId),
       TaskClaimAcquisitionIntended: (candidate) => {
         if (candidate.operation.authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return undefined
-        // TaskClaimReacquisitionRequestId is currently a transport-only
-        // branded string. Keep this compatibility path for the structured
-        // request identity accepted by newer journal records without weakening
-        // ordinary string identities.
-        const authorityRunId = runIdOfStructuredRequestIdentity(candidate.operation.authority.requestId)
-        return invalidNestedRunBinding(
-          "task-claim reacquisition authority",
-          authorityRunId === undefined ? [] : [authorityRunId],
-          runId
-        )
+        // The exact reacquisition request is a branded transport identity and
+        // carries no RunId; the correlated direction event validates its Run.
+        return undefined
       },
       TaskClaimReleaseIntended: (candidate) =>
         candidate.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority"
@@ -305,6 +293,3 @@ export const invalidWorkflowRunBinding = (event: WorkflowJournalEvent, runId: Ru
   }
   return invalidRunBinding(event, runId)
 }
-
-/** Backwards-compatible name used by the integration reconstruction validator. */
-export const invalidIntegrationRunBinding = invalidWorkflowRunBinding

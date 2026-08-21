@@ -40,11 +40,7 @@ import {
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowActor } from "../../workflow/registry/actor.js"
-import {
-  GitReadIntentRecordedEvent,
-  TargetLineageObservedEvent,
-  TaskClaimAcquisitionIntendedEvent
-} from "../../workflow/registry/event.js"
+import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../workflow/registry/event.js"
 import { makeCompletionTaskFactsObservationOperation, WorkflowOperation } from "../../workflow/registry/operation.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
@@ -63,8 +59,7 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { IntegrationHistoryIndexes } from "./integration-history.js"
 import { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
 import { makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
-import { invalidIntegrationRunBinding } from "./integration-history-run-binding.js"
-import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
+import { invalidWorkflowRunBinding } from "./integration-history-run-binding.js"
 import {
   CompletionClaimDeletionReadObservedEvent,
   CompletionClaimDeletionReadPurpose,
@@ -408,7 +403,7 @@ describe("retained integration history", () => {
       })
     ] as const
 
-    expect(events.map((event) => invalidIntegrationRunBinding(event, runId))).toEqual([
+    expect(events.map((event) => invalidWorkflowRunBinding(event, runId))).toEqual([
       `Integrator session binds run ${foreignRun}`,
       `Integrator run start binds run ${foreignRun}`,
       `Integrator run result binds run ${foreignRun}`,
@@ -417,7 +412,7 @@ describe("retained integration history", () => {
     ])
   })
 
-  it("rejects foreign nested completion claims and explicit reacquisition identities", () => {
+  it("rejects foreign nested completion claims", () => {
     const foreignRun = RunId.make("integrator-history-nested-foreign-run")
     const foreignAttempt = { ...fixture.plannedAttempt, runId: foreignRun }
     const foreignSession = IntegratorSessionCorrelation.make({
@@ -460,26 +455,6 @@ describe("retained integration history", () => {
       foreignFocusedObservation
     )
 
-    const validAcquisitionOperation = WorkflowOperation.cases.AcquireTaskClaim.make({
-      acquisition: fixture.activeClaim,
-      authority: {
-        _tag: "ExplicitTaskClaimReacquisitionAuthority",
-        requestId: TaskClaimReacquisitionRequestId.make("integrator-history-nested-reacquisition")
-      },
-      predecessorOperationIds: []
-    })
-    const validAcquisitionIntent = TaskClaimAcquisitionIntendedEvent.make({
-      operation: validAcquisitionOperation,
-      version: workflowJournalEventVersion
-    })
-    const foreignAuthorityRequestId = { nonce: "integrator-history-nested-reacquisition", runId: foreignRun }
-    const foreignAcquisitionIntent = Object.assign({}, validAcquisitionIntent, {
-      operation: {
-        ...validAcquisitionIntent.operation,
-        authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId: foreignAuthorityRequestId }
-      }
-    })
-
     const deletionReadPurpose = CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
       attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
       readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
@@ -498,12 +473,6 @@ describe("retained integration history", () => {
     })
 
     const cases = [
-      {
-        foreign: foreignAcquisitionIntent,
-        foreignDetail: `task-claim reacquisition authority binds run ${foreignRun}`,
-        valid: validAcquisitionIntent,
-        validRunId: runId
-      },
       {
         foreign: foreignFocusedFactsEvent,
         foreignDetail: `focused task-completion observation binds run ${foreignRun}`,
@@ -533,8 +502,8 @@ describe("retained integration history", () => {
       }
       expect(foreignRecord.key).toBe(describeJournalEvent(foreign).expectedKey)
       expect(validRecord.key).toBe(describeJournalEvent(valid).expectedKey)
-      expect(invalidIntegrationRunBinding(foreign, runId)).toBe(foreignDetail)
-      expect(invalidIntegrationRunBinding(valid, validRunId)).toBeUndefined()
+      expect(invalidWorkflowRunBinding(foreign, runId)).toBe(foreignDetail)
+      expect(invalidWorkflowRunBinding(valid, validRunId)).toBeUndefined()
     }
   })
 
@@ -634,18 +603,18 @@ describe("retained integration history", () => {
     })
 
     expect([
-      invalidIntegrationRunBinding(validPromotion, runId),
-      invalidIntegrationRunBinding(foreignPromotion, runId),
-      invalidIntegrationRunBinding(validSuccessor, runId),
-      invalidIntegrationRunBinding(foreignSuccessor, runId),
-      invalidIntegrationRunBinding(validDirection, runId),
-      invalidIntegrationRunBinding(foreignDirection, runId),
-      invalidIntegrationRunBinding(validAbsence, runId),
-      invalidIntegrationRunBinding(foreignAbsence, runId),
-      invalidIntegrationRunBinding(validResponsibility, runId),
-      invalidIntegrationRunBinding(foreignResponsibility, runId),
-      invalidIntegrationRunBinding(integrationStarted, runId),
-      invalidIntegrationRunBinding(foreignStarted, runId)
+      invalidWorkflowRunBinding(validPromotion, runId),
+      invalidWorkflowRunBinding(foreignPromotion, runId),
+      invalidWorkflowRunBinding(validSuccessor, runId),
+      invalidWorkflowRunBinding(foreignSuccessor, runId),
+      invalidWorkflowRunBinding(validDirection, runId),
+      invalidWorkflowRunBinding(foreignDirection, runId),
+      invalidWorkflowRunBinding(validAbsence, runId),
+      invalidWorkflowRunBinding(foreignAbsence, runId),
+      invalidWorkflowRunBinding(validResponsibility, runId),
+      invalidWorkflowRunBinding(foreignResponsibility, runId),
+      invalidWorkflowRunBinding(integrationStarted, runId),
+      invalidWorkflowRunBinding(foreignStarted, runId)
     ]).toEqual([
       undefined,
       `target promotion binds run ${foreignRun}`,
@@ -818,7 +787,7 @@ describe("retained integration history", () => {
   })
 
   it("covers ordinary and unclaimed focused observations in run binding", () => {
-    expect(invalidIntegrationRunBinding(fixture.graphRecordEvent, runId)).toBeUndefined()
+    expect(invalidWorkflowRunBinding(fixture.graphRecordEvent, runId)).toBeUndefined()
     const purpose = fixture.focusedSuccessFactsEvent.observation.purpose
     const operation = makeCompletionTaskFactsObservationOperation(fixture.completionRequest, fixture.target, purpose)
     const observation = makeFocusedTaskCompletionFactsObserved(
@@ -830,7 +799,7 @@ describe("retained integration history", () => {
       })
     )
     const unclaimedEvent = taskTrackerFactsObservedEvent(operation.operationId, observation)
-    expect(invalidIntegrationRunBinding(unclaimedEvent, runId)).toBeUndefined()
+    expect(invalidWorkflowRunBinding(unclaimedEvent, runId)).toBeUndefined()
   })
 
   it("retains target lineage facts as the Integrator session prerequisite", () => {

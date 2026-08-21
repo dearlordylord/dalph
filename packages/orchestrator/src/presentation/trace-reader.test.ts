@@ -1077,6 +1077,19 @@ it.effect("rejects trace identities and observations outside their committed pre
       })
     ).toThrow()
     expect(() =>
+      Schema.decodeUnknownSync(TraceHistoryItem)({
+        ...firstItem,
+        operationIds: [OperationId.make("unrecorded-history-item-operation")]
+      })
+    ).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(TraceHistoryItem)({
+        ...firstItem,
+        taskIds: [TaskId.make("unrecorded-history-item-task")]
+      })
+    ).toThrow()
+    expect(() => Schema.decodeUnknownSync(TraceHistoryItem)({ ...secondItem, operationIds: [] })).toThrow()
+    expect(() =>
       Schema.decodeUnknownSync(TraceHistory)({
         ...history,
         items: [{ ...firstItem, identity: { ...firstItem.identity, runId: RunId.make("other-run") } }]

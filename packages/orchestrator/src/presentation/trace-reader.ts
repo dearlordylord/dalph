@@ -388,10 +388,28 @@ const occurrenceRunId = (occurrence: WorkflowOccurrenceValue): RunId =>
 const traceHistoryItemInvariant = (item: {
   readonly identity: TraceItemIdentity
   readonly occurrence: WorkflowOccurrenceValue
-}): string | undefined =>
-  item.identity.runId === occurrenceRunId(item.occurrence) && item.identity.position === item.occurrence.recordedAt
+  readonly operationIds: ReadonlyArray<OperationId>
+  readonly taskIds: ReadonlyArray<TaskId>
+}): string | undefined => {
+  if (
+    item.identity.runId !== occurrenceRunId(item.occurrence) ||
+    item.identity.position !== item.occurrence.recordedAt
+  ) {
+    return "A history item identity must equal its occurrence Run and recorded journal position"
+  }
+  const expectedOperationIds = operationIdsOfOccurrence(item.occurrence)
+  if (
+    item.operationIds.length !== expectedOperationIds.length ||
+    item.operationIds.some((operationId, index) => operationId !== expectedOperationIds[index])
+  ) {
+    return "A history item's operation identities must equal the identities derived from its occurrence"
+  }
+  const expectedTaskIds = sortedUniqueTaskIds(taskIdsOfOccurrence(item.occurrence))
+  return item.taskIds.length === expectedTaskIds.length &&
+    item.taskIds.every((taskId, index) => taskId === expectedTaskIds[index])
     ? undefined
-    : "A history item identity must equal its occurrence Run and recorded journal position"
+    : "A history item's task identities must equal the identities derived from its occurrence"
+}
 
 /** One occurrence with its durable identity and only identities Dalph can prove. */
 export const TraceHistoryItem = Schema.Struct({
