@@ -14,6 +14,7 @@ import {
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { deriveCleanupAuthorizations } from "./activation.js"
+import { appendDerivedCleanupAuthorizations } from "./loop.js"
 import { attempt, authorization, runId, successor } from "./fixtures.js"
 import {
   appendAbandonedProvenance,
@@ -74,6 +75,21 @@ it.effect("derives one abandonment authorization from the latest exact ready-wor
     const derived = deriveCleanupAuthorizations(yield* journal.read(runId)).worktree
     expect(derived).toHaveLength(1)
     expect(derived[0]?.disposition._tag).toBe("Abandoned")
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("keeps an existing exact cleanup authorization when activation derives it again", () =>
+  Effect.gen(function* () {
+    const journal = yield* begin("activation-existing-exact-authorization")
+    yield* appendAbandonedProvenance(attempt)
+
+    yield* appendDerivedCleanupAuthorizations(runId, ["worktree"])
+    yield* appendDerivedCleanupAuthorizations(runId, ["worktree"])
+
+    const authorizations = (yield* journal.read(runId)).filter(
+      ({ event }) => event._tag === "WorktreeCleanupAuthorized"
+    )
+    expect(authorizations).toHaveLength(1)
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
