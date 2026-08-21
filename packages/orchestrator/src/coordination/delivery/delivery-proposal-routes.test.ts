@@ -1926,6 +1926,12 @@ describe("delivery proposal route matrix", () => {
         readCompletionRequest: () => Effect.die("unavailable completion runtime must stop before lookup"),
         readFocusedTaskCompletion: () => Effect.die("unavailable completion runtime must stop before reads")
       })
+      const unavailable = yield* Effect.flip(
+        executeIntegrationAction(action, transition, inertLease, target).pipe(
+          Effect.provideService(InRunJournal, appendableJournalFor(yield* Ref.make<ReadonlyArray<JournalRecord>>([])))
+        )
+      )
+      expect(unavailable).toBeInstanceOf(IntegrationFinalityRuntimeUnavailable)
       expect(
         yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
           Effect.provideService(CompletionTaskBoundary, neverCalledBoundary),

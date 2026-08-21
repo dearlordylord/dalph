@@ -412,6 +412,10 @@ it.effect("matches the prefix projection at every early cursor when a later immu
       expect(fallbackView).toEqual(indexedView)
     }
 
+    const repeatedCursor = TraceCursor.make({ position: JournalPosition.make(1), runId })
+    const firstFallbackView = yield* fallbackReader.readAt(repeatedCursor)
+    expect(yield* fallbackReader.readAt(repeatedCursor)).toBe(firstFallbackView)
+
     const malformedCursorFailure = yield* Effect.flip(
       fallbackReader.readAt(TraceCursor.make({ position: JournalPosition.make(4), runId }))
     )

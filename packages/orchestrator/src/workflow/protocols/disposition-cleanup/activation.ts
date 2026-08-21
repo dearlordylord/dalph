@@ -1,6 +1,5 @@
 import { Schema } from "effect"
 import { OperationId } from "../../identity.js"
-import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
   branchCleanupAuthorizedRecordKey,
@@ -8,6 +7,7 @@ import {
   outcomeRecordKey,
   worktreeCleanupAuthorizedRecordKey
 } from "../../../workflow-journal/record-key.js"
+import type { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import type { PlannedAttemptWorktreeObservedEvent } from "../../registry/event.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
@@ -59,47 +59,82 @@ const candidateAuthorizationEquals = Schema.toEquivalence(IntegratorCandidateCle
 const worktreeAuthorizationEquals = Schema.toEquivalence(WorktreeCleanupAuthorizationSchema)
 const branchAuthorizationEquals = Schema.toEquivalence(BranchCleanupAuthorizationSchema)
 
-const hasValidatedWorktreeAuthorization = (
-  records: ReadonlyArray<JournalRecord>,
-  authorization: WorktreeCleanupAuthorization
-): boolean =>
-  records.some(
-    (candidate) =>
-      candidate.event._tag === "WorktreeCleanupAuthorized" &&
-      worktreeAuthorizationEquals(candidate.event.authorization, authorization) &&
-      candidate.runId === candidate.event.authorization.disposition.plannedAttempt.runId &&
-      candidate.key === worktreeCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
-      validateWorktreeCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
-      validateWorktreeCleanupHistory(records, candidate.event.authorization)._tag === "Valid"
-  )
+type PlannedWorktreeReadyObservedEvent = Omit<typeof PlannedAttemptWorktreeObservedEvent.Type, "observation"> & {
+  readonly observation: PlannedWorktreeReady
+}
 
-const hasValidatedBranchAuthorization = (
-  records: ReadonlyArray<JournalRecord>,
-  authorization: BranchCleanupAuthorization
-): boolean =>
-  records.some(
-    (candidate) =>
-      candidate.event._tag === "BranchCleanupAuthorized" &&
-      branchAuthorizationEquals(candidate.event.authorization, authorization) &&
-      candidate.runId === candidate.event.authorization.disposition.plannedAttempt.runId &&
-      candidate.key === branchCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
-      validateWorktreeCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
-      validateBranchCleanupHistory(records, candidate.event.authorization)._tag === "Valid"
-  )
+type AuthorizationEventTag = { readonly eventTag: string }
 
-const hasValidatedCandidateAuthorization = (
+type AuthorizationValidationStrategy<Authorization> = AuthorizationEventTag & {
+  readonly authorizationOf: (event: JournalRecord["event"]) => Authorization | undefined
+  readonly equals: (candidate: Authorization, expected: Authorization) => boolean
+  readonly runIdOf: (authorization: Authorization) => JournalRecord["runId"]
+  readonly keyOf: (authorization: Authorization) => JournalRecord["key"]
+  readonly provenance: (
+    records: ReadonlyArray<JournalRecord>,
+    authorization: Authorization
+  ) => { readonly _tag: string }
+  readonly history: (records: ReadonlyArray<JournalRecord>, authorization: Authorization) => { readonly _tag: string }
+}
+
+const hasValidatedAuthorization = <Authorization>(
   records: ReadonlyArray<JournalRecord>,
-  authorization: IntegratorCandidateCleanupAuthorization
+  authorization: Authorization,
+  strategy: AuthorizationValidationStrategy<Authorization>
 ): boolean =>
-  records.some(
-    (candidate) =>
-      candidate.event._tag === "IntegratorCandidateCleanupAuthorized" &&
-      candidateAuthorizationEquals(candidate.event.authorization, authorization) &&
-      candidate.runId === candidate.event.authorization.disposition.predecessor.plannedAttempt.runId &&
-      candidate.key === integratorCandidateCleanupAuthorizedRecordKey(candidate.event.authorization.operationId) &&
-      validateIntegratorCandidateCleanupProvenance(records, candidate.event.authorization)._tag === "Valid" &&
-      validateIntegratorCandidateCleanupHistory(records, candidate.event.authorization)._tag === "Valid"
-  )
+  records.some((candidate) => {
+    if (candidate.event._tag !== strategy.eventTag) return false
+    const candidateAuthorization = strategy.authorizationOf(candidate.event)
+    return (
+      candidateAuthorization !== undefined &&
+      strategy.equals(candidateAuthorization, authorization) &&
+      candidate.runId === strategy.runIdOf(candidateAuthorization) &&
+      candidate.key === strategy.keyOf(candidateAuthorization) &&
+      strategy.provenance(records, candidateAuthorization)._tag === "Valid" &&
+      strategy.history(records, candidateAuthorization)._tag === "Valid"
+    )
+  })
+
+const worktreeAuthorizationOf = (event: JournalRecord["event"]): WorktreeCleanupAuthorization | undefined =>
+  event._tag === "WorktreeCleanupAuthorized" ? event.authorization : undefined
+
+const branchAuthorizationOf = (event: JournalRecord["event"]): BranchCleanupAuthorization | undefined =>
+  event._tag === "BranchCleanupAuthorized" ? event.authorization : undefined
+
+const candidateAuthorizationOf = (
+  event: JournalRecord["event"]
+): IntegratorCandidateCleanupAuthorization | undefined =>
+  event._tag === "IntegratorCandidateCleanupAuthorized" ? event.authorization : undefined
+
+const worktreeAuthorizationValidation: AuthorizationValidationStrategy<WorktreeCleanupAuthorization> = {
+  eventTag: "WorktreeCleanupAuthorized",
+  authorizationOf: worktreeAuthorizationOf,
+  equals: worktreeAuthorizationEquals,
+  runIdOf: (authorization) => authorization.disposition.plannedAttempt.runId,
+  keyOf: (authorization) => worktreeCleanupAuthorizedRecordKey(authorization.operationId),
+  provenance: validateWorktreeCleanupProvenance,
+  history: validateWorktreeCleanupHistory
+}
+
+const branchAuthorizationValidation: AuthorizationValidationStrategy<BranchCleanupAuthorization> = {
+  eventTag: "BranchCleanupAuthorized",
+  authorizationOf: branchAuthorizationOf,
+  equals: branchAuthorizationEquals,
+  runIdOf: (authorization) => authorization.disposition.plannedAttempt.runId,
+  keyOf: (authorization) => branchCleanupAuthorizedRecordKey(authorization.operationId),
+  provenance: validateWorktreeCleanupProvenance,
+  history: validateBranchCleanupHistory
+}
+
+const candidateAuthorizationValidation: AuthorizationValidationStrategy<IntegratorCandidateCleanupAuthorization> = {
+  eventTag: "IntegratorCandidateCleanupAuthorized",
+  authorizationOf: candidateAuthorizationOf,
+  equals: candidateAuthorizationEquals,
+  runIdOf: (authorization) => authorization.disposition.predecessor.plannedAttempt.runId,
+  keyOf: (authorization) => integratorCandidateCleanupAuthorizedRecordKey(authorization.operationId),
+  provenance: validateIntegratorCandidateCleanupProvenance,
+  history: validateIntegratorCandidateCleanupHistory
+}
 
 const recordsWithoutAuthorizationTag = (
   records: ReadonlyArray<JournalRecord>,
@@ -122,16 +157,14 @@ const exactWorktreeAuthorityRecord = (
     JournalRecord["event"],
     { readonly _tag: "PlannedAttemptReplaced" }
   >["subject"]["plannedAttempt"],
-  operationId: OperationId,
-  afterPosition?: JournalPosition
-): (JournalRecord & { readonly event: typeof PlannedAttemptWorktreeObservedEvent.Type }) | undefined => {
+  operationId: OperationId
+): (JournalRecord & { readonly event: PlannedWorktreeReadyObservedEvent }) | undefined => {
   const candidates = records.filter(
-    (record): record is JournalRecord & { readonly event: typeof PlannedAttemptWorktreeObservedEvent.Type } =>
+    (record): record is JournalRecord & { readonly event: PlannedWorktreeReadyObservedEvent } =>
       record.event._tag === "PlannedAttemptWorktreeObserved" &&
       record.runId === plannedAttempt.runId &&
       record.key === outcomeRecordKey(operationId) &&
       record.event.operationId === operationId &&
-      (afterPosition === undefined || record.position > afterPosition) &&
       record.event.observation._tag === "PlannedWorktreeReady" &&
       plannedAttemptWorktreeObservationMatchesPlan(record.event.observation, plannedAttempt)
   )
@@ -158,12 +191,10 @@ const worktreeAuthorizationFromReplacement = (
   const observationRecord = exactWorktreeAuthorityRecord(
     records,
     plannedAttempt,
-    event.witness.oldWorktreeObservationOperationId,
-    undefined
+    event.witness.oldWorktreeObservationOperationId
   )
   if (observationRecord === undefined || observationRecord.position >= record.position) return undefined
   const observation = observationRecord.event.observation
-  if (observation._tag !== "PlannedWorktreeReady") return undefined
   const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
     dispositionAt: record.position,
     plannedAttempt,
@@ -193,7 +224,7 @@ const worktreeAuthorizationFromAbandonment = (
   const plannedAttempt = event.subject.plannedAttempt
   const observations = records
     .filter(
-      (candidate) =>
+      (candidate): candidate is JournalRecord & { readonly event: PlannedWorktreeReadyObservedEvent } =>
         candidate.event._tag === "PlannedAttemptWorktreeObserved" &&
         candidate.runId === plannedAttempt.runId &&
         candidate.event.observation._tag === "PlannedWorktreeReady" &&
@@ -201,11 +232,9 @@ const worktreeAuthorizationFromAbandonment = (
     )
     .toSorted((left, right) => Number(right.position) - Number(left.position))
   const observationRecord = observations.find((candidate) => {
-    if (candidate.event._tag !== "PlannedAttemptWorktreeObserved") return false
     return candidate.key === outcomeRecordKey(candidate.event.operationId)
   })
-  if (observationRecord?.event._tag !== "PlannedAttemptWorktreeObserved") return undefined
-  if (observationRecord.event.observation._tag !== "PlannedWorktreeReady") return undefined
+  if (observationRecord === undefined) return undefined
   const disposition = PlannedAttemptCleanupDisposition.cases.Abandoned.make({
     dispositionAt: record.position,
     plannedAttempt,
@@ -235,7 +264,7 @@ const worktreeAuthorizationsFromTerminalFacts = (
         ? worktreeAuthorizationFromAbandonment(records, record)
         : undefined
     if (authorization === undefined) return []
-    if (hasValidatedWorktreeAuthorization(records, authorization)) return []
+    if (hasValidatedAuthorization(records, authorization, worktreeAuthorizationValidation)) return []
     const canonicalRecords = recordsWithoutAuthorizationTag(records, "WorktreeCleanupAuthorized")
     const provenance = validateWorktreeCleanupProvenance(canonicalRecords, authorization)
     const history = validateWorktreeCleanupHistory(canonicalRecords, authorization)
@@ -265,7 +294,7 @@ const branchAuthorizationsFromSettledWorktrees = (
     })
     if (authorization === undefined) return []
     if (validateSettledWorktreeForBranch(records, authorization)._tag === "Invalid") return []
-    if (hasValidatedBranchAuthorization(records, authorization)) return []
+    if (hasValidatedAuthorization(records, authorization, branchAuthorizationValidation)) return []
     const canonicalRecords = recordsWithoutAuthorizationTag(records, "BranchCleanupAuthorized")
     const provenance = validateWorktreeCleanupProvenance(canonicalRecords, authorization)
     const history = validateBranchCleanupHistory(canonicalRecords, authorization)
@@ -318,7 +347,7 @@ const candidateAuthorizationsFromSuccessors = (
       writerQuiescent: true
     })
     if (authorization === undefined) return []
-    if (hasValidatedCandidateAuthorization(records, authorization)) return []
+    if (hasValidatedAuthorization(records, authorization, candidateAuthorizationValidation)) return []
     const canonicalRecords = recordsWithoutAuthorizationTag(records, "IntegratorCandidateCleanupAuthorized")
     const provenance = validateIntegratorCandidateCleanupProvenance(canonicalRecords, authorization)
     const history = validateIntegratorCandidateCleanupHistory(canonicalRecords, authorization)

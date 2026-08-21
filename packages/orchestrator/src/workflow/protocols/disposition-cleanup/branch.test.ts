@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { GitCommitSha, WorktreeLocator } from "@dalph/contracts"
+import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -28,6 +28,7 @@ import {
   BranchCleanupMutationResult,
   BranchCleanupObservation,
   BranchCleanupAuthorizedEvent,
+  BranchCleanupObservationIntendedEvent,
   branchCleanupTestLayer,
   runBranchCleanup,
   TestBranchCleanupBoundary
@@ -38,7 +39,8 @@ import {
   worktreeCleanupAbsenceConfirmedRecordKey,
   worktreeCleanupObservationIntendedRecordKey,
   worktreeCleanupObservedRecordKey,
-  worktreeCleanupSettledRecordKey
+  worktreeCleanupSettledRecordKey,
+  branchCleanupObservationIntendedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { authorization, attempt, disposition, runId, baseSha, successor } from "./fixtures.js"
 import {
@@ -266,6 +268,98 @@ it.effect("does not settle a branch removal with a stale revision", () =>
   )
 )
 
+it.effect("settles an already-absent branch without issuing a mutation", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const result = yield* runBranchCleanup(branchAuthorization)
+    const records = yield* (yield* JournalStore).read(runId)
+    expect(result._tag).toBe("Settled")
+    expect(records.map(({ event }) => event._tag)).toContain("BranchCleanupAbsenceConfirmed")
+    expect((yield* (yield* TestBranchCleanupBoundary).calls()).map((call) => call._tag)).toEqual(["Observe"])
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          BranchCleanupObservation.cases.Absent.make({
+            branch: attempt.branch,
+            revision: BranchCleanupEvidenceRevision.make(1)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("preserves a post-mutation branch observation that is not absent", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const result = yield* runBranchCleanup(branchAuthorization)
+    const calls = yield* (yield* TestBranchCleanupBoundary).calls()
+    expect(result._tag).toBe("Preserved")
+    expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          present,
+          BranchCleanupObservation.cases.Foreign.make({
+            branch: attempt.branch,
+            observedHead: baseSha,
+            observedWorktree: WorktreeLocator.make("/tmp/other-branch-worktree"),
+            reason: "RegisteredWorktree",
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          BranchCleanupMutationResult.cases.Removed.make({
+            branch: attempt.branch,
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("uses the explicit unreadable fallback when the branch mutation script is exhausted", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const result = yield* runBranchCleanup(branchAuthorization)
+    const calls = yield* (yield* TestBranchCleanupBoundary).calls()
+    expect(result).toMatchObject({ _tag: "Pending", reason: "script exhausted" })
+    expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove"])
+  }).pipe(Effect.provide(branchCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("replays a contradicted branch without rereading or appending", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const first = yield* runBranchCleanup(branchAuthorization)
+    const second = yield* runBranchCleanup(branchAuthorization)
+    const calls = yield* (yield* TestBranchCleanupBoundary).calls()
+    expect(first._tag).toBe("Preserved")
+    expect(second._tag).toBe("Preserved")
+    expect(calls.map((call) => call._tag)).toEqual(["Observe"])
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          BranchCleanupObservation.cases.Foreign.make({
+            branch: attempt.branch,
+            observedHead: baseSha,
+            observedWorktree: WorktreeLocator.make("/tmp/other-branch-worktree"),
+            reason: "RegisteredWorktree",
+            revision: BranchCleanupEvidenceRevision.make(1)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
 it.effect("replays a settled branch twice without a boundary call or journal write", () =>
   Effect.gen(function* () {
     yield* begin()
@@ -395,4 +489,88 @@ it.effect("reconciles a lost branch response after restart without duplicate rem
     ),
     Effect.provide(memoryJournalTestLayer)
   )
+)
+
+it.effect("preserves a branch when the mutation response names a foreign branch", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const result = yield* runBranchCleanup(branchAuthorization)
+    const boundary = yield* TestBranchCleanupBoundary
+    const records = yield* (yield* JournalStore).read(runId)
+    expect(result._tag).toBe("Preserved")
+    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove"])
+    expect(records.map(({ event }) => event._tag)).toContain("BranchCleanupContradicted")
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [present],
+        mutations: [
+          BranchCleanupMutationResult.cases.Removed.make({
+            branch: TaskBranchRef.make("refs/heads/foreign-branch"),
+            revision: BranchCleanupEvidenceRevision.make(1)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("stops branch mutation retries at the exact three-request bound", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const results = [
+      yield* runBranchCleanup(branchAuthorization),
+      yield* runBranchCleanup(branchAuthorization),
+      yield* runBranchCleanup(branchAuthorization),
+      yield* runBranchCleanup(branchAuthorization)
+    ]
+    const boundary = yield* TestBranchCleanupBoundary
+    expect(results.map((result) => result._tag)).toEqual(["Pending", "Pending", "Pending", "Pending"])
+    expect(results.at(-1)).toMatchObject({ attempts: 3 })
+    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual([
+      "Observe",
+      "Remove",
+      "Observe",
+      "Remove",
+      "Observe",
+      "Remove",
+      "Observe"
+    ])
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [present, present, present, present],
+        mutations: [
+          BranchCleanupMutationResult.cases.Unknown.make({ branch: attempt.branch, detail: "response lost: 1" }),
+          BranchCleanupMutationResult.cases.DefinitelyNotApplied.make({ branch: attempt.branch, detail: "retry: 2" }),
+          BranchCleanupMutationResult.cases.Unknown.make({ branch: attempt.branch, detail: "response lost: 3" })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("preserves a branch when its cleanup history has no authorization prefix", () =>
+  Effect.gen(function* () {
+    yield* begin()
+    const journal = yield* JournalStore
+    const ordinal = CleanupObservationOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      branchCleanupObservationIntendedRecordKey(branchAuthorization.operationId, ordinal),
+      BranchCleanupObservationIntendedEvent.make({
+        authorization: branchAuthorization,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operationId: OperationId.make(`${branchAuthorization.operationId}:observe:${ordinal}`),
+        ordinal,
+        version: workflowJournalEventVersion
+      })
+    )
+    const result = yield* runBranchCleanup(branchAuthorization)
+    expect(result._tag).toBe("Preserved")
+    expect(yield* (yield* TestBranchCleanupBoundary).calls()).toEqual([])
+  }).pipe(Effect.provide(branchCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
 )

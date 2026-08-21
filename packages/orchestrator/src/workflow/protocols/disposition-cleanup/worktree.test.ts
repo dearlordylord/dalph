@@ -868,6 +868,110 @@ it.effect("preserves an invalid successful mutation response instead of settling
   )
 )
 
+it.effect("preserves a post-mutation worktree observation that is not absent", () =>
+  setup(
+    [
+      present,
+      WorktreeCleanupObservation.cases.Foreign.make({
+        locator: attempt.worktree,
+        observedBranch: TaskBranchRef.make("refs/heads/task/other"),
+        observedHead: baseSha,
+        reason: "OtherBranch",
+        revision: WorktreeCleanupEvidenceRevision.make(2)
+      })
+    ],
+    [
+      WorktreeCleanupMutationResult.cases.Removed.make({
+        branch: attempt.branch,
+        locator: attempt.worktree,
+        revision: WorktreeCleanupEvidenceRevision.make(2)
+      })
+    ]
+  ).pipe(
+    Effect.tap(({ calls, result }) =>
+      Effect.sync(() => {
+        expect(result._tag).toBe("Preserved")
+        expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove", "Observe"])
+      })
+    )
+  )
+)
+
+it.effect("keeps a cleanup pending when the mutation boundary returns definitely-not-applied", () =>
+  setup(
+    [present],
+    [
+      WorktreeCleanupMutationResult.cases.DefinitelyNotApplied.make({
+        branch: attempt.branch,
+        detail: "remove was rejected",
+        locator: attempt.worktree
+      })
+    ]
+  ).pipe(
+    Effect.tap(({ calls, result }) =>
+      Effect.sync(() => {
+        expect(result).toMatchObject({ _tag: "Pending", reason: "remove was rejected" })
+        expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove"])
+      })
+    )
+  )
+)
+
+it.effect("uses the explicit unreadable fallback when the mutation script is exhausted", () =>
+  setup([present]).pipe(
+    Effect.tap(({ calls, result }) =>
+      Effect.sync(() => {
+        expect(result).toMatchObject({ _tag: "Pending", reason: "worktree remove response was lost" })
+        expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove"])
+      })
+    )
+  )
+)
+
+it.effect("preserves a worktree when the observation script is exhausted", () =>
+  setup([]).pipe(
+    Effect.tap(({ calls, result }) =>
+      Effect.sync(() => {
+        expect(result._tag).toBe("Preserved")
+        expect(calls.map((call) => call._tag)).toEqual(["Observe"])
+      })
+    )
+  )
+)
+
+it.effect("replays a contradicted worktree without rereading or appending", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-contradiction-replay"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendReplacementProvenance(attempt, successor)
+    const first = yield* runWorktreeCleanup(authorization)
+    const second = yield* runWorktreeCleanup(authorization)
+    const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
+    expect(first._tag).toBe("Preserved")
+    expect(second._tag).toBe("Preserved")
+    expect(calls.map((call) => call._tag)).toEqual(["Observe"])
+  }).pipe(
+    Effect.provide(
+      worktreeCleanupTestLayer({
+        observations: [
+          WorktreeCleanupObservation.cases.Foreign.make({
+            locator: attempt.worktree,
+            observedBranch: TaskBranchRef.make("refs/heads/task/other"),
+            observedHead: baseSha,
+            reason: "OtherBranch",
+            revision: WorktreeCleanupEvidenceRevision.make(1)
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
 it("rejects a superseded disposition that reuses predecessor identity", () => {
   expect(() =>
     PlannedAttemptCleanupDisposition.cases.Superseded.make({

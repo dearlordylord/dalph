@@ -647,6 +647,16 @@ it("reports exact run binding and semantic issues through the reconstruction cal
   expect(invalidIntegrationFinalityRunBinding(deletionRead, RunId.make("foreign-finality-run"))).toContain(
     fixture.runId
   )
+  const foreignDeletionSemantics: Array<string> = []
+  validateIntegrationFinalityHistoryRecord(
+    record(1, deletionRead),
+    RunId.make("foreign-finality-run"),
+    [],
+    makeIntegrationFinalityHistoryIndexes(),
+    () => undefined,
+    (detail) => foreignDeletionSemantics.push(detail)
+  )
+  expect(foreignDeletionSemantics).toContain(`completion claim cleanup read binds run ${fixture.runId}`)
   const identities: Array<string> = []
   const semantics: Array<string> = []
   validateIntegrationFinalityHistoryRecord(

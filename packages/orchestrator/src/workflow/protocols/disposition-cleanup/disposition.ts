@@ -93,6 +93,16 @@ export const IntegratorCandidateCleanupOwner = Schema.Struct({ sessionId: Integr
 )
 export type IntegratorCandidateCleanupOwner = typeof IntegratorCandidateCleanupOwner.Type
 
+const worktreeCleanupSubjectEquivalence = Schema.toEquivalence(
+  Schema.Struct({ locator: WorktreeLocator, owner: WorktreeCleanupOwner })
+)
+const branchCleanupSubjectEquivalence = Schema.toEquivalence(
+  Schema.Struct({ locator: TaskBranchRef, owner: BranchCleanupOwner })
+)
+const integratorCandidateCleanupSubjectEquivalence = Schema.toEquivalence(
+  Schema.Struct({ locator: IntegratorCandidateResourceLocator, owner: IntegratorCandidateCleanupOwner })
+)
+
 /** Provider evidence revisions are never interchangeable across cleanup families. */
 export const WorktreeCleanupEvidenceRevision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
   Schema.brand("WorktreeCleanupEvidenceRevision")
@@ -141,9 +151,13 @@ export const WorktreeCleanupAuthorization = Schema.Struct({
 }).check(
   Schema.makeFilter((authorization) => {
     const attempt = authorization.disposition.plannedAttempt
-    return authorization.locator === attempt.worktree &&
-      authorization.owner.attemptId === attempt.attemptId &&
-      authorization.owner.branch === attempt.branch
+    return worktreeCleanupSubjectEquivalence(
+      { locator: authorization.locator, owner: authorization.owner },
+      {
+        locator: attempt.worktree,
+        owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch })
+      }
+    )
       ? undefined
       : "worktree cleanup authorization must bind the exact planned attempt locator and owner"
   })
@@ -166,9 +180,10 @@ export const BranchCleanupAuthorization = Schema.Struct({
 }).check(
   Schema.makeFilter((authorization) => {
     const attempt = authorization.disposition.plannedAttempt
-    return authorization.locator === attempt.branch &&
-      authorization.owner.attemptId === attempt.attemptId &&
-      authorization.expectedHead.length > 0
+    return branchCleanupSubjectEquivalence(
+      { locator: authorization.locator, owner: authorization.owner },
+      { locator: attempt.branch, owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }) }
+    ) && authorization.expectedHead.length > 0
       ? undefined
       : "branch cleanup authorization must bind the exact planned branch and expected head"
   })
@@ -189,8 +204,13 @@ export const IntegratorCandidateCleanupAuthorization = Schema.Struct({
 }).check(
   Schema.makeFilter((authorization) => {
     const predecessor = authorization.disposition.predecessor
-    return authorization.locator === predecessor.candidateResource &&
-      authorization.owner.sessionId === predecessor.sessionId
+    return integratorCandidateCleanupSubjectEquivalence(
+      { locator: authorization.locator, owner: authorization.owner },
+      {
+        locator: predecessor.candidateResource,
+        owner: IntegratorCandidateCleanupOwner.make({ sessionId: predecessor.sessionId })
+      }
+    )
       ? undefined
       : "candidate cleanup authorization must bind the predecessor session resource and owner"
   })

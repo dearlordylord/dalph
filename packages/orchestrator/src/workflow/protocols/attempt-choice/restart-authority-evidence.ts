@@ -1,5 +1,5 @@
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
-import { Match } from "effect"
+import { Match, Schema } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
@@ -14,9 +14,9 @@ import {
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { latestPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
 import {
+  AttemptQuiescenceProof,
   type AttemptChoiceRequestId,
   type AttemptChoiceSubject,
-  type AttemptQuiescenceProof,
   sameAttemptChoiceRequestId,
   sameAttemptChoiceSubject
 } from "./events.js"
@@ -110,21 +110,8 @@ export const terminalRestartQuiescence = (
   return evidence.observedAt > application.position ? { _tag: "Proof", evidence } : { _tag: "Unproved" }
 }
 
-const proofEquals = (left: AttemptQuiescenceProof, right: AttemptQuiescenceProof): boolean => {
-  if (left._tag !== right._tag) return false
-  switch (left._tag) {
-    case "CommandResponse":
-      return right._tag === "CommandResponse" && right.reportOrdinal === left.reportOrdinal
-    case "CommandProjection":
-      return (
-        right._tag === "CommandProjection" &&
-        right.commandOrdinal === left.commandOrdinal &&
-        right.projectionOrdinal === left.projectionOrdinal
-      )
-    case "StateProjection":
-      return right._tag === "StateProjection" && right.observationOrdinal === left.observationOrdinal
-  }
-}
+/** Exact structural equality for the durable executor quiescence witness. */
+const proofEquals = Schema.toEquivalence(AttemptQuiescenceProof)
 
 /**
  * Validates the complete executor witness used by replacement and abandonment

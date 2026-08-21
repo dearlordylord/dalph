@@ -1,5 +1,5 @@
 import fc from "fast-check"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { expect, it } from "vitest"
 import {
   AcceptedResult,
@@ -409,4 +409,25 @@ it("runs all three cleanup families for independently varied facts without a des
     ),
     { numRuns: 24 }
   )
+})
+
+it("rejects typed cleanup subjects that name a foreign resource", () => {
+  expect(
+    Schema.is(WorktreeCleanupAuthorization)({
+      ...authorization,
+      locator: WorktreeLocator.make("/tmp/issue-69-property-foreign")
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(BranchCleanupAuthorization)({
+      ...branchAuthorizationFor(authorization),
+      locator: TaskBranchRef.make("refs/heads/task/issue-69-property-foreign")
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(IntegratorCandidateCleanupAuthorization)({
+      ...candidateAuthorization,
+      locator: IntegratorCandidateResourceLocator.make("candidate:issue-69-property-foreign")
+    })
+  ).toBe(false)
 })

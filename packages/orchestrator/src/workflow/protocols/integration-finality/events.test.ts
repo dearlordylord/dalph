@@ -20,6 +20,10 @@ import {
   completionClaimDeletionRequestFor,
   completionClaimReplacementRequestFor,
   completionTaskFocusedReadPurposeEquals,
+  PostPromotionBlockerCandidateAncestryObservedEvent,
+  PostPromotionBlockerCandidateAncestryReadIntendedEvent,
+  PostPromotionBlockerClearAuthorization,
+  postPromotionBlockerAncestryOperationIdFor,
   FocusedCompletedTaskObservation,
   FocusedTaskCompletionFacts
 } from "./events.js"
@@ -31,6 +35,45 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { TaskId, TaskRevision } from "@dalph/contracts"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
+
+it("validates post-promotion blocker chronology and deterministic Git-read identity", () => {
+  const authorization = PostPromotionBlockerClearAuthorization.make({
+    blockerClearedAt: JournalPosition.make(2),
+    blockerObservedAt: JournalPosition.make(1),
+    claim: fixture.claim
+  })
+  expect(Schema.is(PostPromotionBlockerClearAuthorization)(authorization)).toBe(true)
+  expect(
+    Schema.is(PostPromotionBlockerClearAuthorization)({ ...authorization, blockerClearedAt: JournalPosition.make(1) })
+  ).toBe(false)
+  const operationId = postPromotionBlockerAncestryOperationIdFor(authorization)
+  const intent = PostPromotionBlockerCandidateAncestryReadIntendedEvent.make({
+    authorization,
+    operationId,
+    version: workflowJournalEventVersion
+  })
+  const outcome = PostPromotionBlockerCandidateAncestryObservedEvent.make({
+    authorization,
+    observation: { _tag: "Unreadable", detail: "Git unavailable" },
+    operationId,
+    version: workflowJournalEventVersion
+  })
+  expect(Schema.is(PostPromotionBlockerCandidateAncestryReadIntendedEvent)(intent)).toBe(true)
+  expect(Schema.is(PostPromotionBlockerCandidateAncestryObservedEvent)(outcome)).toBe(true)
+  expect(
+    Schema.is(PostPromotionBlockerCandidateAncestryReadIntendedEvent)({
+      ...intent,
+      operationId: OperationId.make("forged-post-promotion-operation")
+    })
+  ).toBe(false)
+  expect(
+    Schema.is(PostPromotionBlockerCandidateAncestryObservedEvent)({
+      ...outcome,
+      operationId: OperationId.make("forged-post-promotion-operation")
+    })
+  ).toBe(false)
+})
 
 const useBoundary = <A, E>(
   initial: ReadonlyArray<

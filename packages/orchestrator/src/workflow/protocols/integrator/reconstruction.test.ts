@@ -83,7 +83,8 @@ import {
   deriveCurrentIntegratorState,
   deriveIntegratorRunState,
   integratorResponsibilityFactsFor,
-  integratorRunQualifiedCandidateFromState
+  integratorRunQualifiedCandidateFromState,
+  validateIntegratorSuccessorSessionFixed
 } from "./state.js"
 import type { IntegratorHistoryIndexes } from "../../../coordination/reconstruction/integrator-history.js"
 import { validateIntegratorHistoryEvent } from "../../../coordination/reconstruction/integrator-history.js"
@@ -357,6 +358,38 @@ const freshLineageRecordsFor = (
 ]
 
 describe("Integrator reconstruction states", () => {
+  it("accepts only one exact FullRerun successor and rejects absent, duplicate, or foreign successors", () => {
+    const successorFixture = makeSuccessorValidationFixture()
+    const records = [
+      ...lineageRecords(),
+      sessionRecord(),
+      ...successorFixture.records,
+      ...freshLineageRecordsFor(successorFixture)
+    ]
+    expect(validateIntegratorSuccessorSessionFixed(records, session, successorFixture.successor)).toEqual({
+      _tag: "Valid"
+    })
+    const foreignSuccessorResult = validateIntegratorSuccessorSessionFixed(records, session, {
+      ...successorFixture.successor,
+      sessionId: IntegratorSessionId.make("integrator-reconstruction-foreign-successor")
+    })
+    expect(foreignSuccessorResult._tag).toBe("Invalid")
+    if (foreignSuccessorResult._tag === "Invalid") expect(foreignSuccessorResult.detail).toContain("foreign successor")
+    expect(validateIntegratorSuccessorSessionFixed([...lineageRecords(), sessionRecord()], session, session)).toEqual({
+      _tag: "Invalid",
+      detail: "FullRerun successor evidence is missing"
+    })
+    const duplicateSuccessor = successorFixture.records[2]
+    if (duplicateSuccessor === undefined) expect.fail("successor fixture is incomplete")
+    const duplicateResult = validateIntegratorSuccessorSessionFixed(
+      [...records, duplicateSuccessor],
+      session,
+      successorFixture.successor
+    )
+    expect(duplicateResult._tag).toBe("Invalid")
+    if (duplicateResult._tag === "Invalid") expect(duplicateResult.detail).toContain("multiple FullRerun successors")
+  })
+
   it("reconstructs only explicit run outcomes from their exact chronology", () => {
     expect(deriveCurrentIntegratorState([], responsibility)).toMatchObject({ _tag: "Absent" })
     const fixed = [...lineageRecords(), sessionRecord()]

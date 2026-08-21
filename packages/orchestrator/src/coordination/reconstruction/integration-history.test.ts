@@ -16,6 +16,7 @@ import {
   IntegratorSessionFixedEvent,
   IntegratorSessionId,
   IntegratorSuccessorSessionFixedEvent,
+  IntegratorNotPreparedDetail,
   firstFullRerunSuccessorGeneration
 } from "../../workflow/protocols/integrator/events.js"
 import {
@@ -23,11 +24,14 @@ import {
   IntegrationStartedEvent
 } from "../../workflow/protocols/integration-admission/events.js"
 import {
+  IntegrationQuarantineBasis,
   IntegrationProviderRunActivityAbsentEvent,
+  IntegrationQuarantinedEvent,
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
-  IntegrationQuarantineFailureDetail
+  IntegrationQuarantineFailureDetail,
+  integrationQuarantineDirectionSubject
 } from "../../workflow/protocols/integration-quarantine/events.js"
 import {
   TargetPromotionIntendedEvent,
@@ -45,13 +49,17 @@ import {
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
-  integratorSuccessorSessionFixedRecordKey
+  integratorSuccessorSessionFixedRecordKey,
+  integrationProviderRunActivityAbsentRecordKey,
+  integrationQuarantineDirectionAppliedRecordKey,
+  integrationQuarantinedRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { IntegrationHistoryIndexes } from "./integration-history.js"
 import { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
 import { makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import { invalidIntegrationRunBinding } from "./integration-history-run-binding.js"
+import { invalidIntegrationHistoryEvent } from "./integration-history.js"
 
 const fixture = integrationFinalityFixture
 const runId = fixture.runId
@@ -519,5 +527,111 @@ describe("retained integration history", () => {
       IntegrationTarget.make({ ref: fixture.integrationTarget.ref, repository: fixture.integrationTarget.repository })
     )
     expect(GitCommitSha.make("1".repeat(40))).toBe(fixture.plannedAttempt.baseSha)
+  })
+
+  it("classifies provider absence, quarantine, direction, and start chronology at the reconstruction boundary", () => {
+    const absenceDetail = IntegrationQuarantineFailureDetail.make("integration-history coverage absence")
+    const absenceEvent = IntegrationProviderRunActivityAbsentEvent.make({
+      correlation: session,
+      detail: absenceDetail,
+      occurrenceClassification: "NonActionOccurrence",
+      run,
+      version: workflowJournalEventVersion
+    })
+    const absenceRecord = record(20, absenceEvent, integrationProviderRunActivityAbsentRecordKey(run))
+    expect(invalidIntegrationHistoryEvent(absenceRecord, indexes(), [absenceRecord]).detail).toContain(
+      "provider-activity absence is not justified"
+    )
+
+    const basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+      cause: { _tag: "NotPrepared", detail: IntegratorNotPreparedDetail.make("history coverage quarantine") },
+      evidence: { resultRecordedAt: JournalPosition.make(19) }
+    })
+    const quarantineEvent = IntegrationQuarantinedEvent.make({
+      basis,
+      correlation: session,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+    const quarantineRecord = record(21, quarantineEvent, integrationQuarantinedRecordKey(session.sessionId, basis))
+    expect(invalidIntegrationHistoryEvent(quarantineRecord, indexes(), [quarantineRecord]).detail).toContain(
+      "not justified"
+    )
+
+    const directionEvent = IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+        direction: "FullRerun",
+        quarantineAt: quarantineRecord.position,
+        sessionId: session.sessionId
+      }),
+      initiatedBy: WorkflowActor.cases.Operator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "history-coverage-direction", runId }),
+      version: workflowJournalEventVersion
+    })
+    const directionRecord = record(
+      22,
+      directionEvent,
+      integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(directionEvent.fingerprint))
+    )
+    expect(
+      invalidIntegrationHistoryEvent(directionRecord, indexes(), [quarantineRecord, directionRecord]).detail
+    ).toContain("not the exact first direction")
+    expect(invalidIntegrationHistoryEvent(directionRecord, indexes(), [directionRecord]).detail).toContain(
+      "not the exact first direction"
+    )
+
+    expect(
+      invalidIntegrationHistoryEvent(record(30, integrationStarted, JournalRecordKey.make("start")), indexes()).detail
+    ).toContain("no exact earlier responsibility")
+
+    const responsibilityEvent = IntegrationResponsibilityBeganEvent.make({
+      acceptedResult: session.acceptedResult,
+      integrationTarget: session.integrationTarget,
+      plannedAttempt: session.plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+    const responsibilityRecord = record(31, responsibilityEvent)
+    const restartBeforeAcceptedWithoutPosition = invalidIntegrationHistoryEvent(
+      responsibilityRecord,
+      {
+        ...indexes(),
+        firstRestartChoiceAppliedAt: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(10)])
+      },
+      [responsibilityRecord]
+    )
+    expect(restartBeforeAcceptedWithoutPosition.detail).toContain("no prior matching accepted terminal result")
+
+    const restartAfterAccepted = invalidIntegrationHistoryEvent(
+      responsibilityRecord,
+      {
+        ...indexes(),
+        acceptedExecutorResults: HashMap.make([session.plannedAttempt.attemptId, session.acceptedResult]),
+        acceptedExecutorResultPositions: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(10)]),
+        executorResponsibilitiesBegan: HashMap.make([
+          session.plannedAttempt.attemptId,
+          { plannedAttempt: session.plannedAttempt, position: JournalPosition.make(5) }
+        ]),
+        firstRestartChoiceAppliedAt: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(11)])
+      },
+      [responsibilityRecord]
+    )
+    expect(restartAfterAccepted.detail).toBeUndefined()
+
+    const restartBeforeAccepted = invalidIntegrationHistoryEvent(
+      responsibilityRecord,
+      {
+        ...indexes(),
+        acceptedExecutorResults: HashMap.make([session.plannedAttempt.attemptId, session.acceptedResult]),
+        acceptedExecutorResultPositions: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(10)]),
+        executorResponsibilitiesBegan: HashMap.make([
+          session.plannedAttempt.attemptId,
+          { plannedAttempt: session.plannedAttempt, position: JournalPosition.make(5) }
+        ]),
+        firstRestartChoiceAppliedAt: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(9)])
+      },
+      [responsibilityRecord]
+    )
+    expect(restartBeforeAccepted.detail).toContain("suppressed by prior Restart")
   })
 })

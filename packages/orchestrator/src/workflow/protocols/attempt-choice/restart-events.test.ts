@@ -32,6 +32,7 @@ import {
 } from "../../registry/operation.js"
 import { AttemptChoiceRequestId } from "./events.js"
 import {
+  AttemptRestartAuthorityReadFailedEvent,
   AttemptRestartTaskFactsReadFailure,
   PlannedAttemptReplacedEvent,
   PlannedAttemptReplacementWitness,
@@ -51,6 +52,7 @@ const p1 = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make("restart-event-F1"),
   worktree: WorktreeLocator.make("/worktrees/restart-event-P1")
 })
+
 const p2 = PlannedTaskAttempt.make({
   ...p1,
   attemptId: AttemptId.make("restart-event-P2"),
@@ -190,4 +192,43 @@ it("matches all exact Restart read-failure operations and rejects a different bo
       subject
     )
   ).toBe(false)
+})
+
+it("rejects replacement witnesses with duplicate reads and authority failures for another P1 boundary", () => {
+  expect(() =>
+    PlannedAttemptReplacementWitness.make({
+      ...witness,
+      graphObservationOperationId: witness.claimObservationOperationId
+    })
+  ).toThrow()
+
+  const integrationTarget = IntegrationTarget.make({
+    repository: GitRepositoryLocator.make("/repositories/restart-event-foreign-boundary.git"),
+    ref: IntegrationTargetRef.make("refs/heads/main")
+  })
+  expect(() =>
+    AttemptRestartAuthorityReadFailedEvent.make({
+      failure: new GitWorktreeReadFailure({ detail: "foreign worktree", worktree: p2.worktree }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: OperationId.make("restart-event-foreign-worktree-failure"),
+      requestId,
+      subject,
+      version: workflowJournalEventVersion
+    })
+  ).toThrow()
+
+  expect(() =>
+    AttemptRestartAuthorityReadFailedEvent.make({
+      failure: new GitTargetLineageReadFailure({
+        detail: "foreign base",
+        plannedBaseSha: p2.baseSha,
+        target: integrationTarget
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: OperationId.make("restart-event-foreign-lineage-failure"),
+      requestId,
+      subject,
+      version: workflowJournalEventVersion
+    })
+  ).toThrow()
 })

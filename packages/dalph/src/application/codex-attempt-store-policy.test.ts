@@ -70,6 +70,9 @@ const fakeStat = ({
 
 const descriptorWithStat = (stat: () => Promise<Stats>): FileHandle => ({ stat }) as FileHandle
 
+const descriptorWithRead = (stat: () => Promise<Stats>, readFile: () => Promise<string>): FileHandle =>
+  ({ stat, readFile, close: async () => undefined }) as FileHandle
+
 it("classifies primitive and native coded failures", () => {
   expect(errorCode("failure")).toBe("")
   expect(errorCode({ code: "EAGAIN" })).toBe("EAGAIN")
@@ -166,6 +169,14 @@ it("rejects every non-canonical locator and unsafe private-file disposition", as
   ).toBe("Failure")
   expect((await ensurePrivateDirectory(nodePath.parse("/").root, native))._tag).toBe("Failure")
   expect((await ensurePrivateDirectory("/invalid\u0000private-directory", native))._tag).toBe("Failure")
+  expect(
+    (
+      await ensurePrivateDirectory(
+        "/state",
+        controlledNative({ lstat: async () => Promise.reject(new Error("EACCES")) })
+      )
+    )._tag
+  ).toBe("Failure")
   expect(nativeFailureDetail(new CodexAttemptStoreNativeFailure({ cause: "native" }))).toBe("Error: native")
   expect(processUid(controlledNative({ processUid: () => undefined }))).toBeUndefined()
 })
@@ -182,6 +193,24 @@ it("keeps descriptor read and append failures inside the typed Effect boundary",
   expect(Exit.isFailure(await Effect.runPromiseExit(appendPrivateSnapshot(appendFailure, "payload")))).toBe(true)
   const failingNative = controlledNative()
   expect(Exit.isFailure(await Effect.runPromiseExit(readPrivateFile("/state/missing", failingNative)))).toBe(true)
+  const readableFile = descriptorWithRead(
+    async () => fakeStat(),
+    async () => "private payload"
+  )
+  expect(
+    await Effect.runPromise(readPrivateFile("/state/readable", controlledNative({ open: async () => readableFile })))
+  ).toBe("private payload")
+  const nonRegularFile = descriptorWithRead(
+    async () => fakeStat({ file: false }),
+    async () => "never read"
+  )
+  expect(
+    Exit.isFailure(
+      await Effect.runPromiseExit(
+        readPrivateFile("/state/non-regular", controlledNative({ open: async () => nonRegularFile }))
+      )
+    )
+  ).toBe(true)
   await expect(openPrivateAppendDescriptor("/state/missing", failingNative)).rejects.toBeDefined()
   await expect(openPrivateLeaseDescriptor("/state/missing", failingNative)).rejects.toBeDefined()
 })

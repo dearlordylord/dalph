@@ -46,7 +46,7 @@ import {
   restartReplacementDisposition
 } from "../../../coordination/run/recovery-activation.js"
 import { causalPredecessorOperationIds } from "../../causal-history.js"
-import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
+import { authorizedClaimForAttempt, causalClaimForAttempt } from "../../claim-authority-history.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -951,6 +951,42 @@ it.effect("exposes the same exact attempt choice for a replacement-recorded succ
 
     expect(result._tag).toBe("RestartApplied")
     expect(reduceWorkflowJournalHistory(runId, yield* journal.read(runId))._tag).toBe("ValidWorkflowJournalHistory")
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("fails closed when claim chronology is absent or late", () =>
+  Effect.gen(function* () {
+    expect(authorizedClaimForAttempt([], plannedAttempt)).toBeUndefined()
+
+    yield* appendExposedRestart
+    const journal = yield* JournalStore
+    const records = yield* journal.read(runId)
+    const plan = records.find(({ event }) => event._tag === "TaskAttemptPlanned")
+    if (plan === undefined) return expect.fail("expected original plan")
+    const lateClaim = records.map((record) =>
+      record.event._tag === "TaskClaimAcquired"
+        ? { ...record, position: JournalPosition.make(Number(plan.position) + 1) }
+        : record
+    )
+    expect(causalClaimForAttempt(lateClaim, plannedAttempt.attemptId)).toBeUndefined()
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("falls back to the original causal claim when reacquisition direction is absent", () =>
+  Effect.gen(function* () {
+    yield* exerciseRestart({ postChoiceClaimReacquired: true })
+    const journal = yield* JournalStore
+    const withReacquisition = yield* journal.read(runId)
+    const withoutDirection = withReacquisition.filter(({ event }) => event._tag !== "TaskClaimReacquisitionDirected")
+    expect(authorizedClaimForAttempt(withoutDirection, plannedAttempt)?.claim).toEqual(exactClaim)
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),

@@ -11,7 +11,7 @@
   },
   "packages/orchestrator/src/workflow/protocols/attempt-choice/restart-authority-evidence.ts": {
     "complexity": {
-      "count": 3
+      "count": 2
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/activation.ts": {
@@ -51,7 +51,7 @@
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/provenance.ts": {
     "complexity": {
-      "count": 10
+      "count": 6
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.ts": {
@@ -66,12 +66,12 @@
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-provenance.ts": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.ts": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts": {

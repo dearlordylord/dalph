@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- The branch gate, recovery chronology, and controlled boundary stay co-located for auditability. */
 
 import { Effect, Context, Layer, Ref, Schema } from "effect"
-import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
+import { TaskBranchRef } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord } from "../../../workflow-journal/store.js"
 import {
@@ -31,26 +31,11 @@ import { OperationId } from "../../identity.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
+import { BranchCleanupObservation } from "./observations.js"
 
-/** Fresh Git facts for the exact planned branch after its worktree settled. */
-export const BranchCleanupObservation = Schema.TaggedUnion({
-  Present: {
-    branch: TaskBranchRef,
-    headSha: GitCommitSha,
-    registeredWorktree: Schema.NullOr(WorktreeLocator),
-    revision: BranchCleanupEvidenceRevision
-  },
-  Absent: { branch: TaskBranchRef, revision: BranchCleanupEvidenceRevision },
-  Foreign: {
-    branch: TaskBranchRef,
-    observedHead: GitCommitSha,
-    observedWorktree: WorktreeLocator,
-    reason: Schema.Literals(["DifferentHead", "RegisteredWorktree", "OtherOwner"]),
-    revision: BranchCleanupEvidenceRevision
-  },
-  Unreadable: { branch: TaskBranchRef, detail: Schema.String }
-})
-export type BranchCleanupObservation = typeof BranchCleanupObservation.Type
+export { BranchCleanupObservation }
+
+const branchCleanupObservationEquivalence = Schema.toEquivalence(BranchCleanupObservation)
 
 /** Result of one exact branch-delete request. */
 export const BranchCleanupMutationResult = Schema.TaggedUnion({
@@ -262,8 +247,8 @@ const recordsWith = (
 ) =>
   records.filter(
     (record) =>
+      Schema.is(BranchCleanupJournalEvent)(record.event) &&
       record.event._tag === tag &&
-      "authorization" in record.event &&
       record.event.authorization.operationId === operationId
   )
 
@@ -278,10 +263,15 @@ const appendEvent = Effect.fn("BranchCleanup.appendEvent")(function* (
 
 const exactPresent = (observation: BranchCleanupObservation, authorization: BranchCleanupAuthorization): boolean =>
   observation._tag === "Present" &&
-  observation.branch === authorization.locator &&
-  observation.headSha === authorization.expectedHead &&
-  observation.registeredWorktree === null &&
-  observation.revision === authorization.evidenceRevision
+  branchCleanupObservationEquivalence(
+    observation,
+    BranchCleanupObservation.cases.Present.make({
+      branch: authorization.locator,
+      headSha: authorization.expectedHead,
+      registeredWorktree: null,
+      revision: authorization.evidenceRevision
+    })
+  )
 
 const observationHasAuthorizedBranch = (
   observation: BranchCleanupObservation,
@@ -414,14 +404,12 @@ const appendContradiction = Effect.fn("BranchCleanup.appendContradiction")(funct
 
 const settleFromAbsence = Effect.fn("BranchCleanup.settleFromAbsence")(function* (
   authorization: BranchCleanupAuthorization,
-  observation: BranchCleanupObservation,
+  observation: Extract<BranchCleanupObservation, { readonly _tag: "Absent" }>,
   operationId: OperationId,
   ordinal: CleanupObservationOrdinal,
   result: Extract<BranchCleanupMutationResult, { readonly _tag: "AlreadyAbsent" | "Removed" }>,
   records: ReadonlyArray<JournalRecord>
 ) {
-  if (observation._tag !== "Absent")
-    return yield* Effect.die("branch absence settlement requires an Absent observation")
   if (result.revision !== observation.revision) {
     yield* appendContradiction(
       authorization,

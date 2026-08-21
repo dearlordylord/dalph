@@ -22,6 +22,9 @@ import {
 type SuccessorRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSuccessorSessionFixed" }>
 }
+type PredecessorSessionRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
+}
 type QuarantineRecord = JournalRecord & { readonly event: IntegrationQuarantinedEvent }
 type DirectionRecord = JournalRecord & { readonly event: IntegrationQuarantineDirectionAppliedEvent }
 type ExactLineageEvidence = NonNullable<ReturnType<typeof exactTargetLineageRecord>>
@@ -64,7 +67,7 @@ const exactPredecessorSession = (
   records: ReadonlyArray<JournalRecord>,
   predecessor: IntegratorSessionCorrelation,
   beforePosition: JournalPosition
-): JournalRecord | undefined => {
+): PredecessorSessionRecord | undefined => {
   const key = integratorSessionFixedRecordKey({
     acceptedResult: predecessor.acceptedResult,
     integrationTarget: predecessor.integrationTarget,
@@ -73,7 +76,7 @@ const exactPredecessorSession = (
     startedAt: predecessor.startedAt
   })
   const matches = records.filter(
-    (record) =>
+    (record): record is PredecessorSessionRecord =>
       record.event._tag === "IntegratorSessionFixed" &&
       record.key === key &&
       record.runId === runIdFor(predecessor) &&
@@ -153,6 +156,8 @@ export const evaluateIntegratorFullRerunSuccessor = (
       readonly lineage: ExactLineageEvidence
       readonly quarantine: QuarantineRecord
       readonly record: SuccessorRecord
+      /** Exact predecessor session evidence retained for FullRerun authorization. */
+      readonly predecessorSession: PredecessorSessionRecord
       readonly successor: IntegratorSessionCorrelation
     }
   | { readonly _tag: "Invalid"; readonly detail: string } => {
@@ -182,7 +187,8 @@ export const evaluateIntegratorFullRerunSuccessor = (
   if (!integratorSuccessorResponsibilityMatches(predecessor, successor.event.successor)) {
     return { _tag: "Invalid", detail: "FullRerun successor changes the planned responsibility" }
   }
-  if (exactPredecessorSession(records, predecessor, successor.event.quarantineAt) === undefined) {
+  const predecessorSession = exactPredecessorSession(records, predecessor, successor.event.quarantineAt)
+  if (predecessorSession === undefined) {
     return { _tag: "Invalid", detail: "FullRerun successor lacks the exact predecessor fixed session S1" }
   }
   if (!exactPredecessorLineage(records, predecessor, successor.event.quarantineAt)) {
@@ -203,8 +209,13 @@ export const evaluateIntegratorFullRerunSuccessor = (
   if (lineage === undefined) {
     return { _tag: "Invalid", detail: "FullRerun successor lacks the exact fresh target-lineage read L" }
   }
-  if (successor.position <= successor.event.successor.targetLineageObservedAt) {
-    return { _tag: "Invalid", detail: "FullRerun successor must be fixed after its fresh target-lineage read" }
+  return {
+    _tag: "Valid",
+    direction,
+    lineage,
+    predecessorSession,
+    quarantine,
+    record: successor,
+    successor: successor.event.successor
   }
-  return { _tag: "Valid", direction, lineage, quarantine, record: successor, successor: successor.event.successor }
 }

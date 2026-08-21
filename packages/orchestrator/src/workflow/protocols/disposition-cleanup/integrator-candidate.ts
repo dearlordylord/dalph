@@ -30,25 +30,11 @@ import { OperationId } from "../../identity.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
+import { IntegratorCandidateCleanupObservation } from "./observations.js"
 
-/** Fresh provider-neutral observation for one quarantined predecessor candidate. */
-export const IntegratorCandidateCleanupObservation = Schema.TaggedUnion({
-  Present: {
-    locator: IntegratorCandidateResourceLocator,
-    revision: IntegratorCandidateCleanupEvidenceRevision,
-    sessionId: IntegratorSessionId,
-    writerQuiescent: Schema.Literal(true)
-  },
-  Absent: { locator: IntegratorCandidateResourceLocator, revision: IntegratorCandidateCleanupEvidenceRevision },
-  Foreign: {
-    locator: IntegratorCandidateResourceLocator,
-    observedSessionId: IntegratorSessionId,
-    reason: Schema.Literals(["LiveWriter", "OtherSession", "Transferred"]),
-    revision: IntegratorCandidateCleanupEvidenceRevision
-  },
-  Unreadable: { detail: Schema.String, locator: IntegratorCandidateResourceLocator }
-})
-export type IntegratorCandidateCleanupObservation = typeof IntegratorCandidateCleanupObservation.Type
+export { IntegratorCandidateCleanupObservation }
+
+const integratorCandidateCleanupObservationEquivalence = Schema.toEquivalence(IntegratorCandidateCleanupObservation)
 
 /** Result of one exact predecessor-candidate disposal request. */
 export const IntegratorCandidateCleanupMutationResult = Schema.TaggedUnion({
@@ -354,8 +340,8 @@ const recordsWith = (
 ) =>
   records.filter(
     (record) =>
+      Schema.is(IntegratorCandidateCleanupJournalEvent)(record.event) &&
       record.event._tag === tag &&
-      "authorization" in record.event &&
       record.event.authorization.operationId === operationId
   )
 
@@ -373,10 +359,15 @@ const exactPresent = (
   authorization: IntegratorCandidateCleanupAuthorization
 ): boolean =>
   observation._tag === "Present" &&
-  observation.locator === authorization.locator &&
-  observation.sessionId === authorization.owner.sessionId &&
-  observation.revision === authorization.evidenceRevision &&
-  observation.writerQuiescent
+  integratorCandidateCleanupObservationEquivalence(
+    observation,
+    IntegratorCandidateCleanupObservation.cases.Present.make({
+      locator: authorization.locator,
+      revision: authorization.evidenceRevision,
+      sessionId: authorization.owner.sessionId,
+      writerQuiescent: true
+    })
+  )
 
 const observationHasAuthorizedLocator = (
   observation: IntegratorCandidateCleanupObservation,
@@ -521,14 +512,12 @@ const appendContradiction = Effect.fn("IntegratorCandidateCleanup.appendContradi
 
 const settleFromAbsence = Effect.fn("IntegratorCandidateCleanup.settleFromAbsence")(function* (
   authorization: IntegratorCandidateCleanupAuthorization,
-  observation: IntegratorCandidateCleanupObservation,
+  observation: Extract<IntegratorCandidateCleanupObservation, { readonly _tag: "Absent" }>,
   operationId: OperationId,
   ordinal: CleanupObservationOrdinal,
   result: Extract<IntegratorCandidateCleanupMutationResult, { readonly _tag: "AlreadyAbsent" | "Removed" }>,
   records: ReadonlyArray<JournalRecord>
 ) {
-  if (observation._tag !== "Absent")
-    return yield* Effect.die("candidate absence settlement requires an Absent observation")
   if (result.revision !== observation.revision) {
     yield* appendContradiction(
       authorization,

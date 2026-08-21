@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- The exact cleanup algebra, recovery chronology, and controlled boundary stay co-located for auditability. */
 
 import { Effect, Context, Layer, Ref, Schema } from "effect"
-import { AttemptId, GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
+import { TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord } from "../../../workflow-journal/store.js"
 import {
@@ -27,29 +27,11 @@ import {
   worktreeCleanupAuthorizationEquals
 } from "./disposition.js"
 import { validateWorktreeCleanupHistory, validateWorktreeCleanupProvenance } from "./provenance.js"
+import { WorktreeCleanupObservation } from "./observations.js"
 
-/** Fresh Git evidence for the exact planned worktree named by one authorization. */
-export const WorktreeCleanupObservation = Schema.TaggedUnion({
-  Present: {
-    attemptId: AttemptId,
-    branch: TaskBranchRef,
-    headSha: GitCommitSha,
-    locator: WorktreeLocator,
-    revision: WorktreeCleanupEvidenceRevision,
-    writerQuiescent: Schema.Literal(true)
-  },
-  Absent: { locator: WorktreeLocator, revision: WorktreeCleanupEvidenceRevision },
-  Foreign: {
-    locator: WorktreeLocator,
-    observedBranch: TaskBranchRef,
-    observedHead: GitCommitSha,
-    reason: Schema.Literals(["OtherBranch", "OtherOwner", "MovedRegistration"]),
-    revision: WorktreeCleanupEvidenceRevision
-  },
-  Unregistered: { locator: WorktreeLocator, revision: WorktreeCleanupEvidenceRevision },
-  Unreadable: { detail: Schema.String, locator: WorktreeLocator }
-})
-export type WorktreeCleanupObservation = typeof WorktreeCleanupObservation.Type
+export { WorktreeCleanupObservation }
+
+const worktreeCleanupObservationEquivalence = Schema.toEquivalence(WorktreeCleanupObservation)
 
 /** Result returned by the worktree remove boundary; Unknown is intentionally recoverable. */
 export const WorktreeCleanupMutationResult = Schema.TaggedUnion({
@@ -269,8 +251,8 @@ const recordsFor = (
 ) =>
   records.filter(
     (record) =>
+      Schema.is(WorktreeCleanupJournalEvent)(record.event) &&
       record.event._tag === tag &&
-      "authorization" in record.event &&
       record.event.authorization.operationId === operationId
   )
 
@@ -289,12 +271,17 @@ export const worktreeCleanupObservationMatchesAuthorization = (
   authorization: WorktreeCleanupAuthorization
 ): boolean =>
   observation._tag === "Present" &&
-  observation.locator === authorization.locator &&
-  observation.attemptId === authorization.owner.attemptId &&
-  observation.branch === authorization.owner.branch &&
-  observation.headSha === authorization.expectedHead &&
-  observation.revision === authorization.evidenceRevision &&
-  observation.writerQuiescent
+  worktreeCleanupObservationEquivalence(
+    observation,
+    WorktreeCleanupObservation.cases.Present.make({
+      attemptId: authorization.owner.attemptId,
+      branch: authorization.owner.branch,
+      headSha: authorization.expectedHead,
+      locator: authorization.locator,
+      revision: authorization.evidenceRevision,
+      writerQuiescent: true
+    })
+  )
 
 const nextObservationOrdinal = (
   records: ReadonlyArray<JournalRecord>,
@@ -430,14 +417,12 @@ const appendContradiction = Effect.fn("WorktreeCleanup.appendContradiction")(fun
 
 const settleFromAbsence = Effect.fn("WorktreeCleanup.settleFromAbsence")(function* (
   authorization: WorktreeCleanupAuthorization,
-  observation: WorktreeCleanupObservation,
+  observation: Extract<WorktreeCleanupObservation, { readonly _tag: "Absent" }>,
   operationId: OperationId,
   ordinal: CleanupObservationOrdinal,
   result: Extract<WorktreeCleanupMutationResult, { readonly _tag: "AlreadyAbsent" | "Removed" }>,
   records: ReadonlyArray<JournalRecord>
 ) {
-  if (observation._tag !== "Absent")
-    return yield* Effect.die("worktree absence settlement requires an Absent observation")
   if (result.revision !== observation.revision) {
     yield* appendContradiction(
       authorization,

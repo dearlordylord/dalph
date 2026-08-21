@@ -1,8 +1,8 @@
-import { Context, Effect } from "effect"
+import { Context, Effect, Schema } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import type { OperationId } from "../../identity.js"
-import type { JournalAppendError, JournalReadError, JournalRecord } from "../../../workflow-journal/store.js"
+import { JournalRecord, type JournalAppendError, type JournalReadError } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import {
   isCleanupEligibleDisposition,
@@ -105,14 +105,12 @@ export class DispositionCleanupActivation extends Context.Service<
  */
 const familyAuthorizations = <Authorization extends { readonly operationId: OperationId }>(
   records: ReadonlyArray<JournalRecord>,
-  tag: "WorktreeCleanupAuthorized" | "BranchCleanupAuthorized" | "IntegratorCandidateCleanupAuthorized",
-  authorizationOf: (record: JournalRecord) => Authorization | undefined,
+  authorizationOf: (event: JournalRecord["event"]) => Authorization | undefined,
   validate: (authorization: Authorization) => boolean
 ): ReadonlyArray<Authorization> =>
   records
-    .filter(({ event }) => event._tag === tag)
     .toSorted((left, right) => Number(left.position) - Number(right.position))
-    .map(authorizationOf)
+    .map((record) => authorizationOf(record.event))
     .filter((authorization): authorization is Authorization => authorization !== undefined && validate(authorization))
     .reduce<ReadonlyArray<Authorization>>(
       (selected, authorization) =>
@@ -226,7 +224,7 @@ const validCandidate = (
  * prefix validate against the same Run journal.
  */
 export const selectCleanupResponsibilities = (
-  records: ReadonlyArray<JournalRecord>,
+  records: ReadonlyArray<unknown>,
   operationId?: OperationId
 ): DispositionCleanupResponsibilities => {
   const selected = selectCleanupResponsibilitySet(records)
@@ -242,40 +240,42 @@ export const selectCleanupResponsibilities = (
  * the same family; each result is validated against its own operation prefix.
  */
 export const selectCleanupResponsibilitySet = (
-  records: ReadonlyArray<JournalRecord>
-): DispositionCleanupResponsibilitySet => ({
-  branch: bounded(
-    familyAuthorizations(
-      records,
-      "BranchCleanupAuthorized",
-      (record) => (record.event._tag === "BranchCleanupAuthorized" ? record.event.authorization : undefined),
-      (authorization) => validBranch(records, authorization)
-    ).filter(
-      (authorization) => !hasTerminalCleanupEvent(records, authorization) && hasMutationBudget(records, authorization)
+  records: ReadonlyArray<unknown>
+): DispositionCleanupResponsibilitySet => {
+  const journalRecords = records.filter((record): record is JournalRecord => Schema.is(JournalRecord)(record))
+  return {
+    branch: bounded(
+      familyAuthorizations(
+        journalRecords,
+        (event) => (Schema.is(BranchCleanupAuthorizedEvent)(event) ? event.authorization : undefined),
+        (authorization) => validBranch(journalRecords, authorization)
+      ).filter(
+        (authorization) =>
+          !hasTerminalCleanupEvent(journalRecords, authorization) && hasMutationBudget(journalRecords, authorization)
+      )
+    ),
+    candidate: bounded(
+      familyAuthorizations(
+        journalRecords,
+        (event) => (Schema.is(IntegratorCandidateCleanupAuthorizedEvent)(event) ? event.authorization : undefined),
+        (authorization) => validCandidate(journalRecords, authorization)
+      ).filter(
+        (authorization) =>
+          !hasTerminalCleanupEvent(journalRecords, authorization) && hasMutationBudget(journalRecords, authorization)
+      )
+    ),
+    worktree: bounded(
+      familyAuthorizations(
+        journalRecords,
+        (event) => (Schema.is(WorktreeCleanupAuthorizedEvent)(event) ? event.authorization : undefined),
+        (authorization) => validWorktree(journalRecords, authorization)
+      ).filter(
+        (authorization) =>
+          !hasTerminalCleanupEvent(journalRecords, authorization) && hasMutationBudget(journalRecords, authorization)
+      )
     )
-  ),
-  candidate: bounded(
-    familyAuthorizations(
-      records,
-      "IntegratorCandidateCleanupAuthorized",
-      (record) =>
-        record.event._tag === "IntegratorCandidateCleanupAuthorized" ? record.event.authorization : undefined,
-      (authorization) => validCandidate(records, authorization)
-    ).filter(
-      (authorization) => !hasTerminalCleanupEvent(records, authorization) && hasMutationBudget(records, authorization)
-    )
-  ),
-  worktree: bounded(
-    familyAuthorizations(
-      records,
-      "WorktreeCleanupAuthorized",
-      (record) => (record.event._tag === "WorktreeCleanupAuthorized" ? record.event.authorization : undefined),
-      (authorization) => validWorktree(records, authorization)
-    ).filter(
-      (authorization) => !hasTerminalCleanupEvent(records, authorization) && hasMutationBudget(records, authorization)
-    )
-  )
-})
+  }
+}
 
 /**
  * Runs the same family protocols used by production activation. Worktree
