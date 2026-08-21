@@ -1,11 +1,15 @@
 import { AttemptId, TaskId } from "@dalph/contracts"
+import { IntegratorCandidateText, IntegratorNotPreparedDetail } from "@dalph/orchestrator"
 import { describe, expect, it } from "vitest"
 import { AuthoredCassetteStoryItem } from "../../src/cassettes/authored-domain.js"
 import {
   renderAuthoredStoryItemLandmark,
   renderAuthoredStoryItemLyric
 } from "../../src/cassettes/authored-presentation.js"
-import { contractedCapacityRetainsTwoAttemptsAuthoredCassette } from "../../src/cassettes/catalog.js"
+import {
+  contractedCapacityRetainsTwoAttemptsAuthoredCassette,
+  maintainedAuthoredCassetteCatalog
+} from "../../src/cassettes/catalog.js"
 
 describe("authored delivery landmarks", () => {
   const graph = contractedCapacityRetainsTwoAttemptsAuthoredCassette.startingFacts.trackerGraph
@@ -71,5 +75,80 @@ describe("authored delivery landmarks", () => {
     expect(renderAuthoredStoryItemLyric(item)).toBe(
       "The task tracker classifies the exact completion request for task B as NotApplied."
     )
+  })
+
+  it("renders control, Integrator, and protocol variants at the presentation boundary", () => {
+    const unpause = Object.values(maintainedAuthoredCassetteCatalog)
+      .flatMap(({ story }) => story)
+      .find(
+        (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting.Type =>
+          item._tag === "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting"
+      )
+    if (unpause === undefined) throw new Error("maintained catalog lacks an in-flight Unpause story item")
+
+    const beforeAdmissionTask = AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.make(
+      { direction: "Pause", subject: { _tag: "Task", taskId: TaskId.make("A") } }
+    )
+    const beforeAdmissionRun = AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.make(
+      { direction: "Unpause", subject: { _tag: "Run" } }
+    )
+    const cancellationWhileInFlight = AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellationWhileExecutorRequestInFlight.make(
+      { duringAttemptId: AttemptId.make("attempt:A:0") }
+    )
+    const notPrepared = AuthoredCassetteStoryItem.cases.IntegratorResultReturned.make({
+      result: { _tag: "NotPrepared", detail: IntegratorNotPreparedDetail.make("the provider did not prepare a candidate") }
+    })
+    const prepared = AuthoredCassetteStoryItem.cases.IntegratorResultReturned.make({
+      result: { _tag: "PreparedCandidate", candidateText: IntegratorCandidateText.make("refs/heads/candidate") }
+    })
+    const failedGit = AuthoredCassetteStoryItem.cases.IntegratorGitObservationFailed.make({
+      candidateText: IntegratorCandidateText.make("refs/heads/candidate"),
+      detail: "candidate read unavailable"
+    })
+    const expected = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
+      orchestration: null,
+      protocol: [
+        { _tag: "RunCancellationApplied" },
+        {
+          _tag: "PlannedAttemptReplaced",
+          priorAttemptId: AttemptId.make("attempt:A:0"),
+          successorAttemptId: AttemptId.make("attempt:A:1"),
+          taskId: TaskId.make("A")
+        }
+      ],
+      taskWork: { absences: [], results: [] }
+    })
+
+    expect(renderAuthoredStoryItemLyric(beforeAdmissionTask)).toContain("task A before delivery-action admission")
+    expect(renderAuthoredStoryItemLyric(beforeAdmissionRun)).toContain("the Run before delivery-action admission")
+    expect(renderAuthoredStoryItemLyric(cancellationWhileInFlight)).toContain("whole-Run cancellation")
+    expect(renderAuthoredStoryItemLyric(notPrepared)).toContain("NotPrepared: the provider did not prepare a candidate")
+    expect(renderAuthoredStoryItemLyric(prepared)).toContain("PreparedCandidate refs/heads/candidate")
+    expect(renderAuthoredStoryItemLyric(failedGit)).toBe(
+      "Git cannot observe reported candidate refs/heads/candidate: candidate read unavailable"
+    )
+    expect(renderAuthoredStoryItemLyric(AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellation.make({}))).toBe(
+      "Operator applies whole-Run cancellation."
+    )
+    expect(renderAuthoredStoryItemLyric(expected)).toContain("whole-Run cancellation exactly once")
+    expect(renderAuthoredStoryItemLyric(expected)).toContain(
+      "atomically replace attempt attempt:A:0 with clean attempt attempt:A:1"
+    )
+    expect(renderAuthoredStoryItemLyric({ ...unpause, subject: { _tag: "Run" } })).toContain("unpauses the Run")
+    expect(renderAuthoredStoryItemLyric({ ...unpause, subject: { _tag: "Task", taskId: TaskId.make("A") } })).toContain(
+      "unpauses task A"
+    )
+    expect(
+      renderAuthoredStoryItemLyric(
+        AuthoredCassetteStoryItem.cases.OperatorSubscribesToPauseObservation.make({ subject: { _tag: "Run" } })
+      )
+    ).toContain("subscribes to Pause progress for the Run")
+    expect(
+      renderAuthoredStoryItemLyric(
+        AuthoredCassetteStoryItem.cases.OperatorSubscribesToPauseObservation.make({
+          subject: { _tag: "Task", taskId: TaskId.make("A") }
+        })
+      )
+    ).toContain("subscribes to Pause progress for task A")
   })
 })
