@@ -52,6 +52,7 @@ import {
   IntegratorBoundaryUnavailable,
   TargetLineageObservation,
   appendCandidateProvenance,
+  appendCurrentQuarantineProvenance,
   appendReplacementProvenance,
   integratorSuccessorCorrelationFor,
   makeTaskAttemptPlanOperation,
@@ -505,6 +506,84 @@ it.effect("ordinary production Run activation sends FullRerun cleanup through th
       const records = yield* fixture.readRecords
       expect(records.some(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")).toBe(true)
       expect(records.some(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")).toBe(true)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("ordinary production Run activation leaves a current quarantine untouched", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerObserveCalls = yield* Ref.make(0)
+      const providerRemoveCalls = yield* Ref.make(0)
+      const provider: IntegratorCandidateProviderAuthorityService = {
+        observe: () =>
+          Ref.update(providerObserveCalls, (calls) => calls + 1).pipe(
+            Effect.andThen(Effect.die("current quarantine must not observe a provider candidate"))
+          ),
+        remove: () =>
+          Ref.update(providerRemoveCalls, (calls) => calls + 1).pipe(
+            Effect.andThen(Effect.die("current quarantine must not remove a provider candidate"))
+          )
+      }
+      const fixture = yield* makePublicRunFixture(() => [], undefined, provider)
+      const acceptedResult = AcceptedResult.make({
+        commit: fixture.attempt.baseSha,
+        evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("b".repeat(64)) })
+      })
+      const predecessor = IntegratorSessionCorrelation.make({
+        acceptedResult,
+        candidateResource: IntegratorCandidateResourceLocator.make("candidate:ordinary-production-current-quarantine"),
+        expectedTargetHead: fixture.attempt.baseSha,
+        integrationTarget: productionIntegrationTarget(`${fixture.repository}/.git`),
+        plannedAttempt: fixture.attempt,
+        queuedAt: JournalPosition.make(12),
+        sessionId: IntegratorSessionId.make("session:ordinary-production-current-quarantine"),
+        startedAt: JournalPosition.make(13),
+        targetLineageObservedAt: JournalPosition.make(15)
+      })
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+        yield* journal.append(
+          fixture.runId,
+          plannedAttemptExecutorWorkReportedRecordKey(fixture.attempt.attemptId, reportOrdinal),
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: reportOrdinal,
+            report: PlannedAttemptExecutorReport.cases.Terminal.make({
+              correlation: plannedAttemptExecutorCorrelation(fixture.attempt),
+              result: { _tag: "Accepted", acceptedResult }
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+        yield* appendCurrentQuarantineProvenance(predecessor, "StartupValid")
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename })))
+
+      const activation = yield* Effect.exit(fixture.activate())
+      // Cleanup is intentionally a no-op. The current quarantine keeps the
+      // Run active; if a future activation continues to delivery, require the
+      // exact unrelated Integrator failure rather than accepting any failure.
+      if (activation._tag === "Failure") {
+        expect(Cause.findErrorOption(activation.cause)).toEqual(
+          Option.some(new IntegratorBoundaryUnavailable({ boundary: "Integrator" }))
+        )
+      } else {
+        expect(activation._tag).toBe("Success")
+        expect(activation.value).toEqual({ reason: "UnsettledResponsibility", _tag: "RunMustRemainActive" })
+      }
+      const records = yield* fixture.readRecords
+      expect(records.filter(({ event }) => event._tag.startsWith("WorktreeCleanup"))).toHaveLength(0)
+      expect(records.filter(({ event }) => event._tag.startsWith("BranchCleanup"))).toHaveLength(0)
+      expect(records.filter(({ event }) => event._tag.startsWith("IntegratorCandidateCleanup"))).toHaveLength(0)
+      expect(yield* Ref.get(providerObserveCalls)).toBe(0)
+      expect(yield* Ref.get(providerRemoveCalls)).toBe(0)
+
+      const fileSystem = yield* FileSystem.FileSystem
+      const git = yield* GitCommand
+      expect(yield* fileSystem.exists(fixture.attempt.worktree)).toBe(true)
+      expect(
+        (yield* git.runInWorktree(fixture.repository, ["show-ref", "--verify", fixture.attempt.branch])).stdout
+      ).toContain(fixture.attempt.branch)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )

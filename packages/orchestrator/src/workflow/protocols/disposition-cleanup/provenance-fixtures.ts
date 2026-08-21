@@ -737,11 +737,16 @@ const appendCandidateAuthorityPrefix = (
   })
 
 /** Appends a real current-quarantine history without fabricating disposal authority. */
-export const appendCurrentQuarantineProvenance = Effect.fn("DispositionCleanupTest.appendCurrentQuarantineProvenance")(
-  function* (predecessor: IntegratorSessionCorrelation) {
-    yield* appendCandidateAuthorityPrefix(predecessor)
+const appendCurrentQuarantineProvenanceEffect = Effect.fn("DispositionCleanupTest.appendCurrentQuarantineProvenance")(
+  function* (predecessor: IntegratorSessionCorrelation, chronology: "Cassette" | "StartupValid") {
+    yield* appendCandidateAuthorityPrefix(predecessor, chronology)
   }
 )
+
+export const appendCurrentQuarantineProvenance = (
+  predecessor: IntegratorSessionCorrelation,
+  chronology: "Cassette" | "StartupValid" = "Cassette"
+) => appendCurrentQuarantineProvenanceEffect(predecessor, chronology)
 
 /**
  * Appends the complete S1/Q/D/S2 evidence needed by candidate cleanup. The

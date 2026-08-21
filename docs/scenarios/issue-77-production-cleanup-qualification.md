@@ -129,8 +129,9 @@ quarantine label or a locator into an authorization by retrying.
 The maintainer sees no cleanup boundary calls. Dalph must not delete the current
 candidate, release its session, or fabricate a FullRerun predecessor relation.
 
-Acceptance test: `production current quarantine performs no cleanup boundary
-call`.
+Acceptance test: `ordinary production Run activation leaves a current quarantine
+untouched`; the focused boundary negative control is `production current
+quarantine performs no cleanup boundary call`.
 
 ## SQLite/process reopen resumes from fresh observed authority
 
@@ -165,7 +166,7 @@ duplicate delete`.
 | One exact worktree and branch | Real Git removes W1 then B1 at H, while P2 remains untouched and B1 waits for W1 settlement | `production Git cleanup removes only the authorized worktree and branch and leaves an unrelated task intact`; restart variant |
 | Changed/foreign/unreadable/malformed facts | Typed fresh evidence preserves every resource and sends zero mutation calls | `production cleanup preserves changed, foreign, unreadable, and malformed Git facts with zero mutation calls` |
 | FullRerun predecessor candidate | Provider authority removes only C1 after proving S1 ownership and quiescence; C2, successor history, and evidence remain | `production SQLite cleanup reopens after a lost provider response without a duplicate delete for an exact FullRerun predecessor` |
-| Current quarantine | No cleanup responsibility or boundary call is manufactured | `production current quarantine performs no cleanup boundary call` |
+| Current quarantine | No cleanup responsibility or boundary call is manufactured | `ordinary production Run activation leaves a current quarantine untouched`; focused boundary negative control: `production current quarantine performs no cleanup boundary call` |
 | SQLite/process reopen | Recovery rereads owning authority before any remaining mutation and does not duplicate a settled delete | `production SQLite cleanup reopens after a lost Git response without a duplicate delete`; provider analogue |
 
 ## Model decision
