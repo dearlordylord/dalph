@@ -1,4 +1,5 @@
 import { Effect, Layer, Option, Stream } from "effect"
+import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import {
   DeliveryActionPlanningInputs,
@@ -20,8 +21,10 @@ import {
   type DeliveryActionProposal,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeFacts,
+  type DeliveryRuntimeSnapshot,
   type DeliveryRelationInputBundle,
   type DeliveryGraphPublication,
+  type TicketDeliveryEvidence,
   type DeliveryConsequences,
   type DeliveryRelationSourceError,
   type TrackerGraphActionProposal,
@@ -55,6 +58,49 @@ export interface DeliveryRelationsLayerInput {
  * replay the previous graph publication, while a new graph observation,
  * policy, or exact evidence still publishes.
  */
+const publicationEvidenceKeyByArray = new WeakMap<ReadonlyArray<TicketDeliveryEvidence>, string>()
+const publicationEvidenceKeyByElement = new WeakMap<TicketDeliveryEvidence, string>()
+const publicationSnapshotKeyByObject = new WeakMap<TaskDagSnapshot, string>()
+
+/**
+ * Keep the exact JSON equality law while avoiding repeated traversal of
+ * immutable evidence values that are shared by adjacent publications. The
+ * array itself is often rebuilt for each publication, so the element cache is
+ * the useful layer here. A JSON array of the element JSON strings is
+ * injective for the original serialized evidence array, including ordering
+ * and duplicate entries.
+ */
+const publicationEvidenceKeyOf = (evidence: ReadonlyArray<TicketDeliveryEvidence>): string => {
+  const cached = publicationEvidenceKeyByArray.get(evidence)
+  if (cached !== undefined) return cached
+
+  const key = JSON.stringify(
+    evidence.map((entry) => {
+      const cachedEntry = publicationEvidenceKeyByElement.get(entry)
+      if (cachedEntry !== undefined) return cachedEntry
+      const serializedEntry = JSON.stringify(entry)
+      publicationEvidenceKeyByElement.set(entry, serializedEntry)
+      return serializedEntry
+    })
+  )
+  publicationEvidenceKeyByArray.set(evidence, key)
+  return key
+}
+
+const publicationSnapshotKeyOf = (snapshot: TaskDagSnapshot): string => {
+  const cached = publicationSnapshotKeyByObject.get(snapshot)
+  if (cached !== undefined) return cached
+  const key = snapshot.canonicalJson()
+  publicationSnapshotKeyByObject.set(snapshot, key)
+  return key
+}
+
+/** Encodes one publication-key component without allowing delimiter collisions. */
+const publicationKeyPartOf = (value: string | number): string => {
+  const text = String(value)
+  return `${typeof value}:${text.length}:${text}`
+}
+
 const deliveryPublicationKeyOf = (publication: DeliveryGraphPublication): string => {
   const graph = publication.graph
   const graphKey =
@@ -62,17 +108,20 @@ const deliveryPublicationKeyOf = (publication: DeliveryGraphPublication): string
       ? [graph._tag]
       : [
           graph._tag,
-          graph.observation.snapshot.canonicalJson(),
+          publicationSnapshotKeyOf(graph.observation.snapshot),
           graph.observation.operationId,
           graph.observation.contentIdentity,
           graph.observation.recordedAt,
           graph.observation.freshness.operationId
         ]
-  return JSON.stringify({
-    exactEvidence: publication.exactEvidence,
-    graph: graphKey,
-    policy: [publication.policy.revision, publication.policy.taskExecutionCapacity]
-  })
+  return [
+    publicationEvidenceKeyOf(publication.exactEvidence),
+    ...graphKey,
+    publication.policy.revision,
+    publication.policy.taskExecutionCapacity
+  ]
+    .map(publicationKeyPartOf)
+    .join("|")
 }
 
 const deduplicatedPublicationSignal = (
@@ -250,13 +299,16 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
         const facts = mapCurrentSignal(input.coherent, ({ actionInputs }) => actionInputs.runtimeFacts)
-        const current = mapCurrentSignal(delivery, (delivery) => ({
-          _tag: "DeliveryRuntimeSnapshot" as const,
-          reflection: delivery.trackerConsequences,
-          settlements: delivery.settlements,
-          ticketDeliveries: delivery.ticketDeliveries,
-          trackerGraph: delivery.graph
-        }))
+        const current = mapCurrentSignal(
+          delivery,
+          (delivery): DeliveryRuntimeSnapshot => ({
+            _tag: "DeliveryRuntimeSnapshot",
+            reflection: delivery.trackerConsequences,
+            settlements: delivery.settlements,
+            ticketDeliveries: delivery.ticketDeliveries,
+            trackerGraph: delivery.graph
+          })
+        )
         const makeEvaluation = (
           facts: DeliveryRuntimeFacts,
           current: Effect.Effect<DeliveryRuntimeEvaluation["current"], E | DeliveryRelationSourceError>,

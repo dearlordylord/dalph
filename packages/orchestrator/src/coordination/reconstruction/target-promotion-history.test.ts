@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
+import { HashMap } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -96,11 +97,9 @@ const qualification = IntegratorRunCandidateGitObservedEvent.make({
   version: workflowJournalEventVersion
 })
 
-const integratorObservations = new Map([
-  [
-    integratorRunCandidateRecordKeyPrefix(qualifiedCandidate.run, candidateText),
-    { event: qualification, position: qualifiedCandidate.qualifiedAt }
-  ]
+const integratorObservations = HashMap.make([
+  integratorRunCandidateRecordKeyPrefix(qualifiedCandidate.run, candidateText),
+  { event: qualification, position: qualifiedCandidate.qualifiedAt }
 ])
 
 const promotionRecord = (position: number, event: JournalRecord["event"]): JournalRecord => ({
@@ -110,16 +109,32 @@ const promotionRecord = (position: number, event: JournalRecord["event"]): Journ
   runId
 })
 
+const validationDetail = (
+  record: JournalRecord,
+  indexes: ReturnType<typeof makeTargetPromotionHistoryIndexes>,
+  observations: typeof integratorObservations
+): string | undefined => invalidTargetPromotionHistory(record, indexes, observations).detail
+
+const acceptPromotionRecord = (
+  record: JournalRecord,
+  indexes: ReturnType<typeof makeTargetPromotionHistoryIndexes>,
+  observations: typeof integratorObservations
+): ReturnType<typeof makeTargetPromotionHistoryIndexes> => {
+  const validation = invalidTargetPromotionHistory(record, indexes, observations)
+  expect(validation.detail).toBeUndefined()
+  return validation.indexes
+}
+
 it("accepts promotion intent only after the exact Integrator Git qualification", () => {
   const indexes = makeTargetPromotionHistoryIndexes()
   const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
-  expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
+  expect(validationDetail(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
 })
 
 it("rejects promotion intent with no earlier Integrator Git result", () => {
   const indexes = makeTargetPromotionHistoryIndexes()
   const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
-  expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, new Map())).toContain(
+  expect(validationDetail(promotionRecord(6, intent), indexes, HashMap.empty())).toContain(
     "Integrator Git qualification"
   )
 })
@@ -170,14 +185,12 @@ it("rejects altered or non-prior Integrator Git qualification evidence", () => {
       correlation: targetPromotionCorrelationFor(candidate),
       version: workflowJournalEventVersion
     })
-    const observations = new Map([
-      [
-        integratorRunCandidateRecordKeyPrefix(candidate.run, candidate.candidateText),
-        { event: observationEvent, position: observedAt }
-      ]
+    const observations = HashMap.make([
+      integratorRunCandidateRecordKeyPrefix(candidate.run, candidate.candidateText),
+      { event: observationEvent, position: observedAt }
     ])
     expect(
-      invalidTargetPromotionHistory(promotionRecord(6, intent), makeTargetPromotionHistoryIndexes(), observations),
+      validationDetail(promotionRecord(6, intent), makeTargetPromotionHistoryIndexes(), observations),
       label
     ).toContain("Integrator Git qualification")
   }
@@ -203,9 +216,9 @@ it("requires numbered attempts and terminal proof to follow the same outer reque
     }),
     version: workflowJournalEventVersion
   })
-  expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
-  expect(invalidTargetPromotionHistory(promotionRecord(7, attempt), indexes, integratorObservations)).toBeUndefined()
-  expect(invalidTargetPromotionHistory(promotionRecord(8, success), indexes, integratorObservations)).toBeUndefined()
+  let nextIndexes = acceptPromotionRecord(promotionRecord(6, intent), indexes, integratorObservations)
+  nextIndexes = acceptPromotionRecord(promotionRecord(7, attempt), nextIndexes, integratorObservations)
+  acceptPromotionRecord(promotionRecord(8, success), nextIndexes, integratorObservations)
 })
 
 it("rejects a promotion attempt whose reason is not exact for its ordinal", () => {
@@ -220,8 +233,8 @@ it("rejects a promotion attempt whose reason is not exact for its ordinal", () =
     }),
     version: workflowJournalEventVersion
   })
-  expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
-  expect(invalidTargetPromotionHistory(promotionRecord(7, attempt), indexes, integratorObservations)).toContain(
+  const nextIndexes = acceptPromotionRecord(promotionRecord(6, intent), indexes, integratorObservations)
+  expect(validationDetail(promotionRecord(7, attempt), nextIndexes, integratorObservations)).toContain(
     "expected exact sequential ordinal"
   )
 })
@@ -277,8 +290,8 @@ it("rejects terminal observations that contradict M, H, or their causal basis", 
   for (const terminal of invalidTerminals) {
     const indexes = makeTargetPromotionHistoryIndexes()
     const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
-    expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
-    expect(invalidTargetPromotionHistory(promotionRecord(7, terminal), indexes, integratorObservations)).toContain(
+    const nextIndexes = acceptPromotionRecord(promotionRecord(6, intent), indexes, integratorObservations)
+    expect(validationDetail(promotionRecord(7, terminal), nextIndexes, integratorObservations)).toContain(
       "no exact latest unresolved attempt"
     )
   }
@@ -287,7 +300,7 @@ it("rejects terminal observations that contradict M, H, or their causal basis", 
 it("accepts three exact attempts followed by bounded non-convergence", () => {
   const indexes = makeTargetPromotionHistoryIndexes()
   const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
-  expect(invalidTargetPromotionHistory(promotionRecord(6, intent), indexes, integratorObservations)).toBeUndefined()
+  let nextIndexes = acceptPromotionRecord(promotionRecord(6, intent), indexes, integratorObservations)
 
   for (const ordinal of [1, 2, 3]) {
     const attemptOrdinal = TargetPromotionAttemptOrdinal.make(ordinal)
@@ -304,9 +317,7 @@ it("accepts three exact attempts followed by bounded non-convergence", () => {
       reason,
       version: workflowJournalEventVersion
     })
-    expect(
-      invalidTargetPromotionHistory(promotionRecord(6 + ordinal, attempt), indexes, integratorObservations)
-    ).toBeUndefined()
+    nextIndexes = acceptPromotionRecord(promotionRecord(6 + ordinal, attempt), nextIndexes, integratorObservations)
   }
 
   const nonConvergence = TargetPromotionNonConvergenceEvent.make({
@@ -318,13 +329,11 @@ it("accepts three exact attempts followed by bounded non-convergence", () => {
     }),
     version: workflowJournalEventVersion
   })
-  expect(
-    invalidTargetPromotionHistory(promotionRecord(10, nonConvergence), indexes, integratorObservations)
-  ).toBeUndefined()
+  acceptPromotionRecord(promotionRecord(10, nonConvergence), nextIndexes, integratorObservations)
 })
 
 it("ignores workflow events outside the promotion chronology", () => {
   expect(
-    invalidTargetPromotionHistory(promotionRecord(5, qualification), makeTargetPromotionHistoryIndexes(), new Map())
+    validationDetail(promotionRecord(5, qualification), makeTargetPromotionHistoryIndexes(), HashMap.empty())
   ).toBeUndefined()
 })

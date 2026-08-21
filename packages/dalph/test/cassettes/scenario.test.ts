@@ -37,6 +37,9 @@ import {
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
   deriveIntegrationAdmission,
+  evaluateDeliveryRelationAndRuntimeInputBundle,
+  evaluateDeliveryRelationInputBundle,
+  evaluateDeliveryRuntimeInputBundle,
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
@@ -3431,6 +3434,27 @@ it.effect("notifies the read-only delivery observer before returning the termina
       storyPosition: run.deliveryFrames[0]?.storyPosition
     })
     expect(publications.at(-1)?.storyPosition).toBe(run.deliveryFrames.at(-1)?.storyPosition)
+  })
+)
+
+it.effect("reuses one delivery relation evaluation for the authored publication frame", () =>
+  Effect.gen(function* () {
+    let captured: AuthoredDeliveryPublication | undefined
+    yield* runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette, {
+      onDeliveryPublication: (publication) => {
+        captured ??= publication
+      }
+    })
+    if (captured === undefined) return expect.fail("expected a delivery publication")
+
+    const separate = yield* Effect.all({
+      consequences: evaluateDeliveryRelationInputBundle(captured.bundle),
+      runtime: evaluateDeliveryRuntimeInputBundle(captured.bundle)
+    })
+    const combined = yield* evaluateDeliveryRelationAndRuntimeInputBundle(captured.bundle)
+
+    expect(combined.runtime).toEqual(separate.runtime)
+    expect(combined.consequences).toEqual(separate.consequences)
   })
 )
 

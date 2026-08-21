@@ -47,8 +47,7 @@ import {
   type BoundedTicketRank,
   DeliveryRelationPublicationObserver,
   DeliveryRuntimeObservationObserver,
-  evaluateDeliveryRelationInputBundle,
-  evaluateDeliveryRuntimeInputBundle,
+  evaluateDeliveryRelationAndRuntimeInputBundle,
   type DeliveryConsequences,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
@@ -98,6 +97,10 @@ import {
   TargetPromotionGitReadObservation,
   targetPromotionCorrelationFor,
   type TargetPromotionGitService,
+  type TraceAtCursor,
+  TraceCursor,
+  TraceReader,
+  TraceReaderLayer,
   memoryEvidenceStoreLayer,
   EvidenceStore,
   type EvidenceStoreFailure,
@@ -143,6 +146,8 @@ export interface AuthoredScenarioCassetteRun {
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
   readonly runId: RunId
+  /** Historical views are read from the production trace reader at exact journal cursors. */
+  readonly traceHistories: ReadonlyArray<TraceAtCursor>
 }
 
 interface AuthoredTaggedDiagnostic {
@@ -1058,10 +1063,7 @@ const authoredDeliveryFrameOf = (
 export const evaluateAuthoredDeliveryPublication = Effect.fn("AuthoredCassette.evaluateDeliveryPublication")(function* (
   publication: AuthoredDeliveryPublication
 ) {
-  const { consequences, runtime } = yield* Effect.all({
-    consequences: evaluateDeliveryRelationInputBundle(publication.bundle),
-    runtime: evaluateDeliveryRuntimeInputBundle(publication.bundle)
-  })
+  const { consequences, runtime } = yield* evaluateDeliveryRelationAndRuntimeInputBundle(publication.bundle)
   return authoredDeliveryFrameOf(publication, consequences, runtime)
 })
 
@@ -2704,6 +2706,10 @@ const runAuthoredScenarioCassetteWith = (request: {
       const deliveryFrames = observationMoments.flatMap((moment) =>
         moment._tag === "DeliveryPublicationMoment" ? [moment.deliveryFrame] : []
       )
+      const traceHistories = yield* Effect.gen(function* () {
+        const reader = yield* TraceReader
+        return yield* Effect.forEach(records, ({ position }) => reader.readAt(TraceCursor.make({ position, runId })))
+      }).pipe(Effect.provide(TraceReaderLayer.pipe(Layer.provide(journalLayer))))
       return {
         activationOrdinals,
         cassette,
@@ -2713,7 +2719,8 @@ const runAuthoredScenarioCassetteWith = (request: {
         observationMoments,
         observedBehavior,
         records,
-        runId
+        runId,
+        traceHistories
       } satisfies AuthoredScenarioCassetteRun
     })
   )

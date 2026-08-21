@@ -13,7 +13,7 @@ const GitWorktreeRecord = Schema.Struct({
 })
 type GitWorktreeRecord = typeof GitWorktreeRecord.Type
 
-export type WorktreeListRead =
+type WorktreeListRead =
   | { readonly _tag: "Valid"; readonly records: ReadonlyArray<GitWorktreeRecord> }
   | { readonly _tag: "Malformed"; readonly detail: string }
 
@@ -74,7 +74,7 @@ type PathInspection =
   | { readonly _tag: "Present" }
   | { readonly _tag: "Unreadable"; readonly detail: string }
 
-export type PathProbe =
+type PathProbe =
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Present"; readonly result: GitCommandResult | { readonly failure: string } }
   | { readonly _tag: "Unreadable"; readonly detail: string }

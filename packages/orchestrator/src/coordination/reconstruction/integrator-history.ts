@@ -1,4 +1,6 @@
+/* eslint-disable max-lines -- Outer Integrator chronology and its causal indexes form one audited boundary. */
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
+import { HashMap, Option } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -17,30 +19,38 @@ import { type IntegratorRunHistoryIndexes, validateIntegratorRunHistoryEvent } f
 
 /** Causal indexes owned by the generic outer Integrator history. */
 export interface IntegratorHistoryIndexes extends IntegratorRunHistoryIndexes {
-  readonly integrationStarted: Map<
+  readonly integrationStarted: HashMap.HashMap<
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
   >
-  readonly targetLineageReadIntents: Map<
+  readonly targetLineageReadIntents: HashMap.HashMap<
     OperationId,
     {
       readonly operation: Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" }>
       readonly position: JournalPosition
     }
   >
-  readonly targetLineageObservations: Map<
+  readonly targetLineageObservations: HashMap.HashMap<
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "TargetLineageObserved" }>
   >
-  readonly integratorSessionFixed: Map<
+  readonly integratorSessionFixed: HashMap.HashMap<
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }>
   >
-  readonly integratorSessionsByStartedAt: Map<JournalPosition, JournalPosition>
-  readonly integratorSessionsBySessionId: Map<string, JournalPosition>
-  readonly integratorSessionsByCandidateResource: Map<string, JournalPosition>
-  readonly integratorSuccessorSessionFixed: Map<JournalPosition, IntegratorSuccessorSessionFixedEvent>
-  readonly integratorSuccessorSessionsByPredecessor: Map<string, JournalPosition>
+  readonly integratorSessionsByStartedAt: HashMap.HashMap<JournalPosition, JournalPosition>
+  readonly integratorSessionsBySessionId: HashMap.HashMap<string, JournalPosition>
+  readonly integratorSessionsByCandidateResource: HashMap.HashMap<string, JournalPosition>
+  readonly integratorSuccessorSessionFixed: HashMap.HashMap<JournalPosition, IntegratorSuccessorSessionFixedEvent>
+  readonly integratorSuccessorSessionsByPredecessor: HashMap.HashMap<string, JournalPosition>
+}
+
+const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
+  Option.getOrUndefined(HashMap.get(map, key))
+
+interface IntegratorHistoryValidation<Indexes extends IntegratorHistoryIndexes = IntegratorHistoryIndexes> {
+  readonly indexes: Indexes
+  readonly detail: string | undefined
 }
 
 type IntegratorSessionFixed = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorSessionFixed" }>
@@ -68,7 +78,7 @@ const targetLineageMatchesSession = (
   observedAt: JournalPosition,
   indexes: IntegratorHistoryIndexes
 ): boolean => {
-  const intent = indexes.targetLineageReadIntents.get(observed.operationId)
+  const intent = mapGet(indexes.targetLineageReadIntents, observed.operationId)
   if (intent === undefined) return false
   return [
     intent.position < observedAt,
@@ -105,9 +115,9 @@ const existingSessionIdentity = (
   correlation: IntegratorSessionCorrelation,
   indexes: IntegratorHistoryIndexes
 ): JournalPosition | undefined =>
-  indexes.integratorSessionsByStartedAt.get(correlation.startedAt) ??
-  indexes.integratorSessionsBySessionId.get(correlation.sessionId) ??
-  indexes.integratorSessionsByCandidateResource.get(correlation.candidateResource)
+  mapGet(indexes.integratorSessionsByStartedAt, correlation.startedAt) ??
+  mapGet(indexes.integratorSessionsBySessionId, correlation.sessionId) ??
+  mapGet(indexes.integratorSessionsByCandidateResource, correlation.candidateResource)
 
 const integratorSessionIssue = (
   event: IntegratorSessionFixed,
@@ -129,20 +139,37 @@ const invalidIntegratorSession = (
   record: JournalRecord,
   event: IntegratorSessionFixed,
   indexes: IntegratorHistoryIndexes
-): string | undefined => {
-  const started = indexes.integrationStarted.get(event.correlation.startedAt)
-  const targetLineage = indexes.targetLineageObservations.get(event.correlation.targetLineageObservedAt)
+): IntegratorHistoryValidation => {
+  const started = mapGet(indexes.integrationStarted, event.correlation.startedAt)
+  const targetLineage = mapGet(indexes.targetLineageObservations, event.correlation.targetLineageObservedAt)
   const existing = existingSessionIdentity(event.correlation, indexes)
-  setMapValue(indexes.integratorSessionFixed, record.position, event)
-  setMapValue(indexes.integratorSessionsByStartedAt, event.correlation.startedAt, record.position)
-  setMapValue(indexes.integratorSessionsBySessionId, event.correlation.sessionId, record.position)
-  setMapValue(indexes.integratorSessionsByCandidateResource, event.correlation.candidateResource, record.position)
-  return integratorSessionIssue(
-    event,
-    existing,
-    hasEarlierIntegrationStart(record, event, started),
-    hasEarlierTargetLineage(record, event, targetLineage, indexes)
-  )
+  return {
+    detail: integratorSessionIssue(
+      event,
+      existing,
+      hasEarlierIntegrationStart(record, event, started),
+      hasEarlierTargetLineage(record, event, targetLineage, indexes)
+    ),
+    indexes: {
+      ...indexes,
+      integratorSessionFixed: setMapValue(indexes.integratorSessionFixed, record.position, event),
+      integratorSessionsByStartedAt: setMapValue(
+        indexes.integratorSessionsByStartedAt,
+        event.correlation.startedAt,
+        record.position
+      ),
+      integratorSessionsBySessionId: setMapValue(
+        indexes.integratorSessionsBySessionId,
+        event.correlation.sessionId,
+        record.position
+      ),
+      integratorSessionsByCandidateResource: setMapValue(
+        indexes.integratorSessionsByCandidateResource,
+        event.correlation.candidateResource,
+        record.position
+      )
+    }
+  }
 }
 
 const successorResponsibilityMatches = (
@@ -181,10 +208,10 @@ const successorTargetLineageMatches = (
   event: IntegratorSuccessorSessionFixed,
   indexes: IntegratorHistoryIndexes
 ): boolean => {
-  const observed = indexes.targetLineageObservations.get(event.successor.targetLineageObservedAt)
+  const observed = mapGet(indexes.targetLineageObservations, event.successor.targetLineageObservedAt)
   /* v8 ignore next -- @preserve the caller computes deterministicSuccessor only after this exact observation lookup succeeds. */
   if (observed === undefined) return false
-  const intent = indexes.targetLineageReadIntents.get(observed.operationId)
+  const intent = mapGet(indexes.targetLineageReadIntents, observed.operationId)
   return (
     intent !== undefined &&
     successorTargetLineageIntentChronologyMatches(intent, event) &&
@@ -357,14 +384,17 @@ const invalidIntegratorSuccessorSession = (
   event: IntegratorSuccessorSessionFixed,
   indexes: IntegratorHistoryIndexes,
   records: ReadonlyArray<JournalRecord>
-): string | undefined => {
-  const predecessorPosition = indexes.integratorSessionsBySessionId.get(event.predecessor.sessionId)
+): IntegratorHistoryValidation => {
+  const predecessorPosition = mapGet(indexes.integratorSessionsBySessionId, event.predecessor.sessionId)
   const predecessor =
-    predecessorPosition === undefined ? undefined : indexes.integratorSessionFixed.get(predecessorPosition)
-  const existingSuccessorPosition = indexes.integratorSuccessorSessionsByPredecessor.get(event.predecessor.sessionId)
+    predecessorPosition === undefined ? undefined : mapGet(indexes.integratorSessionFixed, predecessorPosition)
+  const existingSuccessorPosition = mapGet(
+    indexes.integratorSuccessorSessionsByPredecessor,
+    event.predecessor.sessionId
+  )
   const existingSessionIdentity =
-    indexes.integratorSessionsBySessionId.get(event.successor.sessionId) ??
-    indexes.integratorSessionsByCandidateResource.get(event.successor.candidateResource)
+    mapGet(indexes.integratorSessionsBySessionId, event.successor.sessionId) ??
+    mapGet(indexes.integratorSessionsByCandidateResource, event.successor.candidateResource)
   const quarantine = records.find((candidate) => candidate.position === event.quarantineAt)
   const direction = records.find((candidate) => candidate.position === event.directionAppliedAt)
   const expectedKey = integratorSuccessorSessionFixedRecordKey(
@@ -372,7 +402,7 @@ const invalidIntegratorSuccessorSession = (
     event.quarantineAt,
     event.directionAppliedAt
   )
-  const successorLineage = indexes.targetLineageObservations.get(event.successor.targetLineageObservedAt)
+  const successorLineage = mapGet(indexes.targetLineageObservations, event.successor.targetLineageObservedAt)
   const deterministicSuccessor = deterministicSuccessorFor(event, successorLineage)
   const validPredecessor = validSuccessorPredecessorFor(predecessorPosition, predecessor, event)
   const validQuarantine = successorQuarantineIsValid(quarantine, record, event)
@@ -390,50 +420,83 @@ const invalidIntegratorSuccessorSession = (
     validDirection
   )
 
-  setMapValue(indexes.integratorSessionFixed, record.position, event)
-  setMapValue(indexes.integratorSuccessorSessionFixed, record.position, event)
-  setMapValue(indexes.integratorSuccessorSessionsByPredecessor, event.predecessor.sessionId, record.position)
-  setMapValue(indexes.integratorSessionsBySessionId, event.successor.sessionId, record.position)
-  setMapValue(indexes.integratorSessionsByCandidateResource, event.successor.candidateResource, record.position)
-  return issue
+  return {
+    detail: issue,
+    indexes: {
+      ...indexes,
+      integratorSessionFixed: setMapValue(indexes.integratorSessionFixed, record.position, event),
+      integratorSuccessorSessionFixed: setMapValue(indexes.integratorSuccessorSessionFixed, record.position, event),
+      integratorSuccessorSessionsByPredecessor: setMapValue(
+        indexes.integratorSuccessorSessionsByPredecessor,
+        event.predecessor.sessionId,
+        record.position
+      ),
+      integratorSessionsBySessionId: setMapValue(
+        indexes.integratorSessionsBySessionId,
+        event.successor.sessionId,
+        record.position
+      ),
+      integratorSessionsByCandidateResource: setMapValue(
+        indexes.integratorSessionsByCandidateResource,
+        event.successor.candidateResource,
+        record.position
+      )
+    }
+  }
 }
 
-type IntegratorHistoryValidationResult =
-  | { readonly handled: true; readonly issue: string | undefined }
-  | { readonly handled: false }
+type IntegratorHistoryValidationResult<Indexes extends IntegratorHistoryIndexes> =
+  | { readonly handled: true; readonly issue: string | undefined; readonly indexes: Indexes }
+  | { readonly handled: false; readonly indexes: Indexes }
 
-const validateNonRunIntegratorHistoryEvent = (
+const validateNonRunIntegratorHistoryEvent = <Indexes extends IntegratorHistoryIndexes>(
   record: JournalRecord,
-  indexes: IntegratorHistoryIndexes,
+  indexes: Indexes,
   records: ReadonlyArray<JournalRecord> = [record]
-): IntegratorHistoryValidationResult => {
+): IntegratorHistoryValidationResult<Indexes> => {
   const event = record.event
   if (event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage") {
-    setMapValue(indexes.targetLineageReadIntents, event.operation.operationId, {
-      operation: event.operation,
-      position: record.position
-    })
-    return { handled: true, issue: undefined }
+    return {
+      handled: true,
+      issue: undefined,
+      indexes: {
+        ...indexes,
+        targetLineageReadIntents: setMapValue(indexes.targetLineageReadIntents, event.operation.operationId, {
+          operation: event.operation,
+          position: record.position
+        })
+      }
+    }
   }
   if (event._tag === "TargetLineageObserved") {
-    setMapValue(indexes.targetLineageObservations, record.position, event)
-    return { handled: true, issue: undefined }
+    return {
+      handled: true,
+      issue: undefined,
+      indexes: {
+        ...indexes,
+        targetLineageObservations: setMapValue(indexes.targetLineageObservations, record.position, event)
+      }
+    }
   }
   if (event._tag === "IntegratorSessionFixed") {
-    return { handled: true, issue: invalidIntegratorSession(record, event, indexes) }
+    const validation = invalidIntegratorSession(record, event, indexes)
+    return { handled: true, issue: validation.detail, indexes: { ...indexes, ...validation.indexes } }
   }
   if (event._tag === "IntegratorSuccessorSessionFixed") {
-    return { handled: true, issue: invalidIntegratorSuccessorSession(record, event, indexes, records) }
+    const validation = invalidIntegratorSuccessorSession(record, event, indexes, records)
+    return { handled: true, issue: validation.detail, indexes: { ...indexes, ...validation.indexes } }
   }
-  return { handled: false }
+  return { handled: false, indexes }
 }
 
 /** Validates and indexes only the events owned by the outer Integrator protocol. */
-export const validateIntegratorHistoryEvent = (
+export const validateIntegratorHistoryEvent = <Indexes extends IntegratorHistoryIndexes>(
   record: JournalRecord,
-  indexes: IntegratorHistoryIndexes,
+  indexes: Indexes,
   records: ReadonlyArray<JournalRecord> = [record]
-): IntegratorHistoryValidationResult => {
+): IntegratorHistoryValidationResult<Indexes> => {
   const runHistory = validateIntegratorRunHistoryEvent(record, indexes, records)
-  return runHistory.handled ? runHistory : validateNonRunIntegratorHistoryEvent(record, indexes, records)
+  return runHistory.handled
+    ? { handled: true, issue: runHistory.issue, indexes: runHistory.indexes }
+    : validateNonRunIntegratorHistoryEvent(record, indexes, records)
 }

@@ -1,7 +1,7 @@
-/* eslint-disable functional/immutable-data -- Chronological validation owns one private per-fold causal index. */
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
+import { HashMap, HashSet, Option } from "effect"
 import { integratorRunCandidateRecordKeyPrefix } from "../../workflow-journal/record-key.js"
 import {
   integratorCandidateHasExactParents,
@@ -15,7 +15,7 @@ import {
   type TargetPromotionRequestId
 } from "../../workflow/protocols/target-promotion/events.js"
 
-type IntegratorRunQualifiedObservation = ReadonlyMap<
+type IntegratorRunQualifiedObservation = HashMap.HashMap<
   string,
   {
     readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunCandidateGitObserved" }>
@@ -29,22 +29,25 @@ type QualifiedCandidateObservation = Extract<
 >
 
 export interface TargetPromotionHistoryIndexes {
-  readonly intents: Map<
+  readonly intents: HashMap.HashMap<
     TargetPromotionRequestId,
     Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionIntended" }>
   >
-  readonly attempts: Map<
+  readonly attempts: HashMap.HashMap<
     TargetPromotionRequestId,
-    Map<number, Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>>
+    HashMap.HashMap<number, Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>>
   >
-  readonly terminals: Set<TargetPromotionRequestId>
+  readonly terminals: HashSet.HashSet<TargetPromotionRequestId>
 }
 /** Creates one explicit per-history causal index; it is never authority or persisted state. */
 export const makeTargetPromotionHistoryIndexes = (): TargetPromotionHistoryIndexes => ({
-  attempts: new Map(),
-  intents: new Map(),
-  terminals: new Set()
+  attempts: HashMap.empty(),
+  intents: HashMap.empty(),
+  terminals: HashSet.empty()
 })
+
+const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
+  Option.getOrUndefined(HashMap.get(map, key))
 
 const exactQualifiedCandidatePrior = (
   record: JournalRecord,
@@ -52,7 +55,7 @@ const exactQualifiedCandidatePrior = (
   observations: IntegratorRunQualifiedObservation
 ): boolean => {
   const key = integratorRunCandidateRecordKeyPrefix(candidate.run, candidate.candidateText)
-  const observed = observations.get(key)
+  const observed = mapGet(observations, key)
   if (observed === undefined) return false
   if (observed.position !== candidate.qualifiedAt) return false
   if (observed.position >= record.position) return false
@@ -79,34 +82,30 @@ const exactQualifiedCandidateObservationFor = (
 }
 
 // The intent binds only the durable Integrator Git qualification; no candidate-agent or verification event is an input.
+interface TargetPromotionHistoryValidation {
+  readonly indexes: TargetPromotionHistoryIndexes
+  readonly detail: string | undefined
+}
+
 const invalidTargetPromotionIntent = (
   record: JournalRecord,
   event: Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionIntended" }>,
   indexes: TargetPromotionHistoryIndexes,
   integratorObservations: IntegratorRunQualifiedObservation
-): string | undefined => {
+): TargetPromotionHistoryValidation => {
   const correlation = event.correlation
   const candidate = correlation.qualifiedCandidate
-  const duplicate = indexes.intents.has(correlation.requestId)
-  indexes.intents.set(correlation.requestId, event)
+  const duplicate = HashMap.has(indexes.intents, correlation.requestId)
   const exactCandidate =
     !duplicate &&
     correlation.requestId === targetPromotionRequestIdForCandidate(candidate) &&
     exactQualifiedCandidatePrior(record, candidate, integratorObservations)
-  return exactCandidate
-    ? undefined
-    : `target promotion intent has no exact earlier Integrator Git qualification for request ${correlation.requestId}`
-}
-
-const promotionAttemptsFor = (
-  requestId: TargetPromotionRequestId,
-  indexes: TargetPromotionHistoryIndexes
-): Map<number, Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>> => {
-  const existing = indexes.attempts.get(requestId)
-  if (existing !== undefined) return existing
-  const created = new Map<number, Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>>()
-  indexes.attempts.set(requestId, created)
-  return created
+  return {
+    detail: exactCandidate
+      ? undefined
+      : `target promotion intent has no exact earlier Integrator Git qualification for request ${correlation.requestId}`,
+    indexes: { ...indexes, intents: HashMap.set(indexes.intents, correlation.requestId, event) }
+  }
 }
 
 type PromotionAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>
@@ -126,16 +125,16 @@ const exactPromotionAttemptReason = (event: PromotionAttempt, ordinal: number): 
 const validPromotionAttempt = (
   event: PromotionAttempt,
   intent: Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionIntended" }> | undefined,
-  attempts: ReadonlyMap<number, PromotionAttempt>,
+  attempts: HashMap.HashMap<number, PromotionAttempt>,
   terminalExists: boolean
 ): boolean => {
   const ordinal = Number(event.attemptOrdinal)
   return [
     intent !== undefined && targetPromotionCorrelationEquals(intent.correlation, event.correlation),
     !terminalExists,
-    ordinal === attempts.size + 1,
+    ordinal === HashMap.size(attempts) + 1,
     ordinal <= targetPromotionAttemptLimit,
-    !attempts.has(ordinal),
+    !HashMap.has(attempts, ordinal),
     exactPromotionAttemptReason(event, ordinal)
   ].every(Boolean)
 }
@@ -143,17 +142,19 @@ const validPromotionAttempt = (
 const invalidTargetPromotionAttempt = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>,
   indexes: TargetPromotionHistoryIndexes
-): string | undefined => {
+): TargetPromotionHistoryValidation => {
   const requestId = event.correlation.requestId
-  const intent = indexes.intents.get(requestId)
-  const attempts = promotionAttemptsFor(requestId, indexes)
+  const intent = mapGet(indexes.intents, requestId)
+  const attempts = mapGet(indexes.attempts, requestId) ?? HashMap.empty<number, PromotionAttempt>()
   const ordinal = Number(event.attemptOrdinal)
-  const expectedOrdinal = attempts.size + 1
-  const valid = validPromotionAttempt(event, intent, attempts, indexes.terminals.has(requestId))
-  attempts.set(ordinal, event)
-  return valid
-    ? undefined
-    : `target promotion attempt for request ${requestId} expected exact sequential ordinal ${expectedOrdinal} at or below ${targetPromotionAttemptLimit}`
+  const expectedOrdinal = HashMap.size(attempts) + 1
+  const valid = validPromotionAttempt(event, intent, attempts, HashSet.has(indexes.terminals, requestId))
+  return {
+    detail: valid
+      ? undefined
+      : `target promotion attempt for request ${requestId} expected exact sequential ordinal ${expectedOrdinal} at or below ${targetPromotionAttemptLimit}`,
+    indexes: { ...indexes, attempts: HashMap.set(indexes.attempts, requestId, HashMap.set(attempts, ordinal, event)) }
+  }
 }
 
 type PromotionSuccess = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionObservedSuccess" }>
@@ -197,37 +198,38 @@ const validTargetPromotionTerminalObservation = (event: PromotionTerminal): bool
 
 const terminalBasisAttempt = (
   event: PromotionTerminal,
-  attempts: ReadonlyMap<number, PromotionAttempt> | undefined
+  attempts: HashMap.HashMap<number, PromotionAttempt> | undefined
 ): PromotionAttempt | undefined => {
-  if (event._tag === "TargetPromotionNonConvergence") return attempts?.get(Number(event.attemptOrdinal))
-  if (event.basis._tag === "AfterAttempt") return attempts?.get(Number(event.basis.attemptOrdinal))
+  if (event._tag === "TargetPromotionNonConvergence")
+    return attempts === undefined ? undefined : mapGet(attempts, Number(event.attemptOrdinal))
+  if (event.basis._tag === "AfterAttempt")
+    return attempts === undefined ? undefined : mapGet(attempts, Number(event.basis.attemptOrdinal))
   return undefined
 }
 
 const terminalBasisIsCausal = (
   event: PromotionTerminal,
   latestOrdinal: number,
-  attempts: ReadonlyMap<number, PromotionAttempt> | undefined
+  attempts: HashMap.HashMap<number, PromotionAttempt> | undefined
 ): boolean => {
   if (event._tag === "TargetPromotionNonConvergence") {
     const ordinal = Number(event.attemptOrdinal)
-    return ordinal === latestOrdinal && attempts?.has(ordinal) === true
+    return ordinal === latestOrdinal && attempts !== undefined && HashMap.has(attempts, ordinal)
   }
   if (event.basis._tag === "BeforeFirstAttempt") return latestOrdinal === 0
   const ordinal = Number(event.basis.attemptOrdinal)
-  return ordinal === latestOrdinal && attempts?.has(ordinal) === true
+  return ordinal === latestOrdinal && attempts !== undefined && HashMap.has(attempts, ordinal)
 }
 
 const invalidTargetPromotionTerminal = (
   event: PromotionTerminal,
   indexes: TargetPromotionHistoryIndexes
-): string | undefined => {
+): TargetPromotionHistoryValidation => {
   const requestId = event.correlation.requestId
-  const intent = indexes.intents.get(requestId)
-  const attempts = indexes.attempts.get(requestId)
-  const latestOrdinal = attempts?.size ?? 0
-  const duplicate = indexes.terminals.has(requestId)
-  indexes.terminals.add(requestId)
+  const intent = mapGet(indexes.intents, requestId)
+  const attempts = mapGet(indexes.attempts, requestId)
+  const latestOrdinal = attempts === undefined ? 0 : HashMap.size(attempts)
+  const duplicate = HashSet.has(indexes.terminals, requestId)
   const basisAttempt = terminalBasisAttempt(event, attempts)
   const valid = [
     !duplicate,
@@ -236,7 +238,12 @@ const invalidTargetPromotionTerminal = (
     terminalBasisIsCausal(event, latestOrdinal, attempts),
     validTargetPromotionTerminalObservation(event)
   ].every(Boolean)
-  return valid ? undefined : `target promotion terminal has no exact latest unresolved attempt for request ${requestId}`
+  return {
+    detail: valid
+      ? undefined
+      : `target promotion terminal has no exact latest unresolved attempt for request ${requestId}`,
+    indexes: { ...indexes, terminals: HashSet.add(indexes.terminals, requestId) }
+  }
 }
 
 /** Validates one promotion event against the earlier Integrator Git qualification and CAS chronology. */
@@ -244,7 +251,7 @@ export const invalidTargetPromotionHistory = (
   record: JournalRecord,
   indexes: TargetPromotionHistoryIndexes,
   integratorObservations: IntegratorRunQualifiedObservation
-): string | undefined => {
+): TargetPromotionHistoryValidation => {
   const event = record.event
   if (event._tag === "TargetPromotionIntended") {
     return invalidTargetPromotionIntent(record, event, indexes, integratorObservations)
@@ -257,5 +264,5 @@ export const invalidTargetPromotionHistory = (
   ) {
     return invalidTargetPromotionTerminal(event, indexes)
   }
-  return undefined
+  return { detail: undefined, indexes }
 }

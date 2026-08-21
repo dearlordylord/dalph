@@ -27,6 +27,7 @@
     "check:complexity:prune": "node scripts/check-oxlint-complexity.mjs --prune",
     "check:duplicates": "jscpd .",
     "check:lab": "pnpm --filter @dalph/reducer-lab-prototype check",
+    "check:lab:browser": "pnpm --filter @dalph/reducer-lab-prototype check:browser",
     "check:package-boundary": "node scripts/check-package-boundaries.mjs",
     "check:quint": "node scripts/check-quint-models.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",

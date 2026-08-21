@@ -76,12 +76,17 @@ pnpm --filter @dalph/reducer-lab-prototype smoke
 pnpm --filter @dalph/reducer-lab-prototype build
 ```
 
-Drive the running application through real Chromium (install the Playwright
-browser once with `pnpm --filter @dalph/reducer-lab-prototype exec playwright install chromium`):
+Install the pinned Chromium browser and its system libraries once (the system
+package step requires root or passwordless sudo on Debian/Ubuntu):
 
 ```sh
-REDUCER_LAB_URL=http://determined_johnson.orb.local:4173/ \
-  pnpm --filter @dalph/reducer-lab-prototype browser-smoke
+pnpm --dir prototypes/reducer-lab browser:install
+```
+
+Then drive an ephemeral, self-hosted Lab through real Chromium:
+
+```sh
+pnpm check:lab:browser
 ```
 
 The accepted chronology and scenario-to-test mapping are in

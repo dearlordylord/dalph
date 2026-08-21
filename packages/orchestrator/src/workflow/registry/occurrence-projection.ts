@@ -31,8 +31,7 @@ import {
   AttemptChoice,
   AttemptChoiceRequestId,
   AttemptChoiceSubject,
-  sameAttemptChoiceRequestId,
-  sameAttemptChoiceSubject
+  attemptChoiceSubjectKey
 } from "../protocols/attempt-choice/events.js"
 import {
   AttemptRestartAuthorityReadFailure,
@@ -42,9 +41,9 @@ import {
 import {
   IntegrationResponsibilityBegan,
   IntegrationStarted,
-  invalidIntegrationOccurrenceRelationship,
   projectIntegrationOccurrence
 } from "./integration-occurrence.js"
+import { integrationResponsibilityEquivalence } from "../protocols/integration-admission/responsibility.js"
 export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integration-occurrence.js"
 export { WorkflowActor } from "./actor.js"
 
@@ -316,6 +315,35 @@ const isOriginatingGitReadFor =
     occurrence.operation.operationId === observation.originatingActionOperationId &&
     occurrence.recordedAt < observation.recordedAt
 
+/**
+ * The exact choice identity used by Restart-dependent occurrences. A choice
+ * is unique only for its request and immutable attempt subject; the nonce by
+ * itself is not enough when malformed history crosses Run or attempt bounds.
+ */
+const restartChoiceKey = (occurrence: {
+  readonly requestId: AttemptChoiceRequestId
+  readonly subject: AttemptChoiceSubject
+}): string =>
+  JSON.stringify([occurrence.requestId.runId, occurrence.requestId.nonce, attemptChoiceSubjectKey(occurrence.subject)])
+
+/** The relationship facts needed to validate one projected occurrence once. */
+type OccurrenceRelationshipIndexes = {
+  /** Every exact Restart application, retained with its journal position so a later occurrence cannot satisfy an earlier one. */
+  readonly appliedRestartChoices: Map<string, Array<JournalPosition>>
+  readonly executorResponsibilities: Map<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>
+  readonly gitReads: Map<string, IndexedRelationship<GitReadInitiated>>
+  readonly integrationResponsibilities: Map<JournalPosition, IntegrationResponsibilityBegan>
+  readonly trackerActions: Map<string, IndexedRelationship<TaskTrackerReadInitiated>>
+}
+
+const emptyOccurrenceRelationshipIndexes = (): OccurrenceRelationshipIndexes => ({
+  appliedRestartChoices: new Map(),
+  executorResponsibilities: new Map(),
+  gitReads: new Map(),
+  integrationResponsibilities: new Map(),
+  trackerActions: new Map()
+})
+
 const ambiguousRelationship = Symbol("ambiguous workflow-occurrence relationship")
 type IndexedRelationship<A> = A | typeof ambiguousRelationship
 
@@ -371,36 +399,27 @@ const exactTrackerReadForRestartFailure = (
   return restartAuthorityReadOperationMatches(action.operation, occurrence.failure, occurrence.subject)
 }
 
-const isExactEarlierGitReadForRestartFailure =
-  (occurrence: AttemptRestartAuthorityReadFailed) =>
-  (candidate: WorkflowOccurrence): candidate is GitReadInitiated =>
-    candidate._tag === "GitReadInitiated" &&
-    candidate.runId === occurrence.runId &&
-    candidate.operation.operationId === occurrence.originatingActionOperationId &&
-    candidate.recordedAt < occurrence.recordedAt
-
 const exactGitReadForRestartFailure = (
-  occurrences: ReadonlyArray<WorkflowOccurrence>,
+  indexes: OccurrenceRelationshipIndexes,
   occurrence: AttemptRestartAuthorityReadFailed
 ): boolean => {
   if (occurrence.failure._tag === "AttemptRestartTaskFactsReadFailure") return false
-  const actions = occurrences.filter(isExactEarlierGitReadForRestartFailure(occurrence))
-  if (actions.length !== 1) return false
-  const operation = actions[0]?.operation
-  /* v8 ignore next -- @preserve A schema-valid GitReadInitiated occurrence always has operation when the exact-one filter succeeds. */
-  if (operation === undefined) return false
-  return restartAuthorityReadOperationMatches(operation, occurrence.failure, occurrence.subject)
+  const key = relationshipKey(occurrence.runId, occurrence.originatingActionOperationId)
+  const action = indexes.gitReads.get(key)
+  if (action === undefined || action === ambiguousRelationship || action.recordedAt >= occurrence.recordedAt) {
+    return false
+  }
+  return restartAuthorityReadOperationMatches(action.operation, occurrence.failure, occurrence.subject)
 }
 
 const restartFailureHasExactEarlierRead = (
-  occurrences: ReadonlyArray<WorkflowOccurrence>,
-  trackerActions: ReadonlyMap<string, IndexedRelationship<TaskTrackerReadInitiated>>,
+  indexes: OccurrenceRelationshipIndexes,
   occurrence: AttemptRestartAuthorityReadFailed
 ): boolean =>
   occurrence.requestId.runId === occurrence.runId &&
   occurrence.subject.plannedAttempt.runId === occurrence.runId &&
-  (exactTrackerReadForRestartFailure(trackerActions, occurrence) ||
-    exactGitReadForRestartFailure(occurrences, occurrence))
+  (exactTrackerReadForRestartFailure(indexes.trackerActions, occurrence) ||
+    exactGitReadForRestartFailure(indexes, occurrence))
 
 type RestartDependentOccurrence = AttemptRestartAuthorityReadFailed | PlannedAttemptReplaced
 
@@ -408,25 +427,19 @@ const isRestartDependentOccurrence = (occurrence: WorkflowOccurrence): occurrenc
   occurrence._tag === "AttemptRestartAuthorityReadFailed" || occurrence._tag === "PlannedAttemptReplaced"
 
 const restartOccurrenceHasExactAppliedChoice = (
-  occurrences: ReadonlyArray<WorkflowOccurrence>,
+  indexes: OccurrenceRelationshipIndexes,
   occurrence: RestartDependentOccurrence
-): boolean =>
-  occurrences.filter(
-    (candidate) =>
-      candidate._tag === "AppliedAttemptChoice" &&
-      candidate.choice === "RestartTaskImplementation" &&
-      candidate.recordedAt < occurrence.recordedAt &&
-      sameAttemptChoiceRequestId(candidate.requestId, occurrence.requestId) &&
-      sameAttemptChoiceSubject(candidate.subject, occurrence.subject)
-  ).length === 1
+): boolean => {
+  const applications = indexes.appliedRestartChoices.get(restartChoiceKey(occurrence)) ?? []
+  return applications.filter((recordedAt) => recordedAt < occurrence.recordedAt).length === 1
+}
 
 const invalidRestartOccurrenceRelationship = (
-  occurrences: ReadonlyArray<WorkflowOccurrence>,
-  trackerActions: ReadonlyMap<string, IndexedRelationship<TaskTrackerReadInitiated>>,
+  indexes: OccurrenceRelationshipIndexes,
   occurrence: RestartDependentOccurrence,
   index: number
 ) => {
-  if (!restartOccurrenceHasExactAppliedChoice(occurrences, occurrence)) {
+  if (!restartOccurrenceHasExactAppliedChoice(indexes, occurrence)) {
     const subject =
       occurrence._tag === "AttemptRestartAuthorityReadFailed"
         ? "Restart authority failure"
@@ -437,7 +450,7 @@ const invalidRestartOccurrenceRelationship = (
     }
   }
   if (occurrence._tag === "PlannedAttemptReplaced") return undefined
-  return !restartFailureHasExactEarlierRead(occurrences, trackerActions, occurrence)
+  return !restartFailureHasExactEarlierRead(indexes, occurrence)
     ? {
         issue: `Restart authority failure must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
         path: ["occurrences", index]
@@ -445,56 +458,136 @@ const invalidRestartOccurrenceRelationship = (
     : undefined
 }
 
-const invalidOutcomeRelationship = (
-  projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> },
-  occurrence: WorkflowOccurrence,
-  index: number,
-  trackerActions: ReadonlyMap<string, IndexedRelationship<TaskTrackerReadInitiated>>,
-  executorResponsibilities: ReadonlyMap<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>
+const invalidIntegrationStartRelationship = (
+  indexes: OccurrenceRelationshipIndexes,
+  occurrence: IntegrationStarted,
+  index: number
 ) => {
-  if (occurrence._tag === "TaskTrackerFactsObserved") {
-    return invalidTrackerRelationship(trackerActions, occurrence, index)
-  }
-  if (isRestartDependentOccurrence(occurrence)) {
-    return invalidRestartOccurrenceRelationship(projection.occurrences, trackerActions, occurrence, index)
-  }
-  if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
-    return invalidExecutorRelationship(executorResponsibilities, occurrence, index)
-  }
-  if (occurrence._tag === "PlannedAttemptWorktreeObserved" || occurrence._tag === "TargetLineageObserved") {
-    const action = projection.occurrences.find(isOriginatingGitReadFor(occurrence))
-    return action === undefined
-      ? {
-          issue: `Git worktree observation must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
-          path: ["occurrences", index]
-        }
-      : undefined
-  }
-  return invalidIntegrationOccurrenceRelationship(projection.occurrences, occurrence, index)
+  const responsibility = indexes.integrationResponsibilities.get(occurrence.responsibilityBeganAt)
+  const exact =
+    responsibility !== undefined &&
+    responsibility.runId === occurrence.runId &&
+    responsibility.recordedAt < occurrence.recordedAt &&
+    integrationResponsibilityEquivalence(responsibility, occurrence)
+  return exact
+    ? undefined
+    : {
+        issue: `integration start must have one exact earlier responsibility at ${occurrence.responsibilityBeganAt}`,
+        path: ["occurrences", index]
+      }
 }
 
+const isGitObservationOutcome = (
+  occurrence: WorkflowOccurrence
+): occurrence is PlannedAttemptWorktreeObserved | TargetLineageObserved =>
+  occurrence._tag === "PlannedAttemptWorktreeObserved" || occurrence._tag === "TargetLineageObserved"
+
+const invalidGitObservationRelationship = (
+  indexes: OccurrenceRelationshipIndexes,
+  occurrence: PlannedAttemptWorktreeObserved | TargetLineageObserved,
+  index: number
+) => {
+  const action = indexes.gitReads.get(relationshipKey(occurrence.runId, occurrence.originatingActionOperationId))
+  return action !== undefined && action !== ambiguousRelationship && isOriginatingGitReadFor(occurrence)(action)
+    ? undefined
+    : {
+        issue: `Git worktree observation must have one exact earlier initiating read action ${occurrence.originatingActionOperationId}`,
+        path: ["occurrences", index]
+      }
+}
+
+const invalidNonRestartOutcomeRelationship = (
+  occurrence: WorkflowOccurrence,
+  index: number,
+  indexes: OccurrenceRelationshipIndexes
+) => {
+  if (occurrence._tag === "TaskTrackerFactsObserved") {
+    return invalidTrackerRelationship(indexes.trackerActions, occurrence, index)
+  }
+  if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
+    return invalidExecutorRelationship(indexes.executorResponsibilities, occurrence, index)
+  }
+  if (isGitObservationOutcome(occurrence)) return invalidGitObservationRelationship(indexes, occurrence, index)
+  return occurrence._tag === "IntegrationStarted"
+    ? invalidIntegrationStartRelationship(indexes, occurrence, index)
+    : undefined
+}
+
+const rememberTrackerAction = (occurrence: WorkflowOccurrence, indexes: OccurrenceRelationshipIndexes): boolean => {
+  if (occurrence._tag !== "TaskTrackerReadInitiated") return false
+  rememberUniqueRelationship(
+    indexes.trackerActions,
+    relationshipKey(occurrence.runId, occurrence.operation.operationId),
+    occurrence
+  )
+  return true
+}
+
+const rememberExecutorResponsibility = (
+  occurrence: WorkflowOccurrence,
+  indexes: OccurrenceRelationshipIndexes
+): boolean => {
+  if (occurrence._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return false
+  rememberUniqueRelationship(
+    indexes.executorResponsibilities,
+    relationshipKey(occurrence.runId, occurrence.plannedAttempt.attemptId),
+    occurrence
+  )
+  return true
+}
+
+const rememberRestartChoice = (occurrence: WorkflowOccurrence, indexes: OccurrenceRelationshipIndexes): boolean => {
+  if (occurrence._tag !== "AppliedAttemptChoice" || occurrence.choice !== "RestartTaskImplementation") return false
+  const key = restartChoiceKey(occurrence)
+  const applications = indexes.appliedRestartChoices.get(key) ?? []
+  applications.push(occurrence.recordedAt)
+  indexes.appliedRestartChoices.set(key, applications)
+  return true
+}
+
+const rememberGitRead = (occurrence: WorkflowOccurrence, indexes: OccurrenceRelationshipIndexes): boolean => {
+  if (occurrence._tag !== "GitReadInitiated") return false
+  rememberUniqueRelationship(
+    indexes.gitReads,
+    relationshipKey(occurrence.runId, occurrence.operation.operationId),
+    occurrence
+  )
+  return true
+}
+
+const rememberIntegrationResponsibility = (
+  occurrence: WorkflowOccurrence,
+  indexes: OccurrenceRelationshipIndexes
+): boolean => {
+  if (occurrence._tag !== "IntegrationResponsibilityBegan") return false
+  if (!indexes.integrationResponsibilities.has(occurrence.recordedAt)) {
+    indexes.integrationResponsibilities.set(occurrence.recordedAt, occurrence)
+  }
+  return true
+}
+
+const rememberOriginatingAction = (occurrence: WorkflowOccurrence, indexes: OccurrenceRelationshipIndexes): boolean =>
+  rememberTrackerAction(occurrence, indexes) ||
+  rememberExecutorResponsibility(occurrence, indexes) ||
+  rememberRestartChoice(occurrence, indexes) ||
+  rememberGitRead(occurrence, indexes) ||
+  rememberIntegrationResponsibility(occurrence, indexes)
+
+const invalidOutcomeRelationship = (
+  occurrence: WorkflowOccurrence,
+  index: number,
+  indexes: OccurrenceRelationshipIndexes
+) =>
+  isRestartDependentOccurrence(occurrence)
+    ? invalidRestartOccurrenceRelationship(indexes, occurrence, index)
+    : invalidNonRestartOutcomeRelationship(occurrence, index, indexes)
+
 const invalidOriginatingAction = (projection: { readonly occurrences: ReadonlyArray<WorkflowOccurrence> }) => {
-  const trackerActions = new Map<string, IndexedRelationship<TaskTrackerReadInitiated>>()
-  const executorResponsibilities = new Map<string, IndexedRelationship<PlannedAttemptExecutorWorkResponsibilityBegan>>()
+  const indexes = emptyOccurrenceRelationshipIndexes()
 
   for (const [index, occurrence] of projection.occurrences.entries()) {
-    if (occurrence._tag === "TaskTrackerReadInitiated") {
-      rememberUniqueRelationship(
-        trackerActions,
-        relationshipKey(occurrence.runId, occurrence.operation.operationId),
-        occurrence
-      )
-      continue
-    }
-    if (occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-      rememberUniqueRelationship(
-        executorResponsibilities,
-        relationshipKey(occurrence.runId, occurrence.plannedAttempt.attemptId),
-        occurrence
-      )
-      continue
-    }
-    const invalid = invalidOutcomeRelationship(projection, occurrence, index, trackerActions, executorResponsibilities)
+    if (rememberOriginatingAction(occurrence, indexes)) continue
+    const invalid = invalidOutcomeRelationship(occurrence, index, indexes)
     if (invalid !== undefined) return invalid
   }
   return undefined
@@ -776,6 +869,13 @@ type ProjectionError =
   | GitOutcomeWithoutReadIntent
   | ExecutorReportWithoutResponsibilityBegan
 
+/**
+ * A successful projection is immutable for the exact record-array object that
+ * produced it. This cache is deliberately process-local: a replacement
+ * process receives a new decoded array and must project durable rows again.
+ */
+const projectionsByRecords = new WeakMap<ReadonlyArray<JournalRecord>, WorkflowOccurrenceProjection>()
+
 const projectTrackerReadIntent = (
   record: JournalRecord,
   event: TrackerReadIntentJournalEvent,
@@ -1016,6 +1116,9 @@ const projectJournalRecord = (
 export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project")(function* (
   records: ReadonlyArray<JournalRecord>
 ) {
+  const cached = projectionsByRecords.get(records)
+  if (cached !== undefined) return cached
+
   const occurrences: Array<WorkflowOccurrence> = []
   const context: ProjectionContext = {
     executorResponsibilities: new Set<string>(),
@@ -1029,10 +1132,12 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
     if (occurrence !== undefined) occurrences.push(occurrence)
   }
 
-  return yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+  const projection = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
     occurrences,
     version: workflowOccurrenceProjectionVersion
   })
+  projectionsByRecords.set(records, projection)
+  return projection
 })
 
 /** Follows only the exact operation relationship carried by the observation. */

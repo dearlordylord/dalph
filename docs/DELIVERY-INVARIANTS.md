@@ -156,9 +156,10 @@ requires `durableCleanupCalls == 0`. Issue #69 is covered by focused property
 tests, maintained authored/recorded cassettes, and memory/SQLite P0-P6 replay;
 those are positive evidence, not Quint coverage.
 
-D37 resolves a retained execution without stating what becomes of its worktree,
-and no invariant here makes disposal obligatory. A Run may therefore terminate
-under D35 leaving durable state that nothing owns.
+D37 resolves a retained execution without making destructive disposal
+obligatory. Issue #102 makes cancellation preservation the V1 default: a Run
+may terminate under D35 after durable relinquishment while its recoverable
+worktree remains. Deletion still requires a separate exact cleanup disposition.
 
 ## Locality
 
@@ -329,14 +330,21 @@ unrelated responsibility. `runActivation.finalityReadRequiresQuiescence` and
 single later read for both newly established and reconstructed Runs.
 
 **D35 A Run does not terminate while it owes work.** Termination requires a
-later accepted complete tracker observation proving the target settled, no
-outstanding obligation, no executable action, and no live action owner. An
-unsettled retained responsibility keeps the Run active.
+later accepted complete tracker observation supporting one accepted terminal
+classification, no outstanding obligation, no executable action, and no live
+action owner. `Completed` requires every task in the current Run task graph to be
+tracker-confirmed successful. `Blocked` requires conclusive tracker facts that
+make success of the current graph impossible and no applied cancellation.
+`Cancelled` requires an applied Operator cancellation and completed
+cancellation settlement. All-success takes precedence over an applied
+cancellation. An unsettled retained responsibility keeps the Run active for
+every disposition.
 → `integrationFinality` proves that an empty frontier cannot settle its
 retained task responsibility.
 `runActivation.terminationRequiresNoRetainedResponsibilityOrPosition` checks
 whole-Run termination only after both durable retained attempts and their
-independently reconstructed positions are gone.
+independently reconstructed positions are gone. The `Blocked` and `Cancelled`
+clauses are accepted in issue #102 and are not yet implemented.
 
 **D36 No busy loop on unchanged facts.** One activation performs at most one
 post-quiescence tracker reconfirmation. It runs any actions introduced by that
@@ -349,16 +357,18 @@ existing unfinished history.
 deterministic parity scenario and production-backed conformance adapter enter
 the same bounded path after both a new beginning and existing history.
 
-**D37 Every Run is convergeable.** *Not implemented: no Operator resolution
-exists for a task closed without success or removed from the target closure, so
-a Run in that state cannot currently terminate.* Under the same hypotheses as
-D33, every retained obligation has an Operator resolution that settles it, so no Run is
-left permanently unable to terminate. This binds the cases where no outside
-event clears the constraint on its own: a task closed without success, and a
-task removed from the target closure. The minimum resolution is discarding the
-retained execution. D16 still holds — discarding the execution preserves its
-worktree and work in progress.
-→ `—` no model has Operator resolutions.
+**D37 Every Run is convergeable.** *The issue #102 resolution is accepted but
+not implemented.* Under the same hypotheses as D33, every retained obligation
+can reach an accepted settlement or durable relinquishment, so no Run is left
+permanently unable to terminate. A fresh complete Run task graph that
+conclusively makes success impossible permits automatic `Blocked` after all
+responsibilities settle; it does not require an Operator to authorize that
+classification. A task that leaves a later graph no longer contributes to
+`Completed` after its retained responsibility settles or is durably
+relinquished. D16 still holds: relinquishment preserves its worktree and work
+in progress unless a separate exact cleanup disposition authorizes otherwise.
+→ `—` issue #102 identifies the required `runActivation` model and executable
+test seams; Phase 2 has not implemented them.
 
 ### The progress hypotheses
 

@@ -1,6 +1,7 @@
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
+import { HashMap, Option } from "effect"
 import {
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
@@ -37,22 +38,30 @@ type PositionedIntegratorEvent<Event> = { readonly event: Event; readonly positi
 
 /** Causal indexes for run-bound Integrator events. */
 export interface IntegratorRunHistoryIndexes {
-  readonly integratorRunStarted: Map<string, PositionedIntegratorEvent<IntegratorRunStarted>>
-  readonly integratorRunResults: Map<string, PositionedIntegratorEvent<IntegratorRunResultRecorded>>
-  readonly integratorRunCandidateGitReadIntents: Map<
+  readonly integratorRunStarted: HashMap.HashMap<string, PositionedIntegratorEvent<IntegratorRunStarted>>
+  readonly integratorRunResults: HashMap.HashMap<string, PositionedIntegratorEvent<IntegratorRunResultRecorded>>
+  readonly integratorRunCandidateGitReadIntents: HashMap.HashMap<
     string,
     PositionedIntegratorEvent<IntegratorRunCandidateGitReadIntended>
   >
-  readonly integratorRunCandidateGitObservations: Map<
+  readonly integratorRunCandidateGitObservations: HashMap.HashMap<
     string,
     PositionedIntegratorEvent<IntegratorRunCandidateGitObserved>
   >
 }
 
 interface IntegratorRunHistoryValidationIndexes extends IntegratorRunHistoryIndexes {
-  readonly integratorSessionFixed: Map<JournalPosition, IntegratorSessionFixed>
-  readonly integratorSessionsByStartedAt: Map<JournalPosition, JournalPosition>
-  readonly integratorSessionsBySessionId: Map<string, JournalPosition>
+  readonly integratorSessionFixed: HashMap.HashMap<JournalPosition, IntegratorSessionFixed>
+  readonly integratorSessionsByStartedAt: HashMap.HashMap<JournalPosition, JournalPosition>
+  readonly integratorSessionsBySessionId: HashMap.HashMap<string, JournalPosition>
+}
+
+const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
+  Option.getOrUndefined(HashMap.get(map, key))
+
+interface IntegratorRunHistoryValidation<Indexes extends IntegratorRunHistoryIndexes> {
+  readonly indexes: Indexes
+  readonly detail: string | undefined
 }
 
 const integratorRunKey = integratorRunRecordKeyPrefix
@@ -62,8 +71,8 @@ const exactSessionForCorrelation = (
   record: JournalRecord,
   indexes: IntegratorRunHistoryValidationIndexes
 ): boolean => {
-  const sessionPosition = indexes.integratorSessionsBySessionId.get(correlation.sessionId)
-  const session = sessionPosition === undefined ? undefined : indexes.integratorSessionFixed.get(sessionPosition)
+  const sessionPosition = mapGet(indexes.integratorSessionsBySessionId, correlation.sessionId)
+  const session = sessionPosition === undefined ? undefined : mapGet(indexes.integratorSessionFixed, sessionPosition)
   const sessionCorrelation =
     session === undefined
       ? undefined
@@ -92,8 +101,8 @@ const runRecordsAreConclusive = (
   record: JournalRecord,
   indexes: IntegratorRunHistoryValidationIndexes
 ): boolean => {
-  const previousStart = indexes.integratorRunStarted.get(integratorRunKey(previous))
-  const previousResult = indexes.integratorRunResults.get(integratorRunKey(previous))
+  const previousStart = mapGet(indexes.integratorRunStarted, integratorRunKey(previous))
+  const previousResult = mapGet(indexes.integratorRunResults, integratorRunKey(previous))
   return (
     previousStart !== undefined &&
     previousResult !== undefined &&
@@ -147,15 +156,20 @@ const invalidIntegratorRunStarted = (
   event: IntegratorRunStarted,
   indexes: IntegratorRunHistoryValidationIndexes,
   records: ReadonlyArray<JournalRecord>
-): string | undefined => {
+): IntegratorRunHistoryValidation<IntegratorRunHistoryValidationIndexes> => {
   const key = integratorRunKey(event.run)
-  const existing = indexes.integratorRunStarted.get(key)
+  const existing = mapGet(indexes.integratorRunStarted, key)
   const session = exactSessionForCorrelation(event.run.session, record, indexes)
   const previous = previousIntegratorRun(event.run)
   const previousConclusive = previousRunIsConclusive(previous, record, indexes)
   const authorizationIssue = integratorRunAuthorizationIssue(event, records, record)
-  setMapValue(indexes.integratorRunStarted, key, { event, position: record.position })
-  return invalidIntegratorRunStartedRecord(record, event, existing, session, authorizationIssue, previousConclusive)
+  return {
+    detail: invalidIntegratorRunStartedRecord(record, event, existing, session, authorizationIssue, previousConclusive),
+    indexes: {
+      ...indexes,
+      integratorRunStarted: setMapValue(indexes.integratorRunStarted, key, { event, position: record.position })
+    }
+  }
 }
 
 const exactIntegratorRunStart = (
@@ -163,7 +177,7 @@ const exactIntegratorRunStart = (
   record: JournalRecord,
   indexes: IntegratorRunHistoryIndexes
 ): PositionedIntegratorEvent<IntegratorRunStarted> | undefined => {
-  const started = indexes.integratorRunStarted.get(integratorRunKey(run))
+  const started = mapGet(indexes.integratorRunStarted, integratorRunKey(run))
   return started !== undefined &&
     started.position < record.position &&
     integratorRunCorrelationsEqual(started.event.run, run)
@@ -175,19 +189,25 @@ const invalidIntegratorRunResult = (
   record: JournalRecord,
   event: IntegratorRunResultRecorded,
   indexes: IntegratorRunHistoryValidationIndexes
-): string | undefined => {
+): IntegratorRunHistoryValidation<IntegratorRunHistoryValidationIndexes> => {
   const key = integratorRunKey(event.run)
-  const existing = indexes.integratorRunResults.get(key)
+  const existing = mapGet(indexes.integratorRunResults, key)
   const started = exactIntegratorRunStart(event.run, record, indexes)
   const matchingSession = integratorCorrelationsEqual(event.result.correlation, event.run.session)
-  setMapValue(indexes.integratorRunResults, key, { event, position: record.position })
-  return existing !== undefined
-    ? `Integrator run result repeats exact session ordinal ${event.run.ordinal}`
-    : record.key !== integratorRunResultRecordedRecordKey(event.run)
-      ? `Integrator run result has a foreign key for session ordinal ${event.run.ordinal}`
-      : started === undefined || !matchingSession
-        ? `Integrator run result has no exact earlier run start and matching session`
-        : undefined
+  return {
+    detail:
+      existing !== undefined
+        ? `Integrator run result repeats exact session ordinal ${event.run.ordinal}`
+        : record.key !== integratorRunResultRecordedRecordKey(event.run)
+          ? `Integrator run result has a foreign key for session ordinal ${event.run.ordinal}`
+          : started === undefined || !matchingSession
+            ? `Integrator run result has no exact earlier run start and matching session`
+            : undefined,
+    indexes: {
+      ...indexes,
+      integratorRunResults: setMapValue(indexes.integratorRunResults, key, { event, position: record.position })
+    }
+  }
 }
 
 const exactPreparedIntegratorRunResultFor = (
@@ -196,7 +216,7 @@ const exactPreparedIntegratorRunResultFor = (
   record: JournalRecord,
   indexes: IntegratorRunHistoryIndexes
 ): PositionedIntegratorEvent<IntegratorRunResultRecorded> | undefined => {
-  const result = indexes.integratorRunResults.get(integratorRunKey(run))
+  const result = mapGet(indexes.integratorRunResults, integratorRunKey(run))
   return result !== undefined &&
     result.position < record.position &&
     result.event.result._tag === "PreparedCandidate" &&
@@ -241,60 +261,83 @@ const invalidIntegratorRunCandidateGitReadIntent = (
   record: JournalRecord,
   event: IntegratorRunCandidateGitReadIntended,
   indexes: IntegratorRunHistoryIndexes
-): string | undefined => {
+): IntegratorRunHistoryValidation<IntegratorRunHistoryIndexes> => {
   const key = integratorRunCandidateRecordKeyPrefix(event.run, event.candidateText)
-  const existing = indexes.integratorRunCandidateGitReadIntents.get(key)
+  const existing = mapGet(indexes.integratorRunCandidateGitReadIntents, key)
   const result = exactPreparedIntegratorRunResultFor(event.run, event.candidateText, record, indexes)
-  setMapValue(indexes.integratorRunCandidateGitReadIntents, key, { event, position: record.position })
-  return existing !== undefined
-    ? `Integrator run candidate Git-read intent repeats candidate text ${event.candidateText}`
-    : record.key !== integratorRunCandidateGitReadIntendedRecordKey(event.run, event.candidateText)
-      ? `Integrator run candidate Git-read intent has a foreign key`
-      : result === undefined
-        ? `Integrator run candidate Git-read intent has no exact earlier PreparedCandidate result`
-        : undefined
+  return {
+    detail:
+      existing !== undefined
+        ? `Integrator run candidate Git-read intent repeats candidate text ${event.candidateText}`
+        : record.key !== integratorRunCandidateGitReadIntendedRecordKey(event.run, event.candidateText)
+          ? `Integrator run candidate Git-read intent has a foreign key`
+          : result === undefined
+            ? `Integrator run candidate Git-read intent has no exact earlier PreparedCandidate result`
+            : undefined,
+    indexes: {
+      ...indexes,
+      integratorRunCandidateGitReadIntents: setMapValue(indexes.integratorRunCandidateGitReadIntents, key, {
+        event,
+        position: record.position
+      })
+    }
+  }
 }
 
 const invalidIntegratorRunCandidateGitObservation = (
   record: JournalRecord,
   event: IntegratorRunCandidateGitObserved,
   indexes: IntegratorRunHistoryIndexes
-): string | undefined => {
+): IntegratorRunHistoryValidation<IntegratorRunHistoryIndexes> => {
   const key = integratorRunCandidateRecordKeyPrefix(event.run, event.candidateText)
-  const existing = indexes.integratorRunCandidateGitObservations.get(key)
-  const intent = indexes.integratorRunCandidateGitReadIntents.get(key)
+  const existing = mapGet(indexes.integratorRunCandidateGitObservations, key)
+  const intent = mapGet(indexes.integratorRunCandidateGitReadIntents, key)
   const result = exactPreparedIntegratorRunResultFor(event.run, event.candidateText, record, indexes)
   const exactEarlierIntent = exactEarlierIntegratorRunCandidateIntent(intent, record, event)
   const matchingCandidateText = event.observation.candidateText === event.candidateText
-  setMapValue(indexes.integratorRunCandidateGitObservations, key, { event, position: record.position })
-  return invalidIntegratorRunCandidateGitObservationRecord(
-    record,
-    event,
-    existing,
-    exactEarlierIntent,
-    result,
-    matchingCandidateText
-  )
+  return {
+    detail: invalidIntegratorRunCandidateGitObservationRecord(
+      record,
+      event,
+      existing,
+      exactEarlierIntent,
+      result,
+      matchingCandidateText
+    ),
+    indexes: {
+      ...indexes,
+      integratorRunCandidateGitObservations: setMapValue(indexes.integratorRunCandidateGitObservations, key, {
+        event,
+        position: record.position
+      })
+    }
+  }
 }
 
 /** Validates and indexes the run-bound events owned by the outer Integrator protocol. */
-export const validateIntegratorRunHistoryEvent = (
+export const validateIntegratorRunHistoryEvent = <Indexes extends IntegratorRunHistoryValidationIndexes>(
   record: JournalRecord,
-  indexes: IntegratorRunHistoryValidationIndexes,
+  indexes: Indexes,
   records: ReadonlyArray<JournalRecord> = [record]
-): { readonly handled: true; readonly issue: string | undefined } | { readonly handled: false } => {
+):
+  | { readonly handled: true; readonly issue: string | undefined; readonly indexes: Indexes }
+  | { readonly handled: false; readonly indexes: Indexes } => {
   const event = record.event
   if (event._tag === "IntegratorRunStarted") {
-    return { handled: true, issue: invalidIntegratorRunStarted(record, event, indexes, records) }
+    const validation = invalidIntegratorRunStarted(record, event, indexes, records)
+    return { handled: true, issue: validation.detail, indexes: { ...indexes, ...validation.indexes } }
   }
   if (event._tag === "IntegratorRunResultRecorded") {
-    return { handled: true, issue: invalidIntegratorRunResult(record, event, indexes) }
+    const validation = invalidIntegratorRunResult(record, event, indexes)
+    return { handled: true, issue: validation.detail, indexes: { ...indexes, ...validation.indexes } }
   }
   if (event._tag === "IntegratorRunCandidateGitReadIntended") {
-    return { handled: true, issue: invalidIntegratorRunCandidateGitReadIntent(record, event, indexes) }
+    const validation = invalidIntegratorRunCandidateGitReadIntent(record, event, indexes)
+    return { handled: true, issue: validation.detail, indexes: { ...indexes, ...validation.indexes } }
   }
   if (event._tag === "IntegratorRunCandidateGitObserved") {
-    return { handled: true, issue: invalidIntegratorRunCandidateGitObservation(record, event, indexes) }
+    const validation = invalidIntegratorRunCandidateGitObservation(record, event, indexes)
+    return { handled: true, issue: validation.detail, indexes: { ...indexes, ...validation.indexes } }
   }
-  return { handled: false }
+  return { handled: false, indexes }
 }

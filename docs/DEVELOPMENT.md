@@ -114,6 +114,13 @@ requires a setting that cannot correctly be shared.
 - `pnpm check:lab` runs the Reducer Lab maintained evaluation: the Lab package's
   typecheck, maintained-cassette smoke, and production build. It does not run
   `browser-smoke`, which needs a hosted Lab and Chromium.
+- `pnpm check:lab:browser` starts an ephemeral hosted Lab, runs the real
+  Chromium smoke through every maintained cassette, and stops the host. Before
+  the first run on Debian/Ubuntu or in a development image, install the pinned
+  browser and its system libraries with
+  `pnpm --dir prototypes/reducer-lab browser:install`. Playwright's system
+  package step needs root or passwordless sudo, so provision it while building
+  a container rather than during an unprivileged CI job.
 - `pnpm check:quint` runs deterministic, sampled, and exhaustive formal model
   checks. Run it once after the final relevant changes and before integration;
   during development, use it when changing a Quint model, its conformance
@@ -125,11 +132,13 @@ requires a setting that cannot correctly be shared.
   Quint-connected MBT and the Reducer Lab maintained evaluation, but not
   exhaustive formal model checking.
 
-The quality gate runs the Reducer Lab check with a bounded timeout in both
+The quality gate runs the non-browser Reducer Lab check with a bounded timeout in both
 `check:all` and `check:ci`; `check:ci` still omits only the Quint-connected MBT
 stage. The Lab package's `check` script intentionally orders its existing
 typecheck, maintained-cassette smoke, and build. The browser smoke remains a
-separate hosted check because it requires an HTTP host and Chromium.
+separate explicit check because it requires Chromium system libraries and runs
+every maintained cassette in a real browser. Its runner owns the temporary HTTP
+host; callers do not need to start Vite or set `REDUCER_LAB_URL`.
 
 Maintained cassettes and the shared integration-finality fixture are evaluation
 evidence, not production implementation. Keep their maintained evaluation at

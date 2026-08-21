@@ -17,6 +17,17 @@ own executable conformance adapter under
 | `specs/runActivation.qnt` | one idempotent Run-entry boundary: exact target and Run identity, lazy first policy versus the latest durable policy, reduction of exactly one unfinished history, independent reconstruction of every retained task-work position before new admission, and identical quiescence/finality handling after a new or reconstructed beginning. Process loss clears only process-local activation state; the same ordinary entry establishes the Run again from durable history. Executable seam: `packages/dalph/test/conformance/run-activation.mbt.test.ts` invokes production lifecycle, startup inspection, history reduction, recovery projection, the ordinary delivery relation's admission basis, admission, planned-attempt ambiguity reconciliation, and finality seams. | 195 |
 | `specs/applicationExit.qnt` | one process-local graceful application Exit decision boundary: cutoff-linearized admission, joined requests, typed owner disposition, exact executor evidence, enumerated quick drain actions, five monotonic ticks, distinct success/failure/timeout/unexpected-death outcomes, forced termination, no Run-journal Exit facts, and fresh restart state. Executable seam: `packages/dalph/test/conformance/application-exit.mbt.test.ts` invokes the production lifecycle-decision kernel without becoming a second runtime. | 203 |
 
+One additional model is accepted by issue #102 but does not exist until that
+issue's Phase 2 implementation:
+
+| Planned model | Owns | Issue |
+|---|---|---|
+| `specs/runCancellation.qnt` | one durable Run cancellation direction, forward-admission cutoff, settlement or durable relinquishment of exact executor, claim, integration, reconciliation, and cleanup responsibilities, crash recovery, and handoff to fresh Run classification. Its executable seam will be `packages/dalph/test/conformance/run-cancellation.mbt.test.ts`. It does not own final disposition classification or application Exit. | 102 |
+
+`specs/runActivation.qnt` continues to own fresh final classification, terminal
+history, and restart behavior. Issue #102 extends that existing ownership from
+`Completed` alone to `Completed`, `Blocked`, and `Cancelled`.
+
 ## Why subject scope rather than composition scope
 
 A model scoped to a decision boundary stays exhaustively checkable, and its

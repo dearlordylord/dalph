@@ -50,10 +50,13 @@ planning derive their next values without a general invalidation command.
 Run stabilization sits above description, planning, and live action ownership.
 After no action is executable and no admitted action is still running, it must
 obtain a later complete tracker observation before either an incomplete return
-or normal termination. That quiescent condition does not prove completion. The
-later observation may reveal new work, help prove normal termination together
-with settled obligations and empty live ownership, or leave an incomplete Run
-recoverable after the current invocation returns.
+or Run termination. That quiescent condition does not prove a terminal result.
+The later observation may reveal new work, prove `Completed` or `Blocked`
+together with settled obligations and empty live ownership, classify a settled
+Operator cancellation, or leave an incomplete Run recoverable after the
+current invocation returns. V1 final dispositions are `Completed`, `Blocked`,
+and `Cancelled`; `Failed` requires a separately accepted conclusive Run-failure
+protocol.
 
 The governing design and chronology are specified by
 [issue 190](https://github.com/dearlordylord/dalph/issues/190). GitHub owns
@@ -315,12 +318,13 @@ Detailed rules live in
 [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md)
 and [ADR 0009](adr/0009-separate-frontier-from-bounded-admission.md).
 
-## Tracker Target Closure
+## Run Task Graph
 
-Grouping chooses target membership. Dependency edges extend that membership
-only far enough to include every transitive prerequisite needed to evaluate a
-selected task. Grouping children of a prerequisite-only task remain outside
-the closure unless the target also selects them.
+One Run root task starts each complete Run task graph read. Grouping edges are
+followed downward from the root and its grouping descendants. Dependency edges
+add every transitive supporting prerequisite needed to evaluate or complete
+included work. Grouping children of a supporting prerequisite remain outside
+the graph unless an explicit prerequisite edge also reaches them.
 
 ## Task-Tracker Observation Consistency
 

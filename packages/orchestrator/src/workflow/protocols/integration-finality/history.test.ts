@@ -162,17 +162,18 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
 }
 
 const validationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> => {
-  const indexes = makeIntegrationFinalityHistoryIndexes()
+  let indexes = makeIntegrationFinalityHistoryIndexes()
   return records.flatMap((current) => {
-    const issue = invalidIntegrationFinalityHistory(current, records, indexes)
-    return issue === undefined ? [] : [issue]
+    const validation = invalidIntegrationFinalityHistory(current, records, indexes)
+    indexes = validation.indexes
+    return validation.detail === undefined ? [] : [validation.detail]
   })
 }
 
 it("accepts only the exact next cleanup reread identity after deletion intent", () => {
   const prefix = validFinalityRecords().slice(0, 10)
-  const indexes = makeIntegrationFinalityHistoryIndexes()
-  for (const current of prefix) invalidIntegrationFinalityHistory(current, prefix, indexes)
+  let indexes = makeIntegrationFinalityHistoryIndexes()
+  for (const current of prefix) indexes = invalidIntegrationFinalityHistory(current, prefix, indexes).indexes
   const request = { claim: fixture.claim, operationId: deletionOperationId, successObservation }
   const observed = CompletionClaimDeletionReadObservedEvent.make({
     observation: fixture.claim,
