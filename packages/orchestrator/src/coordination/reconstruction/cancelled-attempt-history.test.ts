@@ -413,6 +413,131 @@ it("rejects a relinquishment with the wrong authorized claim or a duplicate reli
   )
 })
 
+it("rejects each independent cancellation settlement foundation mismatch", () => {
+  const relinquishment = baseRecords.at(-1)
+  const cancellation = baseRecords.find(({ event }) => event._tag === "RunCancellationApplied")
+  if (
+    relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished" ||
+    cancellation?.event._tag !== "RunCancellationApplied"
+  ) {
+    return expect.fail("test fixture lacks cancellation settlement")
+  }
+  const foreignRunId = RunId.make("cancelled-history-foreign-run")
+  const foreignAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: foreignRunId })
+  const withRelinquishment = (
+    event: typeof relinquishment.event,
+    records: ReadonlyArray<JournalRecord> = baseRecords.slice(0, -1)
+  ) => invalidDetailsFor({ ...relinquishment, event }, [...records, { ...relinquishment, event }])
+
+  expect(
+    withRelinquishment(relinquishment.event, [...baseRecords.slice(0, 9), { ...cancellation, runId: foreignRunId }])
+  ).toContain("cancelled-attempt relinquishment names a cancellation from another Run")
+  expect(
+    withRelinquishment(
+      CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+        ...relinquishment.event,
+        plannedAttempt: foreignAttempt
+      })
+    )
+  ).toContain("cancelled-attempt relinquishment planned attempt binds another Run")
+  expect(
+    withRelinquishment(
+      relinquishment.event,
+      baseRecords.filter((_, index) => index !== 3 && index !== 10)
+    )
+  ).toContain("cancelled-attempt relinquishment requires its exact prior planned attempt")
+  expect(
+    withRelinquishment(
+      relinquishment.event,
+      baseRecords.filter((_, index) => index !== 4 && index !== 10)
+    )
+  ).toContain("cancelled-attempt relinquishment requires prior executor-work responsibility")
+  const priorResponsibility = baseRecords[4]
+  expect(priorResponsibility).toBeDefined()
+  if (priorResponsibility === undefined) return
+  const lateResponsibility = { ...priorResponsibility, position: cancellation.position }
+  expect(
+    withRelinquishment(relinquishment.event, [
+      ...baseRecords.filter((_, index) => index !== 4 && index !== 10),
+      lateResponsibility
+    ])
+  ).toContain("cancelled-attempt relinquishment requires prior executor-work responsibility")
+
+  const readIntentRecord: JournalRecord = {
+    event: taskTrackerReadIntent(readOperation),
+    key: intentRecordKey(readOperation.operationId),
+    position: JournalPosition.make(12),
+    runId
+  }
+  const observationRecord: JournalRecord = {
+    event: noReleaseObservation,
+    key: outcomeRecordKey(readOperation.operationId),
+    position: JournalPosition.make(13),
+    runId
+  }
+  const noReleaseRecord: JournalRecord = {
+    event: noRelease,
+    key: cancelledAttemptClaimNoReleaseRecordKey(plannedAttempt.attemptId),
+    position: JournalPosition.make(14),
+    runId
+  }
+  expect(
+    invalidDetailsFor(
+      {
+        ...noReleaseRecord,
+        event: CancelledAttemptClaimNoReleaseObservedEvent.make({ ...noRelease, plannedAttempt: foreignAttempt })
+      },
+      [...baseRecords, readIntentRecord, observationRecord, noReleaseRecord]
+    )
+  ).toContain("cancelled-attempt no-release binds another Run")
+  expect(invalidDetailsFor(noReleaseRecord, [readIntentRecord, observationRecord, noReleaseRecord])).toContain(
+    "cancelled-attempt no-release requires its exact prior implementation relinquishment"
+  )
+  const foreignClaim = ActiveTaskClaim.make({
+    ...exactClaim,
+    operationId: OperationId.make("cancelled-history-foundation-foreign-claim")
+  })
+  const wrongExpected = {
+    ...noReleaseRecord,
+    event: CancelledAttemptClaimNoReleaseObservedEvent.make({ ...noRelease, expectedClaim: foreignClaim })
+  }
+  expect(
+    invalidDetailsFor(wrongExpected, [...baseRecords, readIntentRecord, observationRecord, wrongExpected])
+  ).toContain("cancelled-attempt no-release contradicts its authorized claim")
+
+  const releaseIntentFor = (authority: typeof cancellationReleaseAuthority): JournalRecord => ({
+    event: TaskClaimReleaseIntendedEvent.make({
+      operation: makeTaskClaimReleaseOperation({
+        authority,
+        predecessorOperationIds: cancellationReleaseOperation.predecessorOperationIds,
+        release: cancellationReleaseOperation.release
+      }),
+      version: workflowJournalEventVersion
+    }),
+    key: intentRecordKey(cancellationReleaseOperation.release.operationId),
+    position: JournalPosition.make(14),
+    runId
+  })
+  const missingCancellationIntent = releaseIntentFor(
+    TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+      ...cancellationReleaseAuthority,
+      cancellationAppliedAt: JournalPosition.make(99)
+    })
+  )
+  expect(invalidDetailsFor(missingCancellationIntent, [...baseRecords, missingCancellationIntent])).toContain(
+    "cancelled-attempt claim release requires its exact prior RunCancellationApplied"
+  )
+  const missingRelinquishmentIntent = releaseIntentFor(
+    TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+      ...cancellationReleaseAuthority,
+      implementationRelinquishedAt: JournalPosition.make(99)
+    })
+  )
+  expect(invalidDetailsFor(missingRelinquishmentIntent, [...baseRecords, missingRelinquishmentIntent])).toContain(
+    "cancelled-attempt claim release requires its exact prior implementation relinquishment"
+  )
+})
+
 it("accepts a safe executor proof observed before cancellation", () => {
   const record = baseRecords.at(-1)
   if (record === undefined) return expect.fail("test fixture lacks relinquishment")
@@ -787,6 +912,9 @@ it("requires cancellation authority for a release after relinquishment and valid
     position: JournalPosition.make(14)
   }
   expect(invalidDetailsFor(ordinaryIntentRecord, [...baseRecords, ordinaryIntentRecord])).toContain(
+    "cancelled-attempt claim release requires CancelledAttemptClaimReleaseAuthority"
+  )
+  expect(invalidDetailsFor(ordinaryIntentRecord, [...baseRecords.slice(0, -1), ordinaryIntentRecord])).toContain(
     "cancelled-attempt claim release requires CancelledAttemptClaimReleaseAuthority"
   )
 

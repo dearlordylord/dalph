@@ -455,6 +455,56 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
         ({ event }) => event._tag === "CancelledAttemptClaimNoReleaseObserved"
       )
     ).toBe(false)
+
+    const noPredecessorOperation = makeTaskClaimObservationOperation(
+      observationOperation.operationId,
+      target,
+      taskId,
+      []
+    )
+    const noPredecessorRead: JournalRecord = {
+      event: taskTrackerReadIntent(noPredecessorOperation),
+      key: JournalRecordKey.make("route-matrix-cancelled-claim-no-predecessor-read"),
+      position: JournalPosition.make(3),
+      runId
+    }
+    const noPredecessorObservation: JournalRecord = {
+      event: taskTrackerFactsObservedEvent(
+        noPredecessorOperation.operationId,
+        makeFocusedTaskClaimFactsObserved(noPredecessorOperation, foreignClaim)
+      ),
+      key: JournalRecordKey.make("route-matrix-cancelled-claim-no-predecessor-observation"),
+      position: JournalPosition.make(4),
+      runId
+    }
+    const exactObservation: JournalRecord = {
+      ...observation,
+      event: taskTrackerFactsObservedEvent(
+        observationOperation.operationId,
+        makeFocusedTaskClaimFactsObserved(observationOperation, activeClaim)
+      )
+    }
+    const cases: ReadonlyArray<ReadonlyArray<JournalRecord>> = [
+      [cancellation, readIntent, observation],
+      [cancellation, relinquished, readIntent],
+      [cancellation, relinquished, noPredecessorRead, noPredecessorObservation],
+      [cancellation, relinquished, readIntent, exactObservation],
+      yield* Ref.get(records)
+    ]
+    yield* Effect.forEach(cases, (initial) =>
+      Effect.gen(function* () {
+        const controlled = yield* Ref.make(initial)
+        const before = initial.filter(({ event }) => event._tag === "CancelledAttemptClaimNoReleaseObserved").length
+        yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, inertLease).pipe(
+          Effect.provideService(InRunJournal, appendableJournalFor(controlled)),
+          Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
+        )
+        const after = (yield* Ref.get(controlled)).filter(
+          ({ event }) => event._tag === "CancelledAttemptClaimNoReleaseObserved"
+        ).length
+        expect(after).toBe(before)
+      })
+    )
   })
 )
 

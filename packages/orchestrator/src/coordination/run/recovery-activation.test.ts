@@ -132,7 +132,8 @@ import {
 } from "./recovery-activation.js"
 import { authorizedClaimForAttempt } from "./recovery-authority.js"
 import { ReconstructedPauseState, type ReconstructedRunState } from "../reconstruction/state.js"
-import { deriveRunnableFrontier, RunnableFrontierTransition } from "../frontier/frontier.js"
+import { deriveRunnableFrontier, ResponsibilityDisposition, RunnableFrontierTransition } from "../frontier/frontier.js"
+import type { PlannedAttemptExecutorDisposition } from "../frontier/fresh-facts.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 
 const coverageRunId = RunId.make("recovery-activation-coverage-run")
@@ -1325,6 +1326,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
     }
   })
   if (releaseFacts?._tag !== "PlannedAttemptExecutorFreshFacts") return
+  if (releaseFacts.disposition._tag !== "CancelledAttemptClaimReleaseRequired") return
   expect(
     deriveRunnableFrontier({
       freshEligibleTasks: [],
@@ -1332,6 +1334,37 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
       responsibilityFacts: [releaseFacts]
     }).transitions
   ).toMatchObject([{ _tag: "ReleaseCancelledAttemptClaim", plannedAttempt: coverageAttempt }])
+  const frontierForCancellationDisposition = (disposition: PlannedAttemptExecutorDisposition) =>
+    deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: { entries: [coverageResponsibility] },
+      responsibilityFacts: [{ ...releaseFacts, disposition }]
+    })
+  expect(
+    frontierForCancellationDisposition(
+      ResponsibilityDisposition.CancelledAttemptClaimReleaseRetryRequired({
+        operation: releaseFacts.disposition.operation,
+        plannedAttempt: coverageAttempt
+      })
+    ).transitions
+  ).toMatchObject([{ _tag: "RetryCancelledAttemptClaimRelease" }])
+  expect(
+    frontierForCancellationDisposition(
+      ResponsibilityDisposition.CancelledAttemptClaimReleasePending({
+        operationId: releaseFacts.disposition.operation.release.operationId
+      })
+    ).explanations
+  ).toMatchObject([{ _tag: "CancelledAttemptClaimReleasePending" }])
+  expect(
+    frontierForCancellationDisposition(
+      ResponsibilityDisposition.CancelledAttemptClaimPlanningWait({ reason: "TrackerTargetUnavailable" })
+    ).explanations
+  ).toMatchObject([{ _tag: "CancelledAttemptClaimPlanningWait" }])
+  expect(
+    frontierForCancellationDisposition(
+      ResponsibilityDisposition.CancelledAttemptClaimUnreadableWait({ observationOperationId: claimRead.operationId })
+    ).explanations
+  ).toMatchObject([{ _tag: "CancelledAttemptClaimWait" }])
 
   const foreignObservation = coverageRecord(
     10,

@@ -7,13 +7,15 @@ const coverageThresholds = Object.fromEntries(
 )
 
 const mbtTestPattern = "packages/**/*.mbt.test.ts"
-// Cancellation's ordinary tests exercise the accepted production conformance
-// seams; only its exhaustive Quint traces are mode-gated by quintIt itself.
-const coverageExcludedMbtTestPattern = "packages/**/!(run-cancellation).mbt.test.ts"
+// These ordinary tests exercise production conformance seams; their exhaustive
+// Quint traces remain mode-gated by quintIt itself.
+const coverageExcludedMbtTestPattern =
+  "packages/**/!(run-activation|run-cancellation|task-fact-reconciliation).mbt.test.ts"
 const performanceTestPattern = "packages/**/*.performance.test.ts"
 const ordinaryTestTimeoutMilliseconds = 10_000
-const coverageTestTimeoutMilliseconds = 20_000
+const coverageTestTimeoutMilliseconds = 30_000
 const ordinaryWorkerCount = 4
+const coverageWorkerCount = 6
 const ordinaryTestIncludes = ["src/**/*.test.ts", "packages/**/*.test.ts", "scripts/**/*.test.ts", "test/**/*.test.ts"]
 
 export default defineConfig(({ mode }) => ({
@@ -39,7 +41,7 @@ export default defineConfig(({ mode }) => ({
       ...(mode === "coverage" ? [coverageExcludedMbtTestPattern, performanceTestPattern] : [])
     ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
-    maxWorkers: ordinaryWorkerCount,
+    maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,
     testTimeout: mode === "coverage" ? coverageTestTimeoutMilliseconds : ordinaryTestTimeoutMilliseconds
   }
 }))

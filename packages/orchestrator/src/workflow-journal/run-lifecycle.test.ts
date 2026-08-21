@@ -11,6 +11,7 @@ import {
 import { OperationId } from "../workflow/identity.js"
 import { TrackerRevision } from "../authorities/task-tracker/task.js"
 import { JournalPosition } from "./identity.js"
+import type { JournalRecord } from "./store.js"
 import { intentRecordKey, outcomeRecordKey, runCancellationAppliedRecordKey } from "./record-key.js"
 import { RunCancellationAppliedEvent } from "../workflow/protocols/run-cancellation/events.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
@@ -330,3 +331,77 @@ const makeRunFinalityEvidenceForTest = (
     terminalTaskIds: [],
     observedAt: JournalPosition.make(3)
   })
+
+it("rejects every independently mismatched terminal evidence dimension at storage", () => {
+  const fixture = completedRunFinalityFixture({ runId, target })
+  const records: ReadonlyArray<JournalRecord> = [
+    makeWorkflowRunBeganRecord(runId, target, policy),
+    {
+      event: fixture.intent,
+      key: intentRecordKey(fixture.operation.operationId),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: fixture.observation,
+      key: outcomeRecordKey(fixture.operation.operationId),
+      position: JournalPosition.make(3),
+      runId
+    }
+  ]
+  const foreignTarget = FixtureTarget.make("lifecycle-evidence-foreign-target")
+  const cases: ReadonlyArray<{
+    readonly evidence: RunFinalityEvidence
+    readonly disposition?: "Blocked" | "Cancelled" | "Completed"
+    readonly name: string
+  }> = [
+    {
+      name: "beginning target",
+      evidence: {
+        ...fixture.evidence,
+        coverage: { ...fixture.evidence.coverage, target: foreignTarget },
+        target: foreignTarget
+      }
+    },
+    { name: "complete coverage", evidence: { ...fixture.evidence, complete: false } },
+    {
+      name: "operation identity",
+      evidence: { ...fixture.evidence, operationId: OperationId.make("lifecycle-evidence-foreign-operation") }
+    },
+    {
+      name: "read shape",
+      evidence: {
+        ...fixture.evidence,
+        readShape: RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [TaskId.make("other")] })
+      }
+    },
+    {
+      name: "content identity",
+      evidence: { ...fixture.evidence, contentIdentity: TrackerRevision.make("lifecycle-evidence-stale-revision") }
+    },
+    {
+      name: "explicit coverage",
+      evidence: {
+        ...fixture.evidence,
+        coverage: { ...fixture.evidence.coverage, explicitlyCoveredTaskIds: [TaskId.make("other")] }
+      }
+    },
+    { name: "terminal task set", evidence: { ...fixture.evidence, terminalTaskIds: [TaskId.make("root")] } },
+    { name: "blocked task set", evidence: { ...fixture.evidence, blockedTaskIds: [TaskId.make("root")] } },
+    { name: "blocked disposition", disposition: "Blocked", evidence: fixture.evidence },
+    { name: "cancelled disposition", disposition: "Cancelled", evidence: fixture.evidence }
+  ]
+
+  for (const testCase of cases) {
+    const decision = decideWorkflowRunTermination(
+      records,
+      runId,
+      testCase.disposition ?? "Completed",
+      testCase.evidence
+    )
+    expect(decision, testCase.name).toMatchObject({
+      _tag: "LifecycleTransitionRejected",
+      failure: { _tag: "WorkflowRunTerminationEvidenceInvalid" }
+    })
+  }
+})
