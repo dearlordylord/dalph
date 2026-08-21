@@ -12,7 +12,11 @@ import {
   acceptedResultEquivalence,
   integrationResponsibilityEquivalence
 } from "../../workflow/protocols/integration-admission/responsibility.js"
-import { invalidTargetPromotionHistory, type TargetPromotionHistoryIndexes } from "./target-promotion-history.js"
+import {
+  invalidTargetPromotionHistory,
+  makeTargetPromotionHistoryIndexes,
+  type TargetPromotionHistoryIndexes
+} from "./target-promotion-history.js"
 import { setMapValue } from "./integration-history-run-binding.js"
 import { type IntegratorHistoryIndexes, validateIntegratorHistoryEvent } from "./integrator-history.js"
 import { deriveIntegrationQuarantineState } from "../../workflow/protocols/integration-quarantine/state.js"
@@ -36,6 +40,29 @@ export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
   readonly firstRestartChoiceAppliedAt: HashMap.HashMap<AttemptId, JournalPosition>
   readonly targetPromotionHistory: TargetPromotionHistoryIndexes
 }
+
+/** Creates one fresh in-memory index for validating a trace prefix. */
+export const makeIntegrationHistoryIndexes = (): IntegrationHistoryIndexes => ({
+  acceptedExecutorResults: HashMap.empty(),
+  acceptedExecutorResultPositions: HashMap.empty(),
+  executorResponsibilitiesBegan: HashMap.empty(),
+  integrationResponsibilitiesBegan: HashMap.empty(),
+  integrationStarted: HashMap.empty(),
+  firstRestartChoiceAppliedAt: HashMap.empty(),
+  targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
+  targetLineageReadIntents: HashMap.empty(),
+  targetLineageObservations: HashMap.empty(),
+  integratorSessionFixed: HashMap.empty(),
+  integratorSessionsByStartedAt: HashMap.empty(),
+  integratorSessionsBySessionId: HashMap.empty(),
+  integratorSessionsByCandidateResource: HashMap.empty(),
+  integratorSuccessorSessionFixed: HashMap.empty(),
+  integratorSuccessorSessionsByPredecessor: HashMap.empty(),
+  integratorRunStarted: HashMap.empty(),
+  integratorRunResults: HashMap.empty(),
+  integratorRunCandidateGitReadIntents: HashMap.empty(),
+  integratorRunCandidateGitObservations: HashMap.empty()
+})
 
 const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
   Option.getOrUndefined(HashMap.get(map, key))

@@ -365,7 +365,7 @@ it("folds the executor command, projection, response, state, and report evidence
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   const foreignCorrelation = plannedAttemptExecutorCorrelation({
     ...plannedAttempt,
-    runId: RunId.make("executor-evidence-foreign-run")
+    attemptId: AttemptId.make("executor-evidence-foreign-attempt")
   })
   const command = (ordinal: number, command: "StartOrContinue" | "Suspend") => {
     const brandedOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)

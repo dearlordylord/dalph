@@ -1,6 +1,16 @@
 /* eslint-disable import/no-nodejs-modules -- Source assertion guards the public console presentation seam. */
 import { it } from "@effect/vitest"
-import { RunId } from "@dalph/contracts"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
 import {
   FixtureTarget,
   InitialControlPolicy,
@@ -13,11 +23,13 @@ import {
   TraceCursor,
   TraceDerivedTaskOrder,
   TraceHistoryItem,
+  TraceHistoricalFacets,
   TraceOutput,
   TracePositionIdentity,
   TraceReaderLayer,
   TraceRelationships,
   WorkflowActor,
+  PlannedAttemptExecutorWorkResponsibilityBegan,
   intentRecordKey,
   makeTrackerGraphObservationOperation,
   memoryJournalStoreLayer,
@@ -82,16 +94,64 @@ const laterHistoryItem = TraceHistoryItem.make({
   operationIds: [laterOperation.operationId],
   taskIds: []
 })
+const executorAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("console-production-trace-attempt"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/console-production-trace"),
+  executor: TaskExecutorLocator.make("executor:console-production-trace"),
+  runId,
+  taskId: TaskId.make("console-production-trace-task"),
+  taskRevision: TaskRevision.make("console-production-trace-revision"),
+  worktree: WorktreeLocator.make("/worktrees/console-production-trace")
+})
+const executorResponsibilityItem = TraceHistoryItem.make({
+  identity: TracePositionIdentity.make({ position: JournalPosition.make(4), runId }),
+  occurrence: PlannedAttemptExecutorWorkResponsibilityBegan.make({
+    initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    plannedAttempt: executorAttempt,
+    recordedAt: JournalPosition.make(4),
+    runId
+  }),
+  operationIds: [],
+  taskIds: [executorAttempt.taskId]
+})
 const traceAtCursor = TraceAtCursor.make({
-  cursor: TraceCursor.make({ position: JournalPosition.make(3), runId }),
+  cursor: TraceCursor.make({ position: JournalPosition.make(4), runId }),
   derivedTaskOrder: TraceDerivedTaskOrder.make({ basis: "TaskIdCodeUnitAscending", taskIds: [] }),
   graph: null,
-  items: [historyItem, laterHistoryItem],
+  items: [historyItem, laterHistoryItem, executorResponsibilityItem],
   relationships: TraceRelationships.make({
     outsideAuthorityAcknowledgements: [],
     processLocalResourceSerializations: [],
     taskGraphEdges: [],
     workflowCausalEdges: []
+  }),
+  facets: TraceHistoricalFacets.make({
+    integration: { facts: [] },
+    recovery: {
+      observationGaps: [
+        {
+          _tag: "TrackerObservation",
+          action: historyItem.identity,
+          operationId: operation.operationId,
+          required: "TaskTrackerFactsObserved",
+          taskIds: []
+        },
+        {
+          _tag: "TrackerObservation",
+          action: laterHistoryItem.identity,
+          operationId: laterOperation.operationId,
+          required: "TaskTrackerFactsObserved",
+          taskIds: []
+        },
+        { _tag: "ExecutorReport", action: executorResponsibilityItem.identity, attemptId: executorAttempt.attemptId }
+      ],
+      preservationDispositions: [],
+      retainedResponsibilities: [
+        { _tag: "ExecutorWork", plannedAttempt: executorAttempt, source: executorResponsibilityItem.identity }
+      ]
+    }
   }),
   version: traceReaderSchemaVersion
 })
@@ -101,15 +161,17 @@ it("canonicalizes the production cursor view without changing its committed iden
 
   expect(canonical).toEqual(traceAtCursor)
   expect(traceCursorAt(canonical)).toEqual(traceAtCursor.cursor)
-  expect(canonical.cursor).toEqual(TraceCursor.make({ position: JournalPosition.make(3), runId }))
+  expect(canonical.cursor).toEqual(TraceCursor.make({ position: JournalPosition.make(4), runId }))
   expect(canonical.items.map(({ identity }) => identity.position)).toEqual([
     JournalPosition.make(2),
-    JournalPosition.make(3)
+    JournalPosition.make(3),
+    JournalPosition.make(4)
   ])
   expect(canonical.items[0]?.identity).toEqual({ position: JournalPosition.make(2), runId })
   expect(renderTraceAtCursor(traceAtCursor)).toEqual([
     encodeTraceHistoryItem(historyItem),
-    encodeTraceHistoryItem(laterHistoryItem)
+    encodeTraceHistoryItem(laterHistoryItem),
+    encodeTraceHistoryItem(executorResponsibilityItem)
   ])
 })
 
@@ -158,6 +220,7 @@ it.effect("reads one exact production cursor through TraceReader and writes its 
     expect(view.items[0]?.identity).toEqual({ position: JournalPosition.make(2), runId })
     expect(view.items[0]?.occurrence._tag).toBe("TaskTrackerReadInitiated")
     expect(encoded).toEqual(view)
+    expect(encoded.facets).toEqual(view.facets)
     expect(historyAfterPresentation).toEqual(historyBeforePresentation)
     expect(presentationLayerOutput).toBe(true)
   })
