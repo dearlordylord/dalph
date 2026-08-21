@@ -8,7 +8,7 @@ import { GitCommand } from "../../../authorities/git/command.js"
 import { BranchCleanupBoundary, BranchCleanupMutationResult, BranchCleanupObservation } from "./branch.js"
 import {
   IntegratorCandidateCleanupBoundary,
-  IntegratorCandidateCleanupMutationResult,
+  IntegratorCandidateProviderAuthority,
   unavailableIntegratorCandidateProviderAuthority
 } from "./integrator-candidate.js"
 import { WorktreeCleanupBoundary, WorktreeCleanupMutationResult, WorktreeCleanupObservation } from "./worktree.js"
@@ -31,12 +31,26 @@ export type DispositionCleanupBoundaryServices =
 const revisionOneWorktree = WorktreeCleanupEvidenceRevision.make(1)
 const revisionOneBranch = BranchCleanupEvidenceRevision.make(1)
 
-export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTarget) =>
-  Layer.effectContext(
+/**
+ * Installs the real Git worktree/branch boundary and an explicitly supplied
+ * provider authority for predecessor candidates. A provider authority owns
+ * candidate ownership and quiescence; Git object existence is never used as a
+ * substitute. Omitting it is a deliberate fail-closed composition.
+ */
+export const gitDispositionCleanupBoundaryLayer = (
+  target: GitCommonDirectoryTarget,
+  candidateAuthorityLayer?: Layer.Layer<IntegratorCandidateProviderAuthority>
+) => {
+  const providerAuthorityLayer =
+    candidateAuthorityLayer ??
+    Layer.succeed(IntegratorCandidateProviderAuthority, unavailableIntegratorCandidateProviderAuthority)
+  const providerMutationIsLive = candidateAuthorityLayer !== undefined
+  return Layer.effectContext(
     Effect.gen(function* () {
       const commands = yield* GitCommand
       const fileSystem = yield* FileSystem.FileSystem
       const ownership = yield* CoordinatorOwnership
+      const candidateAuthority = yield* IntegratorCandidateProviderAuthority
       const readWorktrees = commands.run(target, ["worktree", "list", "--porcelain"])
       const worktree = WorktreeCleanupBoundary.of({
         observe: (authorization) =>
@@ -305,7 +319,11 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
         remove: (authorization) =>
           ownership.runMutation(
             Effect.suspend(() =>
-              commands.run(target, ["branch", "-D", "--", authorization.locator]).pipe(
+              // `git branch` accepts the local branch name, while the
+              // authorization deliberately carries the canonical full ref.
+              // Strip only Git's fixed local-ref prefix; the authorization
+              // and result remain bound to the exact full ref.
+              commands.run(target, ["branch", "-D", "--", authorization.locator.slice("refs/heads/".length)]).pipe(
                 Effect.map((result) =>
                   result.exitCode === 0
                     ? BranchCleanupMutationResult.cases.Removed.make({
@@ -330,15 +348,11 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
           )
       })
       const candidate = IntegratorCandidateCleanupBoundary.of({
-        observe: unavailableIntegratorCandidateProviderAuthority.observe,
-        remove: (authorization) =>
-          Effect.succeed(
-            IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
-              detail: "provider candidate authority is unavailable in the provider-neutral Git boundary",
-              locator: authorization.locator,
-              sessionId: authorization.owner.sessionId
-            })
-          )
+        observe: candidateAuthority.observe,
+        remove: (authorization, attempt) =>
+          providerMutationIsLive
+            ? ownership.runMutation(Effect.suspend(() => candidateAuthority.remove(authorization, attempt)))
+            : candidateAuthority.remove(authorization, attempt)
       })
       return Context.empty().pipe(
         Context.add(WorktreeCleanupBoundary, worktree),
@@ -346,4 +360,5 @@ export const gitDispositionCleanupBoundaryLayer = (target: GitCommonDirectoryTar
         Context.add(IntegratorCandidateCleanupBoundary, candidate)
       )
     })
-  )
+  ).pipe(Layer.provide(providerAuthorityLayer))
+}

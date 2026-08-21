@@ -67,14 +67,12 @@ const issue69P1Branch = TaskBranchRef.make("refs/heads/task/issue-69-maintained-
 const issue69AbandonedCleanupOperation = OperationId.make("issue-69-maintained-abandoned-worktree-cleanup")
 const issue69P1Candidate = IntegratorCandidateResourceLocator.make("candidate:issue-69-maintained-p1")
 const issue69P1Session = IntegratorSessionId.make("session:issue-69-maintained-p1")
-const issue69DerivedWorktreeOperation = OperationId.make("disposition-cleanup:worktree:issue-69-maintained-p1:19")
-const issue69DerivedBranchOperation = OperationId.make("disposition-cleanup:branch:issue-69-maintained-p1:28")
-const issue69DerivedAbandonedWorktreeOperation = OperationId.make(
-  "disposition-cleanup:worktree:issue-69-maintained-p1:9"
-)
-const issue69DerivedAbandonedBranchOperation = OperationId.make("disposition-cleanup:branch:issue-69-maintained-p1:20")
+const issue69DerivedWorktreeOperation = OperationId.make("disposition-cleanup:worktree:issue-69-maintained-p1")
+const issue69DerivedBranchOperation = OperationId.make("disposition-cleanup:branch:issue-69-maintained-p1")
+const issue69DerivedAbandonedWorktreeOperation = OperationId.make("disposition-cleanup:worktree:issue-69-maintained-p1")
+const issue69DerivedAbandonedBranchOperation = OperationId.make("disposition-cleanup:branch:issue-69-maintained-p1")
 const issue69DerivedCandidateOperation = OperationId.make(
-  "disposition-cleanup:integrator-candidate:session:issue-69-maintained-p1:13"
+  "disposition-cleanup:integrator-candidate:session:issue-69-maintained-p1"
 )
 
 /** Concrete controlled-boundary subject retained by the maintained cassette. */

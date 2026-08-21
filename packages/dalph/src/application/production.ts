@@ -35,7 +35,10 @@ import {
   type TargetPromotionRuntimeInput,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService,
-  preservingDispositionCleanupBoundaryLayer
+  gitDispositionCleanupBoundaryLayer,
+  IntegratorCandidateProviderAuthority,
+  type IntegratorCandidateProviderAuthorityService,
+  unavailableIntegratorCandidateProviderAuthority
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Effect, Layer } from "effect"
@@ -62,7 +65,13 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
   completionTask?: CompletionTaskBoundaryService,
-  acceptedResultEvidenceStore?: EvidenceStoreService
+  acceptedResultEvidenceStore?: EvidenceStoreService,
+  /**
+   * Provider-owned Integrator candidate authority. Production cannot infer
+   * predecessor ownership or writer quiescence from a Git locator, so the
+   * absent adapter fails closed and performs no candidate mutation.
+   */
+  integratorCandidateProviderAuthority?: IntegratorCandidateProviderAuthorityService
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
@@ -76,6 +85,16 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     Layer.provide(NodeServices.layer)
   )
   const gitIntegratorCandidateLayer = nodeGitIntegratorCandidateLayer.pipe(
+    Layer.provide(nodeGitCommandLayer),
+    Layer.provide(NodeServices.layer)
+  )
+  const candidateAuthorityLayer = Layer.succeed(
+    IntegratorCandidateProviderAuthority,
+    IntegratorCandidateProviderAuthority.of(
+      integratorCandidateProviderAuthority ?? unavailableIntegratorCandidateProviderAuthority
+    )
+  )
+  const cleanupBoundaryLayer = gitDispositionCleanupBoundaryLayer(target, candidateAuthorityLayer).pipe(
     Layer.provide(nodeGitCommandLayer),
     Layer.provide(NodeServices.layer)
   )
@@ -123,7 +142,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           targetPromotion,
           integrationFinality,
           completionTask,
-          preservingDispositionCleanupBoundaryLayer,
+          cleanupBoundaryLayer,
           acceptedResultEvidenceStore
         ).pipe(
           Layer.provide(interpreterLayer),

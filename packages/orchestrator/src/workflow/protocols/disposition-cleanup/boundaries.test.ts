@@ -29,7 +29,12 @@ import {
   IntegratorCandidateCleanupOwner
 } from "./disposition.js"
 import { BranchCleanupBoundary } from "./branch.js"
-import { IntegratorCandidateCleanupBoundary } from "./integrator-candidate.js"
+import {
+  IntegratorCandidateCleanupBoundary,
+  IntegratorCandidateCleanupMutationResult,
+  IntegratorCandidateCleanupObservation,
+  IntegratorCandidateProviderAuthority
+} from "./integrator-candidate.js"
 import { WorktreeCleanupBoundary } from "./worktree.js"
 import { gitDispositionCleanupBoundaryLayer } from "./boundaries.js"
 import { attempt, authorization, baseSha } from "./fixtures.js"
@@ -301,5 +306,64 @@ it.effect("does not expose a provider-neutral candidate remove command", () =>
     const result = yield* boundaries.candidate.remove(candidateAuthorization, CleanupMutationOrdinal.make(1))
     expect(result._tag).toBe("Unknown")
     expect(yield* Ref.get(calls)).toBe(0)
+  })
+)
+
+it.effect("production candidate cleanup uses provider ownership and quiescence before mutation", () =>
+  Effect.gen(function* () {
+    const providerMutations = yield* Ref.make(0)
+    const providerAuthorityLayer = Layer.succeed(
+      IntegratorCandidateProviderAuthority,
+      IntegratorCandidateProviderAuthority.of({
+        observe: (subject) =>
+          Effect.succeed(
+            IntegratorCandidateCleanupObservation.cases.Present.make({
+              locator: subject.locator,
+              revision: subject.evidenceRevision,
+              sessionId: subject.owner.sessionId,
+              writerQuiescent: true
+            })
+          ),
+        remove: (subject) =>
+          Ref.update(providerMutations, (count) => count + 1).pipe(
+            Effect.as(
+              IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+                locator: subject.locator,
+                revision: subject.evidenceRevision,
+                sessionId: subject.owner.sessionId
+              })
+            )
+          )
+      })
+    )
+    const candidate = yield* Effect.gen(function* () {
+      return yield* IntegratorCandidateCleanupBoundary
+    }).pipe(
+      Effect.provide(gitDispositionCleanupBoundaryLayer(target, providerAuthorityLayer)),
+      Effect.provide(commandLayer(yield* Ref.make(0))),
+      Effect.provide(
+        Layer.succeed(
+          CoordinatorOwnership,
+          CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+        )
+      ),
+      Effect.provide(NodeServices.layer)
+    )
+    expect((yield* candidate.observe(candidateAuthorization))._tag).toBe("Present")
+    expect((yield* candidate.remove(candidateAuthorization, CleanupMutationOrdinal.make(1)))._tag).toBe("Removed")
+    expect(yield* Ref.get(providerMutations)).toBe(1)
+
+    const denied = yield* Effect.gen(function* () {
+      return yield* IntegratorCandidateCleanupBoundary
+    }).pipe(
+      Effect.provide(gitDispositionCleanupBoundaryLayer(target, providerAuthorityLayer)),
+      Effect.provide(commandLayer(yield* Ref.make(0))),
+      Effect.provide(failingOwnershipLayer),
+      Effect.provide(NodeServices.layer)
+    )
+    expect(
+      yield* denied.remove(candidateAuthorization, CleanupMutationOrdinal.make(1)).pipe(Effect.flip)
+    ).toBeInstanceOf(CoordinatorOwnershipLost)
+    expect(yield* Ref.get(providerMutations)).toBe(1)
   })
 )

@@ -227,6 +227,15 @@ export interface IntegratorCandidateProviderAuthorityService {
   readonly observe: (
     authorization: IntegratorCandidateCleanupAuthorization
   ) => Effect.Effect<IntegratorCandidateCleanupObservation>
+  /**
+   * Removes only the provider resource named by the already-authorized
+   * predecessor. The cleanup boundary wraps this call in CoordinatorOwnership
+   * before allowing it to cross the provider mutation seam.
+   */
+  readonly remove: (
+    authorization: IntegratorCandidateCleanupAuthorization,
+    attempt: CleanupMutationOrdinal
+  ) => Effect.Effect<IntegratorCandidateCleanupMutationResult>
 }
 export class IntegratorCandidateProviderAuthority extends Context.Service<
   IntegratorCandidateProviderAuthority,
@@ -240,6 +249,14 @@ export const unavailableIntegratorCandidateProviderAuthority = IntegratorCandida
       IntegratorCandidateCleanupObservation.cases.Unreadable.make({
         detail: "provider authority is unavailable; Git object existence is not ownership evidence",
         locator: authorization.locator
+      })
+    ),
+  remove: (authorization) =>
+    Effect.succeed(
+      IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+        detail: "provider authority is unavailable; candidate mutation is disabled",
+        locator: authorization.locator,
+        sessionId: authorization.owner.sessionId
       })
     )
 })
@@ -300,35 +317,31 @@ export const integratorCandidateCleanupTestLayer = (input: {
             })
           )
         })
-      const service = IntegratorCandidateCleanupBoundary.of({
-        observe,
-        remove: (authorization, attempt) =>
-          Effect.gen(function* () {
-            yield* Ref.update(calls, (values) => [
-              ...values,
-              IntegratorCandidateCleanupBoundaryCall.cases.Remove.make({
-                locator: authorization.locator,
-                operationId: authorization.operationId,
-                ordinal: attempt,
-                sessionId: authorization.owner.sessionId
-              })
-            ])
-            const current = yield* Ref.getAndUpdate(mutations, (values) =>
-              values.length > 1 ? values.slice(1) : values
-            )
-            return (
-              current[0] ??
-              IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
-                detail: "script exhausted",
-                locator: authorization.locator,
-                sessionId: authorization.owner.sessionId
-              })
-            )
-          })
-      })
+      const remove = (authorization: IntegratorCandidateCleanupAuthorization, attempt: CleanupMutationOrdinal) =>
+        Effect.gen(function* () {
+          yield* Ref.update(calls, (values) => [
+            ...values,
+            IntegratorCandidateCleanupBoundaryCall.cases.Remove.make({
+              locator: authorization.locator,
+              operationId: authorization.operationId,
+              ordinal: attempt,
+              sessionId: authorization.owner.sessionId
+            })
+          ])
+          const current = yield* Ref.getAndUpdate(mutations, (values) => (values.length > 1 ? values.slice(1) : values))
+          return (
+            current[0] ??
+            IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+              detail: "script exhausted",
+              locator: authorization.locator,
+              sessionId: authorization.owner.sessionId
+            })
+          )
+        })
+      const service = IntegratorCandidateCleanupBoundary.of({ observe, remove })
       return Context.empty().pipe(
         Context.add(IntegratorCandidateCleanupBoundary, service),
-        Context.add(IntegratorCandidateProviderAuthority, { observe }),
+        Context.add(IntegratorCandidateProviderAuthority, { observe, remove }),
         Context.add(TestIntegratorCandidateCleanupBoundary, { calls: () => Ref.get(calls) })
       )
     })
