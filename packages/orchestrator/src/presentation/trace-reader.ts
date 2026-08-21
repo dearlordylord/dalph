@@ -1928,6 +1928,7 @@ const prefixLengthThrough = <A>(
   while (low < high) {
     const middle = Math.floor((low + high) / binarySearchSplitDivisor)
     const middleValue = values[middle]
+    /* v8 ignore next -- @preserve low < high <= values.length keeps the midpoint inside the array. */
     if (middleValue === undefined) return low
     const position = positionOf(middleValue)
     if (position <= through) low = middle + 1

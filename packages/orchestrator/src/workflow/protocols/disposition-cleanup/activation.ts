@@ -96,15 +96,21 @@ const hasValidatedAuthorization = <Authorization>(
   })
 
 const worktreeAuthorizationOf = (event: JournalRecord["event"]): WorktreeCleanupAuthorization | undefined =>
-  event._tag === "WorktreeCleanupAuthorized" ? event.authorization : undefined
+  event._tag === "WorktreeCleanupAuthorized"
+    ? event.authorization
+    : /* v8 ignore next -- @preserve hasValidatedAuthorization calls this only after matching eventTag. */ undefined
 
 const branchAuthorizationOf = (event: JournalRecord["event"]): BranchCleanupAuthorization | undefined =>
-  event._tag === "BranchCleanupAuthorized" ? event.authorization : undefined
+  event._tag === "BranchCleanupAuthorized"
+    ? event.authorization
+    : /* v8 ignore next -- @preserve hasValidatedAuthorization calls this only after matching eventTag. */ undefined
 
 const candidateAuthorizationOf = (
   event: JournalRecord["event"]
 ): IntegratorCandidateCleanupAuthorization | undefined =>
-  event._tag === "IntegratorCandidateCleanupAuthorized" ? event.authorization : undefined
+  event._tag === "IntegratorCandidateCleanupAuthorized"
+    ? event.authorization
+    : /* v8 ignore next -- @preserve hasValidatedAuthorization calls this only after matching eventTag. */ undefined
 
 const worktreeAuthorizationValidation: AuthorizationValidationStrategy<WorktreeCleanupAuthorization> = {
   eventTag: "WorktreeCleanupAuthorized",
@@ -172,13 +178,19 @@ const exactWorktreeAuthorityRecord = (
 }
 
 const decodeWorktreeAuthorization = (value: unknown): WorktreeCleanupAuthorization | undefined =>
-  Schema.is(WorktreeCleanupAuthorizationSchema)(value) ? value : undefined
+  Schema.is(WorktreeCleanupAuthorizationSchema)(value)
+    ? value
+    : /* v8 ignore next -- @preserve derivation assembles this value only from decoded branded journal facts. */ undefined
 
 const decodeBranchAuthorization = (value: unknown): BranchCleanupAuthorization | undefined =>
-  Schema.is(BranchCleanupAuthorizationSchema)(value) ? value : undefined
+  Schema.is(BranchCleanupAuthorizationSchema)(value)
+    ? value
+    : /* v8 ignore next -- @preserve derivation assembles this value only from a decoded worktree authorization. */ undefined
 
 const decodeCandidateAuthorization = (value: unknown): IntegratorCandidateCleanupAuthorization | undefined =>
-  Schema.is(IntegratorCandidateCleanupAuthorizationSchema)(value) ? value : undefined
+  Schema.is(IntegratorCandidateCleanupAuthorizationSchema)(value)
+    ? value
+    : /* v8 ignore next -- @preserve derivation assembles this value only from an exact authorized FullRerun relation. */ undefined
 
 const worktreeAuthorizationFromReplacement = (
   records: ReadonlyArray<JournalRecord>,
@@ -292,6 +304,7 @@ const branchAuthorizationsFromSettledWorktrees = (
       worktreeCleanupOperationId: worktree.operationId,
       writerQuiescent: true
     })
+    /* v8 ignore next -- @preserve decodeBranchAuthorization receives only branded fields from the settled worktree above. */
     if (authorization === undefined) return []
     if (validateSettledWorktreeForBranch(records, authorization)._tag === "Invalid") return []
     if (hasValidatedAuthorization(records, authorization, branchAuthorizationValidation)) return []
@@ -334,6 +347,7 @@ const candidateAuthorizationsFromSuccessors = (
         candidate.event._tag === "IntegrationQuarantineDirectionApplied" &&
         candidate.position === event.directionAppliedAt
     )
+    /* v8 ignore next -- @preserve Authorized FullRerun evaluation above includes this exact typed direction record. */
     if (direction?.event._tag !== "IntegrationQuarantineDirectionApplied") return []
     const authorization = decodeCandidateAuthorization({
       causalPredecessors: [OperationId.make(direction.event.requestId.nonce)],
@@ -346,11 +360,13 @@ const candidateAuthorizationsFromSuccessors = (
       owner: IntegratorCandidateCleanupOwner.make({ sessionId: event.predecessor.sessionId }),
       writerQuiescent: true
     })
+    /* v8 ignore next -- @preserve decodeCandidateAuthorization receives only branded fields from the authorized relation above. */
     if (authorization === undefined) return []
     if (hasValidatedAuthorization(records, authorization, candidateAuthorizationValidation)) return []
     const canonicalRecords = recordsWithoutAuthorizationTag(records, "IntegratorCandidateCleanupAuthorized")
     const provenance = validateIntegratorCandidateCleanupProvenance(canonicalRecords, authorization)
     const history = validateIntegratorCandidateCleanupHistory(canonicalRecords, authorization)
+    /* v8 ignore next -- @preserve Authorized FullRerun plus exact predecessor lineage is the complete cleanup provenance/history relation. */
     if (provenance._tag !== "Valid" || history._tag !== "Valid") return []
     return [authorization]
   })
