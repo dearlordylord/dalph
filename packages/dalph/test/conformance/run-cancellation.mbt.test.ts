@@ -432,6 +432,13 @@ interface IntegrationFixture {
   readonly candidate: IntegratorRunQualifiedCandidate
 }
 
+interface IntegrationQuarantineFixture {
+  readonly responsibility: StartedIntegrationResponsibility
+  readonly lineage: TargetLineageObservation
+  readonly lineageObservedAt: JournalPosition
+  readonly run: ReturnType<typeof RunnableFrontierTransition.RunIntegrator>["run"]
+}
+
 const integrationRunTransitionFor = (fixture: IntegrationFixture) =>
   RunnableFrontierTransition.RunIntegrator({
     lineage: fixture.lineage,
@@ -760,6 +767,7 @@ const makeCancellationDriverImplementation = () => {
   let latestClassificationGraph: ClassificationGraph | undefined
   let integratorOutcomeMode: "Prepared" | "NotPrepared" = "Prepared"
   let integrationFixture: IntegrationFixture | undefined
+  let integrationQuarantineFixture: IntegrationQuarantineFixture | undefined
 
   const targetPromotionGit: TargetPromotionRuntime["Service"]["git"] = {
     compareAndSet: (request) =>
@@ -1247,6 +1255,166 @@ const makeCancellationDriverImplementation = () => {
           } else {
             yield* ensureIntegrationTarget
           }
+          if (integrationQuarantineFixture === undefined) {
+            const preparedFixture = integrationFixture
+            if (preparedFixture === undefined) return yield* Effect.die("normal integration fixture was not prepared")
+            yield* journal.append(
+              runId,
+              attemptPlanRecordKey(quarantinePlannedAttempt.attemptId),
+              TaskAttemptPlannedEvent.make({
+                operation: quarantineIntegrationPlanOperation,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorWorkResponsibilityBeganRecordKey(quarantinePlannedAttempt.attemptId),
+              PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+                plannedAttempt: quarantinePlannedAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorCommandIntendedRecordKey(
+                quarantinePlannedAttempt.attemptId,
+                PlannedAttemptExecutorCommandOrdinal.make(1)
+              ),
+              PlannedAttemptExecutorCommandIntendedEvent.make({
+                command: "StartOrContinue",
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+                plannedAttempt: quarantinePlannedAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorWorkReportedRecordKey(
+                quarantinePlannedAttempt.attemptId,
+                PlannedAttemptExecutorReportOrdinal.make(1)
+              ),
+              PlannedAttemptExecutorWorkReportedEvent.make({
+                ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+                report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                  correlation: plannedAttemptExecutorCorrelation(quarantinePlannedAttempt),
+                  result: { _tag: "Accepted", acceptedResult: quarantineAcceptedResult }
+                }),
+                version: workflowJournalEventVersion
+              })
+            )
+            const quarantineBegan = yield* journal.append(
+              runId,
+              integrationResponsibilityBeganRecordKey(quarantinePlannedAttempt.attemptId),
+              IntegrationResponsibilityBeganEvent.make({
+                acceptedResult: quarantineAcceptedResult,
+                integrationTarget,
+                plannedAttempt: quarantinePlannedAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            const quarantineStarted = yield* journal.append(
+              runId,
+              integrationStartedRecordKey(quarantinePlannedAttempt.attemptId),
+              IntegrationStartedEvent.make({
+                acceptedResult: quarantineAcceptedResult,
+                integrationTarget,
+                plannedAttempt: quarantinePlannedAttempt,
+                responsibilityBeganAt: quarantineBegan.position,
+                version: workflowJournalEventVersion
+              })
+            )
+            const quarantineLineage = TargetLineageObservation.make({
+              plannedBaseIsAncestorOfTargetHead: true,
+              plannedBaseSha: quarantinePlannedAttempt.baseSha,
+              targetHeadSha: integrationExpectedTargetHead
+            })
+            const quarantineLineageOperation = makeTargetLineageObservationOperation({
+              integrationTarget,
+              operationId: OperationId.make("run-cancellation-quarantine-lineage"),
+              plannedAttempt: quarantinePlannedAttempt,
+              predecessorOperationIds: []
+            })
+            yield* journal.append(
+              runId,
+              intentRecordKey(quarantineLineageOperation.operationId),
+              GitReadIntentRecordedEvent.make({
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                operation: quarantineLineageOperation,
+                version: workflowJournalEventVersion
+              })
+            )
+            const quarantineLineageObserved = yield* journal.append(
+              runId,
+              outcomeRecordKey(quarantineLineageOperation.operationId),
+              TargetLineageObservedEvent.make({
+                observation: quarantineLineage,
+                occurrenceClassification: "NonActionOccurrence",
+                operationId: quarantineLineageOperation.operationId,
+                plannedAttempt: quarantinePlannedAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            const quarantineResponsibility = StartedIntegrationResponsibility.make({
+              acceptedResult: quarantineAcceptedResult,
+              integrationTarget,
+              plannedAttempt: quarantinePlannedAttempt,
+              queuedAt: quarantineBegan.position,
+              startedAt: quarantineStarted.position
+            })
+            const quarantinePreparation = IntegratorPreparationInput.make({
+              responsibility: quarantineResponsibility,
+              targetLineage: quarantineLineage,
+              targetLineageObservedAt: quarantineLineageObserved.position
+            })
+            const quarantineRun = {
+              ordinal: IntegratorRunOrdinal.make(1),
+              session: integratorCorrelationFor(quarantinePreparation)
+            }
+            const previousIntegratorOutcomeMode = integratorOutcomeMode
+            integratorOutcomeMode = "NotPrepared"
+            const protocolResult = yield* prepareIntegrationCandidateRun({
+              preparation: quarantinePreparation,
+              run: quarantineRun
+            }).pipe(Effect.ensuring(Effect.sync(() => (integratorOutcomeMode = previousIntegratorOutcomeMode))))
+            if (protocolResult._tag !== "NotPrepared") {
+              return yield* Effect.die(
+                `production Integrator quarantine setup was not conclusive: ${protocolResult._tag}`
+              )
+            }
+            yield* runtimeResources.integrationTargets.acquire(quarantineResponsibility)
+            yield* runtimeResources.integrationTargets.publishAcceptedOwnership(quarantineResponsibility)
+            const transition = RunnableFrontierTransition.RecordInitialConclusiveIntegrationQuarantine({
+              result: protocolResult,
+              responsibility: quarantineResponsibility
+            })
+            const result = yield* executeIntegrationAction(
+              identityFreeIntegrationActionFor(transition, quarantineResponsibility),
+              transition,
+              integrationLease,
+              target
+            )
+            if (result._tag !== "ActionCompleted") {
+              return yield* Effect.die(`production integration quarantine was not completed: ${result._tag}`)
+            }
+            if (
+              !(yield* journal.read(runId)).some(
+                ({ event }) =>
+                  event._tag === "IntegrationQuarantined" &&
+                  event.correlation.sessionId === quarantineRun.session.sessionId
+              )
+            ) {
+              return yield* Effect.die("production Integrator quarantine did not persist its exact Q record")
+            }
+            integrationQuarantineFixture = {
+              responsibility: quarantineResponsibility,
+              lineage: quarantineLineage,
+              lineageObservedAt: quarantineLineageObserved.position,
+              run: quarantineRun
+            }
+          }
           yield* Deferred.succeed(command.completed, undefined)
         } else if (command._tag === "ObserveUnreadableIntegration") {
           const fixture = integrationFixture
@@ -1295,162 +1463,29 @@ const makeCancellationDriverImplementation = () => {
           }
           yield* Deferred.succeed(command.completed, undefined)
         } else if (command._tag === "RecordIntegrationQuarantine") {
-          const fixture = integrationFixture
-          if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
-          /*
-           * The normal integration fixture has already recorded a prepared
-           * result, so provider-absence recovery would correctly reject it.
-           * Exercise the initial conclusive quarantine boundary with a second
-           * exact responsibility/session whose real Integrator call records
-           * NotPrepared first; no Q event is assembled by this adapter.
-           */
-          yield* journal.append(
-            runId,
-            attemptPlanRecordKey(quarantinePlannedAttempt.attemptId),
-            TaskAttemptPlannedEvent.make({
-              operation: quarantineIntegrationPlanOperation,
-              version: workflowJournalEventVersion
-            })
+          const quarantineFixture = integrationQuarantineFixture
+          if (quarantineFixture === undefined)
+            return yield* Effect.die("integration quarantine fixture was not prepared")
+          const before = (yield* journal.read(runId)).length
+          const persisted = (yield* journal.read(runId)).findLast(
+            ({ event }) =>
+              event._tag === "IntegrationQuarantined" &&
+              event.correlation.sessionId === quarantineFixture.run.session.sessionId
           )
-          yield* journal.append(
-            runId,
-            plannedAttemptExecutorWorkResponsibilityBeganRecordKey(quarantinePlannedAttempt.attemptId),
-            PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-              plannedAttempt: quarantinePlannedAttempt,
-              version: workflowJournalEventVersion
-            })
+          const cancellation = (yield* journal.read(runId)).findLast(
+            ({ event }) => event._tag === "RunCancellationApplied"
           )
-          yield* journal.append(
-            runId,
-            plannedAttemptExecutorCommandIntendedRecordKey(
-              quarantinePlannedAttempt.attemptId,
-              PlannedAttemptExecutorCommandOrdinal.make(1)
-            ),
-            PlannedAttemptExecutorCommandIntendedEvent.make({
-              command: "StartOrContinue",
-              initiatedBy: { _tag: "DalphCoordinator" },
-              occurrenceClassification: "InitiatedAction",
-              ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
-              plannedAttempt: quarantinePlannedAttempt,
-              version: workflowJournalEventVersion
-            })
-          )
-          yield* journal.append(
-            runId,
-            plannedAttemptExecutorWorkReportedRecordKey(
-              quarantinePlannedAttempt.attemptId,
-              PlannedAttemptExecutorReportOrdinal.make(1)
-            ),
-            PlannedAttemptExecutorWorkReportedEvent.make({
-              ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-              report: PlannedAttemptExecutorReport.cases.Terminal.make({
-                correlation: plannedAttemptExecutorCorrelation(quarantinePlannedAttempt),
-                result: { _tag: "Accepted", acceptedResult: quarantineAcceptedResult }
-              }),
-              version: workflowJournalEventVersion
-            })
-          )
-          const quarantineBegan = yield* journal.append(
-            runId,
-            integrationResponsibilityBeganRecordKey(quarantinePlannedAttempt.attemptId),
-            IntegrationResponsibilityBeganEvent.make({
-              acceptedResult: quarantineAcceptedResult,
-              integrationTarget,
-              plannedAttempt: quarantinePlannedAttempt,
-              version: workflowJournalEventVersion
-            })
-          )
-          const quarantineStarted = yield* journal.append(
-            runId,
-            integrationStartedRecordKey(quarantinePlannedAttempt.attemptId),
-            IntegrationStartedEvent.make({
-              acceptedResult: quarantineAcceptedResult,
-              integrationTarget,
-              plannedAttempt: quarantinePlannedAttempt,
-              responsibilityBeganAt: quarantineBegan.position,
-              version: workflowJournalEventVersion
-            })
-          )
-          const quarantineLineageOperation = makeTargetLineageObservationOperation({
-            integrationTarget,
-            operationId: OperationId.make("run-cancellation-quarantine-lineage"),
-            plannedAttempt: quarantinePlannedAttempt,
-            predecessorOperationIds: []
-          })
-          yield* journal.append(
-            runId,
-            intentRecordKey(quarantineLineageOperation.operationId),
-            GitReadIntentRecordedEvent.make({
-              initiatedBy: { _tag: "DalphCoordinator" },
-              occurrenceClassification: "InitiatedAction",
-              operation: quarantineLineageOperation,
-              version: workflowJournalEventVersion
-            })
-          )
-          const quarantineLineageObserved = yield* journal.append(
-            runId,
-            outcomeRecordKey(quarantineLineageOperation.operationId),
-            TargetLineageObservedEvent.make({
-              observation: fixture.lineage,
-              occurrenceClassification: "NonActionOccurrence",
-              operationId: quarantineLineageOperation.operationId,
-              plannedAttempt: quarantinePlannedAttempt,
-              version: workflowJournalEventVersion
-            })
-          )
-          const quarantineResponsibility = StartedIntegrationResponsibility.make({
-            acceptedResult: quarantineAcceptedResult,
-            integrationTarget: fixture.responsibility.integrationTarget,
-            plannedAttempt: quarantinePlannedAttempt,
-            queuedAt: quarantineBegan.position,
-            startedAt: quarantineStarted.position
-          })
-          const quarantinePreparation = IntegratorPreparationInput.make({
-            responsibility: quarantineResponsibility,
-            targetLineage: fixture.lineage,
-            targetLineageObservedAt: quarantineLineageObserved.position
-          })
-          const quarantineRun = {
-            ordinal: IntegratorRunOrdinal.make(1),
-            session: integratorCorrelationFor(quarantinePreparation)
-          }
-          const previousIntegratorOutcomeMode = integratorOutcomeMode
-          integratorOutcomeMode = "NotPrepared"
-          const protocolResult = yield* prepareIntegrationCandidateRun({
-            preparation: quarantinePreparation,
-            run: quarantineRun
-          }).pipe(Effect.ensuring(Effect.sync(() => (integratorOutcomeMode = previousIntegratorOutcomeMode))))
-          if (protocolResult._tag !== "NotPrepared") {
-            return yield* Effect.die(
-              `production Integrator quarantine setup was not conclusive: ${protocolResult._tag}`
-            )
-          }
-          yield* ensureIntegrationTarget
-          const transition = RunnableFrontierTransition.RecordInitialConclusiveIntegrationQuarantine({
-            result: protocolResult,
-            responsibility: quarantineResponsibility
-          })
-          const result = yield* executeIntegrationAction(
-            identityFreeIntegrationActionFor(transition, quarantineResponsibility),
-            transition,
-            integrationLease,
-            target
-          )
-          if (result._tag !== "ActionCompleted") {
-            return yield* Effect.die(`production integration quarantine was not completed: ${result._tag}`)
-          }
           if (
-            !(yield* journal.read(runId)).some(
-              ({ event }) =>
-                event._tag === "IntegrationQuarantined" &&
-                event.correlation.sessionId === quarantineRun.session.sessionId
-            )
+            persisted?.event._tag !== "IntegrationQuarantined" ||
+            persisted.event.basis._tag !== "ConclusiveResult" ||
+            persisted.event.basis.cause._tag !== "NotPrepared" ||
+            cancellation?.event._tag !== "RunCancellationApplied" ||
+            persisted.position >= cancellation.position
           ) {
-            return yield* Effect.die(
-              `production integration quarantine did not persist its exact record: ${JSON.stringify(
-                (yield* journal.read(runId)).map(({ event }) => event._tag)
-              )}`
-            )
+            return yield* Effect.die("production Integrator quarantine fact was not durable before cancellation")
+          }
+          if ((yield* journal.read(runId)).length !== before) {
+            return yield* Effect.die("MarkIntegrationQuarantined appended new history instead of reconciling Q")
           }
           yield* Deferred.succeed(command.completed, undefined)
         } else {
@@ -1755,6 +1790,7 @@ const makeCancellationDriverImplementation = () => {
         latestClassificationGraph = undefined
         integratorOutcomeMode = "Prepared"
         integrationFixture = undefined
+        integrationQuarantineFixture = undefined
         yield* startRuntime
       }),
     selectIdleRun: () =>
@@ -2136,7 +2172,20 @@ const makeCancellationDriverImplementation = () => {
         process = { ...process, responsibilitiesSettled: false }
       }),
     markIntegrationQuarantined: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const fixture = integrationQuarantineFixture
+        if (fixture === undefined) return yield* Effect.die("integration quarantine fixture was not prepared")
+        const before = records.length
+        if (
+          !records.some(
+            ({ event }) =>
+              event._tag === "IntegrationQuarantined" && event.correlation.sessionId === fixture.run.session.sessionId
+          )
+        ) {
+          return yield* Effect.die("production integration quarantine fact was not retained through cancellation")
+        }
+        if (records.length !== before)
+          return yield* Effect.die("observing integration quarantine appended a duplicate fact")
         durable = { ...durable, integration: "IntegrationQuarantined" }
         process = { ...process, responsibilitiesSettled: false }
       }),
