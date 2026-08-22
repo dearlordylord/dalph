@@ -278,8 +278,10 @@ class BuiltHost {
     readonly child: ChildProcessWithoutNullStreams,
     private readonly observeEvent: (event: HostEvent) => void = () => undefined
   ) {
+    // `exit` may precede delivery of the child's final stdout bytes. `close`
+    // proves both process termination and complete consumption of its streams.
     this.exitPromise = new Promise((resolve) => {
-      child.once("exit", (code, signal) => {
+      child.once("close", (code, signal) => {
         this.exited = true
         this.exitStatus = { code, signal }
         resolve({ code, signal })
@@ -291,7 +293,7 @@ class BuiltHost {
     child.stderr.on("data", (chunk: string) => {
       this.stderr += chunk
     })
-    child.once("exit", () => {
+    child.once("close", () => {
       for (const waiters of this.waiters.values()) {
         for (const resolve of waiters) {
           resolve({ event: "failure", detail: `host exited: ${this.stderr}` })
