@@ -1,9 +1,28 @@
-import { Context, Data, Duration, Effect, Layer, Option, Queue, Ref, Schedule, Schema, Stream } from "effect"
+import {
+  Context,
+  Data,
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Schedule,
+  Schema,
+  Semaphore,
+  Stream
+} from "effect"
+import type { RunId } from "@dalph/contracts"
 import type { RunFinalityDecision as RunFinalityDecisionValue } from "../frontier/frontier.js"
+import { ApplicationExitShell } from "../application-exit/application-shell.js"
 import { attachCurrentSignal, type CurrentSignal } from "../delivery/relations.js"
+import type { AcceptedRunControlDirection, AcceptedRunControlObserver, RunReactivationControlState } from "./run.js"
 
 /** A non-authoritative request to ask the ordinary Run entry for current facts. */
 export type RunReactivationHint = Data.TaggedEnum<{
+  Startup: Record<never, never>
   TrackerNotification: Record<never, never>
   AcceptedFactPublication: Record<never, never>
   OperatorWake: Record<never, never>
@@ -12,45 +31,42 @@ export type RunReactivationHint = Data.TaggedEnum<{
 
 export const RunReactivationHint = Data.taggedEnum<RunReactivationHint>()
 
-/** A descriptive current-first source that can request a fresh check. */
-export interface RunReactivationHintSource<E = never> {
-  readonly signal: CurrentSignal<unknown, E>
-  readonly hint: RunReactivationHint
-}
-
-/** The process-local owner state; it is never written to the workflow Journal. */
-type RunReactivationOwnerState = "Running" | "Paused" | "Terminated" | "Stopped"
-
-type RunReactivationMessage = { readonly _tag: "Hint"; readonly hint: RunReactivationHint } | { readonly _tag: "Stop" }
-
 /**
- * A fresh establishment/activation effect is rerunnable: each execution must
- * read the accepted Journal and outside authority through its ordinary public
- * boundaries instead of retaining a prior observation.
+ * A fresh establishment/activation effect is rerunnable only at its narrow
+ * boundary. The owner initializes its local control projection from durable
+ * Run history once, then changes it only after an accepted Run control fact;
+ * a failed activation is observed and cooled down, never retried.
  */
-// eslint-disable-next-line functional/no-mixed-types -- The application seam intentionally groups the activation effect, timer, retry policy, and failure observer.
-export interface RunReactivationOwnerOptions<E, R = never> {
+// eslint-disable-next-line functional/no-mixed-types -- The application seam intentionally groups the repeatable activation, durable control read, timing, and typed failure observer.
+export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
+  /** Exact workflow Run whose Journal-backed control state this owner serves. */
+  readonly runId: RunId
   readonly activate: Effect.Effect<RunFinalityDecisionValue, E, R>
+  readonly readControl: Effect.Effect<RunReactivationControlState, E, R>
   readonly activationInterval: Duration.Input
-  readonly retrySchedule?: Schedule.Schedule<unknown, E>
-  readonly onFailure?: (failure: E) => Effect.Effect<void>
+  /** Finite positive delay after a failed read/activation before a later hint is considered. */
+  readonly failureCooldown: Duration.Input
+  /** The application must observe every typed read/activation failure here. */
+  readonly onFailure: (failure: E | EInstall) => Effect.Effect<void>
+  /** Terminates the owner for a typed activation failure caused by durable Run closure. */
+  readonly isTerminationFailure: (failure: E) => boolean
+  /** Optional host-owned current-first adapter for tracker notifications; values remain hints. */
+  readonly trackerNotificationSource?: CurrentSignal<unknown>
+  /** Installs the Journal callbacks before the worker can consume its startup hint. */
+  readonly installAcceptedRunReactivationObservers: (observers: {
+    readonly control: AcceptedRunControlObserver
+    readonly acceptedFactPublication: Effect.Effect<void>
+  }) => Effect.Effect<void, EInstall, R>
+  /** Optional process-local timer lifecycle observation for diagnostics. */
+  readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
 }
 
-// eslint-disable-next-line functional/no-mixed-types -- The owner boundary intentionally exposes coordinated commands together with its scoped run effect.
-export interface RunReactivationOwnerService<R = never> {
-  /** Queues one non-authoritative request; duplicate requests are coalesced before activation. */
+/** Only ephemeral hints are public; ownership, pause state, and shutdown stay in the scoped Layer. */
+export interface RunReactivationOwnerService {
   readonly hint: (hint: RunReactivationHint) => Effect.Effect<void>
-  /** Suppresses timer and hint-driven activation until `unpause` is called. */
-  readonly pause: () => Effect.Effect<void>
-  /** Performs one fresh current check after resuming a paused Run. */
-  readonly unpause: () => Effect.Effect<void>
-  /** Stops later reactivation; this is idempotent. */
-  readonly stop: () => Effect.Effect<void>
-  /** Runs the one process-local owner until it is stopped or the Run terminates. */
-  readonly run: Effect.Effect<void, never, R>
 }
 
-/** The application supplied a timer interval that cannot drive a bounded local loop. */
+/** The application supplied a timer or cooldown that cannot drive a bounded local loop. */
 export class RunReactivationIntervalInvalid extends Schema.TaggedError<RunReactivationIntervalInvalid>()(
   "RunReactivationIntervalInvalid",
   { detail: Schema.String }
@@ -61,134 +77,246 @@ export class RunReactivationOwner extends Context.Service<RunReactivationOwner, 
   "@dalph/RunReactivationOwner"
 ) {}
 
-const defaultRetrySchedule = Schedule.exponential("100 millis").pipe(Schedule.upTo({ times: 3 }))
+type RunReactivationMessage = { readonly _tag: "Hint"; readonly hint: RunReactivationHint }
 
-/** Creates one owner around an ordinary, repeatable Run establishment/activation effect. */
-export const makeRunReactivationOwner = Effect.fn("RunReactivationOwner.make")(function* <E, R>(
-  options: RunReactivationOwnerOptions<E, R>
-) {
-  const intervalOption = Duration.fromInput(options.activationInterval)
-  if (Option.isNone(intervalOption)) {
-    return yield* new RunReactivationIntervalInvalid({ detail: "reactivation interval must be a valid duration" })
+const finitePositiveDuration = (input: Duration.Input, name: string) => {
+  const duration = Duration.fromInput(input)
+  if (Option.isNone(duration) || !Duration.isFinite(duration.value) || !Duration.isPositive(duration.value)) {
+    return Effect.fail(new RunReactivationIntervalInvalid({ detail: `${name} must be finite and greater than zero` }))
   }
-  if (!Duration.isFinite(intervalOption.value) || !Duration.isPositive(intervalOption.value)) {
-    return yield* new RunReactivationIntervalInvalid({
-      detail: "reactivation interval must be finite and greater than zero"
-    })
-  }
-  const activationInterval = intervalOption.value
-  // A sliding one-slot trigger preserves only the fact that some current
-  // check is wanted. It cannot accumulate notification storms or lose a Stop
-  // request behind stale hints.
-  const messages = yield* Queue.sliding<RunReactivationMessage>(1)
-  const state = yield* Ref.make<RunReactivationOwnerState>("Running")
-  const started = yield* Ref.make(false)
-  const retrySchedule = options.retrySchedule ?? defaultRetrySchedule
-
-  const offerHint = (hint: RunReactivationHint) =>
-    Effect.gen(function* () {
-      const accepted = yield* Ref.get(state).pipe(Effect.map((current) => current === "Running"))
-      if (accepted) yield* Queue.offer(messages, { _tag: "Hint", hint })
-    })
-
-  const hint = Effect.fn("RunReactivationOwner.hint")(offerHint)
-
-  const pause = Effect.fn("RunReactivationOwner.pause")(() =>
-    Ref.update(state, (current) => (current === "Running" ? "Paused" : current))
-  )
-
-  const unpause = Effect.fn("RunReactivationOwner.unpause")(() =>
-    Effect.gen(function* () {
-      const resumed = yield* Ref.modify(state, (current) =>
-        current === "Paused" ? [true, "Running" as const] : [false, current]
-      )
-      if (resumed) yield* offerHint(RunReactivationHint.OperatorWake())
-    })
-  )
-
-  const stop = Effect.fn("RunReactivationOwner.stop")(() =>
-    Effect.gen(function* () {
-      const stopRequested = yield* Ref.modify(state, (current) =>
-        current === "Stopped" || current === "Terminated" ? [false, current] : [true, "Stopped" as const]
-      )
-      if (stopRequested) {
-        yield* Queue.offer(messages, { _tag: "Stop" })
-      }
-    })
-  )
-
-  const runActivation = Effect.gen(function* () {
-    const result = yield* options.activate.pipe(
-      Effect.retry(retrySchedule),
-      Effect.map(Option.some),
-      Effect.catch((failure) =>
-        (options.onFailure === undefined ? Effect.void : options.onFailure(failure)).pipe(Effect.as(Option.none()))
-      )
-    )
-    if (Option.isNone(result)) return
-    if (result.value._tag === "RunMayTerminate") {
-      yield* Ref.set(state, "Terminated")
-      yield* Queue.offer(messages, { _tag: "Stop" })
-    }
-  })
-
-  const processHint = Effect.fn("RunReactivationOwner.processHint")(() =>
-    Effect.gen(function* () {
-      if ((yield* Ref.get(state)) !== "Running") return
-      yield* runActivation
-      if ((yield* Ref.get(state)) !== "Running") return
-
-      // Hints received while activation was crossing a boundary become one
-      // trailing check. The hint value itself is deliberately discarded.
-      const pending = yield* Queue.takeAll(messages)
-      if (pending.some((message) => message._tag === "Stop")) {
-        yield* Queue.offer(messages, { _tag: "Stop" })
-      } else if (pending.some((message) => message._tag === "Hint")) {
-        yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.Timer() })
-      }
-    })
-  )
-
-  const run = Effect.scoped(
-    Effect.gen(function* () {
-      const claimed = yield* Ref.modify(started, (current) => [!current, true] as const)
-      if (!claimed || (yield* Ref.get(state)) !== "Running") return
-
-      yield* offerHint(RunReactivationHint.Timer())
-      yield* Stream.fromSchedule(Schedule.spaced(activationInterval)).pipe(
-        Stream.runForEach(() => offerHint(RunReactivationHint.Timer())),
-        Effect.forkScoped
-      )
-
-      yield* Stream.fromQueue(messages).pipe(
-        Stream.takeWhile((message) => message._tag !== "Stop"),
-        Stream.runForEach(() => processHint())
-      )
-    })
-  )
-
-  return { hint, pause, run, stop, unpause } satisfies RunReactivationOwnerService<R>
-})
+  return Effect.succeed(duration.value)
+}
 
 /**
- * Attaches one current-first source in the caller's scope. The initial value
- * and every later publication are only hints; source failure ends this
- * subscription while the owner's timer remains responsible for recovery.
+ * Builds one scoped owner and starts its worker during Layer acquisition. A
+ * caller composes this Layer once so every consumer shares the same owner;
+ * there is no public `run`, `start`, `pause`, `unpause`, or `stop` method.
  */
-export const attachRunReactivationHintSource = Effect.fn("RunReactivationOwner.attachHintSource")(function* <E, R>(
-  owner: RunReactivationOwnerService<R>,
-  source: RunReactivationHintSource<E>
-) {
-  const attachment = yield* attachCurrentSignal(source.signal).pipe(Effect.option)
-  if (Option.isNone(attachment)) return
-  yield* owner.hint(source.hint)
-  yield* attachment.value.changes.pipe(
-    Stream.runForEach(() => owner.hint(source.hint)),
-    Effect.ignore,
-    Effect.forkScoped
-  )
-})
+export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivationOwnerOptions<E, R, EInstall>) =>
+  Layer.effect(
+    RunReactivationOwner,
+    Effect.gen(function* () {
+      const ownerScope = yield* Effect.scope
+      const activationInterval = yield* finitePositiveDuration(options.activationInterval, "reactivation interval")
+      const failureCooldown = yield* finitePositiveDuration(options.failureCooldown, "failure cooldown")
+      const applicationExit = yield* ApplicationExitShell
+      // A preparing owner closes the race between application Exit's cutoff
+      // and this Layer's process-local drain registration. Exit waits for the
+      // preparation to disappear before it snapshots and runs local drains.
+      const startupPreparation = yield* applicationExit.admission.prepareForwardOwner("InterruptibleBoundary")
+      yield* Effect.addFinalizer(() => startupPreparation.cancel)
+      const messages = yield* Queue.sliding<RunReactivationMessage>(1)
+      const commandGate = yield* Semaphore.make(1)
+      const shutdown = yield* Deferred.make<void>()
+      const stopped = yield* Ref.make(false)
+      // Registration precedes the authoritative read below. The callback can
+      // therefore capture a Pause accepted in the attach/read interval; the
+      // mandatory reread then current-first replays the durable state.
+      const controlState = yield* Ref.make<RunReactivationControlState>("RunUnpaused")
+      const controlRevision = yield* Ref.make(0)
+      const timerFiber = yield* Ref.make<Option.Option<Fiber.Fiber<void, never>>>(Option.none())
+      const trackerNotificationFiber = yield* Ref.make<Option.Option<Fiber.Fiber<void, never>>>(Option.none())
 
-/** Installs a caller-provided owner as an ordinary Effect service. */
-export const runReactivationOwnerLayer = (owner: RunReactivationOwnerService) =>
-  Layer.succeed(RunReactivationOwner, RunReactivationOwner.of(owner))
+      const observeTimerState = (state: "Started" | "Stopped") =>
+        options.onTimerStateChange === undefined ? Effect.void : options.onTimerStateChange(state)
+
+      const stopTimerFiber = Effect.fn("RunReactivationOwner.stopTimer")(() =>
+        Ref.getAndSet(timerFiber, Option.none()).pipe(
+          Effect.flatMap((current) =>
+            Option.match(current, {
+              onNone: () => Effect.void,
+              onSome: (fiber) => Fiber.interrupt(fiber).pipe(Effect.andThen(observeTimerState("Stopped")))
+            })
+          )
+        )
+      )
+
+      const stopTrackerNotificationFiber = Effect.fn("RunReactivationOwner.stopTrackerNotification")(() =>
+        Ref.getAndSet(trackerNotificationFiber, Option.none()).pipe(
+          Effect.flatMap((current) =>
+            Option.match(current, { onNone: () => Effect.void, onSome: (fiber) => Fiber.interrupt(fiber) })
+          )
+        )
+      )
+
+      const startTimerFiber = Effect.fn("RunReactivationOwner.startTimer")(() =>
+        Ref.get(stopped).pipe(
+          Effect.flatMap((isStopped) =>
+            /* v8 ignore next -- @preserve Every timer-start caller holds commandGate and has already rejected stopped; the guard remains fail-closed against future callers. */
+            isStopped
+              ? Effect.void
+              : Ref.get(timerFiber).pipe(
+                  Effect.flatMap((current) =>
+                    Option.match(current, {
+                      onSome: () => Effect.void,
+                      onNone: () =>
+                        Stream.fromSchedule(Schedule.spaced(activationInterval)).pipe(
+                          Stream.runForEach(() => offerHint(RunReactivationHint.Timer())),
+                          Effect.forkIn(ownerScope),
+                          Effect.tap((fiber) => Ref.set(timerFiber, Option.some(fiber))),
+                          Effect.andThen(observeTimerState("Started"))
+                        )
+                    })
+                  )
+                )
+          )
+        )
+      )
+
+      // Stop is a separate Deferred, not a sliding queue value. Thus a hint
+      // offered concurrently with Exit cannot overwrite shutdown, while the
+      // worker is allowed to finish an activation already admitted before the
+      // Deferred was completed.
+      const requestStop = Effect.fn("RunReactivationOwner.requestStop")(() =>
+        commandGate.withPermit(
+          Effect.gen(function* () {
+            yield* Ref.set(stopped, true)
+            yield* Deferred.succeed(shutdown, undefined)
+            yield* stopTimerFiber()
+            yield* stopTrackerNotificationFiber()
+          })
+        )
+      )
+
+      const offerHint = Effect.fn("RunReactivationOwner.hint")(function* (hint: RunReactivationHint) {
+        yield* commandGate.withPermit(
+          Effect.gen(function* () {
+            if (yield* Ref.get(stopped)) return
+            const current = yield* Ref.get(controlState)
+            if (current !== "RunUnpaused") return
+            yield* Queue.offer(messages, { _tag: "Hint", hint })
+          })
+        )
+      })
+
+      const startTrackerNotificationSource = Effect.fn("RunReactivationOwner.startTrackerNotificationSource")(() =>
+        options.trackerNotificationSource === undefined
+          ? Effect.void
+          : Effect.gen(function* () {
+              const source = options.trackerNotificationSource
+              /* v8 ignore next -- @preserve The exact optional property was narrowed by the immediately enclosing condition and cannot change during Layer acquisition. */
+              if (source === undefined) return
+              const attachment = yield* attachCurrentSignal(source)
+              yield* commandGate.withPermit(
+                Effect.gen(function* () {
+                  if (yield* Ref.get(stopped)) return
+                  yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.TrackerNotification() })
+                  const fiber = yield* attachment.changes.pipe(
+                    Stream.runForEach(() => offerHint(RunReactivationHint.TrackerNotification())),
+                    Effect.forkIn(ownerScope)
+                  )
+                  yield* Ref.set(trackerNotificationFiber, Option.some(fiber))
+                })
+              )
+            })
+      )
+
+      const acceptedControl = Effect.fn("RunReactivationOwner.acceptedControl")(function* (
+        direction: AcceptedRunControlDirection
+      ) {
+        yield* commandGate.withPermit(
+          Effect.gen(function* () {
+            if (yield* Ref.get(stopped)) return
+            const changed = yield* Ref.modify(controlState, (current) => {
+              /* v8 ignore next -- @preserve Initial terminal history stops before callbacks can run, and accepted controls cannot create RunTerminated. */
+              if (current === "RunTerminated") return [false, current] as const
+              const next = direction === "Pause" ? ("RunPaused" as const) : ("RunUnpaused" as const)
+              return [current !== next, next] as const
+            })
+            yield* Ref.update(controlRevision, (revision) => revision + 1)
+            if (!changed) return
+            if (direction === "Pause") {
+              yield* stopTimerFiber()
+            } else {
+              yield* startTimerFiber()
+              yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.OperatorWake() })
+            }
+          })
+        )
+      })
+
+      const observeFailure = (failure: E) =>
+        options
+          .onFailure(failure)
+          .pipe(
+            Effect.andThen(
+              Effect.raceFirst(Effect.sleep(failureCooldown), Deferred.await(shutdown).pipe(Effect.asVoid))
+            )
+          )
+
+      const nextMessage = Effect.raceFirst(
+        Queue.take(messages).pipe(Effect.map(Option.some)),
+        Deferred.await(shutdown).pipe(Effect.as(Option.none()))
+      )
+
+      const processHint = Effect.gen(function* () {
+        if (yield* Ref.get(stopped)) return
+        if ((yield* Ref.get(controlState)) === "RunPaused") return
+        /* v8 ignore next -- @preserve Initial terminal history stops before queue consumption, and no process-local command can create RunTerminated. */
+        if ((yield* Ref.get(controlState)) === "RunTerminated") {
+          yield* requestStop()
+          return
+        }
+
+        const decision = yield* options.activate.pipe(
+          Effect.mapError((failure) => ({ _tag: "Activate" as const, failure }))
+        )
+        if (decision._tag === "RunMayTerminate") yield* requestStop()
+      }).pipe(
+        Effect.catchTag("Activate", ({ failure }) =>
+          options.isTerminationFailure(failure)
+            ? options.onFailure(failure).pipe(Effect.andThen(requestStop()))
+            : observeFailure(failure)
+        )
+      )
+
+      yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: requestStop() })
+      yield* startupPreparation.cancel
+      yield* options.installAcceptedRunReactivationObservers({
+        control: acceptedControl,
+        acceptedFactPublication: offerHint(RunReactivationHint.AcceptedFactPublication())
+      })
+      const control = yield* options.readControl.pipe(Effect.tapError(options.onFailure))
+      // A callback may win while the Journal read is in flight. Do not let a
+      // stale read overwrite that later accepted fact; otherwise the read is
+      // the current-first replay for the observer just attached.
+      yield* commandGate.withPermit(
+        Ref.get(controlRevision).pipe(
+          Effect.flatMap((revision) => (revision === 0 ? Ref.set(controlState, control) : Effect.void))
+        )
+      )
+      yield* startTrackerNotificationSource()
+
+      const worker = Effect.gen(function* () {
+        if ((yield* Ref.get(controlState)) === "RunTerminated") {
+          yield* requestStop()
+          return
+        }
+        yield* commandGate.withPermit(
+          Effect.gen(function* () {
+            if (yield* Ref.get(stopped)) return
+            if ((yield* Ref.get(controlState)) === "RunUnpaused") {
+              yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.Startup() })
+              yield* startTimerFiber()
+            }
+          })
+        )
+        const loop = (): Effect.Effect<void, never, R> =>
+          nextMessage.pipe(
+            Effect.flatMap((message) =>
+              Option.match(message, {
+                onNone: () => Effect.void,
+                onSome: () => processHint.pipe(Effect.andThen(loop()))
+              })
+            )
+          )
+        yield* loop()
+      })
+
+      // Application Exit invokes this registered drain after forward owners
+      // (including an active Run activation) have reached their boundaries.
+      yield* Effect.forkScoped(worker)
+
+      return RunReactivationOwner.of({ hint: offerHint })
+    })
+  )

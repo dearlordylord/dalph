@@ -1850,6 +1850,7 @@ it.effect("publishes each accepted executor report before continuing and stops a
         repository: GitRepositoryLocator.make(`${directory}/.git`),
         ref: IntegrationTargetRef.make("refs/heads/continuation-target")
       })
+      const trackerReads = yield* Ref.make(0)
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
@@ -1862,7 +1863,7 @@ it.effect("publishes each accepted executor report before continuing and stops a
           Layer.succeed(
             TrackerGraphReader,
             TrackerGraphReader.of({
-              read: () => Effect.succeed(currentSnapshot),
+              read: () => Ref.updateAndGet(trackerReads, (reads) => reads + 1).pipe(Effect.as(currentSnapshot)),
               readTaskWorkSpecification: () => Effect.succeed(currentSpecification)
             })
           )
@@ -1899,6 +1900,8 @@ it.effect("publishes each accepted executor report before continuing and stops a
       )
       const failure = yield* activateExactRun.pipe(Effect.flip)
       expect(failure._tag).toBe("GitTargetLineageReadFailure")
+      const trackerReadsAfterFailure = yield* Ref.get(trackerReads)
+      expect(trackerReadsAfterFailure).toBeGreaterThan(0)
       const failedRecords = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
@@ -1910,6 +1913,7 @@ it.effect("publishes each accepted executor report before continuing and stops a
 
       yield* git.runInWorktree(directory, ["update-ref", continuationTarget.ref, plannedAttempt.baseSha])
       yield* activateExactRun
+      expect(yield* Ref.get(trackerReads)).toBeGreaterThan(trackerReadsAfterFailure)
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))

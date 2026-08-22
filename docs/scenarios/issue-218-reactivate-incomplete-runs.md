@@ -11,8 +11,16 @@ The task tracker owns task identity, lifecycle, dependencies, grouping, and
 claims. Git owns refs, worktrees, and lineage. The executor owns session and
 process observations. The Run Journal owns only accepted workflow history.
 The reactivation owner persists none of its wake, timer, frontier, or UI
-state; its queue, fibers, backoff counters, and one-owner guard disappear on
-application exit or process loss.
+state; its queue, fibers, cooldown, and one-owner registration disappear on
+application exit or process loss. The supported production entry is the
+scoped `productionRunReactivationLayer` composition. The configured CLI host
+entry is `makeConfiguredProductionCliApplication`, which invokes a host-owned
+production callback for `dalph run <target>`; `bin/dalph.ts` still installs
+only the documented dry-run host. The accepted-fact publication boundary is
+wired through the reactive delivery publication observer. `TrackerGraphReader`
+currently exposes reads but no provider notification stream, so the bounded
+timer remains the honest tracker-notification recovery adapter rather than an
+invented live source.
 
 ## A lost tracker notification is recovered by the bounded timer
 
@@ -53,14 +61,20 @@ observation, or infer work from the missing notification.
 
 ### Acceptance-test mapping
 
-- `rechecks an unterminated Run after a lost notification when TestClock fires`
-  proves the timer recovery and fresh current reads.
-- `attaches a CurrentSignal current value before listening for later
-  publications` proves
-  the same no-edge guarantee for a subscription that starts after a fact
-  changed.
-- `keeps one activation owner while hints arrive concurrently` proves that a
-  timer wake cannot create a second coordinator.
+- `rechecks after a lost notification when TestClock fires, with no Run read
+  per timer` proves the timer recovery and that the timer
+  consults the local projection rather than polling the Run Journal.
+- `uses current-first control state: paused restart is passive and accepted
+  Unpause activates once` proves a restart observes a durable Pause before the
+  first timer and that an accepted Unpause requests one fresh activation.
+- `production composition wires current-first tracker notifications and fresh checks`
+  proves the supported production Layer wires one exact Run owner and that an
+  injected current-first tracker notification, timer tick, and accepted-fact
+  publication each cause an ordinary fresh check.
+- `routes the configured production CLI command into its host-owned application
+  boundary` proves the exact configured CLI command composes the production
+  Layer and reaches its startup activation; the repository binary remains
+  dry-run-only by configuration.
 
 ## Several hints produce one activation and one optional trailing check
 
@@ -100,13 +114,30 @@ authorize work, continue polling while paused, or reactivate a terminated Run.
 
 ### Acceptance-test mapping
 
-- `keeps one activation owner while hints arrive concurrently` proves the
+- `coalesces concurrent hints behind one activation` proves the
   tracker/publication/Operator hints coalesce, never overlap, and produce only
   one trailing current check.
-- `suppresses polling while paused and checks once after Unpause` proves
-  Pause/Unpause behavior.
-- `stops after Run termination and on an application Exit stop` proves
-  both terminal boundaries.
+- `publishes an accepted delivery fact through the bootstrap's attached Run
+  observer` proves the repository's accepted-fact publication adapter invokes
+  the attached owner hint after the runtime publication boundary.
+- `replays durable Pause between observer attachment and the mandatory current
+  read` proves a Pause accepted at the attach/read race is current before
+  Startup or timer scheduling.
+- `stops the Run-specific timer on accepted Pause and starts one fresh timer on
+  Unpause` proves Pause schedules no Run-specific timer and Unpause schedules
+  exactly one new timer.
+- `uses current-first control state: paused restart is passive and accepted
+  Unpause activates once` proves accepted Pause/Unpause behavior without a
+  local pause command.
+- `keeps one owner per exact Run composition and lets Exit stop after the
+  active boundary` proves one scoped owner, race-safe Exit shutdown, and that
+  a retained late Pause/Unpause callback cannot restart its timer.
+- `registers its drain before Exit can pass a blocking tracker-source
+  attachment` proves the application cutoff cannot miss a partially starting
+  owner or allow that owner to schedule work after Exit succeeds.
+- `treats terminated history as closure and never schedules a fresh
+  activation` proves that already-terminated history is not endlessly
+  observed as a retryable failure.
 
 ## A transient tracker or Git read failure backs off without a hot loop
 
@@ -123,32 +154,35 @@ unchanged.
 
 The owner receives a hint or a bounded timer tick. It invokes fresh Run
 establishment and activation. The first tracker/Git boundary returns a typed
-failure. The owner reports that failure through its observation seam and
-waits on an explicit finite retry/backoff schedule. It does not immediately
-repeat the same failed observation, spin a hot loop, or treat the error as
-proof that the Run is terminal. A later timer tick or hint starts a fresh
+failure. The owner reports that failure through its required typed observation
+seam and waits on one explicit finite cooldown. The failure itself never
+authorizes replay; a later timer tick or hint starts a fresh
 establishment/activation and therefore rereads Journal, tracker, and Git as
 required by ordinary activation. Successful current facts can then select
 work; a terminal proof can close R.
 
-If the process crashes before the backoff elapses, the failed observation and
-the process-local backoff disappear; a later start performs the normal fresh
+If the process crashes before the cooldown elapses, the failed observation and
+the process-local cooldown disappear; a later start performs the normal fresh
 read. If it crashes after a boundary has returned but before the owner records
 its result, the owning tracker/Git protocol's existing intent/reconciliation
 rules decide whether a read may be retried. Executor calls do not apply unless
 fresh accepted facts select an executor responsibility.
 
 The maintainer sees a bounded typed failure or later progress, never an
-unbounded retry storm. Dalph must not reuse a failed snapshot, retry beyond
-the configured bound, append a durable wake/frontier row, or terminate R just
-because a read failed.
+unbounded retry storm. Dalph must not reuse a failed snapshot, replay without
+a later hint/timer check, append a durable wake/frontier row, or terminate R
+just because a read failed.
 
 ### Acceptance-test mapping
 
-- `rereads current facts after a transient failure` proves failed observations
-  are not reused and a later hint reaches a fresh activation.
-- `backs off a typed tracker read failure and waits for a later hint` proves the
-  TestClock retry bound and no immediate duplicate boundary call.
+- `observes one typed activation failure, cools down, and waits for a later
+  hint` proves fresh tracker/Git reads after each later hint, no whole-
+  activation retry, and no mutation replay.
+- `stops on an activation-observed terminated Run instead of cooling down for
+  replay` proves an already-terminated activation result closes the owner and
+  stops its timer rather than entering cooldown.
+- `stops its timer when activation returns RunMayTerminate` proves the normal
+  finality decision closes the process-local owner without a later timer turn.
 
 ## A normal finality result stops or retains the exact Run
 
@@ -179,23 +213,28 @@ termination, or use a notification as proof of legal work.
 
 ### Acceptance-test mapping
 
-- `rechecks an unterminated Run after a lost notification when TestClock
-  fires` proves the retained active branch, while `stops after Run termination
-  and on an application Exit stop` proves the terminal branch.
-- `production composition re-enters public runWorkflow for each current check`
-  proves
-  the application path installs the same ordinary establishment/activation
-  owner.
+- `rechecks after a lost notification when TestClock fires, with no Run read
+  per timer` proves the retained active branch, while
+  `treats terminated history as closure and never schedules a fresh
+  activation` proves the terminal branch.
+- `production composition wires current-first tracker notifications and fresh checks`
+  proves the application path installs the same ordinary
+  establishment/activation owner. The integration scenario
+  `publishes each accepted executor report before continuing and stops after
+  Terminal` uses the actual `TrackerGraphReader`, Journal, and Git target
+  lineage boundaries across two ordinary activations: it asserts a fresh
+  tracker read after the first typed Git read failure and the later ref update,
+  and observes the corresponding accepted Git lineage fact.
 
 ## Authority and ownership boundaries
 
 | Concern | Owner | Reactivation treatment | Acceptance seam |
 |---|---|---|---|
 | Run history and termination | Run Journal/bootstrap | Fresh establishment reads accepted facts; only bootstrap may terminate | active/terminal finality tests |
-| Task identity and current legality | Task tracker | Hints request a new ordinary read; notification never proves work | lost-notification and transient-read tests |
+| Task identity and current legality | Task tracker | An injected current-first notification adapter or bounded timer requests a new ordinary read; notification never proves work | lost-notification, production composition, and transient-read tests |
 | Git refs/worktrees/lineage | Git boundary | Fresh activation chooses Git reads only from accepted facts | transient-read and production composition tests |
 | Executor session/process state | Executor boundary | No executor call on a hint alone; existing executor protocol decides any selected work | production/Run integration tests |
-| Wake/timer/duplicate markers | Process-local reactivation owner | Queue, refs, fibers, and backoff are never journaled or reused after process loss | coalescing/Exit/Pause tests |
+| Wake/timer/duplicate markers | Process-local reactivation owner | Queue, refs, fibers, and cooldown are never journaled or reused after process loss | coalescing/Exit/Pause tests |
 | Operator control and application Exit | Operator/application lifecycle | Pause suppresses polling; Exit closes admission and stops later wakes | Pause and Exit tests |
 
 Aggregate typecheck, coverage, or model totals cannot replace this

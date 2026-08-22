@@ -542,6 +542,12 @@ export {
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
   type ControlledDeliveryActionExecutorFactory,
+  type RunReactivationControlState,
+  type AcceptedRunControlDirection,
+  type AcceptedRunControlObserver,
+  type AcceptedRunFactPublicationObserver,
+  type AcceptedRunReactivationObservers,
+  JournaledRunReactivationObserverAlreadyRegistered,
   runWorkflowWithControlledDeliveryActionExecutor,
   runWorkflow
 } from "./coordination/run/run.js"
@@ -549,12 +555,9 @@ export {
   RunReactivationOwner,
   RunReactivationIntervalInvalid,
   RunReactivationHint,
-  makeRunReactivationOwner,
-  attachRunReactivationHintSource,
   runReactivationOwnerLayer,
   type RunReactivationOwnerOptions,
-  type RunReactivationOwnerService,
-  type RunReactivationHintSource
+  type RunReactivationOwnerService
 } from "./coordination/run/run-reactivation-owner.js"
 export {
   PauseNotApplied,

@@ -39,12 +39,12 @@ import {
   gitDispositionCleanupBoundaryLayer,
   IntegratorCandidateProviderAuthority,
   type IntegratorCandidateProviderAuthorityService,
-  makeRunReactivationOwner,
-  attachRunReactivationHintSource,
+  runReactivationOwnerLayer,
   runWorkflow,
   type InitialControlPolicySource,
+  type CurrentSignal,
   type TrackerTarget,
-  type RunReactivationHintSource
+  WorkflowRunAlreadyTerminated
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Duration, Effect, Layer, Schema } from "effect"
@@ -65,42 +65,63 @@ export type ProductionRunReactivationInterval = typeof ProductionRunReactivation
 
 const defaultProductionRunReactivationInterval = ProductionRunReactivationInterval.make(Duration.minutes(1))
 
-// eslint-disable-next-line functional/no-mixed-types -- Production composition groups decoded timing, failure observation, and ephemeral hint sources at one boundary.
+// eslint-disable-next-line functional/no-mixed-types -- Production composition groups decoded timing and the typed failure observation boundary at one application seam.
 export interface ProductionRunReactivationOptions {
   readonly activationInterval?: ProductionRunReactivationInterval
-  readonly onFailure?: (failure: unknown) => Effect.Effect<void>
-  /** Optional current-first notification/publication sources; values remain hints. */
-  readonly hintSources?: ReadonlyArray<RunReactivationHintSource<unknown>>
+  readonly failureCooldown?: ProductionRunReactivationInterval
+  /** Optional host-owned current-first tracker notification adapter; values remain hints. */
+  readonly trackerNotificationSource?: CurrentSignal<unknown>
+  /** Required boundary for typed tracker/Git/journal failures; no activation failure is swallowed. */
+  readonly onFailure: (failure: unknown) => Effect.Effect<void>
 }
 
+const defaultProductionRunReactivationCooldownSeconds = 5
+const defaultProductionRunReactivationCooldown = ProductionRunReactivationInterval.make(
+  Duration.seconds(defaultProductionRunReactivationCooldownSeconds)
+)
+
+const isWorkflowRunAlreadyTerminated = (failure: unknown): boolean => failure instanceof WorkflowRunAlreadyTerminated
+
 /**
- * Builds one process-local owner for the exact production Run. Every owner
- * turn re-enters the ordinary public `runWorkflow` establishment boundary;
- * no tracker notification or prior observation is retained as authority.
+ * Supported production composition for one exact Run. It acquires one scoped
+ * owner, re-enters the ordinary `runWorkflow` boundary for each hint/timer,
+ * initializes pause state from the Journal, and wires accepted Run controls
+ * only after their Journal append succeeds. The repository's CLI remains a
+ * dry-run host; this Layer is the production application entry seam.
  */
-export const makeProductionRunReactivationOwner = <EInitial, RInitial>(
+export const productionRunReactivationLayer = <EInitial, RInitial>(
   target: TrackerTarget,
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: RunId,
-  options: ProductionRunReactivationOptions = {}
-) =>
-  Effect.gen(function* () {
+  options: ProductionRunReactivationOptions
+) => {
+  const activation = runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId))
+  const readControl = Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
-    const activation = runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId)).pipe(
-      Effect.provideService(JournaledRunBootstrap, bootstrap)
-    )
-    const activationInterval = options.activationInterval ?? defaultProductionRunReactivationInterval
-    const owner =
-      options.onFailure === undefined
-        ? yield* makeRunReactivationOwner({ activate: activation, activationInterval })
-        : yield* makeRunReactivationOwner({ activate: activation, activationInterval, onFailure: options.onFailure })
-    if (options.hintSources !== undefined) {
-      yield* Effect.forEach(options.hintSources, (source) => attachRunReactivationHintSource(owner, source))
-    }
-    const applicationExit = yield* ApplicationExitShell
-    yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: owner.stop() })
-    return owner
+    return yield* bootstrap.readRunReactivationControl(target, runId)
   })
+  const ownerLayer = runReactivationOwnerLayer({
+    activate: activation,
+    activationInterval: options.activationInterval ?? defaultProductionRunReactivationInterval,
+    failureCooldown: options.failureCooldown ?? defaultProductionRunReactivationCooldown,
+    installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
+      Effect.gen(function* () {
+        const bootstrap = yield* JournaledRunBootstrap
+        yield* bootstrap.registerAcceptedRunReactivationObservers({
+          control,
+          acceptedFactPublication: () => acceptedFactPublication
+        })
+      }),
+    isTerminationFailure: isWorkflowRunAlreadyTerminated,
+    onFailure: options.onFailure,
+    readControl,
+    runId,
+    ...(options.trackerNotificationSource === undefined
+      ? {}
+      : { trackerNotificationSource: options.trackerNotificationSource })
+  })
+  return ownerLayer
+}
 
 /**
  * Composes live tracker/Git boundaries with the caller-selected executor

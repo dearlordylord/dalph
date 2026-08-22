@@ -4,7 +4,11 @@ import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Semaphore,
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
-import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
+import {
+  ControlDirectionApplication,
+  controlDirectionApplicationLayer
+} from "../../workflow/protocols/control-direction-application/protocol.js"
+import { ApplyControlDirectionRequest } from "../../workflow/protocols/control-direction-application/request.js"
 import {
   applyOperatorControlDirection,
   type OperatorControlGraphReadBoundary
@@ -23,6 +27,7 @@ import {
 import { ApplyIntegrationQuarantineDirectionRequest } from "../../workflow/protocols/integration-quarantine/events.js"
 import { ReadIntegrationQuarantineDirectionRequest } from "../../workflow/protocols/integration-quarantine/request.js"
 import { Journal, journalLayer, type JournalState } from "../delivery/journal.js"
+import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
 import {
   DeliveryRuntimeResources,
   deliveryRuntimeResourceCapabilitiesLayer,
@@ -39,9 +44,11 @@ import {
   JournaledRunBootstrap,
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
+  JournaledRunReactivationObserverAlreadyRegistered,
   type JournaledRunBootstrapService,
   type JournaledRunProcessServices,
-  type JournaledRunServices
+  type JournaledRunServices,
+  type AcceptedRunReactivationObservers
 } from "./run.js"
 import { inspectStartupRecovery, StartupRecoveryBlocked } from "./startup-recovery.js"
 import { observePauseProgress } from "./pause-progress-observer.js"
@@ -51,7 +58,8 @@ import {
   type JournalError,
   type JournalReadError,
   JournalStore,
-  RunLifecycleJournal
+  RunLifecycleJournal,
+  WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
 import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
@@ -223,8 +231,14 @@ export const journaledRunBootstrapLayer = (
         ...storage,
         append: (...input) => observeProducedWrite(`append:${input[1]}`, "append", storage.append(...input))
       })
-      const integrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(
-        InRunJournal.of({ append: exitAwareStorage.append, read: exitAwareStorage.read })
+      const inRunJournal = InRunJournal.of({ append: exitAwareStorage.append, read: exitAwareStorage.read })
+      const integrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(inRunJournal)
+      const inactiveControlContext = yield* Layer.build(
+        controlDirectionApplicationLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, inRunJournal)))
+      )
+      const inactiveControlDirection = Context.get(inactiveControlContext, ControlDirectionApplication)
+      const acceptedRunReactivationObservers = yield* Ref.make<Option.Option<AcceptedRunReactivationObservers>>(
+        Option.none()
       )
       const runtimeState = yield* Ref.make<RuntimeControlState>({ _tag: "RuntimeInactive" })
       const activation = yield* Semaphore.make(1)
@@ -309,7 +323,16 @@ export const journaledRunBootstrapLayer = (
         Effect.scoped(
           Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
+              const reactivationObservers = yield* Ref.get(acceptedRunReactivationObservers)
+              const publicationObserver = DeliveryRelationPublicationObserver.of({
+                observe: () =>
+                  Option.match(reactivationObservers, {
+                    onNone: () => Effect.void,
+                    onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
+                  })
+              })
               const downstream = runtimeLayer({ runId }).pipe(
+                Layer.provide(Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)),
                 Layer.provideMerge(processRuntimeLayer),
                 Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
@@ -458,6 +481,48 @@ export const journaledRunBootstrapLayer = (
           )
         )
 
+      const readRunReactivationControl: JournaledRunBootstrapService["readRunReactivationControl"] = (target, runId) =>
+        Effect.gen(function* () {
+          if (runId !== expectedRunId) {
+            return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
+          }
+          const records = yield* lifecycle.read(runId)
+          // A not-yet-established Run has no pause fact. The ordinary first
+          // activation is therefore eligible to establish it.
+          if (records.length === 0) return "RunUnpaused" as const
+          const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+          /* v8 ignore next -- @preserve JournalStore cannot return a non-empty accepted Run history without its validated beginning; malformed raw histories fail in store/reconstruction tests. */
+          if (began === undefined || began.event._tag !== "WorkflowRunBegan") {
+            return yield* validateRun(runId, records).pipe(Effect.as("RunUnpaused" as const))
+          }
+          if (taskTrackerTargetKey(began.event.target) !== taskTrackerTargetKey(target)) {
+            return yield* new WorkflowRunTargetMismatch({
+              recordedTarget: began.event.target,
+              requestedTarget: target,
+              runId
+            })
+          }
+          const reduction = yield* validateRun(runId, records)
+          if (reduction.records.some(({ event }) => event._tag === "WorkflowRunTerminated")) {
+            return "RunTerminated" as const
+          }
+          return reduction.runState.pause.run._tag === "RunPaused" ? ("RunPaused" as const) : ("RunUnpaused" as const)
+        })
+
+      const registerAcceptedRunReactivationObservers: JournaledRunBootstrapService["registerAcceptedRunReactivationObservers"] =
+        (observers) =>
+          Ref.modify(acceptedRunReactivationObservers, (current) =>
+            Option.isSome(current)
+              ? ([Option.none(), current] as const)
+              : ([Option.some(undefined), Option.some(observers)] as const)
+          ).pipe(
+            Effect.flatMap((registered) =>
+              Option.isSome(registered)
+                ? Effect.void
+                : Effect.fail(new JournaledRunReactivationObserverAlreadyRegistered())
+            )
+          )
+
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
         applyRunCancellation: (input) =>
           Effect.gen(function* () {
@@ -519,16 +584,51 @@ export const journaledRunBootstrapLayer = (
           }),
         applyAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.apply(input)),
         applyControlDirection: (input) =>
-          withRuntimeControls(
-            ({ controlDirection, operationIdAllocator, runId, target, workflowInterpreter, workflowTrace }) =>
-              applyOperatorControlDirection(runId, target, input, {
-                allocator: operationIdAllocator,
-                application: controlDirection,
-                graphReadBoundary: operatorControlGraphReadBoundary,
-                interpreter: workflowInterpreter,
-                trace: workflowTrace
-              })
-          ),
+          Effect.gen(function* () {
+            const request = yield* Schema.decodeUnknownEffect(ApplyControlDirectionRequest, {
+              onExcessProperty: "error"
+            })(input)
+            if (request.subject._tag === "Run" && request.subject.runId !== expectedRunId) {
+              return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: request.subject.runId })
+            }
+            const publishAcceptedRunControl = Ref.get(acceptedRunReactivationObservers).pipe(
+              Effect.flatMap((observer) =>
+                Option.match(observer, {
+                  onNone: () => Effect.void,
+                  onSome: ({ control }) => control(request.direction)
+                })
+              )
+            )
+            const applied =
+              request.subject._tag === "Run"
+                ? withRuntimeControls(
+                    ({ controlDirection, operationIdAllocator, runId, target, workflowInterpreter, workflowTrace }) =>
+                      applyOperatorControlDirection(runId, target, request, {
+                        allocator: operationIdAllocator,
+                        application: controlDirection,
+                        graphReadBoundary: operatorControlGraphReadBoundary,
+                        interpreter: workflowInterpreter,
+                        trace: workflowTrace
+                      }).pipe(Effect.tap(() => publishAcceptedRunControl))
+                  ).pipe(
+                    Effect.catchTag("JournaledRunNotActive", () =>
+                      withJournalControl(
+                        inactiveControlDirection.apply(request).pipe(Effect.tap(() => publishAcceptedRunControl))
+                      )
+                    )
+                  )
+                : withRuntimeControls(
+                    ({ controlDirection, operationIdAllocator, runId, target, workflowInterpreter, workflowTrace }) =>
+                      applyOperatorControlDirection(runId, target, request, {
+                        allocator: operationIdAllocator,
+                        application: controlDirection,
+                        graphReadBoundary: operatorControlGraphReadBoundary,
+                        interpreter: workflowInterpreter,
+                        trace: workflowTrace
+                      })
+                  )
+            return yield* applied
+          }),
         applyTaskClaimReacquisition: (input) =>
           withRuntimeControls(({ taskClaimReacquisition }) => taskClaimReacquisition.apply(input)),
         readAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.read(input)),
@@ -556,6 +656,11 @@ export const journaledRunBootstrapLayer = (
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }
 
-      return JournaledRunBootstrap.of({ activate, operatorControl })
+      return JournaledRunBootstrap.of({
+        activate,
+        readRunReactivationControl,
+        registerAcceptedRunReactivationObservers,
+        operatorControl
+      })
     })
   )

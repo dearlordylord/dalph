@@ -155,3 +155,31 @@ export const runCli = (input: ReadonlyArray<string>) =>
 export const runCliFromStdio = Command.run(dalphCommand, commandConfiguration).pipe(
   Effect.catchTag("IntegratorBoundaryUnavailable", (failure: IntegratorBoundaryUnavailable) => Effect.fail(failure))
 )
+
+/**
+ * Configured production host seam. The repository binary deliberately remains
+ * dry-run-only, while a host that has installed real tracker/Git/journal
+ * authorities can expose the exact same `dalph run <target>` command by
+ * supplying its scoped production application here.
+ */
+export const makeConfiguredProductionCliApplication = <E, R>(
+  runProduction: (target: TrackerTarget) => Effect.Effect<void, E, R>
+) => {
+  const configuredRunCommand = Command.make(
+    "run",
+    {
+      target: Argument.string("target").pipe(
+        Argument.withDescription(
+          "Fixture locator or github:OWNER/REPOSITORY#ISSUE; provider authorities are host-configured."
+        )
+      )
+    },
+    ({ target: rawTarget }) =>
+      Effect.gen(function* () {
+        const target = yield* decodeCliTarget(rawTarget)
+        yield* runProduction(target)
+      })
+  )
+  const configuredCommand = Command.make("dalph").pipe(Command.withSubcommands([configuredRunCommand]))
+  return Command.run(configuredCommand, commandConfiguration)
+}

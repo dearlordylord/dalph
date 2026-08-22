@@ -20,6 +20,7 @@ import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.j
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { Journal } from "../delivery/journal.js"
 import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
+import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
 import { currentSignalOf, type DeliveryRelationInputBundle, TrackerGraphState } from "../delivery/relations.js"
@@ -51,7 +52,7 @@ import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identi
 import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontier/run-finality.js"
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
-import { JournaledRunBootstrap } from "./run.js"
+import { JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import {
   type ApplicationExitShellService,
@@ -225,8 +226,40 @@ const unpausedRuntimeEvaluation = Effect.gen(function* () {
   return yield* runtime.get
 })
 
-const runtimeLayer = (runId: RunId, trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader) =>
+const publicationBundle: DeliveryRelationInputBundle = {
+  actionInputs: {
+    proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+    reflectionProposals: [],
+    runtimeFacts: {
+      acceptedAt: null,
+      cancellationApplied: false,
+      pauseCoverage: {
+        _tag: "PauseCoverageGraphNotEstablished",
+        applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+      },
+      quiescence: { _tag: "TrackerReconfirmationAllowed" },
+      taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held: [] }
+    },
+    trackerGraphProposals: []
+  },
+  publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy: runtimePolicy }
+}
+
+const runtimeLayer = (
+  runId: RunId,
+  trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader,
+  publicationCount?: Ref.Ref<number>
+) =>
   Layer.mergeAll(
+    publicationCount === undefined
+      ? Layer.empty
+      : Layer.effectDiscard(
+          Effect.gen(function* () {
+            const observer = yield* DeliveryRelationPublicationObserver
+            const first = yield* Ref.modify(publicationCount, (count) => [count === 0, count + 1] as const)
+            if (first) yield* observer.observe(publicationBundle)
+          })
+        ),
     Layer.effect(InRunJournal, InRunJournal),
     attemptChoiceControlLayer,
     controlDirectionApplicationLayer,
@@ -264,7 +297,8 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   trackerGraphReader: TrackerGraphReader["Service"] = defaultTrackerGraphReader,
   applicationExit?: ApplicationExitShellService,
   processLifecycle?: ApplicationProcessLifecycleService,
-  ownership: CoordinatorOwnership["Service"] = defaultOwnership
+  ownership: CoordinatorOwnership["Service"] = defaultOwnership,
+  publicationCount?: Ref.Ref<number>
 ) {
   const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
   const dependencies = Layer.mergeAll(
@@ -277,7 +311,7 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
     (yield* makeApplicationExitShell(ownership, processLifecycle ?? { requestEnd: () => Effect.void }))
   const application = journaledRunBootstrapLayer(
     expectedRunId,
-    ({ runId }) => runtimeLayer(runId, trackerGraphReader),
+    ({ runId }) => runtimeLayer(runId, trackerGraphReader, publicationCount),
     sharedApplicationExit
   ).pipe(Layer.provide(dependencies))
   const bootstrap = Context.get(yield* Layer.build(application), JournaledRunBootstrap)
@@ -1140,6 +1174,7 @@ it.effect("rejects a terminated Run before constructing activation", () =>
         completedFinalityProof(runId, target)
       )
       const bootstrap = yield* buildBootstrap(runId, storage)
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunTerminated")
       const runtimeEntered = yield* Ref.make(false)
 
       const failure = yield* bootstrap
@@ -1270,11 +1305,14 @@ it.effect("publishes an Operator Pause through the active journal without exposi
 
       yield* Deferred.succeed(finish, undefined)
       yield* Fiber.join(running)
-      expect(
-        yield* bootstrap.operatorControl
-          .applyControlDirection({ direction: "Unpause", subject: { _tag: "Run", runId } })
-          .pipe(Effect.flip)
-      ).toMatchObject({ _tag: "JournaledRunNotActive" })
+      const unpaused = yield* bootstrap.operatorControl.applyControlDirection({
+        direction: "Unpause",
+        subject: { _tag: "Run", runId }
+      })
+      expect(unpaused.event).toMatchObject({ _tag: "ControlDirectionApplied", direction: "Unpause" })
+      expect((yield* storage.read(runId)).filter(({ event }) => event._tag === "ControlDirectionApplied")).toHaveLength(
+        2
+      )
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -2117,6 +2155,124 @@ it.effect("applies Alice's Run Pause without a task-membership read", () =>
       expect(applied.event).toMatchObject({ _tag: "ControlDirectionApplied", subject: { _tag: "Run", runId } })
       yield* Deferred.succeed(finish, undefined)
       yield* Fiber.join(running)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("applies inactive Run controls through the Journal while inactive Task control stays NotActive", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-run-control")
+      const runId = yield* freshWorkflowRunId(target)
+      const tracker = TrackerGraphReader.of({
+        read: () => Effect.die("inactive Run control must not read tracker facts"),
+        readTaskWorkSpecification: () => Effect.die("unused")
+      })
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage, tracker)
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunUnpaused")
+      expect(
+        yield* bootstrap.readRunReactivationControl(target, RunId.make("different-reactivation-run")).pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournaledRunIdentityMismatch" })
+      yield* storage.beginRun(runId, target, initialPolicy)
+      expect(
+        yield* bootstrap
+          .readRunReactivationControl(FixtureTarget.make("different-reactivation-target"), runId)
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "WorkflowRunTargetMismatch" })
+      const observed = yield* Ref.make<ReadonlyArray<string>>([])
+      yield* bootstrap.registerAcceptedRunReactivationObservers({
+        control: (direction) => Ref.update(observed, (current) => [...current, direction]),
+        acceptedFactPublication: () => Effect.void
+      })
+      expect(
+        yield* bootstrap.operatorControl
+          .applyControlDirection({
+            direction: "Pause",
+            subject: { _tag: "Run", runId: RunId.make("different-reactivation-run") }
+          })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournaledRunIdentityMismatch" })
+
+      const paused = yield* bootstrap.operatorControl.applyControlDirection({
+        direction: "Pause",
+        subject: { _tag: "Run", runId }
+      })
+      expect(paused.event).toMatchObject({ _tag: "ControlDirectionApplied", direction: "Pause" })
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunPaused")
+      expect(yield* Ref.get(observed)).toEqual(["Pause"])
+
+      const taskFailure = yield* bootstrap.operatorControl
+        .applyControlDirection({
+          direction: "Pause",
+          subject: { _tag: "Task", runId, taskId: TaskId.make("inactive-task") }
+        })
+        .pipe(Effect.flip)
+      expect(taskFailure).toMatchObject({ _tag: "JournaledRunNotActive" })
+
+      const unpaused = yield* bootstrap.operatorControl.applyControlDirection({
+        direction: "Unpause",
+        subject: { _tag: "Run", runId }
+      })
+      expect(unpaused.event).toMatchObject({ _tag: "ControlDirectionApplied", direction: "Unpause" })
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunUnpaused")
+      expect(yield* Ref.get(observed)).toEqual(["Pause", "Unpause"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("publishes an accepted delivery fact through the bootstrap's attached Run observer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-publication-hint")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const publicationCount = yield* Ref.make(0)
+      const hints = yield* Ref.make(0)
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        undefined,
+        undefined,
+        defaultOwnership,
+        publicationCount
+      )
+      yield* bootstrap.registerAcceptedRunReactivationObservers({
+        control: () => Effect.void,
+        acceptedFactPublication: () => Ref.update(hints, (current) => current + 1)
+      })
+
+      yield* bootstrap.activate(
+        target,
+        Effect.succeed(initialPolicy),
+        runId,
+        Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+      )
+
+      expect(yield* Ref.get(publicationCount)).toBe(1)
+      expect(yield* Ref.get(hints)).toBe(1)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rejects a second process-local Run reactivation observer pair instead of stealing owner updates", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-single-owner-observer")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const observers: AcceptedRunReactivationObservers = {
+        control: () => Effect.void,
+        acceptedFactPublication: () => Effect.void
+      }
+      yield* bootstrap.registerAcceptedRunReactivationObservers(observers)
+      const failure = yield* bootstrap.registerAcceptedRunReactivationObservers(observers).pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "JournaledRunReactivationObserverAlreadyRegistered" })
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

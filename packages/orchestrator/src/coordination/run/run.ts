@@ -57,6 +57,28 @@ export type JournaledRunProcessServices =
   | DeliveryRuntimeResources
   | DeliveryRuntimeObservationPublication
 
+/**
+ * The accepted Run-level control fact that a later reactivation check reads
+ * from the workflow Journal.  This is a process-local observation of durable
+ * history, never a second pause authority.
+ */
+export type RunReactivationControlState = "RunPaused" | "RunUnpaused" | "RunTerminated"
+
+/** One accepted Run-level Operator direction published after its Journal append. */
+export type AcceptedRunControlDirection = "Pause" | "Unpause"
+
+/** A process-local observer for an already accepted Run-level control fact. */
+export type AcceptedRunControlObserver = (direction: AcceptedRunControlDirection) => Effect.Effect<void>
+
+/** A process-local observer for one accepted Journal publication that can prompt a fresh current check. */
+export type AcceptedRunFactPublicationObserver = () => Effect.Effect<void>
+
+/** The two process-local callbacks installed atomically for one exact Run owner. */
+export interface AcceptedRunReactivationObservers {
+  readonly control: AcceptedRunControlObserver
+  readonly acceptedFactPublication: AcceptedRunFactPublicationObserver
+}
+
 export type JournaledRunServices =
   | Journal
   | AttemptChoiceControl
@@ -98,6 +120,12 @@ export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRu
 /** An Operator request arrived while no established Run activation was installed. */
 export class JournaledRunNotActive extends Schema.TaggedError<JournaledRunNotActive>()("JournaledRunNotActive", {}) {}
 
+/** A fixed Run bootstrap already has its one reactivation observer pair. */
+export class JournaledRunReactivationObserverAlreadyRegistered extends Schema.TaggedError<JournaledRunReactivationObserverAlreadyRegistered>()(
+  "JournaledRunReactivationObserverAlreadyRegistered",
+  {}
+) {}
+
 export interface JournaledRunBootstrapService {
   readonly activate: <EInitial, RInitial, E, R>(
     target: TrackerTarget,
@@ -109,6 +137,19 @@ export interface JournaledRunBootstrapService {
     E | EInitial | ApplicationExiting | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
     RInitial | Exclude<R, JournaledRunServices>
   >
+  /**
+   * Reads the accepted Run-level control and termination facts without
+   * requiring an active delivery runtime.  An absent history is unpaused so
+   * the ordinary first establishment can create the beginning record.
+   */
+  readonly readRunReactivationControl: (
+    target: TrackerTarget,
+    runId: RunId
+  ) => Effect.Effect<RunReactivationControlState, JournaledRunBootstrapError | JournaledRunIdentityMismatch>
+  /** Installs the process-local callbacks for one owner; each is invoked only after its accepted Journal boundary. */
+  readonly registerAcceptedRunReactivationObservers: (
+    observers: AcceptedRunReactivationObservers
+  ) => Effect.Effect<void, JournaledRunReactivationObserverAlreadyRegistered>
   readonly operatorControl: {
     readonly applyRunCancellation: (
       input: unknown
@@ -142,6 +183,7 @@ export interface JournaledRunBootstrapService {
       | Effect.Error<ReturnType<WorkflowInterpreter["Service"]["readTrackerGraph"]>>
       | Effect.Error<ReturnType<WorkflowTrace["Service"]["emit"]>>
       | JournaledRunNotActive
+      | JournaledRunIdentityMismatch
       | ApplicationExiting
       | TaskControlSubjectOutsideRun
     >
