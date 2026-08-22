@@ -3,6 +3,8 @@
 /* eslint-disable functional/immutable-data -- process output and one-shot CLI state are intentionally mutable. */
 
 import nodeProcess from "node:process"
+import { access } from "node:fs/promises"
+import nodePath from "node:path"
 import { NodeServices } from "@effect/platform-node"
 import {
   AttemptId,
@@ -57,6 +59,7 @@ const QualificationConfiguration = Schema.Struct({
   runId: RunId,
   attemptId: AttemptId,
   holdAfterAction: Schema.Boolean,
+  waitForOwnedChild: Schema.Boolean,
   openAiApiKey: Schema.optionalKey(Schema.String)
 })
 type QualificationConfiguration = typeof QualificationConfiguration.Type
@@ -84,6 +87,7 @@ const rawConfiguration = {
   runId: envValue("DALPH_CODEX_QUALIFICATION_RUN_ID") ?? "real-codex-qualification-run",
   attemptId: envValue("DALPH_CODEX_QUALIFICATION_ATTEMPT_ID") ?? "real-codex-qualification-attempt",
   holdAfterAction: envValue("DALPH_CODEX_QUALIFICATION_HOLD") === "1",
+  waitForOwnedChild: envValue("DALPH_CODEX_QUALIFICATION_WAIT_FOR_OWNED_CHILD") === "1",
   ...(envValue("OPENAI_API_KEY") === undefined ? {} : { openAiApiKey: envValue("OPENAI_API_KEY") })
 }
 
@@ -123,24 +127,40 @@ const terminalObservationAttempts = 600
 
 const settleAttempt = (
   executor: PlannedAttemptExecutorService,
-  request: PlannedAttemptExecutorRequest,
+  correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>,
   remaining: number
 ): Effect.Effect<PlannedAttemptExecutorReport, unknown> =>
   executor
-    .startOrContinue(request)
+    .project(correlation)
     .pipe(
-      Effect.flatMap((report) =>
-        report._tag !== "Running"
-          ? Effect.succeed(report)
+      Effect.flatMap((projection) =>
+        projection._tag === "Exact" && projection.report._tag !== "Running"
+          ? Effect.succeed(projection.report)
           : remaining <= 0
             ? Effect.fail(
                 new QualificationConfigurationFailure({
                   detail: "real Codex turn did not settle within the qualification observation bound"
                 })
               )
-            : Effect.sleep("25 millis").pipe(Effect.andThen(settleAttempt(executor, request, remaining - 1)))
+            : Effect.sleep("25 millis").pipe(Effect.andThen(settleAttempt(executor, correlation, remaining - 1)))
       )
     )
+
+const waitForOwnedChildPublication = (
+  worktree: string,
+  remaining: number = terminalObservationAttempts
+): Effect.Effect<void, QualificationConfigurationFailure> =>
+  Effect.tryPromise({
+    try: () => access(nodePath.join(worktree, ".dalph-owned-child-pid")),
+    catch: () =>
+      new QualificationConfigurationFailure({ detail: "real Codex shell activity did not publish its owned child" })
+  }).pipe(
+    Effect.catch((failure) =>
+      remaining <= 0
+        ? failure
+        : Effect.sleep("25 millis").pipe(Effect.andThen(waitForOwnedChildPublication(worktree, remaining - 1)))
+    )
+  )
 
 const specificationFor = (configuration: QualificationConfiguration) =>
   makeTaskWorkSpecification({ body: taskBody, taskId: configuration.taskId, title: "Real Codex qualification" })
@@ -245,11 +265,12 @@ const configurationProgram = Effect.gen(function* () {
           if (initial._tag === "Running") {
             yield* Effect.sleep("100 millis")
             yield* writeEvent(
-              reportEvent("StartOrContinue", yield* settleAttempt(executor, request, terminalObservationAttempts))
+              reportEvent("StartOrContinue", yield* settleAttempt(executor, correlation, terminalObservationAttempts))
             )
           }
         } else if (configuration.action === "exercise-suspension") {
           yield* writeEvent(reportEvent("StartOrContinue", yield* executor.startOrContinue(request)))
+          if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
           yield* Effect.sleep("100 millis")
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
@@ -264,12 +285,14 @@ const configurationProgram = Effect.gen(function* () {
                 nodeProcess.stdin.resume()
               })
           )
+          yield* settleAttempt(executor, correlation, terminalObservationAttempts)
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))
         } else if (configuration.action === "exit" || configuration.action === "exit-stuck") {
           const started = yield* executor.startOrContinue(request)
           yield* writeEvent(reportEvent("StartOrContinue", started))
+          if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
           const suspendForExit = executor.requestSuspension(attempt).pipe(
             Effect.tap((report) => writeEvent(reportEvent("Suspend", report))),
             Effect.flatMap((report) =>

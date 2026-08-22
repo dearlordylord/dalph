@@ -396,6 +396,7 @@ type Fixture = {
 
 type HostOptions = {
   readonly hold?: boolean
+  readonly waitForOwnedChild?: boolean
   readonly runId?: string
   readonly attemptId?: string
   readonly taskId?: string
@@ -602,6 +603,7 @@ const spawnRawHost = (
       DALPH_CODEX_QUALIFICATION_EVIDENCE: fixture.evidence,
       DALPH_CODEX_QUALIFICATION_BASE_SHA: fixture.baseSha,
       DALPH_CODEX_QUALIFICATION_HOLD: options.hold === true ? "1" : "0",
+      DALPH_CODEX_QUALIFICATION_WAIT_FOR_OWNED_CHILD: options.waitForOwnedChild === true ? "1" : "0",
       DALPH_CODEX_QUALIFICATION_RUN_ID: options.runId ?? "real-codex-qualification-run",
       DALPH_CODEX_QUALIFICATION_ATTEMPT_ID: options.attemptId ?? "real-codex-qualification-attempt",
       DALPH_CODEX_QUALIFICATION_TASK_ID: options.taskId ?? "real-codex-qualification-task"
@@ -914,7 +916,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       const fixture = await makeFixture("child")
       const hosts: Array<BuiltHost> = []
       try {
-        const started = await spawnHost(fixture, "exercise-suspension")
+        const started = await spawnHost(fixture, "exercise-suspension", { waitForOwnedChild: true })
         hosts.push(started)
         expect(requireEvent(await started.waitForReport(1), "report").report?._tag).toBe("Running")
         const ownedChildPid = await waitForOwnedChildPid(fixture)
@@ -965,7 +967,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       const fixture = await makeFixture("stuck-child")
       const hosts: Array<BuiltHost> = []
       try {
-        const survivor = await spawnHost(fixture, "exit-stuck")
+        const survivor = await spawnHost(fixture, "exit-stuck", { waitForOwnedChild: true })
         hosts.push(survivor)
         expect(requireEvent(await survivor.waitForReport(1), "report").report?._tag).toBe("Running")
         await fixture.model.waitForCalls(1)
@@ -1175,7 +1177,9 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         hosts.push(completed)
         const terminal = terminalReport(await completed.waitForReport(2))
         expect(terminal.result._tag).toBe("Accepted")
-        const before = threadIdOf(await attemptRecord(fixture))
+        const completedRecord = await attemptRecord(fixture)
+        expect(completedRecord._tag).toBe("Terminal")
+        const before = threadIdOf(completedRecord)
         await completed.stop("SIGKILL")
         const reread = await spawnHost(fixture, "project")
         hosts.push(reread)
