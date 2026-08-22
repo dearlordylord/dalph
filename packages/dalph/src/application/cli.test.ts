@@ -2,23 +2,39 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { GitCommitSha, RunId, TaskExecutorLocator, TaskId, WorktreeLocator } from "@dalph/contracts"
 import {
+  ApplicationExitShell,
   ClaimOwner,
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
+  defaultTaskWorkCapacity,
   GithubIssueNumber,
   GithubIssueTarget,
   GithubRepositoryName,
   GithubRepositoryOwner,
+  InitialControlPolicy,
+  JournaledRunBootstrap,
+  PlannedTaskAttemptPlanner,
   projectTrackerSnapshot,
+  RunFinalityDecision,
+  RunReactivationOwner,
+  TaskClaimAcquisitionPlanner,
   TraceOutput,
   TraceOutputError,
   TrackerGraphReader,
   trackerGraphReaderFileLayer
 } from "@dalph/orchestrator"
-import { Console, Effect, Layer, Option, Ref } from "effect"
+import { Console, Deferred, Effect, Layer, Option, Ref, Stdio, Stream } from "effect"
 import { expect } from "vitest"
-import { CliUsageError, dryRunWorkflowInterpreterLayer, runCli, workflowTraceOutputLayer } from "../index.js"
+import {
+  CliUsageError,
+  dryRunWorkflowInterpreterLayer,
+  dryCliEnvironmentLayer,
+  makeConfiguredProductionCliApplication,
+  productionRunReactivationLayer,
+  runCli,
+  workflowTraceOutputLayer
+} from "../index.js"
 
 const fixture = (name: "empty" | "singleton") =>
   new URL(`../../../orchestrator/fixtures/${name}.json`, import.meta.url).pathname
@@ -181,5 +197,71 @@ it.effect("propagates typed trace output failures", () =>
       Layer.succeed(TraceOutput, TraceOutput.of({ writeLine: () => Effect.fail(failure) }))
     ).pipe(Effect.flip)
     expect(observed).toBe(failure)
+  })
+)
+
+it.effect("routes the configured production CLI command into its host-owned application boundary", () =>
+  Effect.gen(function* () {
+    const activations = yield* Ref.make(0)
+    const started = yield* Deferred.make<void>()
+    const application = makeConfiguredProductionCliApplication((target) =>
+      Effect.gen(function* () {
+        const bootstrap = JournaledRunBootstrap.of({
+          activate: () =>
+            Ref.updateAndGet(activations, (count) => count + 1).pipe(
+              Effect.tap((count) => (count === 1 ? Deferred.succeed(started, undefined) : Effect.void)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+            ),
+          readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
+          registerAcceptedRunReactivationObservers: () => Effect.void,
+          operatorControl: {
+            applyRunCancellation: () => Effect.die("unused"),
+            applyIntegrationQuarantineDirection: () => Effect.die("unused"),
+            applyAttemptChoice: () => Effect.die("unused"),
+            applyControlDirection: () => Effect.die("unused"),
+            applyTaskClaimReacquisition: () => Effect.die("unused"),
+            readAttemptChoice: () => Effect.die("unused"),
+            readIntegrationQuarantineDirection: () => Effect.die("unused"),
+            readTaskWorkCapacity: () => Effect.die("unused"),
+            observePause: () => Stream.empty,
+            setTaskWorkCapacity: () => Effect.die("unused")
+          }
+        })
+        const applicationExit = ApplicationExitShell.of({
+          admission: {
+            prepareForwardOwner: () => Effect.succeed({ cancel: Effect.void, register: Effect.die("unused") }),
+            acquireForwardOwner: () => Effect.die("unused"),
+            snapshot: Effect.succeed({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+          },
+          awaitExitRequested: Effect.never,
+          awaitExecutorDrains: Effect.void,
+          registerExecutorDrain: () => Effect.void,
+          registerProcessLocalDrain: () => Effect.void,
+          requestBoundary: { requestExit: Effect.never }
+        })
+        const productionLayer = productionRunReactivationLayer(
+          target,
+          Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity })),
+          RunId.make("configured-cli-production-run"),
+          { onFailure: () => Effect.void }
+        ).pipe(
+          Layer.provide(Layer.succeed(JournaledRunBootstrap, bootstrap)),
+          Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)),
+          Layer.provide(Layer.mock(PlannedTaskAttemptPlanner, {})),
+          Layer.provide(Layer.mock(TaskClaimAcquisitionPlanner, {}))
+        )
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* RunReactivationOwner
+            yield* Deferred.await(started)
+          }).pipe(Effect.provide(productionLayer))
+        )
+      })
+    )
+    yield* application.pipe(
+      Effect.provide(Stdio.layerTest({ args: Effect.succeed(["run", fixture("empty")]) })),
+      Effect.provide(dryCliEnvironmentLayer)
+    )
+    expect(yield* Ref.get(activations)).toBe(1)
   })
 )

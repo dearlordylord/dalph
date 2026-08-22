@@ -1,7 +1,8 @@
 import { NodeServices } from "@effect/platform-node"
 import { type IntegrationTarget, PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
 import {
-  type JournaledRunBootstrap,
+  AllocatedWorkflowRunId,
+  JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
   type TrackerGraphReader,
   attemptChoiceControlLayer,
@@ -37,17 +38,97 @@ import {
   type CompletionTaskBoundaryService,
   gitDispositionCleanupBoundaryLayer,
   IntegratorCandidateProviderAuthority,
-  type IntegratorCandidateProviderAuthorityService
+  type IntegratorCandidateProviderAuthorityService,
+  runReactivationOwnerLayer,
+  runWorkflow,
+  type InitialControlPolicySource,
+  type CurrentSignal,
+  type TrackerTarget,
+  WorkflowRunAlreadyTerminated
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
-import { Crypto, Effect, Layer } from "effect"
+import { Crypto, Duration, Effect, Layer, Schema } from "effect"
+
+const finitePositiveDuration = Schema.DurationFromString.check(
+  Schema.makeFilter((duration) =>
+    Duration.isFinite(duration) && Duration.isPositive(duration)
+      ? undefined
+      : "reactivation intervals must be finite and greater than zero"
+  )
+)
+
+/** Decoded production timer input; raw CLI/config strings do not reach the owner. */
+export const ProductionRunReactivationInterval = finitePositiveDuration.pipe(
+  Schema.brand("ProductionRunReactivationInterval")
+)
+export type ProductionRunReactivationInterval = typeof ProductionRunReactivationInterval.Type
+
+const defaultProductionRunReactivationInterval = ProductionRunReactivationInterval.make(Duration.minutes(1))
+
+// eslint-disable-next-line functional/no-mixed-types -- Production composition groups decoded timing and the typed failure observation boundary at one application seam.
+export interface ProductionRunReactivationOptions {
+  readonly activationInterval?: ProductionRunReactivationInterval
+  readonly failureCooldown?: ProductionRunReactivationInterval
+  /** Optional host-owned current-first tracker notification adapter; values remain hints. */
+  readonly trackerNotificationSource?: CurrentSignal<unknown>
+  /** Required boundary for typed tracker/Git/journal failures; no activation failure is swallowed. */
+  readonly onFailure: (failure: unknown) => Effect.Effect<void>
+}
+
+const defaultProductionRunReactivationCooldownSeconds = 5
+const defaultProductionRunReactivationCooldown = ProductionRunReactivationInterval.make(
+  Duration.seconds(defaultProductionRunReactivationCooldownSeconds)
+)
+
+const isWorkflowRunAlreadyTerminated = (failure: unknown): boolean => failure instanceof WorkflowRunAlreadyTerminated
+
+/**
+ * Supported production composition for one exact Run. It acquires one scoped
+ * owner, re-enters the ordinary `runWorkflow` boundary for each hint/timer,
+ * initializes pause state from the Journal, and wires accepted Run controls
+ * only after their Journal append succeeds. The repository's CLI remains a
+ * dry-run host; this Layer is the production application entry seam.
+ */
+export const productionRunReactivationLayer = <EInitial, RInitial>(
+  target: TrackerTarget,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: RunId,
+  options: ProductionRunReactivationOptions
+) => {
+  const activation = runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId))
+  const readControl = Effect.gen(function* () {
+    const bootstrap = yield* JournaledRunBootstrap
+    return yield* bootstrap.readRunReactivationControl(target, runId)
+  })
+  const ownerLayer = runReactivationOwnerLayer({
+    activate: activation,
+    activationInterval: options.activationInterval ?? defaultProductionRunReactivationInterval,
+    failureCooldown: options.failureCooldown ?? defaultProductionRunReactivationCooldown,
+    installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
+      Effect.gen(function* () {
+        const bootstrap = yield* JournaledRunBootstrap
+        yield* bootstrap.registerAcceptedRunReactivationObservers({
+          control,
+          acceptedFactPublication: () => acceptedFactPublication
+        })
+      }),
+    isTerminationFailure: isWorkflowRunAlreadyTerminated,
+    onFailure: options.onFailure,
+    readControl,
+    runId,
+    ...(options.trackerNotificationSource === undefined
+      ? {}
+      : { trackerNotificationSource: options.trackerNotificationSource })
+  })
+  return ownerLayer
+}
 
 /**
  * Composes live tracker/Git boundaries with the caller-selected executor
  * implementation through the ordinary Effect Layer environment.
  */
 type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
-  ApplicationExitRequestBoundary | JournaledRunBootstrap,
+  ApplicationExitRequestBoundary | ApplicationExitShell | JournaledRunBootstrap,
   | TrackerError
   | JournalStoreError
   | Layer.Error<typeof productionJournalStoreLayer>
@@ -153,7 +234,12 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       }
       return Layer.merge(
         journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(Layer.provide(journalLayer)),
-        Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary)
+        Layer.mergeAll(
+          Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary),
+          // Keep the process-wide shell available so Exit can invoke the
+          // owner's process-local stop drain.
+          Layer.succeed(ApplicationExitShell, applicationExit)
+        )
       )
     })
   ).pipe(Layer.provide(nonJournaledRuntimeInputs), Layer.provide(ownershipLayer))

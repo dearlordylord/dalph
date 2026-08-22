@@ -1,0 +1,570 @@
+import { it } from "@effect/vitest"
+import { RunId } from "@dalph/contracts"
+import {
+  ApplicationExitShell,
+  type ApplicationExitDrainFailure,
+  type ApplicationExitShellService,
+  makeApplicationExitShell
+} from "../application-exit/application-shell.js"
+import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
+import { expect } from "vitest"
+import { RunFinalityDecision } from "../frontier/frontier.js"
+import {
+  RunReactivationHint,
+  RunReactivationIntervalInvalid,
+  RunReactivationOwner,
+  type RunReactivationOwnerOptions,
+  type RunReactivationOwnerService,
+  runReactivationOwnerLayer
+} from "./run-reactivation-owner.js"
+import type { AcceptedRunControlObserver } from "./run.js"
+import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
+import { makeCurrentSignal } from "../delivery/relations.js"
+
+class TestTrackerReadFailure extends Schema.TaggedError<TestTrackerReadFailure>()("TestTrackerReadFailure", {
+  detail: Schema.String
+}) {}
+
+class TestGitReadFailure extends Schema.TaggedError<TestGitReadFailure>()("TestGitReadFailure", {
+  detail: Schema.String
+}) {}
+
+class TestAlreadyTerminatedFailure extends Schema.TaggedError<TestAlreadyTerminatedFailure>()(
+  "TestAlreadyTerminatedFailure",
+  {}
+) {}
+
+const isTestAlreadyTerminatedFailure = (failure: unknown): boolean =>
+  typeof failure === "object" &&
+  failure !== null &&
+  "_tag" in failure &&
+  failure._tag === "TestAlreadyTerminatedFailure"
+
+const makeTestExitShell = Effect.gen(function* () {
+  const drains = yield* Ref.make<ReadonlyArray<Effect.Effect<void, ApplicationExitDrainFailure>>>([])
+  const shell = ApplicationExitShell.of({
+    admission: {
+      prepareForwardOwner: () => Effect.succeed({ cancel: Effect.void, register: Effect.die("unused") }),
+      acquireForwardOwner: () => Effect.die("unused"),
+      snapshot: Effect.succeed({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+    },
+    awaitExitRequested: Effect.never,
+    awaitExecutorDrains: Effect.void,
+    registerExecutorDrain: () => Effect.void,
+    registerProcessLocalDrain: ({ closeProcessLocalResources }) =>
+      Ref.update(drains, (current) => [...current, closeProcessLocalResources]),
+    requestBoundary: { requestExit: Effect.never }
+  } satisfies ApplicationExitShellService)
+  return { drains, shell }
+})
+
+const ownerLayer = <E, R>(shell: ApplicationExitShellService, options: RunReactivationOwnerOptions<E, R>) =>
+  runReactivationOwnerLayer(options).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, shell)))
+
+const provideOwner = <E, R, A>(
+  shell: ApplicationExitShellService,
+  options: RunReactivationOwnerOptions<E, R>,
+  program: (owner: RunReactivationOwnerService) => Effect.Effect<A>
+) =>
+  Effect.gen(function* () {
+    const owner = yield* RunReactivationOwner
+    return yield* program(owner)
+  }).pipe(Effect.provide(ownerLayer(shell, options)))
+
+it.effect("rejects non-positive timer and cooldown values at the Layer boundary", () =>
+  Effect.gen(function* () {
+    const shell = yield* makeTestExitShell
+    const result = yield* Effect.exit(
+      RunReactivationOwner.pipe(
+        Effect.provide(
+          ownerLayer(shell.shell, {
+            runId: RunId.make("test-run-invalid-interval"),
+            activationInterval: "0 seconds",
+            failureCooldown: "1 second",
+            activate: Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })),
+            readControl: Effect.succeed("RunUnpaused" as const),
+            isTerminationFailure: () => false,
+            installAcceptedRunReactivationObservers: () => Effect.void,
+            onFailure: () => Effect.void
+          })
+        )
+      )
+    )
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") expect(result.cause).toBeDefined()
+    expect(new RunReactivationIntervalInvalid({ detail: "x" })._tag).toBe("RunReactivationIntervalInvalid")
+  })
+)
+
+it.effect("rechecks after a lost notification when TestClock fires, with no Run read per timer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const activations = yield* Ref.make(0)
+      const controlReads = yield* Ref.make(0)
+      const firstActivation = yield* Deferred.make<void>()
+      const secondActivation = yield* Deferred.make<void>()
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-timer"),
+          activationInterval: "1 second",
+          failureCooldown: "1 second",
+          readControl: Ref.updateAndGet(controlReads, (current) => current + 1).pipe(Effect.as("RunUnpaused" as const)),
+          activate: Ref.updateAndGet(activations, (current) => current + 1).pipe(
+            Effect.tap((count) =>
+              count === 1 ? Deferred.succeed(firstActivation, undefined) : Deferred.succeed(secondActivation, undefined)
+            ),
+            Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+          ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void
+        },
+        () =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstActivation)
+            expect(yield* Ref.get(controlReads)).toBe(1)
+            yield* TestClock.adjust("1 second")
+            yield* Deferred.await(secondActivation)
+            expect(yield* Ref.get(activations)).toBe(2)
+            expect(yield* Ref.get(controlReads)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
+it.effect("coalesces concurrent hints behind one activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const firstStarted = yield* Deferred.make<void>()
+      const firstRelease = yield* Deferred.make<void>()
+      const secondStarted = yield* Deferred.make<void>()
+      const activationCount = yield* Ref.make(0)
+      const concurrent = yield* Ref.make(0)
+      const maximumConcurrent = yield* Ref.make(0)
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-coalescing"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: Effect.gen(function* () {
+            const count = yield* Ref.updateAndGet(activationCount, (current) => current + 1)
+            const active = yield* Ref.updateAndGet(concurrent, (current) => current + 1)
+            yield* Ref.update(maximumConcurrent, (current) => Math.max(current, active))
+            if (count === 1) {
+              yield* Deferred.succeed(firstStarted, undefined)
+              yield* Deferred.await(firstRelease)
+            } else {
+              yield* Deferred.succeed(secondStarted, undefined)
+            }
+            yield* Ref.update(concurrent, (current) => current - 1)
+            return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+          }),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstStarted)
+            yield* Effect.forEach(
+              [
+                RunReactivationHint.TrackerNotification(),
+                RunReactivationHint.AcceptedFactPublication(),
+                RunReactivationHint.OperatorWake()
+              ],
+              owner.hint
+            )
+            yield* Deferred.succeed(firstRelease, undefined)
+            yield* Deferred.await(secondStarted)
+            yield* Effect.yieldNow
+            expect(yield* Ref.get(activationCount)).toBe(2)
+            expect(yield* Ref.get(maximumConcurrent)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
+it.effect("observes one typed activation failure, cools down, and waits for a later hint", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const attempts = yield* Ref.make(0)
+      const firstAttempt = yield* Deferred.make<void>()
+      const secondAttempt = yield* Deferred.make<void>()
+      const failureObserved = yield* Deferred.make<void>()
+      const recovered = yield* Deferred.make<void>()
+      const failures = yield* Ref.make<ReadonlyArray<string>>([])
+      const currentReads = yield* Ref.make(0)
+      const mutationCalls = yield* Ref.make(0)
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-failure"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: Effect.gen(function* () {
+            yield* Ref.update(currentReads, (current) => current + 1)
+            const attempt = yield* Ref.updateAndGet(attempts, (current) => current + 1)
+            if (attempt === 1) {
+              yield* Deferred.succeed(firstAttempt, undefined)
+              return yield* new TestTrackerReadFailure({ detail: "tracker unavailable" })
+            }
+            if (attempt === 2) {
+              yield* Deferred.succeed(secondAttempt, undefined)
+              return yield* new TestGitReadFailure({ detail: "git unavailable" })
+            }
+            yield* Ref.update(mutationCalls, (current) => current + 1)
+            yield* Deferred.succeed(recovered, undefined)
+            return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+          }),
+          onFailure: (failure) =>
+            Ref.update(failures, (current) => [...current, failure._tag]).pipe(
+              Effect.andThen(Deferred.succeed(failureObserved, undefined))
+            ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstAttempt)
+            yield* Deferred.await(failureObserved)
+            yield* TestClock.adjust("999 millis")
+            expect(yield* Ref.get(attempts)).toBe(1)
+            yield* TestClock.adjust("1 millis")
+            yield* owner.hint(RunReactivationHint.OperatorWake())
+            yield* Deferred.await(secondAttempt)
+            yield* TestClock.adjust("1 second")
+            yield* owner.hint(RunReactivationHint.OperatorWake())
+            yield* Deferred.await(recovered)
+            expect(yield* Ref.get(attempts)).toBe(3)
+            expect(yield* Ref.get(currentReads)).toBe(3)
+            expect(yield* Ref.get(mutationCalls)).toBe(1)
+            expect(yield* Ref.get(failures)).toEqual(["TestTrackerReadFailure", "TestGitReadFailure"])
+          })
+      )
+    })
+  )
+)
+
+it.effect("uses current-first control state: paused restart is passive and accepted Unpause activates once", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const activations = yield* Ref.make(0)
+      const activated = yield* Deferred.make<void>()
+      const acceptedControl = yield* Deferred.make<AcceptedRunControlObserver>()
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-paused"),
+          activationInterval: "1 second",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunPaused" as const),
+          activate: Ref.updateAndGet(activations, (current) => current + 1).pipe(
+            Effect.tap(() => Deferred.succeed(activated, undefined)),
+            Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ control }) => Deferred.succeed(acceptedControl, control),
+          onFailure: () => Effect.void
+        },
+        () =>
+          Effect.gen(function* () {
+            yield* TestClock.adjust("1 hour")
+            expect(yield* Ref.get(activations)).toBe(0)
+            yield* (yield* Deferred.await(acceptedControl))("Unpause")
+            yield* Deferred.await(activated)
+            expect(yield* Ref.get(activations)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
+it.effect("replays durable Pause between observer attachment and the mandatory current read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const activations = yield* Ref.make(0)
+      const acceptedControl = yield* Deferred.make<AcceptedRunControlObserver>()
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-attach-read-race"),
+          activationInterval: "1 second",
+          failureCooldown: "1 second",
+          // Deliberately stale: the accepted callback below wins while the
+          // current read is attaching and must not be overwritten.
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: Ref.update(activations, (current) => current + 1).pipe(
+            Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ control }) =>
+            control("Pause").pipe(Effect.andThen(Deferred.succeed(acceptedControl, control))),
+          onFailure: () => Effect.void
+        },
+        () =>
+          Effect.gen(function* () {
+            yield* TestClock.adjust("1 hour")
+            expect(yield* Ref.get(activations)).toBe(0)
+            yield* (yield* Deferred.await(acceptedControl))("Unpause")
+            yield* Effect.yieldNow
+            expect(yield* Ref.get(activations)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
+it.effect("stops the Run-specific timer on accepted Pause and starts one fresh timer on Unpause", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const activations = yield* Ref.make(0)
+      const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
+      const acceptedControl = yield* Deferred.make<AcceptedRunControlObserver>()
+      const firstActivation = yield* Deferred.make<void>()
+      const releaseFirstActivation = yield* Deferred.make<void>()
+      const secondActivation = yield* Deferred.make<void>()
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-timer-lifecycle"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: Ref.updateAndGet(activations, (current) => current + 1).pipe(
+            Effect.tap((count) =>
+              count === 1 ? Deferred.succeed(firstActivation, undefined) : Deferred.succeed(secondActivation, undefined)
+            ),
+            Effect.tap((count) => (count === 1 ? Deferred.await(releaseFirstActivation) : Effect.void)),
+            Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ control }) => Deferred.succeed(acceptedControl, control),
+          onTimerStateChange: (state) => Ref.update(timerStates, (current) => [...current, state]),
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstActivation)
+            expect(yield* Ref.get(timerStates)).toEqual(["Started"])
+            yield* owner.hint(RunReactivationHint.AcceptedFactPublication())
+            yield* (yield* Deferred.await(acceptedControl))("Pause")
+            yield* (yield* Deferred.await(acceptedControl))("Pause")
+            yield* Deferred.succeed(releaseFirstActivation, undefined)
+            expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped"])
+            yield* TestClock.adjust("2 hours")
+            expect(yield* Ref.get(activations)).toBe(1)
+            yield* (yield* Deferred.await(acceptedControl))("Unpause")
+            yield* (yield* Deferred.await(acceptedControl))("Unpause")
+            expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started"])
+            yield* Deferred.await(secondActivation)
+            expect(yield* Ref.get(activations)).toBe(2)
+          })
+      )
+    })
+  )
+)
+
+it.effect("stops its timer when activation returns RunMayTerminate", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const activations = yield* Ref.make(0)
+      const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-may-terminate"),
+          activationInterval: "1 second",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: Ref.update(activations, (current) => current + 1).pipe(
+            Effect.as(RunFinalityDecision.RunMayTerminate())
+          ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void,
+          onTimerStateChange: (state) => Ref.update(timerStates, (current) => [...current, state])
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Effect.yieldNow
+            yield* owner.hint(RunReactivationHint.Timer())
+            yield* TestClock.adjust("1 hour")
+            expect(yield* Ref.get(activations)).toBe(1)
+            expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped"])
+          })
+      )
+    })
+  )
+)
+
+it.effect("stops on an activation-observed terminated Run instead of cooling down for replay", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const attempts = yield* Ref.make(0)
+      const failureObserved = yield* Deferred.make<void>()
+      const timerStopped = yield* Deferred.make<void>()
+      const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-activation-terminated"),
+          activationInterval: "1 second",
+          failureCooldown: "1 hour",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: Effect.gen(function* () {
+            yield* Ref.update(attempts, (current) => current + 1)
+            return yield* new TestAlreadyTerminatedFailure()
+          }),
+          isTerminationFailure: isTestAlreadyTerminatedFailure,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onTimerStateChange: (state) =>
+            Ref.update(timerStates, (current) => [...current, state]).pipe(
+              Effect.andThen(state === "Stopped" ? Deferred.succeed(timerStopped, undefined) : Effect.void)
+            ),
+          onFailure: () => Deferred.succeed(failureObserved, undefined)
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(failureObserved)
+            expect(yield* Ref.get(attempts)).toBe(1)
+            yield* Deferred.await(timerStopped)
+            expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped"])
+            yield* owner.hint(RunReactivationHint.OperatorWake())
+            yield* TestClock.adjust("2 hours")
+            expect(yield* Ref.get(attempts)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
+it.effect("treats terminated history as closure and never schedules a fresh activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const activations = yield* Ref.make(0)
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-terminated"),
+          activationInterval: "1 second",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunTerminated" as const),
+          activate: Ref.update(activations, (current) => current + 1).pipe(
+            Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+          ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* owner.hint(RunReactivationHint.Timer())
+            yield* TestClock.adjust("1 hour")
+            expect(yield* Ref.get(activations)).toBe(0)
+          })
+      )
+    })
+  )
+)
+
+it.effect("keeps one owner per exact Run composition and lets Exit stop after the active boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const activations = yield* Ref.make(0)
+      const acceptedControl = yield* Deferred.make<AcceptedRunControlObserver>()
+      const ownerLayerInstance = ownerLayer(shell.shell, {
+        runId: RunId.make("test-run-exit"),
+        activationInterval: "1 second",
+        failureCooldown: "1 second",
+        readControl: Effect.succeed("RunUnpaused" as const),
+        activate: Ref.updateAndGet(activations, (current) => current + 1).pipe(
+          Effect.tap(() => Deferred.succeed(started, undefined)),
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+        ),
+        isTerminationFailure: () => false,
+        installAcceptedRunReactivationObservers: ({ control }) => Deferred.succeed(acceptedControl, control),
+        onFailure: () => Effect.void
+      })
+      yield* Effect.gen(function* () {
+        const first = yield* RunReactivationOwner
+        const second = yield* RunReactivationOwner
+        expect(first).toBe(second)
+        yield* Deferred.await(started)
+        const [drain] = yield* Ref.get(shell.drains)
+        if (drain === undefined) return yield* Effect.die("owner did not register Exit drain")
+        yield* drain
+        yield* Deferred.succeed(release, undefined)
+        yield* (yield* Deferred.await(acceptedControl))("Pause")
+        yield* (yield* Deferred.await(acceptedControl))("Unpause")
+        yield* TestClock.adjust("1 hour")
+        expect(yield* Ref.get(activations)).toBe(1)
+      }).pipe(Effect.provide(ownerLayerInstance))
+    })
+  )
+)
+
+it.effect("registers its drain before Exit can pass a blocking tracker-source attachment", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const sourceAttaching = yield* Deferred.make<void>()
+      const allowSourceAttachment = yield* Deferred.make<void>()
+      const activations = yield* Ref.make(0)
+      const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
+      const shell = yield* makeApplicationExitShell(
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
+        { requestEnd: () => Effect.void }
+      )
+      const trackerNotificationSource = makeCurrentSignal(
+        Deferred.succeed(sourceAttaching, undefined).pipe(
+          Effect.andThen(Deferred.await(allowSourceAttachment)),
+          Effect.as({ current: undefined, changes: Stream.never })
+        )
+      )
+      const layer = ownerLayer(shell, {
+        runId: RunId.make("test-run-exit-during-source-attachment"),
+        activationInterval: "1 second",
+        failureCooldown: "1 second",
+        readControl: Effect.succeed("RunUnpaused" as const),
+        activate: Ref.update(activations, (current) => current + 1).pipe(
+          Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+        ),
+        isTerminationFailure: () => false,
+        installAcceptedRunReactivationObservers: () => Effect.void,
+        onFailure: () => Effect.void,
+        onTimerStateChange: (state) => Ref.update(timerStates, (current) => [...current, state]),
+        trackerNotificationSource
+      })
+
+      const building = yield* Layer.build(layer).pipe(Effect.forkChild)
+      yield* Deferred.await(sourceAttaching)
+      const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
+      const exitResult = yield* Fiber.join(exiting)
+      yield* Deferred.succeed(allowSourceAttachment, undefined)
+      yield* Fiber.join(building)
+      expect(exitResult).toMatchObject({ _tag: "Succeeded" })
+      yield* TestClock.adjust("1 hour")
+      expect(yield* Ref.get(activations)).toBe(0)
+      expect(yield* Ref.get(timerStates)).toEqual([])
+    })
+  )
+)

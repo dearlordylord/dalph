@@ -66,7 +66,9 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
         readTaskWorkCapacity: () => Effect.die("unused"),
         observePause: () => Stream.empty,
         setTaskWorkCapacity: () => Effect.die("unused")
-      }
+      },
+      readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
+      registerAcceptedRunReactivationObservers: () => Effect.void
     })
 
     expect(
