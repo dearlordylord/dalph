@@ -6,7 +6,7 @@
 import { execFile as nodeExecFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { createHash } from "node:crypto"
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises"
 import type { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import nodePath from "node:path"
@@ -539,7 +539,7 @@ const acceptedEvidenceFor = async (fixture: Fixture, event: HostEvent): Promise<
 }
 
 const makeFixture = async (mode: ModelMode): Promise<Fixture> => {
-  const root = await mkdtemp(nodePath.join(tmpdir(), "dalph-real-codex-host-"))
+  const root = await realpath(await mkdtemp(nodePath.join(tmpdir(), "dalph-real-codex-host-")))
   const repository = nodePath.join(root, "repository")
   const worktree = nodePath.join(root, "worktree")
   const state = nodePath.join(root, "state")

@@ -6,7 +6,7 @@
 
 import { execFile as nodeExecFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import type { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import nodePath from "node:path"
@@ -334,7 +334,7 @@ const runGit = async (cwd: string, ...args: ReadonlyArray<string>): Promise<stri
 }
 
 const createGitFixture = async (mode: QualificationMode): Promise<GitFixture> => {
-  const root = await mkdtemp(nodePath.join(tmpdir(), "dalph-real-codex-qualification-"))
+  const root = await realpath(await mkdtemp(nodePath.join(tmpdir(), "dalph-real-codex-qualification-")))
   const repository = nodePath.join(root, "repository")
   const worktree = nodePath.join(root, "planned-worktree")
   const codexHome = nodePath.join(root, "codex-home")
