@@ -32,6 +32,7 @@ import {
   memoryCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService } from "./codex-process-native.js"
+import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 
 const standaloneNodeCodexOwnedActivityCensusLayer = Layer.succeed(
   CodexOwnedActivityCensus,
@@ -670,7 +671,7 @@ it.effect("reconciles an exact launch-token process before starting a replacemen
         phase: "Launching",
         pid: null
       })
-      const layer = codexAppServerNodeLayer({ executable }).pipe(
+      const layer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
         Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
       )
       const result = yield* Effect.gen(function* () {

@@ -30,14 +30,13 @@ import {
   type CodexAttemptStoreService,
   memoryCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
-import {
-  controlledCodexProcessNativeLayer,
-  nodeCodexProcessNativeLayer,
-  nodeCodexProcessNativeService
-} from "./codex-process-native.js"
+import { controlledCodexProcessNativeLayer, nodeCodexProcessNativeService } from "./codex-process-native.js"
+import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 
 const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[0]) =>
-  rawCodexAppServerLayer(config).pipe(Layer.provide(nodeCodexProcessNativeLayer))
+  rawCodexAppServerLayer(config).pipe(
+    Layer.provide(controlledCodexProcessNativeLayer(isolatedCodexProcessNativeService))
+  )
 
 const QualificationEnvironmentCapture = Schema.Struct({
   codexHome: Schema.optionalKey(Schema.String),
@@ -281,7 +280,9 @@ it.effect("speaks the normalized app-server protocol with exact per-call cwd", (
       yield* fileSystem.writeFileString(executable, fakeServer)
       yield* fileSystem.chmod(executable, 0o755)
 
-      const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const appLayer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
+        Layer.provide(memoryCodexAttemptStoreLayer())
+      )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         const thread = yield* app.startThread("/exact/worktree")
@@ -314,15 +315,18 @@ it.effect("forwards isolated qualification environment only at the child launch 
       yield* fileSystem.writeFileString(executable, fakeServer)
       yield* fileSystem.chmod(executable, 0o755)
 
-      const appLayer = codexAppServerNodeLayer({
-        executable,
-        environment: {
-          CODEX_HOME: "/isolated/qualification-codex-home",
-          DALPH_QUALIFICATION_ENV_CAPTURE: capture,
-          DALPH_QUALIFICATION_PROVIDER_KEY: "fixture-only-provider-key",
-          DALPH_QUALIFICATION_MISSING_ROLLOUT: "1"
-        }
-      }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const appLayer = codexAppServerNodeLayer(
+        {
+          executable,
+          environment: {
+            CODEX_HOME: "/isolated/qualification-codex-home",
+            DALPH_QUALIFICATION_ENV_CAPTURE: capture,
+            DALPH_QUALIFICATION_PROVIDER_KEY: "fixture-only-provider-key",
+            DALPH_QUALIFICATION_MISSING_ROLLOUT: "1"
+          }
+        },
+        isolatedCodexProcessNativeService
+      ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         yield* app.startThread("/isolated/qualification-worktree")
@@ -528,7 +532,9 @@ it.effect("fails closed when initialization decodes to an invalid protocol shape
       const executable = path.join(root, "fixture-codex-malformed")
       yield* fileSystem.writeFileString(executable, malformedInitializationServer)
       yield* fileSystem.chmod(executable, 0o755)
-      const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const appLayer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
+        Layer.provide(memoryCodexAttemptStoreLayer())
+      )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         return yield* app.startThread("/exact/worktree")
@@ -584,7 +590,9 @@ it.effect("fails initialization closed when the server identity contradicts the 
       const executable = path.join(root, "fixture-codex-conflict")
       yield* fileSystem.writeFileString(executable, contradictoryInitializationServer)
       yield* fileSystem.chmod(executable, 0o755)
-      const appLayer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const appLayer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
+        Layer.provide(memoryCodexAttemptStoreLayer())
+      )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         return yield* app.startThread("/exact/worktree")
@@ -627,9 +635,10 @@ it.effect("fails closed when the recorded launch command cannot identify app-ser
           phase: "Live",
           pid: nodeProcess.pid
         })
-        const appLayer = codexAppServerNodeLayer({ executable: "fixture-codex" }).pipe(
-          Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
-        )
+        const appLayer = codexAppServerNodeLayer(
+          { executable: "fixture-codex" },
+          isolatedCodexProcessNativeService
+        ).pipe(Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior })))
         const result = yield* Effect.gen(function* () {
           const app = yield* CodexAppServer
           return yield* Effect.exit(app.startThread("/malformed-launch/worktree"))

@@ -28,6 +28,7 @@ import {
 } from "./codex-attempt-store.js"
 import {
   CodexProcessNative,
+  nodeCodexProcessNativeLayer,
   nodeCodexProcessNativeService,
   type CodexProcessNativeService
 } from "./codex-process-native.js"
@@ -2612,7 +2613,9 @@ export const codexAppServerNodeLayer = (
   CodexAttemptStore | ChildProcessSpawner.ChildProcessSpawner
 > =>
   codexAppServerLayer(config).pipe(
-    Layer.provide(Layer.succeed(CodexProcessNative, native)),
+    Layer.provide(
+      native === nodeCodexProcessNativeService ? nodeCodexProcessNativeLayer : Layer.succeed(CodexProcessNative, native)
+    ),
     Layer.provide(
       Layer.effect(
         CodexProcessOwnership,
