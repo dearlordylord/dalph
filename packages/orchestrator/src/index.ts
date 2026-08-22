@@ -546,6 +546,17 @@ export {
   runWorkflow
 } from "./coordination/run/run.js"
 export {
+  RunReactivationOwner,
+  RunReactivationIntervalInvalid,
+  RunReactivationHint,
+  makeRunReactivationOwner,
+  attachRunReactivationHintSource,
+  runReactivationOwnerLayer,
+  type RunReactivationOwnerOptions,
+  type RunReactivationOwnerService,
+  type RunReactivationHintSource
+} from "./coordination/run/run-reactivation-owner.js"
+export {
   PauseNotApplied,
   PauseObservationRunMismatch,
   PauseProgressProjectionConflict,
