@@ -31,7 +31,7 @@ const gates = [
   // The supported-Node hosted matrix is slower than local coverage after the
   // real process-boundary suites; keep the command bounded without cutting
   // off Vitest before it can report a concrete failure.
-  { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 12 * 60 * SECOND },
+  { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 20 * 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND }
 ]
 
