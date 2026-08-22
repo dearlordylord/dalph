@@ -61,6 +61,10 @@ jobs:
           sudo useradd --create-home --shell /bin/bash dalph-qualification
           sudo cp -a "$(dirname "$(dirname "$PNPM_HOME")")" /opt/dalph-qualification-pnpm
           sudo chmod -R a+rX /opt/dalph-qualification-pnpm
+          sudo setfacl -m u:dalph-qualification:--x \
+            "$(dirname "$(dirname "$(dirname "$GITHUB_WORKSPACE")")")" \
+            "$(dirname "$(dirname "$GITHUB_WORKSPACE")")" \
+            "$(dirname "$GITHUB_WORKSPACE")"
           sudo chown -R dalph-qualification:dalph-qualification "$GITHUB_WORKSPACE"
 
       - name: Run real Codex qualification matrix
@@ -76,4 +80,8 @@ jobs:
         run: |
           sudo chown -R "$QUALIFICATION_WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
           sudo rm -rf /opt/dalph-qualification-pnpm
+          sudo setfacl -x u:dalph-qualification \
+            "$(dirname "$(dirname "$(dirname "$GITHUB_WORKSPACE")")")" \
+            "$(dirname "$(dirname "$GITHUB_WORKSPACE")")" \
+            "$(dirname "$GITHUB_WORKSPACE")"
           sudo userdel --remove dalph-qualification
