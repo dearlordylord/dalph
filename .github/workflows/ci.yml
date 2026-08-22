@@ -46,6 +46,7 @@ jobs:
     # committed change and any worktree changes produced by the gate.
     env:
       DALPH_COVERAGE_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+      NODE_OPTIONS: --max-old-space-size=6144
 
     strategy:
       fail-fast: false

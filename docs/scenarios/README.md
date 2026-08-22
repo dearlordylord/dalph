@@ -54,6 +54,7 @@ on the issue while later dependent work proceeds.
 | `issue-72-qualify-github-completion.md` | 72 |
 | `issue-73-qualify-real-git-lineage-candidate-ref.md` | 73 |
 | `issue-74-qualify-real-worktree-lease.md` | 74 |
+| `issue-75-codex-app-server-qualification.md` | 75 |
 | `issue-156-reject-stale-task-control.md` | 156 |
 | `issue-192-describe-delivery-actions.md` | 192 |
 | `issue-193-run-reactive-delivery-actions.md` | 193 |

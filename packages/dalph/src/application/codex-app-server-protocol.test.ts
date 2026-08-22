@@ -10,6 +10,7 @@ import {
   codexAppServerNodeLayer
 } from "./codex-app-server.js"
 import { CodexOwnedTurnToken, CodexTurnId, memoryCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 
 const protocolFixture = String.raw`#!/usr/bin/env node
 const path = require("node:path")
@@ -244,7 +245,9 @@ const withFixture = <A>(mode: string, action: (app: CodexAppServerService) => Ef
       const executable = path.join(root, mode)
       yield* fileSystem.writeFileString(executable, protocolFixture)
       yield* fileSystem.chmod(executable, 0o755)
-      const layer = codexAppServerNodeLayer({ executable }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const layer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
+        Layer.provide(memoryCodexAttemptStoreLayer())
+      )
       return yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         return yield* action(app).pipe(Effect.ensuring(app.close.pipe(Effect.orDie)))

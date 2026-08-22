@@ -85,9 +85,9 @@ test.skipIf(process.platform === "win32")(
           executable: process.execPath,
           name: "resistant descendant fixture",
           terminationGraceMilliseconds: 100,
-          timeoutMilliseconds: 100
+          timeoutMilliseconds: 2000
         })
-      ).rejects.toThrow("resistant descendant fixture exceeded 0.1 seconds")
+      ).rejects.toThrow("resistant descendant fixture exceeded 2 seconds")
 
       const descendantPid = Number(await readFile(pidFile, "utf8"))
       await expect.poll(() => processExists(descendantPid), { interval: 20, timeout: 2000 }).toBe(false)

@@ -1,0 +1,87 @@
+name: Codex app-server qualification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/codex-app-server-qualification.yml"
+      - "packages/dalph/src/application/codex-app-server.ts"
+      - "packages/dalph/src/application/codex-app-server-real-qualification.test.ts"
+      - "packages/dalph/src/application/codex-planned-attempt-executor.ts"
+      - "packages/dalph/bin/codex-qualification-host.ts"
+      - "packages/dalph/bin/codex-qualification-host-contract.ts"
+      - "packages/dalph/test/qualification/codex-real-host-qualification.test.ts"
+      - "scripts/qualify-codex-app-server.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: codex-app-server-qualification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    name: Real Codex app-server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          node-version: 24.15.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare isolated Linux qualification account
+        if: runner.os == 'Linux'
+        run: |
+          echo "QUALIFICATION_WORKSPACE_OWNER=$(stat -c '%u:%g' "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
+          echo "QUALIFICATION_PNPM_HOME=/opt/dalph-qualification-pnpm/node_modules/.bin" >> "$GITHUB_ENV"
+          sudo useradd --create-home --shell /bin/bash dalph-qualification
+          sudo cp -a "$(dirname "$(dirname "$PNPM_HOME")")" /opt/dalph-qualification-pnpm
+          sudo chmod -R a+rX /opt/dalph-qualification-pnpm
+          sudo setfacl -m u:dalph-qualification:--x \
+            "$(dirname "$(dirname "$(dirname "$GITHUB_WORKSPACE")")")" \
+            "$(dirname "$(dirname "$GITHUB_WORKSPACE")")" \
+            "$(dirname "$GITHUB_WORKSPACE")"
+          sudo chown -R dalph-qualification:dalph-qualification "$GITHUB_WORKSPACE"
+
+      - name: Run real Codex qualification matrix
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            sudo -H -u dalph-qualification env "PATH=$QUALIFICATION_PNPM_HOME:$PATH" pnpm qualify:codex
+          else
+            pnpm qualify:codex
+          fi
+
+      - name: Restore Linux workspace ownership
+        if: always() && runner.os == 'Linux'
+        run: |
+          sudo chown -R "$QUALIFICATION_WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+          sudo rm -rf /opt/dalph-qualification-pnpm
+          sudo setfacl -x u:dalph-qualification \
+            "$(dirname "$(dirname "$(dirname "$GITHUB_WORKSPACE")")")" \
+            "$(dirname "$(dirname "$GITHUB_WORKSPACE")")" \
+            "$(dirname "$GITHUB_WORKSPACE")"
+          sudo userdel --remove dalph-qualification

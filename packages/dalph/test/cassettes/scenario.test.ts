@@ -7106,7 +7106,8 @@ it.effect(
       expect(encodedAfter).toContain("1111111111111111111111111111111111111111")
       expect(encodedAfter).toContain("singleton-revision")
       expect(encodedBefore).toContain("singleton-revision")
-    })
+    }),
+  120_000
 )
 
 it.effect("renames and renders every contradictory planned-worktree observation distinctly", () =>

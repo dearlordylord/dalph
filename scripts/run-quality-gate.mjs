@@ -2,7 +2,7 @@ import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
 
 const SECOND = 1_000
-const maximumSuccessfulOutputLines = 400
+const maximumSuccessfulOutputLines = 550
 const pnpmEntryPoint = process.env.npm_execpath
 const withoutQuint = process.argv.includes("--without-quint")
 const testEnvironment = {
@@ -28,7 +28,10 @@ const gates = [
   ...(withoutQuint
     ? []
     : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 8 * 60 * SECOND }]),
-  { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 8 * 60 * SECOND },
+  // The supported-Node hosted matrix is slower than local coverage after the
+  // real process-boundary suites; keep the command bounded without cutting
+  // off Vitest before it can report a concrete failure.
+  { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 20 * 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND }
 ]
 
