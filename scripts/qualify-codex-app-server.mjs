@@ -53,7 +53,7 @@ const main = async () => {
     throw new Error(`CODEX_BIN must be pinned to Codex ${pinnedCodexVersion}; received ${version}`)
   }
 
-  await run("pnpm", ["--filter", "@dalph/dalph", "build"])
+  await run("pnpm", ["--filter", "@dalph/dalph...", "build"])
   await run("pnpm", ["vitest", "run", ...testFiles, "--maxWorkers=1"], {
     env: { ...nodeProcess.env, CODEX_BIN: codexExecutable, DALPH_RUN_REAL_CODEX_QUALIFICATION: "1" }
   })
