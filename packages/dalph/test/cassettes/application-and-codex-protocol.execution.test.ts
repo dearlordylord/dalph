@@ -8,10 +8,10 @@ import {
   runApplicationExitProtocolCassette,
   runCodexPlannedAttemptExecutorCassette
 } from "../../src/cassettes/index.js"
-import { codexAttemptRecordOrNull } from "../../src/cassettes/codex-planned-attempt-executor-cassette.js"
+import { codexAttemptRecordTagOrNull } from "../../src/cassettes/codex-planned-attempt-executor-cassette.js"
 
-it("reports an absent private Codex record as null", () => {
-  expect(codexAttemptRecordOrNull(undefined)).toBeNull()
+it("reports an absent private Codex record tag as null", () => {
+  expect(codexAttemptRecordTagOrNull(undefined)).toBeNull()
 })
 
 it.effect("runs maintained application Exit stories through the production request boundary", () =>
@@ -58,8 +58,9 @@ it.effect("runs maintained Codex executor stories through the concrete productio
     expect(lost?.turnStartCount).toBe(1)
     expect(accepted?.reports.map(({ _tag }) => _tag)).toEqual(["Running", "Terminal"])
     expect(accepted?.reports[1]?._tag === "Terminal" && accepted.reports[1].result._tag).toBe("Accepted")
-    expect(accepted?.privateRecord?._tag).toBe("Terminal")
+    expect(accepted?.privateRecordTag).toBe("Terminal")
     expect(suspended?.reports.map(({ _tag }) => _tag)).toEqual(["Running", "SafelySuspended"])
-    expect(suspended?.privateRecord?._tag).toBe("SafelySuspended")
+    expect(suspended?.privateRecordTag).toBe("SafelySuspended")
+    expect(JSON.stringify(runs)).not.toContain("codex-cassette-thread")
   }).pipe(Effect.provide(NodeCrypto.layer))
 )

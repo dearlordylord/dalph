@@ -1,0 +1,57 @@
+name: Codex app-server qualification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/codex-app-server-qualification.yml"
+      - "packages/dalph/src/application/codex-app-server.ts"
+      - "packages/dalph/src/application/codex-app-server-real-qualification.test.ts"
+      - "packages/dalph/src/application/codex-planned-attempt-executor.ts"
+      - "packages/dalph/bin/codex-qualification-host.ts"
+      - "packages/dalph/bin/codex-qualification-host-contract.ts"
+      - "packages/dalph/test/qualification/codex-real-host-qualification.test.ts"
+      - "scripts/qualify-codex-app-server.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: codex-app-server-qualification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    name: Real Codex app-server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          node-version: 24.15.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run real Codex qualification matrix
+        run: pnpm qualify:codex

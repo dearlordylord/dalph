@@ -875,6 +875,24 @@ it.effect("seals an immediate provider failure and rejects a turn that returns a
   )
 })
 
+it.effect("seals a recovered failed owned turn even when Codex marks its thread systemError", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    expect((yield* executor.startOrContinue(request))._tag).toBe("Running")
+    const thread = harness.currentThread()
+    harness.setThread({
+      ...thread,
+      status: "systemError",
+      turns: thread.turns.map((turn) => ({ ...turn, status: "failed" as const }))
+    })
+    const failed = yield* executor.startOrContinue(request)
+    expect(failed).toEqual(
+      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+    )
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
 it.effect("rejects malformed, foreign, ambiguous, and non-JSON terminal messages without accepting a commit", () =>
   Effect.forEach(
     [
@@ -1626,9 +1644,31 @@ it.effect("retries a lost association write without sending two task turns", () 
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("sends the first turn on a freshly associated thread without treating it as recovered state", () => {
+  const harness = makeHarness({ missingEmptyThread: true })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const running = yield* executor.startOrContinue(request)
+    expect(running._tag).toBe("Running")
+    expect(harness.threadStarts()).toBe(1)
+    expect(harness.resumeCwds).toHaveLength(0)
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
 it.effect("replaces only a conclusively absent empty pre-turn thread", () => {
   const harness = makeHarness({ missingEmptyThread: true })
   return Effect.gen(function* () {
+    const lostEmptyThread = yield* harness.app.startThread(worktree)
+    harness.setRecord(
+      CodexAttemptRecord.cases.AssociatedPreTurn.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        threadId: lostEmptyThread.id,
+        worktree
+      })
+    )
     const executor = yield* PlannedAttemptExecutor
     const running = yield* executor.startOrContinue(request)
     expect(running._tag).toBe("Running")

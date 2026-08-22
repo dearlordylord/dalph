@@ -15,7 +15,6 @@ import {
   controlledCodexOwnedActivityCensusLayer,
   codexAppServerNodeLayer,
   makeNodeCodexOwnedActivityCensusService,
-  nodeCodexOwnedActivityCensusLayer,
   type CodexAppServerService,
   type CodexOwnedActivityCensusProjection,
   type CodexOwnedProcessIdentity,
@@ -33,6 +32,11 @@ import {
   memoryCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService } from "./codex-process-native.js"
+
+const standaloneNodeCodexOwnedActivityCensusLayer = Layer.succeed(
+  CodexOwnedActivityCensus,
+  makeNodeCodexOwnedActivityCensusService()
+)
 
 const thread = (
   status: CodexThreadSnapshot["status"],
@@ -73,6 +77,7 @@ const withFakeLinuxProc = <A, E>(
   kill: typeof nodeProcess.kill = nodeCodexProcessNativeService.kill as typeof nodeProcess.kill
 ): Effect.Effect<A, E> => {
   const readFile = async (path: string): Promise<string> => {
+    if (path.endsWith("/cmdline")) return "fixture-codex\u0000"
     const match = /\/proc\/([0-9]+)\/stat$/.exec(path)
     const pid = match === null ? -1 : Number(match[1])
     const result = stats.get(pid)
@@ -234,6 +239,7 @@ const withFakeLaunchObservation = <A, E>(
 }
 
 const discoveryFixture = String.raw`#!/usr/bin/env node
+if (process.env.DALPH_DISCOVERY_READY === "1") process.stderr.write("ready\n")
 let buffer = ""
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
 process.stdin.setEncoding("utf8")
@@ -319,23 +325,23 @@ it.effect("keeps controlled app-server and owned-activity substitutions at their
 it.effect("reports exact owned activities only after fresh turn, terminal, and process observations", () =>
   Effect.gen(function* () {
     const absent = yield* runCensus((census) => census.observe(thread("idle", []), [])).pipe(
-      Effect.provide(nodeCodexOwnedActivityCensusLayer)
+      Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer)
     )
     expect(absent).toEqual({ _tag: "Absent" })
 
     const activeWithoutTurn = yield* runCensus((census) => census.observe(thread("active", []), [])).pipe(
-      Effect.provide(nodeCodexOwnedActivityCensusLayer)
+      Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer)
     )
     expect(activeWithoutTurn._tag).toBe("Contradictory")
 
     const multipleTurns = yield* runCensus((census) =>
       census.observe(thread("idle", [turn("one", "inProgress"), turn("two", "inProgress")]), [])
-    ).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+    ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(multipleTurns._tag).toBe("Contradictory")
 
     const activeTurn = yield* runCensus((census) =>
       census.observe(thread("idle", [turn("active", "inProgress")]), [])
-    ).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+    ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(activeTurn).toEqual({
       _tag: "ExactLive",
       activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("active") }]
@@ -343,12 +349,12 @@ it.effect("reports exact owned activities only after fresh turn, terminal, and p
 
     const background = yield* runCensus((census) =>
       census.observe(thread("idle", [turn("done", "completed")]), [terminal(null)])
-    ).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+    ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(background).toMatchObject({ _tag: "ExactLive", activities: [{ _tag: "BackgroundTerminal" }] })
 
     const processBacked = yield* runCensus((census) =>
       census.observe(thread("idle", []), [terminal(nodeProcess.pid)])
-    ).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+    ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(processBacked._tag).toBe("ExactLive")
     if (processBacked._tag === "ExactLive") {
       expect(processBacked.activities.some((activity) => activity._tag === "ProcessGroupDescendant")).toBe(true)
@@ -486,14 +492,26 @@ it.effect("revalidates and signals controlled Linux descendants without touching
   const absent = Effect.gen(function* () {
     const census = yield* CodexOwnedActivityCensus
     return yield* census.terminateDescendants([])
-  }).pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+  }).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
   const errorKill = (() => {
     // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates a native signal failure.
     throw new Error("signal failed")
   }) as typeof nodeProcess.kill
   const absentKill = (() => {
     // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates ESRCH from the native boundary.
-    throw { cause: { code: "ESRCH" } }
+    throw Object.assign(new Error("gone"), { code: "ESRCH" })
+  }) as typeof nodeProcess.kill
+  const stoppedStats = new Map<number, FakeLinuxProcessStat>([[208, valid(208)]])
+  const successfulKill = ((_pid: number, signal?: number | NodeJS.Signals) => {
+    if (signal === 0 && !stoppedStats.has(208)) {
+      // eslint-disable-next-line functional/no-throw-statements -- the native fixture reports the post-signal process as absent.
+      throw Object.assign(new Error("gone"), { code: "ESRCH" })
+    }
+    if (signal !== 0) {
+      // eslint-disable-next-line functional/immutable-data -- the native fixture advances its one observed process from live to absent.
+      stoppedStats.delete(208)
+    }
+    return true
   }) as typeof nodeProcess.kill
   const cases: ReadonlyArray<{
     readonly stats: ReadonlyMap<number, FakeLinuxProcessStat>
@@ -521,13 +539,18 @@ it.effect("revalidates and signals controlled Linux descendants without touching
       descendant: member(205),
       expectedFailure: "changed identity"
     },
-    { stats: new Map([[206, valid(206)]]), descendant: member(206), kill: absentKill },
+    {
+      stats: new Map([[206, valid(206)]]),
+      descendant: member(206),
+      kill: absentKill,
+      expectedFailure: "did not become absent"
+    },
     { stats: new Map([[207, valid(207)]]), descendant: member(207), kill: errorKill, expectedFailure: "signal failed" },
-    { stats: new Map([[208, valid(208)]]), descendant: member(208) }
+    { stats: stoppedStats, descendant: member(208), kill: successfulKill }
   ]
   const unsupportedLayer = Layer.succeed(
     CodexOwnedActivityCensus,
-    makeNodeCodexOwnedActivityCensusService({ ...nodeCodexProcessNativeService, platform: "darwin" })
+    makeNodeCodexOwnedActivityCensusService({ ...nodeCodexProcessNativeService, platform: "freebsd" })
   )
   return Effect.gen(function* () {
     const empty = yield* absent
@@ -542,7 +565,7 @@ it.effect("revalidates and signals controlled Linux descendants without touching
       return outcome.pipe(
         Effect.map((result) => {
           if (expectedFailure === undefined) {
-            expect(Exit.isSuccess(result)).toBe(true)
+            expect(Exit.isSuccess(result), `expected process ${descendant.pid} cleanup to succeed`).toBe(true)
           } else {
             expect(Exit.isFailure(result)).toBe(true)
             if (Exit.isFailure(result)) {
@@ -559,7 +582,7 @@ it.effect("revalidates and signals controlled Linux descendants without touching
 
 it.effect("revalidates exact descendant identities before stopping owned activity", () =>
   Effect.gen(function* () {
-    const census = yield* CodexOwnedActivityCensus.pipe(Effect.provide(nodeCodexOwnedActivityCensusLayer))
+    const census = yield* CodexOwnedActivityCensus.pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     yield* census.terminateDescendants([
       {
         pid: 999_999_999,
@@ -595,7 +618,7 @@ it.effect("keeps unsupported host process census fail-closed", () =>
     Effect.provide(
       Layer.succeed(
         CodexOwnedActivityCensus,
-        makeNodeCodexOwnedActivityCensusService({ ...nodeCodexProcessNativeService, platform: "darwin" })
+        makeNodeCodexOwnedActivityCensusService({ ...nodeCodexProcessNativeService, platform: "freebsd" })
       )
     )
   )
@@ -613,9 +636,17 @@ it.effect("reconciles an exact launch-token process before starting a replacemen
       const token = "public-discovery-token"
       const child = spawn(executable, ["app-server"], {
         detached: true,
-        env: { ...nodeProcess.env, DALPH_CODEX_SERVER_INCARNATION: token },
-        stdio: "ignore"
+        env: { ...nodeProcess.env, DALPH_CODEX_SERVER_INCARNATION: token, DALPH_DISCOVERY_READY: "1" },
+        stdio: ["ignore", "ignore", "pipe"]
       })
+      yield* Effect.tryPromise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            child.stderr.once("data", () => resolve())
+            child.once("error", reject)
+            child.once("exit", (code, signal) => reject(new Error(`discovery fixture exited: ${code}/${signal}`)))
+          })
+      )
       const childPid = child.pid
       expect(childPid).toBeGreaterThan(0)
       yield* Effect.addFinalizer(() =>
@@ -650,11 +681,14 @@ it.effect("reconciles an exact launch-token process before starting a replacemen
           if (Option.isSome(failure)) {
             expect(failure.value).toBeInstanceOf(CodexAppServerFailure)
             if (failure.value instanceof CodexAppServerFailure) {
-              expect(failure.value.detail).toMatch(/different launch token|not qualified|cannot observe/)
+              expect(failure.value.detail).toMatch(
+                /different launch token|not qualified|cannot observe|not the recorded Codex executable/
+              )
             }
           }
         }
       }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.exit)
+      if (Exit.isFailure(result)) return yield* Effect.fail(Cause.squash(result.cause))
       expect(Exit.isSuccess(result)).toBe(true)
     }).pipe(Effect.provide(NodeServices.layer))
   )

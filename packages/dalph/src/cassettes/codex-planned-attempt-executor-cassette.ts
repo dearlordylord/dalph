@@ -179,15 +179,16 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (lo
 export interface CodexPlannedAttemptExecutorCassetteRun {
   readonly cassette: CodexPlannedAttemptExecutorCassetteType
   readonly activeActivity: CodexOwnedActivityCensusProjection
-  readonly privateRecord: CodexAttemptRecord | null
+  readonly privateRecordTag: CodexAttemptRecord["_tag"] | null
   readonly reports: ReadonlyArray<PlannedAttemptExecutorReport>
   readonly threadStartCount: number
   readonly turnStartCount: number
 }
 
-/** Preserves the cassette result's nullable diagnostic shape when no private record is available. */
-export const codexAttemptRecordOrNull = (record: CodexAttemptRecord | undefined): CodexAttemptRecord | null =>
-  record ?? null
+/** Exposes only the record state needed by cassette assertions, never its private Codex thread id. */
+export const codexAttemptRecordTagOrNull = (
+  record: CodexAttemptRecord | undefined
+): CodexAttemptRecord["_tag"] | null => record?._tag ?? null
 
 /** Runs one maintained story through the concrete Codex planned-attempt executor layer. */
 export const runCodexPlannedAttemptExecutorCassette = Effect.fn("CodexPlannedAttemptExecutorCassette.run")(function* (
@@ -224,7 +225,7 @@ export const runCodexPlannedAttemptExecutorCassette = Effect.fn("CodexPlannedAtt
   return {
     cassette,
     activeActivity: execution.activeActivity,
-    privateRecord: codexAttemptRecordOrNull(yield* harness.currentRecord),
+    privateRecordTag: codexAttemptRecordTagOrNull(yield* harness.currentRecord),
     reports: execution.reports,
     threadStartCount: yield* Ref.get(harness.threadStartCount),
     turnStartCount: yield* Ref.get(harness.turnStartCount)

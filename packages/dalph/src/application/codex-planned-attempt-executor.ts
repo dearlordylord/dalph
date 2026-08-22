@@ -51,16 +51,26 @@ type JsonRecord = Record<string, unknown>
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null
 
+// eslint-disable-next-line complexity -- One fail-closed boundary preserves typed detail, tag, Error, and unknown failure shapes.
+const commandFailureDetail = (error: unknown): string => {
+  if (typeof error === "object" && error !== null && "detail" in error && typeof error.detail === "string") {
+    /* v8 ignore next -- @preserve Typed failures construct a non-empty detail; the fallback keeps foreign callers total. */
+    if (error.detail.length > 0) return error.detail
+  }
+  if (typeof error === "object" && error !== null && "_tag" in error && typeof error._tag === "string") {
+    return error._tag
+  }
+  /* v8 ignore next -- @preserve Native Error producers retain a message; name is a defensive foreign-error fallback. */
+  if (error instanceof Error) return error.message.length > 0 ? error.message : error.name
+  return String(error)
+}
+
 export const commandFailure = (
   command: "StartOrContinue" | "Suspend",
   correlation: PlannedAttemptExecutorCorrelation,
   error: unknown
 ): PlannedAttemptExecutorCommandFailure =>
-  new PlannedAttemptExecutorCommandFailure({
-    command,
-    correlation,
-    detail: error instanceof Error ? error.message : String(error)
-  })
+  new PlannedAttemptExecutorCommandFailure({ command, correlation, detail: commandFailureDetail(error) })
 
 export const preserveCommandFailure = (
   command: "StartOrContinue" | "Suspend",
@@ -551,13 +561,19 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       if (record._tag === "EmptyPreTurn") return yield* Effect.fail(new CodexThreadMismatch({}))
       const thread = yield* app.resumeThread(record.threadId, attempt.worktree)
       yield* enforceThreadIdentity(attempt, correlation, record.threadId, thread)
+      if (record._tag === "AssociatedPreTurn") {
+        /* v8 ignore next -- @preserve Associated no-turn reconciliation accepts only the loaded idle state established by thread/read normalization. */
+        if (thread.status === "notLoaded" || thread.status === "systemError") {
+          return yield* Effect.fail(new CodexThreadMismatch({}))
+        }
+        return yield* reconcileAssociatedThread(thread)
+      }
+      const ownedTurn = yield* reconcileOwnedTurn(thread, record)
+      if (ownedTurn._tag === "Terminal") return ownedTurn
       if (thread.status === "notLoaded" || thread.status === "systemError") {
         return yield* Effect.fail(new CodexThreadMismatch({}))
       }
-      if (record._tag === "AssociatedPreTurn") {
-        return yield* reconcileAssociatedThread(thread)
-      }
-      return yield* reconcileOwnedTurn(thread, record)
+      return ownedTurn
     })
 
     const observeOwnedActivity = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivity")(function* (
@@ -943,17 +959,30 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       return yield* finishStartedTurn(attempt, correlation, record, priorObservedTurnId, currentToken, result)
     })
 
+    /** Distinguishes a thread created by this command from private state recovered after a process boundary. */
+    type LoadedStartRecord =
+      | { readonly _tag: "FreshAllocation"; readonly record: CodexThreadBackedRecord }
+      | { readonly _tag: "Recovered"; readonly record: CodexThreadBackedRecord }
+
     const loadStartRecord = Effect.fn("CodexPlannedAttemptExecutor.loadStartRecord")(function* (
       attempt: PlannedTaskAttempt,
       correlation: PlannedAttemptExecutorCorrelation
     ) {
       const found = yield* readRecord(correlation, attempt)
       if (Option.isNone(found)) {
-        return yield* allocateThread(attempt, correlation)
+        return {
+          _tag: "FreshAllocation" as const,
+          record: yield* allocateThread(attempt, correlation)
+        } satisfies LoadedStartRecord
       }
       const record = found.value
-      if (!isThreadBackedRecord(record)) return yield* allocateThread(attempt, correlation)
-      return record
+      if (!isThreadBackedRecord(record)) {
+        return {
+          _tag: "FreshAllocation" as const,
+          record: yield* allocateThread(attempt, correlation)
+        } satisfies LoadedStartRecord
+      }
+      return { _tag: "Recovered" as const, record } satisfies LoadedStartRecord
     })
 
     const reconcileAssociatedStart = Effect.fn("CodexPlannedAttemptExecutor.reconcileAssociatedStart")(function* (
@@ -1027,10 +1056,11 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const start = Effect.fn("CodexPlannedAttemptExecutor.start")(function* (request: PlannedAttemptExecutorRequest) {
       const attempt = request.plannedAttempt
       const correlation = plannedAttemptExecutorCorrelation(attempt)
-      let record = yield* loadStartRecord(attempt, correlation)
-      if (record._tag === "AssociatedPreTurn") {
+      const loaded = yield* loadStartRecord(attempt, correlation)
+      let record = loaded.record
+      if (loaded._tag === "Recovered" && record._tag === "AssociatedPreTurn") {
         record = yield* reconcileAssociatedStart(attempt, correlation, record)
-      } else {
+      } else if (loaded._tag === "Recovered") {
         const existingReport = yield* continueExistingStart(attempt, correlation, record)
         if (existingReport !== undefined) return existingReport
       }

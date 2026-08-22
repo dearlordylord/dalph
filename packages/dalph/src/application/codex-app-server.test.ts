@@ -2,7 +2,7 @@
 import nodeProcess from "node:process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect"
+import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
 import { expect } from "vitest"
 import {
   ApplicationExitDiagnostic,
@@ -39,12 +39,27 @@ import {
 const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[0]) =>
   rawCodexAppServerLayer(config).pipe(Layer.provide(nodeCodexProcessNativeLayer))
 
+const QualificationEnvironmentCapture = Schema.Struct({
+  codexHome: Schema.optionalKey(Schema.String),
+  providerKey: Schema.optionalKey(Schema.String)
+})
+
 const fakeServer = String.raw`#!/usr/bin/env node
 const fs = require("node:fs")
 let buffer = ""
 let thread = { id: "fixture-thread", cwd: "/unset", status: "idle", turns: [] }
 const persistedThreadFile = process.argv[1] + ".thread"
+if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined) {
+  fs.writeFileSync(
+    process.env.DALPH_QUALIFICATION_ENV_CAPTURE,
+    JSON.stringify({
+      codexHome: process.env.CODEX_HOME,
+      providerKey: process.env.DALPH_QUALIFICATION_PROVIDER_KEY
+    })
+  )
+}
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
+const writeError = (id, error) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error }) + "\n")
 const onMessage = (message) => {
   if (message.method === "initialized") return
   if (message.method === "initialize")
@@ -59,7 +74,12 @@ const onMessage = (message) => {
     fs.writeFileSync(persistedThreadFile, thread.id)
     return write(message.id, { thread })
   }
-  if (message.method === "thread/read" || message.method === "thread/resume") return write(message.id, { thread })
+  if (message.method === "thread/read" || message.method === "thread/resume") {
+    if (process.env.DALPH_QUALIFICATION_MISSING_ROLLOUT === "1") {
+      return writeError(message.id, { code: -32600, message: "no rollout found for thread id fixture-missing" })
+    }
+    return write(message.id, { thread })
+  }
   if (message.method === "turn/start") {
     const inputText = message.params.input?.[0]?.text ?? ""
     const turn = {
@@ -276,6 +296,47 @@ it.effect("speaks the normalized app-server protocol with exact per-call cwd", (
         expect((yield* app.listBackgroundTerminals(thread.id)).length).toBe(0)
         yield* app.close
         expect(Exit.isFailure(yield* Effect.exit(app.startThread("/closed/worktree")))).toBe(true)
+        yield* app.close
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
+      expect(result).toBeUndefined()
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("forwards isolated qualification environment only at the child launch boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-75-environment-forwarding-" })
+      const executable = path.join(root, "fixture-codex")
+      const capture = path.join(root, "environment.json")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+
+      const appLayer = codexAppServerNodeLayer({
+        executable,
+        environment: {
+          CODEX_HOME: "/isolated/qualification-codex-home",
+          DALPH_QUALIFICATION_ENV_CAPTURE: capture,
+          DALPH_QUALIFICATION_PROVIDER_KEY: "fixture-only-provider-key",
+          DALPH_QUALIFICATION_MISSING_ROLLOUT: "1"
+        }
+      }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/isolated/qualification-worktree")
+        const captured = yield* Schema.decodeUnknownEffect(QualificationEnvironmentCapture)(
+          JSON.parse(yield* fileSystem.readFileString(capture))
+        )
+        expect(captured).toEqual({
+          codexHome: "/isolated/qualification-codex-home",
+          providerKey: "fixture-only-provider-key"
+        })
+        const missing = yield* app
+          .resumeThread(CodexThreadId.make("fixture-missing"), "/isolated/qualification-worktree")
+          .pipe(Effect.flip)
+        expect(missing).toMatchObject({ kind: "NotFound", operation: "thread/resume" })
         yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
       expect(result).toBeUndefined()

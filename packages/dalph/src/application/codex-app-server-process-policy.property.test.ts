@@ -1,5 +1,5 @@
 import { ApplicationExitDiagnostic, ApplicationExitDrainFailure } from "@dalph/orchestrator"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Option } from "effect"
 import * as fc from "fast-check"
 import { describe, expect, it } from "vitest"
 import {
@@ -20,11 +20,13 @@ import {
   isLinuxProcessDescendant,
   launchCommandFacts,
   launchExecutableMatches,
+  linuxProcessEffectiveUid,
   makeNodeCodexProcessOwnershipService,
   makeNodeCodexOwnedActivityCensusService,
   makeNodeCodexProcessGroupCensusService,
   normalizeInitializeResponse,
   numericProcessId,
+  observeLeaseOwner,
   processErrorCode,
   processGroupLeaderFailure,
   processIdentityFromIncarnation,
@@ -32,6 +34,8 @@ import {
   processWasAbsent,
   preserveAppServerFailure,
   projectDiscoveredProcesses,
+  reconcileLaunchingPriorServer,
+  reconcilePriorTokenOwnedActivities,
   signalExactDetachedDescendants,
   signalOwnedProcessGroup,
   stopOwnedAppServer,
@@ -47,9 +51,13 @@ import {
 import type { CodexProcessNativeService } from "./codex-process-native.js"
 import {
   CodexAttemptStoreFailure,
+  CodexProcessIdentity,
   CodexServerIncarnation,
+  CodexServerLeaseIncarnation,
+  CodexServerLeaseRecord,
   CodexServerLaunchRecord,
-  CodexThreadId
+  CodexThreadId,
+  type CodexAttemptStoreService
 } from "./codex-attempt-store.js"
 
 const stat = (pid: number, parentPid: number, processGroupId: number, identity: string): LinuxProcessStat => ({
@@ -326,6 +334,317 @@ describe("Codex process observation policy", () => {
     ).toBe(true)
   })
 
+  it("stops an escaped exact-token child before replacement after its prior leader is absent", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("prior-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    let childLive = true
+    let childSignals = 0
+    const selectedNative = native({
+      readdir: async () => (childLive ? ["100"] : []),
+      readFile: async (path) => {
+        if (!childLive) throw Object.assign(new Error("gone"), { code: "ESRCH" })
+        if (path.endsWith("/stat")) return linuxStatText(stat(100, 1, 100, "linux:child"))
+        if (path.endsWith("/environ")) return "DALPH_CODEX_SERVER_INCARNATION=prior-token\u0000"
+        if (path.endsWith("/cmdline")) return "/bin/sh\u0000-c\u0000work\u0000"
+        throw new Error(`unexpected process path ${path}`)
+      },
+      kill: (pid, signal) => {
+        if (pid === 100 && signal === "SIGTERM") {
+          childSignals += 1
+          childLive = false
+        }
+      }
+    })
+    expect(Exit.isSuccess(await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative)))).toBe(
+      true
+    )
+    expect(childSignals).toBe(1)
+    expect(childLive).toBe(false)
+  })
+
+  it("does not clear a Launching intent until its escaped token child is absent", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("launching-token"),
+      phase: "Launching",
+      pid: null
+    })
+    let childLive = true
+    let clearedAfterAbsence = false
+    const selectedNative = native({
+      readdir: async () => (childLive ? ["100"] : []),
+      readFile: async (path) => {
+        if (!childLive) throw Object.assign(new Error("gone"), { code: "ESRCH" })
+        if (path.endsWith("/stat")) return linuxStatText(stat(100, 1, 100, "linux:child"))
+        if (path.endsWith("/environ")) return "DALPH_CODEX_SERVER_INCARNATION=launching-token\u0000"
+        if (path.endsWith("/cmdline")) return "/bin/sh\u0000-c\u0000work\u0000"
+        throw new Error(`unexpected process path ${path}`)
+      },
+      kill: (pid, signal) => {
+        if (pid === 100 && signal === "SIGTERM") childLive = false
+      }
+    })
+    const store: CodexAttemptStoreService = {
+      readAttempt: () => Effect.succeed(Option.none()),
+      writeAttempt: () => Effect.void,
+      readServerLaunch: () => Effect.succeed(Option.some(prior)),
+      writeServerLaunch: () => Effect.void,
+      clearServerLaunch: () =>
+        Effect.sync(() => {
+          clearedAfterAbsence = !childLive
+        }),
+      acquireServerLease: () => Effect.void,
+      releaseServerLease: () => Effect.void
+    }
+    const ownership = {
+      observe: () => Effect.succeed({ _tag: "Absent" as const }),
+      discover: () => Effect.succeed({ _tag: "Absent" as const }),
+      stop: () => Effect.void
+    }
+    expect(
+      Exit.isSuccess(
+        await Effect.runPromiseExit(reconcileLaunchingPriorServer(store, ownership, prior, selectedNative))
+      )
+    ).toBe(true)
+    expect(childLive).toBe(false)
+    expect(clearedAfterAbsence).toBe(true)
+  })
+
+  it("repeats the durable-token census until a later token child is also absent", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("recensus-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    const livePids = new Set([100])
+    const signals: Array<number> = []
+    const selectedNative = native({
+      readdir: async () => [...livePids].map(String),
+      readFile: async (path) => {
+        const pid = Number(/^\/proc\/(\d+)\//.exec(path)?.[1])
+        if (!livePids.has(pid)) throw Object.assign(new Error("gone"), { code: "ESRCH" })
+        if (path.endsWith("/stat")) return linuxStatText(stat(pid, 1, pid, `linux:child-${pid}`))
+        if (path.endsWith("/environ")) return "DALPH_CODEX_SERVER_INCARNATION=recensus-token\u0000"
+        if (path.endsWith("/cmdline")) return "/bin/sh\u0000-c\u0000work\u0000"
+        throw new Error(`unexpected process path ${path}`)
+      },
+      kill: (pid, signal) => {
+        if (signal !== "SIGTERM" || !livePids.has(pid)) return
+        signals.push(pid)
+        livePids.delete(pid)
+        if (pid === 100) livePids.add(101)
+      }
+    })
+    expect(Exit.isSuccess(await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative)))).toBe(
+      true
+    )
+    expect(signals).toEqual([100, 101])
+    expect(livePids.size).toBe(0)
+  })
+
+  it("fails closed when the durable-token recensus bound is exhausted", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("bounded-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    const selectedNative = native({
+      readdir: async () => ["100"],
+      readFile: async (path) => {
+        if (path.endsWith("/stat")) return linuxStatText(stat(100, 1, 100, "linux:child"))
+        if (path.endsWith("/environ")) return "DALPH_CODEX_SERVER_INCARNATION=bounded-token\u0000"
+        if (path.endsWith("/cmdline")) return "/bin/sh\u0000-c\u0000work\u0000"
+        throw new Error(`unexpected process path ${path}`)
+      }
+    })
+    expect(
+      Exit.isFailure(await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative, 0)))
+    ).toBe(true)
+  })
+
+  it("fails closed when Darwin reports a live process with malformed stat text", async () => {
+    const member = stat(60, 1, 60, "darwin:Sat Aug 22 01:23:45 2026")
+    const selectedNative = native({
+      platform: "darwin",
+      execFile: async () => ({ stdout: "malformed-live-row\n" }),
+      kill: () => undefined
+    })
+    const observation = await Effect.runPromiseExit(awaitExactMembersAbsent([member], 0, selectedNative))
+    expect(Exit.isFailure(observation)).toBe(true)
+
+    const launch = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("darwin-malformed|darwin%3ASat%20Aug%2022%2001%3A23%3A45%202026"),
+      phase: "Live",
+      pid: 60
+    })
+    const census = makeNodeCodexProcessGroupCensusService(selectedNative)
+    expect(await Effect.runPromise(census.observe(launch))).toMatchObject({ _tag: "Unreadable" })
+  })
+
+  it("fails closed when Darwin omits a recorded live leader or returns an empty census", async () => {
+    const started = "Sat Aug 22 01:23:45 2026"
+    const launch = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make(`darwin-omission|${encodeURIComponent(`darwin:${started}`)}`),
+      phase: "Live",
+      pid: 60
+    })
+    for (const fullCensus of ["61 1 61 S Sat Aug 22 01:23:46 2026\n", ""]) {
+      const selectedNative = native({
+        platform: "darwin",
+        execFile: async (_file, arguments_) =>
+          arguments_.includes("-axo") ? { stdout: fullCensus } : { stdout: `60 1 60 S ${started}\n` },
+        kill: () => undefined
+      })
+      expect(
+        await Effect.runPromise(makeNodeCodexProcessGroupCensusService(selectedNative).observe(launch))
+      ).toMatchObject({ _tag: "Unreadable" })
+    }
+  })
+
+  it("treats Linux and Darwin zombie launch and lease owners as absent", async () => {
+    const started = "Sat Aug 22 01:23:45 2026"
+    const cases = [
+      {
+        identity: "linux:123",
+        selectedNative: native({
+          readFile: async () => linuxStatText(stat(60, 1, 60, "linux:123")).replace("(fixture) S ", "(fixture) Z ")
+        })
+      },
+      {
+        identity: `darwin:${started}`,
+        selectedNative: native({ platform: "darwin", execFile: async () => ({ stdout: `60 1 60 Z ${started}\n` }) })
+      }
+    ]
+    for (const { identity, selectedNative } of cases) {
+      const launch = CodexServerLaunchRecord.make({
+        command: ["codex", "app-server"],
+        incarnation: CodexServerIncarnation.make(`zombie-owner|${encodeURIComponent(identity)}`),
+        phase: "Live",
+        pid: 60
+      })
+      expect(
+        await Effect.runPromise(
+          makeNodeCodexProcessOwnershipService(
+            makeNodeCodexProcessGroupCensusService(selectedNative),
+            selectedNative
+          ).observe(launch)
+        )
+      ).toEqual({ _tag: "Absent" })
+      expect(
+        await observeLeaseOwner(
+          CodexServerLeaseRecord.make({
+            pid: 60,
+            processIdentity: CodexProcessIdentity.make(identity),
+            incarnation: CodexServerLeaseIncarnation.make("zombie-lease")
+          }),
+          selectedNative
+        )
+      ).toEqual({ _tag: "Absent" })
+    }
+  })
+
+  it("fails closed when an exact-token census cannot read a live process environment", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("permission-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    const selectedNative = native({
+      readdir: async () => ["100"],
+      readFile: async (path) => {
+        if (path.endsWith("/stat")) return linuxStatText(stat(100, 1, 100, "linux:child"))
+        if (path.endsWith("/environ")) throw Object.assign(new Error("permission denied"), { code: "EACCES" })
+        return "/bin/sh\u0000"
+      }
+    })
+    expect(Exit.isFailure(await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative)))).toBe(
+      true
+    )
+  })
+
+  it("skips an unreadable Linux environment only after proving a foreign effective uid", async () => {
+    expect(linuxProcessEffectiveUid("Name:\tfixture\nUid:\t1000\t1001\t1001\t1001\n")).toBe("1001")
+    expect(linuxProcessEffectiveUid("Uid: malformed")).toBeUndefined()
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("foreign-user-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    const selectedNative = native({
+      readdir: async () => ["100"],
+      readFile: async (path) => {
+        if (path.endsWith("/stat")) return linuxStatText(stat(100, 1, 100, "linux:child"))
+        if (path === "/proc/100/status") return "Uid:\t2000\t2000\t2000\t2000\n"
+        if (path === "/proc/1/status") return "Uid:\t1000\t1000\t1000\t1000\n"
+        if (path.endsWith("/environ")) throw Object.assign(new Error("permission denied"), { code: "EACCES" })
+        return "/bin/sh\u0000"
+      }
+    })
+    expect(Exit.isSuccess(await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative)))).toBe(
+      true
+    )
+  })
+
+  it("treats an inert Linux zombie as absent without reading its environment", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("zombie-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    let environmentReads = 0
+    const selectedNative = native({
+      readdir: async () => ["100"],
+      readFile: async (path) => {
+        if (path.endsWith("/stat")) {
+          return linuxStatText(stat(100, 1, 100, "linux:zombie")).replace("(fixture) S ", "(fixture) Z ")
+        }
+        if (path.endsWith("/environ")) environmentReads += 1
+        return ""
+      }
+    })
+    expect(Exit.isSuccess(await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative)))).toBe(
+      true
+    )
+    expect(environmentReads).toBe(0)
+  })
+
+  it("rechecks an environment permission race and accepts only a newly inert process", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("zombie-race-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    let statReads = 0
+    const selectedNative = native({
+      readdir: async () => ["100"],
+      readFile: async (path) => {
+        if (path.endsWith("/stat")) {
+          statReads += 1
+          const state = statReads === 1 ? "S" : "Z"
+          return linuxStatText(stat(100, 1, 100, "linux:zombie-race")).replace("(fixture) S ", `(fixture) ${state} `)
+        }
+        if (path.endsWith("/environ")) throw Object.assign(new Error("process became inert"), { code: "EACCES" })
+        return "Uid:\t1000\t1000\t1000\t1000\n"
+      }
+    })
+    expect(Exit.isSuccess(await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative)))).toBe(
+      true
+    )
+    expect(statReads).toBe(2)
+  })
+
   it("classifies platform-specific identity, handshake, census, and discovery boundaries", async () => {
     const launch = CodexServerLaunchRecord.make({
       command: ["codex", "app-server"],
@@ -361,23 +680,72 @@ describe("Codex process observation policy", () => {
       )
     ).toBeUndefined()
 
-    const darwinNative = native({ platform: "darwin" })
+    const darwinStarted = "Sat Aug 22 01:23:45 2026"
+    const darwinNative = native({
+      platform: "darwin",
+      execFile: async (_file, arguments_) => {
+        const joined = arguments_.join(" ")
+        if (joined.includes("pid=,ppid=,pgid=,stat=,lstart=")) {
+          return { stdout: `60 1 60 S ${darwinStarted}\n` }
+        }
+        if (joined.includes("-axo pid=")) return { stdout: " 60\n" }
+        if (joined.includes("eww -o command=")) {
+          return { stdout: "codex app-server DALPH_CODEX_SERVER_INCARNATION=platform\n" }
+        }
+        if (joined.includes("lstart=")) return { stdout: `${darwinStarted}\n` }
+        if (joined.includes("command=")) return { stdout: "codex app-server\n" }
+        return { stdout: "" }
+      }
+    })
+    const darwinIncarnation = CodexServerIncarnation.make(`platform|${encodeURIComponent(`darwin:${darwinStarted}`)}`)
+    const darwinLaunch = CodexServerLaunchRecord.make({ ...launch, incarnation: darwinIncarnation })
     expect(
       await incarnationWithProcessIdentity(
         CodexServerIncarnation.make("platform"),
         60,
         withNative(darwinNative, (value) => value)
       )
-    ).toBeUndefined()
+    ).toBe(darwinIncarnation)
     expect(
       await validateLaunchedProcessObservation(
-        launch,
+        darwinLaunch,
         60,
         { expectedExecutable: "codex", expectedMode: "app-server" },
         ["codex", "app-server"],
         withNative(darwinNative, (value) => value)
       )
-    ).toMatchObject({ _tag: "Unreadable" })
+    ).toEqual({ _tag: "ExactLive", pid: 60 })
+    expect(
+      await validateLaunchedProcessObservation(
+        { ...darwinLaunch, incarnation: CodexServerIncarnation.make("platform|darwin%3Aother") },
+        60,
+        { expectedExecutable: "codex", expectedMode: "app-server" },
+        ["codex", "app-server"],
+        withNative(darwinNative, (value) => value)
+      )
+    ).toMatchObject({ _tag: "Contradictory" })
+    let reusedPidSignals = 0
+    const sameSecondReusedPid = native({
+      platform: "darwin",
+      execFile: async (_file, arguments_) =>
+        arguments_.join(" ").includes("pid=,ppid=,pgid=,stat=,lstart=")
+          ? { stdout: `61 1 61 S ${darwinStarted}\n` }
+          : arguments_.join(" ").includes("eww")
+            ? { stdout: "unrelated-process-without-launch-token\n" }
+            : { stdout: `${darwinStarted}\n` },
+      kill: () => {
+        reusedPidSignals += 1
+      }
+    })
+    const reusedPidOutcome = await Effect.runPromiseExit(
+      signalExactDetachedDescendants(
+        darwinLaunch,
+        { _tag: "ExactLive", members: [stat(61, 1, 61, `darwin:${darwinStarted}`)] },
+        withNative(sameSecondReusedPid, (value) => value)
+      )
+    )
+    expect(Exit.isFailure(reusedPidOutcome)).toBe(true)
+    expect(reusedPidSignals).toBe(0)
     expect(
       normalizeInitializeResponse(
         { ...initialize, platformOs: "macos" },
@@ -397,13 +765,13 @@ describe("Codex process observation policy", () => {
       )
     ).toBeInstanceOf(CodexAppServerFailure)
     const darwinGroup = makeNodeCodexProcessGroupCensusService(withNative(darwinNative, (value) => value))
-    expect(await Effect.runPromise(darwinGroup.observe(launch))).toMatchObject({ _tag: "Unreadable" })
+    expect(await Effect.runPromise(darwinGroup.observe(darwinLaunch))).toMatchObject({ _tag: "ExactLive" })
     expect(
       await discoverAppServerProcesses(
-        launch.incarnation,
+        darwinLaunch.incarnation,
         withNative(darwinNative, (value) => value)
       )
-    ).toMatchObject({ _tag: "Unreadable" })
+    ).toMatchObject({ _tag: "ExactLive", pid: 60 })
     expect(
       await Effect.runPromise(
         makeNodeCodexProcessOwnershipService(
@@ -641,7 +1009,7 @@ describe("Codex process observation policy", () => {
     ).toBe(true)
 
     expect(
-      Exit.isSuccess(
+      Exit.isFailure(
         await Effect.runPromiseExit(
           signalExactDetachedDescendants(
             launch,
@@ -738,6 +1106,9 @@ describe("Codex process observation policy", () => {
     expect(launchCommandFacts({ ...complete, command: [] })).toMatchObject({ _tag: "Unreadable" })
     expect(launchCommandFacts({ ...complete, command: ["codex", "wrong-mode"] })).toMatchObject({ _tag: "Unreadable" })
     expect(launchExecutableMatches("codex", ["/usr/local/bin/codex", "app-server"])).toBe(true)
+    expect(
+      launchExecutableMatches("/workspace/node_modules/.bin/codex", ["node", "/pkg/bin/codex.js", "app-server"])
+    ).toBe(true)
     expect(launchExecutableMatches("codex", ["/usr/local/bin/other", "app-server"])).toBe(false)
     expect(launchExecutableMatches("/opt/codex", ["/opt/codex", "app-server"])).toBe(true)
     expect(launchExecutableMatches("relative/codex", ["/elsewhere/codex", "app-server"])).toBe(false)
@@ -747,7 +1118,7 @@ describe("Codex process observation policy", () => {
         complete,
         withNative(native({ platform: "darwin" }), (value) => value)
       )
-    ).toMatchObject({ _tag: "Unreadable" })
+    ).toEqual({ expectedExecutable: "codex", expectedMode: "app-server" })
   })
 
   it("projects process ids, discovery candidates, and observation failures exhaustively", () => {

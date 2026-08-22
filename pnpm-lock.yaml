@@ -34,6 +34,9 @@ importers:
       '@informalsystems/quint':
         specifier: 0.32.0
         version: 0.32.0
+      '@openai/codex':
+        specifier: 0.149.0
+        version: 0.149.0
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
@@ -699,6 +702,47 @@ packages:
 
   '@octokit/types@13.10.0':
     resolution: {integrity: sha512-ifLaO34EbbPj0Xgro4G5lP5asESjwHracYJvVaPIyXMuiuXLlhic3S47cBdTb+jfODkTE5YtGCLt3Ay3+J97sA==}
+
+  '@openai/codex@0.149.0':
+    resolution: {integrity: sha512-i4dryj2Y1j+00Mb5n+0n71EYnTK9/KDc2cdFo/dXD0d1oTog2bhUssKDEIOnKmnEf51P0Z/HJTWvTKw/UHyOvQ==}
+    engines: {node: '>=16'}
+    hasBin: true
+
+  '@openai/codex@0.149.0-darwin-arm64':
+    resolution: {integrity: sha512-GsZJbzBWiD48RETrO8VHGAQNgfSrUVxItXZFeD87wswatPi0+lKuQo8Dx4nMYmOZhZrVtwr3al/feRrZxnDV8Q==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@openai/codex@0.149.0-darwin-x64':
+    resolution: {integrity: sha512-H+mMgW3Nhc5QzGWEklCoFqACuOc0cVpgPkPQRw0LShoK7P5664T6BRnyl1yzT6orKPKv49cXry7DIWWZ19SanQ==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@openai/codex@0.149.0-linux-arm64':
+    resolution: {integrity: sha512-fAXPpvIob+11RNZJS9CVVTsKb+V4Hw3woGFPj42D7fU2wBJUKI2jfAc4fLJNtrpwRecLeW601mtkMHOSIbWuuA==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@openai/codex@0.149.0-linux-x64':
+    resolution: {integrity: sha512-uZXaN9JPxu0/jjnqqJeTd4kRYPnjVZK3MiVndfG1mHhEaoDKL7ScWHfPqvAEOjwsSDEmQSlMfUkmvYp/CHciYw==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [linux]
+
+  '@openai/codex@0.149.0-win32-arm64':
+    resolution: {integrity: sha512-pUd8MzuwtqT5DhM1NUE1gETWIZ9fkDA1XB7tt9YNIi/peUgLuziQgZd7o0bNON4cNzgbil1YUN1qDTgQm0g3pg==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@openai/codex@0.149.0-win32-x64':
+    resolution: {integrity: sha512-qKbwSOOO/fdhQ5MlXE2fts6taPxRPZ/zqeC+eqHD72hLRymV9rFCUbUxOCquognUPRPvS/2/kRCV0UVhoDd3yQ==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [win32]
 
   '@oxlint-tsgolint/darwin-arm64@7.0.2001':
     resolution: {integrity: sha512-CUJEdbSZ54+Xy9OXqOhWLTKZKV0BBiV7C2i/ygyVmXtkUNXx5YCzN8DpSSshTAKktoL7S+tnQ/ftFG/i7X896w==}
@@ -3452,6 +3496,33 @@ snapshots:
   '@octokit/types@13.10.0':
     dependencies:
       '@octokit/openapi-types': 24.2.0
+
+  '@openai/codex@0.149.0':
+    optionalDependencies:
+      '@openai/codex-darwin-arm64': '@openai/codex@0.149.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.149.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.149.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.149.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.149.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.149.0-win32-x64'
+
+  '@openai/codex@0.149.0-darwin-arm64':
+    optional: true
+
+  '@openai/codex@0.149.0-darwin-x64':
+    optional: true
+
+  '@openai/codex@0.149.0-linux-arm64':
+    optional: true
+
+  '@openai/codex@0.149.0-linux-x64':
+    optional: true
+
+  '@openai/codex@0.149.0-win32-arm64':
+    optional: true
+
+  '@openai/codex@0.149.0-win32-x64':
+    optional: true
 
   '@oxlint-tsgolint/darwin-arm64@7.0.2001':
     optional: true
