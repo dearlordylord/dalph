@@ -57,17 +57,23 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           echo "QUALIFICATION_WORKSPACE_OWNER=$(stat -c '%u:%g' "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
+          echo "QUALIFICATION_PNPM_HOME=/opt/dalph-qualification-pnpm/node_modules/.bin" >> "$GITHUB_ENV"
           sudo useradd --create-home --shell /bin/bash dalph-qualification
+          sudo cp -a "$(dirname "$(dirname "$PNPM_HOME")")" /opt/dalph-qualification-pnpm
+          sudo chmod -R a+rX /opt/dalph-qualification-pnpm
           sudo chown -R dalph-qualification:dalph-qualification "$GITHUB_WORKSPACE"
 
       - name: Run real Codex qualification matrix
         run: |
           if [[ "${{ runner.os }}" == "Linux" ]]; then
-            sudo -H -u dalph-qualification env "PATH=$PATH" pnpm qualify:codex
+            sudo -H -u dalph-qualification env "PATH=$QUALIFICATION_PNPM_HOME:$PATH" pnpm qualify:codex
           else
             pnpm qualify:codex
           fi
 
       - name: Restore Linux workspace ownership
         if: always() && runner.os == 'Linux'
-        run: sudo chown -R "$QUALIFICATION_WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+        run: |
+          sudo chown -R "$QUALIFICATION_WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+          sudo rm -rf /opt/dalph-qualification-pnpm
+          sudo userdel --remove dalph-qualification
