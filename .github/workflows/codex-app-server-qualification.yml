@@ -63,7 +63,7 @@ jobs:
       - name: Run real Codex qualification matrix
         run: |
           if [[ "${{ runner.os }}" == "Linux" ]]; then
-            sudo --preserve-env=PATH -H -u dalph-qualification pnpm qualify:codex
+            sudo -H -u dalph-qualification env "PATH=$PATH" pnpm qualify:codex
           else
             pnpm qualify:codex
           fi
