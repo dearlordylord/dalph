@@ -26,6 +26,11 @@ The qualification runner builds the checked-in Dalph host, verifies Codex
 `.github/workflows/codex-app-server-qualification.yml`. The raw-protocol tests
 are deliberately separate evidence for Codex notification and JSON-RPC cuts;
 the built-host tests below prove the normalized Dalph boundary.
+The hosted Linux leg uses one disposable OS account for Dalph and its Codex
+descendants. GitHub runner processes therefore have a provably foreign
+effective UID when their protected process environments are unreadable, while
+every process the fixture creates remains subject to the same fail-closed
+ownership census as production.
 
 ## Scenario-to-test mapping
 
@@ -46,7 +51,7 @@ the built-host tests below prove the normalized Dalph boundary.
 | Dalph-only death refinement | Dalph alone is SIGKILLed after a turn request while its detached app-server remains exactly live. The successor proves the prior PID absent before projecting the same thread and making no replacement call. | `a lost turn response is reconciled on restart with the same private thread and no duplicate task turn` |
 | Prior-leader-loss refinement | If a `Launching` intent or recorded app-server leader remains but the leader is already absent, an escaped real work process still carries its exact durable launch token. A successor repeatedly reads the token census, stops each exact process, and proves a fresh census absent before admitting a replacement; the built host records the child absent at the instant replacement `ready` arrives. Malformed, omitted, empty, permission-denied, or never-quiescent host observations fail closed. | Built host: `restart stops a real escaped token child after the prior app-server leader is gone and before replacement admission`. Controlled cuts: `does not clear a Launching intent until its escaped token child is absent`; `stops an escaped exact-token child before replacement after its prior leader is absent`; `repeats the durable-token census until a later token child is also absent`; `fails closed when the durable-token recensus bound is exhausted`; `fails closed when Darwin reports a live process with malformed stat text`; `fails closed when Darwin omits a recorded live leader or returns an empty census`; `fails closed when an exact-token census cannot read a live process environment` |
 | Private-id refinement | The built host's known private id is absent from every emitted public event; the maintained cassette now exposes only the private record tag and asserts the known cassette thread id is absent from serialization. | `normal built host returns Running then the sealed Accepted commit without exposing its Codex thread id`; `runs maintained Codex executor stories through the concrete production executor` |
-| Supported hosts | One pinned runner and one test list are used unchanged on both supported operating systems. Platform-specific process observations must satisfy the same result contract. | workflow matrix entries `ubuntu-latest` and `macos-latest`, each running `pnpm qualify:codex` |
+| Supported hosts | One pinned runner and one test list are used unchanged on both supported operating systems. The Linux job runs Dalph and Codex under one disposable account so unrelated protected runner processes are provably foreign; platform-specific process observations must satisfy the same result contract. | workflow matrix entries `ubuntu-latest` and `macos-latest`, each running `pnpm qualify:codex` |
 
 No provider mutation retry applies: the fixture provider receives model calls
 but owns no tracker lifecycle or claim. No GitHub facts participate. Crashes and

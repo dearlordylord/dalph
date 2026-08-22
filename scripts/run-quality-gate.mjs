@@ -2,7 +2,7 @@ import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
 
 const SECOND = 1_000
-const maximumSuccessfulOutputLines = 400
+const maximumSuccessfulOutputLines = 550
 const pnpmEntryPoint = process.env.npm_execpath
 const withoutQuint = process.argv.includes("--without-quint")
 const testEnvironment = {

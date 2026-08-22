@@ -363,6 +363,7 @@ it.effect("reports exact owned activities only after fresh turn, terminal, and p
 )
 
 it.effect("classifies controlled Linux process census observations at the public activity boundary", () => {
+  const liveKill = (() => true) as typeof nodeProcess.kill
   const valid = (pid: number, parentPid: number, processGroupId: number, startIdentity = "start") => ({
     _tag: "Read" as const,
     text: linuxProcessStat(pid, parentPid, processGroupId, startIdentity)
@@ -468,7 +469,8 @@ it.effect("classifies controlled Linux process census observations at the public
       stats,
       runCensus((census) => census.observe(thread("idle", []), [terminal(rootPid)])).pipe(
         Effect.map((observed) => expect(observed).toEqual(expected))
-      )
+      ),
+      liveKill
     )
   )
 })
@@ -501,6 +503,7 @@ it.effect("revalidates and signals controlled Linux descendants without touching
     // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates ESRCH from the native boundary.
     throw Object.assign(new Error("gone"), { code: "ESRCH" })
   }) as typeof nodeProcess.kill
+  const liveKill = (() => true) as typeof nodeProcess.kill
   const stoppedStats = new Map<number, FakeLinuxProcessStat>([[208, valid(208)]])
   const successfulKill = ((_pid: number, signal?: number | NodeJS.Signals) => {
     if (signal === 0 && !stoppedStats.has(208)) {
@@ -532,6 +535,7 @@ it.effect("revalidates and signals controlled Linux descendants without touching
     {
       stats: new Map([[204, { _tag: "Read", text: "204 (fixture-codex) broken" }]]),
       descendant: member(204),
+      kill: liveKill,
       expectedFailure: "process 204 stat is malformed"
     },
     {

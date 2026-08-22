@@ -477,11 +477,15 @@ const readLinuxProcessStatObservation = async (
 ): Promise<LinuxProcessStatObservation> => {
   try {
     const stat = await readLinuxProcessStat(pid, native)
-    return stat === undefined
-      ? { _tag: "Unreadable", detail: `process ${pid} stat is malformed` }
-      : stat.processState === "Z"
-        ? { _tag: "Absent" }
-        : { _tag: "Read", stat }
+    if (stat === undefined) {
+      try {
+        native.kill(pid, 0)
+      } catch (error) {
+        if (processWasAbsent(error)) return { _tag: "Absent" }
+      }
+      return { _tag: "Unreadable", detail: `process ${pid} stat is malformed` }
+    }
+    return stat.processState === "Z" ? { _tag: "Absent" } : { _tag: "Read", stat }
   } catch (error) {
     return processWasAbsent(error)
       ? { _tag: "Absent" }
@@ -643,7 +647,43 @@ const environmentCarriesToken = (
   platform: CodexProcessNativeService["platform"]
 ): boolean =>
   /* v8 ignore next -- @preserve Darwin token parsing is exercised by process-policy properties and the macOS qualification. */
-  platform === "linux" ? environment.split("\u0000").includes(tokenEntry) : environment.includes(tokenEntry)
+  platform === "linux"
+    ? environment.split("\u0000").includes(tokenEntry)
+    : environment.split(/\s+/).includes(tokenEntry)
+
+type DarwinProcessCommandsObservation =
+  | { readonly commands: ReadonlyMap<number, string> }
+  | { readonly failure: { readonly detail: string } }
+
+const parseDarwinProcessCommand = (row: string): readonly [number, string] | undefined => {
+  const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(row)
+  const pid = match === null ? Number.NaN : Number(match[1])
+  const command = match?.[2]
+  return Number.isSafeInteger(pid) && pid > 0 && command !== undefined && command.length > 0
+    ? [pid, command]
+    : undefined
+}
+
+/** Reads every Darwin command/environment row in one bounded host observation. */
+const readDarwinProcessCommands = async (
+  native: CodexProcessNativeService
+): Promise<DarwinProcessCommandsObservation> => {
+  try {
+    const { stdout } = await native.execFile("ps", ["eww", "-axo", "pid=,command="])
+    const rows = stdout.split("\n").filter((line) => line.trim().length > 0)
+    if (rows.length === 0) return { failure: { detail: "Darwin process command census returned no processes" } }
+    const parsed = rows.map(parseDarwinProcessCommand)
+    const malformedIndex = parsed.findIndex((row) => row === undefined)
+    if (malformedIndex >= 0) {
+      return { failure: { detail: `Darwin process command census row ${malformedIndex + 1} is malformed` } }
+    }
+    const commands = new Map(parsed.filter((row): row is readonly [number, string] => row !== undefined))
+    if (commands.size !== rows.length) return { failure: { detail: "Darwin process command census repeats a pid" } }
+    return { commands }
+  } catch (error) {
+    return { failure: { detail: `cannot read Darwin process command census: ${String(error)}` } }
+  }
+}
 
 const tokenReadFailure = async (
   pid: number,
@@ -689,6 +729,31 @@ const readTokenMember = async (
     return tokenReadFailure(stat.pid, error, native)
   }
 }
+
+/* v8 ignore start -- @preserve Darwin batch token census is exercised by process-policy properties and macOS qualification. */
+const readDarwinTokenMembers = async (
+  stats: ReadonlyArray<LinuxProcessStat>,
+  token: CodexServerIncarnation,
+  native: CodexProcessNativeService
+): Promise<ReadonlyArray<TokenMemberObservation>> => {
+  const observation = await readDarwinProcessCommands(native)
+  if ("failure" in observation) return [observation.failure]
+  const tokenEntry = `${codexServerIncarnationEnvironment}=${token}`
+  return stats.flatMap((stat) => {
+    const command = observation.commands.get(stat.pid)
+    return command !== undefined && environmentCarriesToken(command, tokenEntry, "darwin")
+      ? [
+          {
+            pid: stat.pid,
+            parentPid: stat.parentPid,
+            processGroupId: stat.processGroupId,
+            startIdentity: stat.startIdentity
+          }
+        ]
+      : []
+  })
+}
+/* v8 ignore stop -- @preserve */
 
 export const isLinuxProcessDescendant = (
   rootPid: number,
@@ -776,7 +841,9 @@ const observeOwnedActivityProcesses = async (
   const tokenMembers =
     token === undefined
       ? []
-      : await Promise.all([...byPid.values()].map((stat) => readTokenMember(stat, token, native)))
+      : native.platform === "darwin"
+        ? await readDarwinTokenMembers([...byPid.values()], token, native)
+        : await Promise.all([...byPid.values()].map((stat) => readTokenMember(stat, token, native)))
   const tokenFailure = tokenMembers.find((member) => member !== undefined && "detail" in member)
   if (tokenFailure !== undefined && "detail" in tokenFailure) return { _tag: "Unreadable", detail: tokenFailure.detail }
   const exactTokenMembers = tokenMembers.filter(
@@ -2098,6 +2165,35 @@ const discoverProcessCandidate = async (
     : { _tag: "Foreign", detail: `pid ${pid} carries a different launch token` }
 }
 
+/* v8 ignore start -- @preserve Darwin launch-token discovery is exercised by process-policy properties and macOS qualification. */
+const discoverDarwinProcessCandidate = async (
+  pid: number,
+  command: string,
+  expectedToken: CodexServerIncarnation,
+  native: CodexProcessNativeService
+): Promise<DiscoveredProcessCandidate> => {
+  if (!command.split(/\s+/).includes("app-server")) return { _tag: "Skip" }
+  const tokenEntry = command.split(/\s+/).find((value) => value.startsWith(`${codexServerIncarnationEnvironment}=`))
+  if (tokenEntry === undefined) return { _tag: "Skip" }
+  try {
+    const processIdentity = await readProcessStartIdentity(pid, native)
+    if (processIdentity === undefined) {
+      return { _tag: "Unreadable", detail: `process ${pid} launch token has no start identity` }
+    }
+    return tokenEntry.slice(codexServerIncarnationEnvironment.length + 1) === expectedToken
+      ? { _tag: "Exact", pid, processIdentity: CodexProcessStartIdentity.make(processIdentity) }
+      : { _tag: "Foreign", detail: `pid ${pid} carries a different launch token` }
+  } catch (error) {
+    try {
+      native.kill(pid, 0)
+    } catch (signalError) {
+      if (processWasAbsent(signalError)) return { _tag: "Skip" }
+    }
+    return { _tag: "Unreadable", detail: `cannot inspect process ${pid}: ${String(error)}` }
+  }
+}
+/* v8 ignore stop -- @preserve */
+
 type ExactDiscoveredProcess = { readonly pid: number; readonly processIdentity: CodexProcessStartIdentity }
 
 export const appendDiscoveredProcessCandidate = (
@@ -2130,8 +2226,46 @@ export const projectDiscoveredProcesses = (
   return foreign.length > 0 ? { _tag: "Contradictory", detail: foreign.join("; ") } : { _tag: "ExactLive", ...only }
 }
 
+type DiscoveryCandidatesObservation =
+  | { readonly candidates: ReadonlyArray<DiscoveredProcessCandidate> }
+  | Extract<DiscoveredProcessCandidate, { readonly _tag: "Unreadable" }>
+
+const discoverLinuxProcessCandidates = async (
+  expectedToken: CodexServerIncarnation,
+  native: CodexProcessNativeService
+): Promise<DiscoveryCandidatesObservation> => {
+  const pids = (await native.readdir("/proc")).flatMap((entry) => {
+    const pid = numericProcessId(entry)
+    return pid === undefined ? [] : [pid]
+  })
+  const candidates: Array<DiscoveredProcessCandidate> = []
+  for (const pid of pids) {
+    // The census is a bounded local observation; sequential reads avoid one
+    // file descriptor and promise per host process.
+    // eslint-disable-next-line functional/immutable-data
+    candidates.push(await discoverProcessCandidate(pid, expectedToken, native))
+  }
+  return { candidates }
+}
+
+/* v8 ignore start -- @preserve Darwin batch discovery is exercised by process-policy properties and macOS qualification. */
+const discoverDarwinProcessCandidates = async (
+  expectedToken: CodexServerIncarnation,
+  native: CodexProcessNativeService
+): Promise<DiscoveryCandidatesObservation> => {
+  const observation = await readDarwinProcessCommands(native)
+  if ("failure" in observation) return { _tag: "Unreadable", detail: observation.failure.detail }
+  return {
+    candidates: await Promise.all(
+      [...observation.commands].map(([pid, command]) =>
+        discoverDarwinProcessCandidate(pid, command, expectedToken, native)
+      )
+    )
+  }
+}
+/* v8 ignore stop -- @preserve */
+
 /* v8 ignore start -- @preserve Darwin launch-token discovery is exercised by process-policy properties and macOS qualification. */
-// eslint-disable-next-line complexity -- Discovery classifies every token-bearing process into exact, foreign, absent, or unreadable evidence.
 export const discoverAppServerProcesses = async (
   incarnation: CodexServerIncarnation,
   native: CodexProcessNativeService = nodeCodexProcessNativeService
@@ -2140,42 +2274,14 @@ export const discoverAppServerProcesses = async (
     return { _tag: "Unreadable", detail: "launch-token process discovery is not qualified on this host" }
   }
   const expectedToken = durableIncarnationToken(incarnation)
-  const entries =
+  const observation =
     native.platform === "linux"
-      ? await native.readdir("/proc")
-      : (await native.execFile("ps", ["-axo", "pid="])).stdout.split("\n").map((entry) => entry.trim())
+      ? await discoverLinuxProcessCandidates(expectedToken, native)
+      : await discoverDarwinProcessCandidates(expectedToken, native)
+  if ("_tag" in observation) return observation
   const exact: Array<ExactDiscoveredProcess> = []
   const foreign: Array<string> = []
-  for (const entry of entries) {
-    const pid = numericProcessId(entry)
-    if (pid === undefined) continue
-    const candidate =
-      native.platform === "linux"
-        ? await discoverProcessCandidate(pid, expectedToken, native)
-        : await (async (): Promise<DiscoveredProcessCandidate> => {
-            try {
-              const command = (await native.execFile("ps", ["eww", "-o", "command=", "-p", String(pid)])).stdout
-              if (!command.split(/\s+/).includes("app-server")) return { _tag: "Skip" }
-              const tokenEntry = command
-                .split(/\s+/)
-                .find((value) => value.startsWith(`${codexServerIncarnationEnvironment}=`))
-              if (tokenEntry === undefined) return { _tag: "Skip" }
-              const processIdentity = await readProcessStartIdentity(pid, native)
-              if (processIdentity === undefined) {
-                return { _tag: "Unreadable", detail: `process ${pid} launch token has no start identity` }
-              }
-              return tokenEntry.slice(codexServerIncarnationEnvironment.length + 1) === expectedToken
-                ? { _tag: "Exact", pid, processIdentity: CodexProcessStartIdentity.make(processIdentity) }
-                : { _tag: "Foreign", detail: `pid ${pid} carries a different launch token` }
-            } catch (error) {
-              try {
-                native.kill(pid, 0)
-              } catch (signalError) {
-                if (processWasAbsent(signalError)) return { _tag: "Skip" }
-              }
-              return { _tag: "Unreadable", detail: `cannot inspect process ${pid}: ${String(error)}` }
-            }
-          })()
+  for (const candidate of observation.candidates) {
     if (candidate._tag === "Unreadable") return candidate
     appendDiscoveredProcessCandidate(candidate, exact, foreign)
   }

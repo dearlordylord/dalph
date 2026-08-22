@@ -619,6 +619,26 @@ describe("Codex process observation policy", () => {
     expect(environmentReads).toBe(0)
   })
 
+  it("treats a malformed Linux stat race as absent only after the exact pid vanishes", async () => {
+    const prior = CodexServerLaunchRecord.make({
+      command: ["codex", "app-server"],
+      incarnation: CodexServerIncarnation.make("vanished-stat-token|linux%3Aprior"),
+      phase: "Live",
+      pid: 50
+    })
+    const selectedNative = native({
+      readdir: async () => ["100"],
+      readFile: async () => "",
+      kill: () => {
+        // eslint-disable-next-line functional/no-throw-statements -- the native fixture proves the exact pid vanished between observations.
+        throw Object.assign(new Error("process vanished"), { code: "ESRCH" })
+      }
+    })
+    expect(Exit.isSuccess(await Effect.runPromiseExit(reconcilePriorTokenOwnedActivities(prior, selectedNative)))).toBe(
+      true
+    )
+  })
+
   it("rechecks an environment permission race and accepts only a newly inert process", async () => {
     const prior = CodexServerLaunchRecord.make({
       command: ["codex", "app-server"],
@@ -681,6 +701,7 @@ describe("Codex process observation policy", () => {
     ).toBeUndefined()
 
     const darwinStarted = "Sat Aug 22 01:23:45 2026"
+    let darwinBatchCommandReads = 0
     const darwinNative = native({
       platform: "darwin",
       execFile: async (_file, arguments_) => {
@@ -688,7 +709,10 @@ describe("Codex process observation policy", () => {
         if (joined.includes("pid=,ppid=,pgid=,stat=,lstart=")) {
           return { stdout: `60 1 60 S ${darwinStarted}\n` }
         }
-        if (joined.includes("-axo pid=")) return { stdout: " 60\n" }
+        if (joined.includes("eww -axo pid=,command=")) {
+          darwinBatchCommandReads += 1
+          return { stdout: "60 codex app-server DALPH_CODEX_SERVER_INCARNATION=platform\n" }
+        }
         if (joined.includes("eww -o command=")) {
           return { stdout: "codex app-server DALPH_CODEX_SERVER_INCARNATION=platform\n" }
         }
@@ -767,11 +791,21 @@ describe("Codex process observation policy", () => {
     const darwinGroup = makeNodeCodexProcessGroupCensusService(withNative(darwinNative, (value) => value))
     expect(await Effect.runPromise(darwinGroup.observe(darwinLaunch))).toMatchObject({ _tag: "ExactLive" })
     expect(
+      await Effect.runPromise(
+        makeNodeCodexOwnedActivityCensusService(
+          withNative(darwinNative, (value) => value),
+          60,
+          darwinIncarnation
+        ).observe({ cwd: "/worktree", id: CodexThreadId.make("darwin-thread"), status: "idle", turns: [] }, [])
+      )
+    ).toEqual({ _tag: "Absent" })
+    expect(
       await discoverAppServerProcesses(
         darwinLaunch.incarnation,
         withNative(darwinNative, (value) => value)
       )
     ).toMatchObject({ _tag: "ExactLive", pid: 60 })
+    expect(darwinBatchCommandReads).toBe(2)
     expect(
       await Effect.runPromise(
         makeNodeCodexProcessOwnershipService(
@@ -826,6 +860,24 @@ describe("Codex process observation policy", () => {
       _tag: "ExactLive",
       members: [expect.objectContaining({ pid: 60 })]
     })
+  })
+
+  it("fails closed on empty, malformed, or duplicate Darwin batch command observations", async () => {
+    const incarnation = CodexServerIncarnation.make("batch-token|darwin%3Astarted")
+    for (const stdout of ["", "malformed\n", "60 codex app-server\n60 duplicate\n"]) {
+      let batchReads = 0
+      const selectedNative = native({
+        platform: "darwin",
+        execFile: async (_file, arguments_) => {
+          if (arguments_.join(" ").includes("eww -axo pid=,command=")) batchReads += 1
+          return { stdout }
+        }
+      })
+      expect(await discoverAppServerProcesses(incarnation, selectedNative)).toMatchObject({ _tag: "Unreadable" })
+      expect(batchReads).toBe(1)
+    }
+    const tokenlessNative = native({ platform: "darwin", execFile: async () => ({ stdout: "60 codex app-server\n" }) })
+    expect(await discoverAppServerProcesses(incarnation, tokenlessNative)).toEqual({ _tag: "Absent" })
   })
 
   it("rejects every non-exact launch observation before authorizing a signal", async () => {
