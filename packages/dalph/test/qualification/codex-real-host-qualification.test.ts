@@ -3,7 +3,7 @@
 /* eslint-disable functional/no-throw-statements -- Fixture assertion helpers fail the active Vitest chronology directly. */
 /* eslint-disable no-restricted-globals -- The explicit opt-in is read before the live suite is registered. */
 
-import { execFile as nodeExecFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { execFile as nodeExecFile, spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { createHash } from "node:crypto"
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises"
@@ -454,6 +454,14 @@ const processIsLive = (pid: number): boolean => {
   }
 }
 
+/** A zombie still answers signal 0 but cannot perform another worktree mutation. */
+const processCanMutateWorktree = (pid: number): boolean => {
+  if (!processIsLive(pid)) return false
+  const observed = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" })
+  if (observed.status !== 0 || observed.stdout.trim().length === 0) return true
+  return !observed.stdout.trim().startsWith("Z")
+}
+
 const waitForProcessAbsence = async (pid: number): Promise<void> => {
   for (let remaining = 100; remaining > 0; remaining -= 1) {
     if (!processIsLive(pid)) return
@@ -848,14 +856,14 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(processIsLive(ownedChildPid)).toBe(true)
         const callsBeforeReplacement = fixture.model.calls.length
 
-        let childLiveAtReplacementReady: boolean | undefined
+        let childCapableAtReplacementReady: boolean | undefined
         const replacement = spawnRawHost(fixture, "project", {}, (event) => {
-          if (event.event === "ready") childLiveAtReplacementReady = processIsLive(ownedChildPid)
+          if (event.event === "ready") childCapableAtReplacementReady = processCanMutateWorktree(ownedChildPid)
         })
         hosts.push(replacement)
         requireEvent(await replacement.waitFor("ready"), "ready")
-        expect(childLiveAtReplacementReady).toBe(false)
-        expect(processIsLive(ownedChildPid)).toBe(false)
+        expect(childCapableAtReplacementReady).toBe(false)
+        expect(processCanMutateWorktree(ownedChildPid)).toBe(false)
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
         const replacementPid = (await latestPrivateSnapshot(fixture)).serverLaunch?.pid
         expect(replacementPid).not.toBe(priorAppServerPid)
@@ -927,7 +935,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const report = requireEvent(await started.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
         expect(report.report?._tag).toBe("SafelySuspended")
-        expect(processIsLive(ownedChildPid)).toBe(false)
+        expect(processCanMutateWorktree(ownedChildPid)).toBe(false)
         await waitForProcessAbsence(ownedChildPid)
         expect(fixture.model.calls).toHaveLength(1)
       } finally {
