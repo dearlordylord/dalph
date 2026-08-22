@@ -397,6 +397,7 @@ type Fixture = {
 type HostOptions = {
   readonly hold?: boolean
   readonly waitForOwnedChild?: boolean
+  readonly waitForTerminalProjection?: boolean
   readonly runId?: string
   readonly attemptId?: string
   readonly taskId?: string
@@ -604,6 +605,7 @@ const spawnRawHost = (
       DALPH_CODEX_QUALIFICATION_BASE_SHA: fixture.baseSha,
       DALPH_CODEX_QUALIFICATION_HOLD: options.hold === true ? "1" : "0",
       DALPH_CODEX_QUALIFICATION_WAIT_FOR_OWNED_CHILD: options.waitForOwnedChild === true ? "1" : "0",
+      DALPH_CODEX_QUALIFICATION_WAIT_FOR_TERMINAL_PROJECTION: options.waitForTerminalProjection === true ? "1" : "0",
       DALPH_CODEX_QUALIFICATION_RUN_ID: options.runId ?? "real-codex-qualification-run",
       DALPH_CODEX_QUALIFICATION_ATTEMPT_ID: options.attemptId ?? "real-codex-qualification-attempt",
       DALPH_CODEX_QUALIFICATION_TASK_ID: options.taskId ?? "real-codex-qualification-task"
@@ -670,7 +672,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const originalThread = threadIdOf(before)
         expect(originalThread).toBeDefined()
 
-        const resumed = await spawnHost(fixture, "project")
+        const resumed = await spawnHost(fixture, "project", { waitForTerminalProjection: true })
         hosts.push(resumed)
         const projected = await resumed.waitFor("projection")
         const terminal = terminalReport(projected)
@@ -1181,7 +1183,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(completedRecord._tag).toBe("Terminal")
         const before = threadIdOf(completedRecord)
         await completed.stop("SIGKILL")
-        const reread = await spawnHost(fixture, "project")
+        const reread = await spawnHost(fixture, "project", { waitForTerminalProjection: true })
         hosts.push(reread)
         expect(terminalReport(await reread.waitFor("projection")).result._tag).toBe("Accepted")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(before)

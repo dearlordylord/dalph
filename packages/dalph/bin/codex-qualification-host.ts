@@ -60,6 +60,7 @@ const QualificationConfiguration = Schema.Struct({
   attemptId: AttemptId,
   holdAfterAction: Schema.Boolean,
   waitForOwnedChild: Schema.Boolean,
+  waitForTerminalProjection: Schema.Boolean,
   openAiApiKey: Schema.optionalKey(Schema.String)
 })
 type QualificationConfiguration = typeof QualificationConfiguration.Type
@@ -88,6 +89,7 @@ const rawConfiguration = {
   attemptId: envValue("DALPH_CODEX_QUALIFICATION_ATTEMPT_ID") ?? "real-codex-qualification-attempt",
   holdAfterAction: envValue("DALPH_CODEX_QUALIFICATION_HOLD") === "1",
   waitForOwnedChild: envValue("DALPH_CODEX_QUALIFICATION_WAIT_FOR_OWNED_CHILD") === "1",
+  waitForTerminalProjection: envValue("DALPH_CODEX_QUALIFICATION_WAIT_FOR_TERMINAL_PROJECTION") === "1",
   ...(envValue("OPENAI_API_KEY") === undefined ? {} : { openAiApiKey: envValue("OPENAI_API_KEY") })
 }
 
@@ -256,7 +258,13 @@ const configurationProgram = Effect.gen(function* () {
         ) {
           yield* writeEvent(reportEvent("StartOrContinue", yield* executor.startOrContinue(request)))
         } else if (configuration.action === "project" || configuration.action === "read") {
-          yield* writeEvent(projectionEvent(yield* executor.project(correlation)))
+          yield* writeEvent(
+            projectionEvent(
+              configuration.waitForTerminalProjection
+                ? { _tag: "Exact", report: yield* settleAttempt(executor, correlation, terminalObservationAttempts) }
+                : yield* executor.project(correlation)
+            )
+          )
         } else if (configuration.action === "suspend" || configuration.action === "interrupt") {
           yield* writeEvent(reportEvent("Suspend", yield* executor.requestSuspension(attempt)))
         } else if (configuration.action === "settle") {
