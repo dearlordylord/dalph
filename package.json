@@ -64,7 +64,7 @@
     "@informalsystems/quint": "0.32.0",
     "@openai/codex": "0.149.0",
     "@types/node": "26.1.1",
-    "@typescript-eslint/parser": "8.65.0",
+    "@typescript-eslint/parser": "8.67.0",
     "@typescript/native": "npm:typescript@7.0.2",
     "@vitest/coverage-v8": "4.1.10",
     "dpdm": "4.2.0",
