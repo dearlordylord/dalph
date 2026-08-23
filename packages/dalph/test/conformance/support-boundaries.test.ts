@@ -3,12 +3,14 @@ import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import * as Contracts from "@dalph/contracts"
 import { dryRunWorkflowInterpreterLayer, semanticTrace } from "@dalph/dalph"
+import * as DalphPublicApi from "@dalph/dalph"
 import { Effect, FileSystem, Layer, Option } from "effect"
 import { expect } from "vitest"
 import { GitCommitSha, makeTaskWorkSpecification, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
 import {
   ClaimOwner,
   ClaimToken,
+  ActiveTaskClaim,
   controlledTrackerMutationLayer,
   CoordinatorOwnership,
   coordinatorOwnedGitWorktreeLayer,
@@ -69,6 +71,56 @@ it("loads the current public surface without compatibility exports", () => {
   expect(new JournalBoundaryDecodeIssue({ detail: "bad row", partition: "Hot", rowOrdinal: 1, runId: null })._tag).toBe(
     "JournalBoundaryDecodeIssue"
   )
+})
+
+it("keeps the Codex replacement seam callable from the package root", () => {
+  const plannedAttempt = Contracts.PlannedTaskAttempt.make({
+    attemptId: Contracts.AttemptId.make("attempt:support-replacement"),
+    baseSha: GitCommitSha.make("2".repeat(40)),
+    branch: Contracts.TaskBranchRef.make("refs/heads/support-replacement"),
+    executor: TaskExecutorLocator.make("executor:support"),
+    runId: RunId.make("support-replacement-run"),
+    taskId: supportSpecification.taskId,
+    taskRevision: supportSpecification.fingerprint,
+    worktree: WorktreeLocator.make("/worktrees/support-replacement")
+  })
+  const claim = ActiveTaskClaim.make({
+    operationId: PublicApi.OperationId.make("support-replacement-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("support-replacement-token")
+  })
+  const requestId = DalphPublicApi.CodexReplacementRequestId.make("support-replacement-request")
+  const request = DalphPublicApi.CodexProviderWorkUnitReplacementRequest.make({
+    claim,
+    plannedAttempt,
+    requestId,
+    specification: supportSpecification
+  })
+  const result = DalphPublicApi.CodexProviderWorkUnitReplacementResult.cases.ProviderTemporarilyUnreadable.make({
+    detail: "controlled authority unavailable"
+  })
+  const replacement = DalphPublicApi.CodexProviderWorkUnitReplacement.of({
+    replacePurgedProviderWorkUnit: (_request) => Effect.succeed(result)
+  })
+  const failure = new DalphPublicApi.CodexReplacementAuthorityFailure({
+    detail: "controlled authority unavailable",
+    kind: "ProviderTemporarilyUnreadable"
+  })
+  const authority = DalphPublicApi.CodexReplacementAuthority.of({ observe: (_request) => Effect.fail(failure) })
+
+  expect(request.requestId).toBe(requestId)
+  expect(result._tag).toBe("ProviderTemporarilyUnreadable")
+  expect(replacement).toBeDefined()
+  expect(authority).toBeDefined()
+  expect(DalphPublicApi.CodexReplacementRequestId).toBeDefined()
+  expect(DalphPublicApi.CodexProviderWorkUnitReplacementRequest).toBeDefined()
+  expect(DalphPublicApi.CodexProviderWorkUnitReplacementResult).toBeDefined()
+  expect(DalphPublicApi.CodexProviderWorkUnitReplacement).toBeDefined()
+  expect(DalphPublicApi.CodexReplacementAuthority).toBeDefined()
+  expect(DalphPublicApi.CodexReplacementAuthorityFailure).toBeDefined()
+  expect(DalphPublicApi.CodexReplacementAuthorityProof).toBeDefined()
+  expect(DalphPublicApi.nodeCodexPlannedAttemptExecutorLayer).toBeDefined()
 })
 
 it.effect("allocates deterministic operation and planned-attempt identities", () =>

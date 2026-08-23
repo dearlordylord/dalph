@@ -13,14 +13,24 @@ import {
   plannedAttemptExecutorCorrelationKey,
   type PlannedAttemptExecutorProjection as PlannedAttemptExecutorProjectionType,
   type PlannedAttemptExecutorReport as PlannedAttemptExecutorReportType,
+  type PlannedAttemptExecutorService,
   EvidenceReference,
   evidenceReferenceEquals,
-  type PlannedTaskAttempt,
+  PlannedTaskAttempt,
   type PlannedAttemptExecutorRequest,
-  type TaskWorkSpecification
+  samePlannedTaskAttempt,
+  TaskRevision,
+  TaskWorkSpecification,
+  WorktreeLocator
 } from "@dalph/contracts"
-import { EvidenceStore, GitCommand, type EvidenceStoreService } from "@dalph/orchestrator"
-import { Crypto, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect"
+import {
+  ActiveTaskClaim,
+  EvidenceStore,
+  GitCommand,
+  isExactTaskClaim,
+  type EvidenceStoreService
+} from "@dalph/orchestrator"
+import { Context, Crypto, Effect, Layer, Option, Ref, Result, Schema, Semaphore } from "effect"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -36,10 +46,18 @@ import {
   CodexAttemptStore,
   CodexAttemptStoreFailure,
   CodexOwnedTurnToken,
+  appendCodexReplacementHistory,
+  codexReplacementRequestDigestFromCanonical,
+  CodexPurgedWorkUnitEvidence,
+  CodexPurgedWorkUnitReplacementLedger,
+  CodexReplacementHistoryEntry,
+  CodexReplacementOperationId,
+  CodexReplacementRequestId,
   CodexSealedTerminal,
+  type CodexReplacementRequestDigest,
+  type CodexSealedTerminal as CodexSealedTerminalType,
   type CodexThreadId,
-  type CodexTurnId,
-  type CodexSealedTerminal as CodexSealedTerminalType
+  type CodexTurnId
 } from "./codex-attempt-store.js"
 
 /** A terminal Codex message must contain one unambiguous 40-character commit. */
@@ -430,6 +448,333 @@ const taskTurnText = (attempt: PlannedTaskAttempt, specification: TaskWorkSpecif
     'Accepted results must be the final JSON object {"commit":"<40-hex>","correlation":{"runId":"...","attemptId":"..."}}.'
   ].join("\n")
 
+/** The stable operator request for replacing one provider work unit inside the retained thread. */
+export const CodexProviderWorkUnitReplacementRequest = Schema.Struct({
+  claim: ActiveTaskClaim,
+  plannedAttempt: PlannedTaskAttempt,
+  requestId: CodexReplacementRequestId,
+  specification: TaskWorkSpecification
+}).check(
+  Schema.makeFilter((request) =>
+    request.claim.taskId !== request.plannedAttempt.taskId ||
+    request.specification.taskId !== request.plannedAttempt.taskId ||
+    request.specification.fingerprint !== request.plannedAttempt.taskRevision
+      ? "replacement request claim and specification must match its planned attempt"
+      : undefined
+  )
+)
+export type CodexProviderWorkUnitReplacementRequest = typeof CodexProviderWorkUnitReplacementRequest.Type
+
+const replacementRequestCanonical = (request: CodexProviderWorkUnitReplacementRequest): string =>
+  JSON.stringify(Schema.encodeUnknownSync(CodexProviderWorkUnitReplacementRequest)(request))
+
+const replacementRequestDigest = (crypto: Crypto.Crypto, request: CodexProviderWorkUnitReplacementRequest) =>
+  codexReplacementRequestDigestFromCanonical(crypto, replacementRequestCanonical(request))
+
+/** Process-local authority witness; it is never copied into the private replacement ledger. */
+export const CodexReplacementAuthorityProof = Schema.Struct({
+  baseSha: GitCommitSha,
+  changedPaths: Schema.Array(Schema.String),
+  claim: ActiveTaskClaim,
+  gitStatus: Schema.String.check(
+    Schema.makeFilter((status) =>
+      status.trim().length > 0 ? undefined : "replacement Git status evidence must be non-empty"
+    )
+  ),
+  headDescendsFromBase: Schema.Boolean,
+  headSha: GitCommitSha,
+  plannedAttempt: PlannedTaskAttempt,
+  taskRevision: TaskRevision,
+  worktree: WorktreeLocator
+}).check(
+  Schema.makeFilter((proof) =>
+    proof.changedPaths.length === 0 ||
+    proof.claim.taskId !== proof.plannedAttempt.taskId ||
+    proof.taskRevision !== proof.plannedAttempt.taskRevision ||
+    proof.baseSha !== proof.plannedAttempt.baseSha ||
+    proof.worktree !== proof.plannedAttempt.worktree
+      ? "replacement authority proof does not cover the exact planned attempt"
+      : undefined
+  )
+)
+export type CodexReplacementAuthorityProof = typeof CodexReplacementAuthorityProof.Type
+
+const sameReplacementGitObservation = (
+  left: CodexReplacementAuthorityProof,
+  right: CodexReplacementAuthorityProof
+): boolean =>
+  left.baseSha === right.baseSha &&
+  left.headSha === right.headSha &&
+  left.headDescendsFromBase === right.headDescendsFromBase &&
+  left.gitStatus === right.gitStatus &&
+  left.changedPaths.length === right.changedPaths.length &&
+  left.changedPaths.every((path, index) => path === right.changedPaths[index])
+
+const CodexReplacementAuthorityFailureKind = Schema.Literals([
+  "ProviderTemporarilyUnreadable",
+  "TaskWorkSessionAbsent",
+  "CorrelationConflict",
+  "ExclusiveRetainedOwnershipUnproved"
+])
+type CodexReplacementAuthorityFailureKind = typeof CodexReplacementAuthorityFailureKind.Type
+
+/** Typed fresh-authority failure; expected branches never become a replacement intent. */
+export class CodexReplacementAuthorityFailure extends Schema.TaggedError<CodexReplacementAuthorityFailure>()(
+  "CodexReplacementAuthorityFailure",
+  { detail: Schema.String, kind: CodexReplacementAuthorityFailureKind }
+) {}
+
+export interface CodexReplacementAuthorityService {
+  readonly observe: (
+    request: CodexProviderWorkUnitReplacementRequest
+  ) => Effect.Effect<CodexReplacementAuthorityProof, CodexReplacementAuthorityFailure>
+}
+
+export class CodexReplacementAuthority extends Context.Service<
+  CodexReplacementAuthority,
+  CodexReplacementAuthorityService
+>()("@dalph/CodexReplacementAuthority") {}
+
+/** Controlled fresh-authority injection for replacement tests and cassettes. */
+export const controlledCodexReplacementAuthorityLayer = (
+  service: CodexReplacementAuthorityService
+): Layer.Layer<CodexReplacementAuthority> => Layer.succeed(CodexReplacementAuthority, service)
+
+/** Actor-visible result; provider/session/authority failures remain distinct and fail closed. */
+export const CodexProviderWorkUnitReplacementResult = Schema.TaggedUnion({
+  Replaced: {
+    correlation: PlannedAttemptExecutorCorrelation,
+    operationId: CodexReplacementOperationId,
+    requestId: CodexReplacementRequestId,
+    worktree: WorktreeLocator
+  },
+  ProviderTemporarilyUnreadable: { detail: Schema.String },
+  TaskWorkSessionAbsent: { detail: Schema.String },
+  CorrelationConflict: { detail: Schema.String },
+  ExclusiveRetainedOwnershipUnproved: { detail: Schema.String },
+  PurgeUnconfirmed: { detail: Schema.String },
+  RequestIdentityReuseContradiction: { detail: Schema.String }
+})
+export type CodexProviderWorkUnitReplacementResult = typeof CodexProviderWorkUnitReplacementResult.Type
+
+/** A typed private-store append failure after replacement intent has crossed persistence. */
+class CodexReplacementLedgerFailure extends Schema.TaggedError<CodexReplacementLedgerFailure>()(
+  "CodexReplacementLedgerFailure",
+  { detail: Schema.String }
+) {}
+
+interface CodexProviderWorkUnitReplacementService {
+  readonly replacePurgedProviderWorkUnit: (
+    request: CodexProviderWorkUnitReplacementRequest
+  ) => Effect.Effect<
+    CodexProviderWorkUnitReplacementResult,
+    CodexAttemptStoreFailure | CodexAppServerFailure | CodexReplacementLedgerFailure
+  >
+}
+
+export class CodexProviderWorkUnitReplacement extends Context.Service<
+  CodexProviderWorkUnitReplacement,
+  CodexProviderWorkUnitReplacementService
+>()("@dalph/CodexProviderWorkUnitReplacement") {}
+
+const replacementTaskTurnText = (
+  attempt: PlannedTaskAttempt,
+  specification: TaskWorkSpecification,
+  evidence: CodexPurgedWorkUnitEvidence,
+  operationId: CodexReplacementOperationId
+): string =>
+  [
+    taskTurnText(attempt, specification),
+    "",
+    "Dalph provider work-unit replacement evidence:",
+    `replacement_operation_id: ${operationId}`,
+    `purged_predecessor_turn_id: ${evidence.predecessorTurnId}`,
+    `purged_predecessor_token: ${evidence.predecessorToken}`,
+    `retained_thread_id: ${evidence.threadId}`,
+    `retained_worktree: ${evidence.worktree}`,
+    "The preceding provider work unit was confirmed purged. Continue the retained worktree; do not describe this turn as a resumption of the purged unit."
+  ].join("\n")
+
+type ReplacementResult = CodexProviderWorkUnitReplacementResult
+
+type ReplacementTurnCheck =
+  | { readonly _tag: "Accepted"; readonly turn: CodexTurnSnapshot }
+  | { readonly _tag: "Rejected"; readonly result: ReplacementResult }
+
+const replacementTurnTokenMatches = (turn: CodexTurnSnapshot, token: CodexOwnedTurnToken): boolean =>
+  turn.ownedTurnToken === undefined || turn.ownedTurnToken === token
+
+const replacementTurnCorrelationMatches = (
+  turn: CodexTurnSnapshot,
+  expected: PlannedAttemptExecutorCorrelation
+): boolean => turn.correlation === undefined || sameCorrelation(turn.correlation, expected)
+
+const replacementTurnCheck = (
+  request: CodexProviderWorkUnitReplacementRequest,
+  turn: CodexTurnSnapshot,
+  predecessor: CodexPurgedWorkUnitEvidence,
+  replacementToken: CodexOwnedTurnToken
+): ReplacementTurnCheck => {
+  const correlatedTurn = turn.ownedTurnToken === undefined ? { ...turn, ownedTurnToken: replacementToken } : turn
+  if (!replacementTurnTokenMatches(correlatedTurn, replacementToken)) {
+    return {
+      _tag: "Rejected",
+      result: CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+        detail: "replacement turn returned a different owned token"
+      })
+    }
+  }
+  if (!replacementTurnCorrelationMatches(correlatedTurn, plannedAttemptExecutorCorrelation(request.plannedAttempt))) {
+    return {
+      _tag: "Rejected",
+      result: CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+        detail: "replacement turn returned a foreign planned-attempt correlation"
+      })
+    }
+  }
+  if (correlatedTurn.id === predecessor.predecessorTurnId) {
+    return {
+      _tag: "Rejected",
+      result: CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+        detail: "replacement turn reused the purged predecessor identity"
+      })
+    }
+  }
+  return { _tag: "Accepted", turn: correlatedTurn }
+}
+
+const replacementThreadIdentityMatches = (
+  request: CodexProviderWorkUnitReplacementRequest,
+  predecessor: CodexPurgedWorkUnitEvidence,
+  thread: CodexThreadSnapshot
+): boolean => thread.id === predecessor.threadId && thread.cwd === request.plannedAttempt.worktree
+
+const replacementThreadCorrelationMatches = (
+  request: CodexProviderWorkUnitReplacementRequest,
+  thread: CodexThreadSnapshot
+): boolean => {
+  const expected = PlannedAttemptExecutorCorrelation.make({
+    runId: request.plannedAttempt.runId,
+    attemptId: request.plannedAttempt.attemptId
+  })
+  return thread.correlation === undefined || sameCorrelation(thread.correlation, expected)
+}
+
+const replacementThreadIsReadable = (thread: CodexThreadSnapshot): boolean =>
+  thread.status !== "notLoaded" && thread.status !== "systemError"
+
+const replacementThreadRetainsPredecessor = (
+  predecessor: CodexPurgedWorkUnitEvidence,
+  thread: CodexThreadSnapshot
+): boolean =>
+  thread.turns.some((turn) => turn.id === predecessor.predecessorTurnId) ||
+  thread.turns.some((turn) => turn.ownedTurnToken === predecessor.predecessorToken)
+
+const replacementThreadFactFailure = (
+  request: CodexProviderWorkUnitReplacementRequest,
+  predecessor: CodexPurgedWorkUnitEvidence,
+  thread: CodexThreadSnapshot
+): ReplacementResult | undefined => {
+  if (!replacementThreadIdentityMatches(request, predecessor, thread)) {
+    return CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+      detail: "retained Codex thread id or worktree changed"
+    })
+  }
+  if (!replacementThreadCorrelationMatches(request, thread)) {
+    return CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+      detail: "retained Codex thread correlation changed"
+    })
+  }
+  if (!replacementThreadIsReadable(thread)) {
+    return CodexProviderWorkUnitReplacementResult.cases.ProviderTemporarilyUnreadable.make({
+      detail: "retained Codex thread status is unreadable"
+    })
+  }
+  if (replacementThreadRetainsPredecessor(predecessor, thread)) {
+    return CodexProviderWorkUnitReplacementResult.cases.PurgeUnconfirmed.make({
+      detail: "the previously observed provider work unit remains visible"
+    })
+  }
+  return undefined
+}
+
+const matchingReplacementTurn = (
+  thread: CodexThreadSnapshot,
+  replacementToken: CodexOwnedTurnToken | undefined
+): CodexTurnSnapshot | undefined =>
+  replacementToken === undefined
+    ? undefined
+    : thread.turns.find((turn) => turn.ownedTurnToken === replacementToken && turn.status === "inProgress")
+
+type ReplacementActivities = Extract<CodexOwnedActivityCensusProjection, { readonly _tag: "ExactLive" }>["activities"]
+
+const replacementActivityHasOnlyMatchingTurn = (
+  activities: ReplacementActivities,
+  matchingTurn: CodexTurnSnapshot | undefined,
+  allowMatchingReplacementTurn: boolean
+): boolean =>
+  allowMatchingReplacementTurn &&
+  matchingTurn !== undefined &&
+  activities.length === 1 &&
+  activities[0]?._tag === "ActiveTurn" &&
+  activities[0].turnId === matchingTurn.id
+
+const replacementActivityFailure = (
+  census: CodexOwnedActivityCensusProjection,
+  thread: CodexThreadSnapshot,
+  replacementToken: CodexOwnedTurnToken | undefined,
+  allowMatchingReplacementTurn: boolean
+): ReplacementResult | undefined => {
+  if (census._tag === "Absent") return undefined
+  if (census._tag !== "ExactLive") {
+    return CodexProviderWorkUnitReplacementResult.cases.ExclusiveRetainedOwnershipUnproved.make({
+      detail: "fresh owned-activity census was not exact"
+    })
+  }
+  const matchingTurn = matchingReplacementTurn(thread, replacementToken)
+  return replacementActivityHasOnlyMatchingTurn(census.activities, matchingTurn, allowMatchingReplacementTurn)
+    ? undefined
+    : CodexProviderWorkUnitReplacementResult.cases.ExclusiveRetainedOwnershipUnproved.make({
+        detail: "fresh owned-activity census found an unowned writer or turn"
+      })
+}
+
+const replacementAuthorityClaimMatches = (
+  request: CodexProviderWorkUnitReplacementRequest,
+  proof: CodexReplacementAuthorityProof
+): boolean => isExactTaskClaim(proof.claim, request.claim)
+
+const replacementAuthorityPlanMatches = (
+  request: CodexProviderWorkUnitReplacementRequest,
+  proof: CodexReplacementAuthorityProof
+): boolean => samePlannedTaskAttempt(proof.plannedAttempt, request.plannedAttempt)
+
+const replacementAuthorityFactsMatch = (
+  request: CodexProviderWorkUnitReplacementRequest,
+  proof: CodexReplacementAuthorityProof
+): boolean =>
+  proof.worktree === request.plannedAttempt.worktree &&
+  proof.baseSha === request.plannedAttempt.baseSha &&
+  proof.taskRevision === request.plannedAttempt.taskRevision
+
+const replacementAuthorityProofFailure = (
+  request: CodexProviderWorkUnitReplacementRequest,
+  proof: CodexReplacementAuthorityProof
+): string | undefined => {
+  if (!replacementAuthorityClaimMatches(request, proof)) return "fresh authority observed a different exact task claim"
+  if (!replacementAuthorityPlanMatches(request, proof)) return "fresh authority observed a different planned attempt"
+  if (!replacementAuthorityFactsMatch(request, proof)) return "fresh authority did not prove retained planned facts"
+  if (!proof.headDescendsFromBase) {
+    return "fresh Git or writer authority did not prove exclusive retained ownership"
+  }
+  return undefined
+}
+
+const replacementLedgerHasPhase = (
+  ledger: CodexPurgedWorkUnitReplacementLedger,
+  phase: CodexReplacementHistoryEntry["_tag"]
+): boolean => ledger.history.at(lastElementOffset)?._tag === phase
+
 const storeFailure = (error: unknown): error is CodexAttemptStoreFailure => error instanceof CodexAttemptStoreFailure
 
 type ThreadReconciliation =
@@ -449,8 +794,7 @@ type CodexAttemptContext = Pick<PlannedTaskAttempt, "attemptId" | "runId" | "wor
  * The concrete app-server executor keeps all Codex identities private. The
  * generic boundary receives only normalized #140/#168 reports.
  */
-export const codexPlannedAttemptExecutorLayer = Layer.effect(
-  PlannedAttemptExecutor,
+export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
   Effect.gen(function* () {
     const app = yield* CodexAppServer
     const activityCensus = yield* CodexOwnedActivityCensus
@@ -458,6 +802,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
     const store = yield* CodexAttemptStore
     const git = yield* GitCommand
     const evidenceStore = yield* Effect.serviceOption(EvidenceStore)
+    const replacementAuthority = yield* Effect.serviceOption(CodexReplacementAuthority)
     const gates = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map())
     const freshOwnedTurnToken = Effect.gen(function* () {
       return CodexOwnedTurnToken.make(yield* crypto.randomUUIDv4)
@@ -1265,7 +1610,721 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
       }
     })
 
-    return {
+    const replacementResultFromAuthorityFailure = (
+      failure: CodexReplacementAuthorityFailure
+    ): CodexProviderWorkUnitReplacementResult =>
+      failure.kind === "ProviderTemporarilyUnreadable"
+        ? CodexProviderWorkUnitReplacementResult.cases.ProviderTemporarilyUnreadable.make({ detail: failure.detail })
+        : failure.kind === "TaskWorkSessionAbsent"
+          ? CodexProviderWorkUnitReplacementResult.cases.TaskWorkSessionAbsent.make({ detail: failure.detail })
+          : failure.kind === "CorrelationConflict"
+            ? CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({ detail: failure.detail })
+            : CodexProviderWorkUnitReplacementResult.cases.ExclusiveRetainedOwnershipUnproved.make({
+                detail: failure.detail
+              })
+
+    const replacementResultFromAppFailure = (failure: CodexAppServerFailure): CodexProviderWorkUnitReplacementResult =>
+      failure.kind === "NotFound"
+        ? CodexProviderWorkUnitReplacementResult.cases.TaskWorkSessionAbsent.make({ detail: failure.detail })
+        : failure.kind === "CorrelationContradiction"
+          ? CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({ detail: failure.detail })
+          : CodexProviderWorkUnitReplacementResult.cases.ProviderTemporarilyUnreadable.make({ detail: failure.detail })
+
+    const replacementLedgerRequestSubjectMatches = (
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      request: CodexProviderWorkUnitReplacementRequest
+    ): boolean =>
+      ledger.requestId === request.requestId && samePlannedTaskAttempt(ledger.plannedAttempt, request.plannedAttempt)
+
+    const replacementRequestSubjectFailure = (
+      request: CodexProviderWorkUnitReplacementRequest
+    ): ReplacementResult | undefined =>
+      /* v8 ignore next -- @preserve The public request Schema rejects this mismatch before the typed service boundary. */
+      request.specification.taskId !== request.plannedAttempt.taskId ||
+      request.specification.fingerprint !== request.plannedAttempt.taskRevision
+        ? CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+            detail: "replacement request specification does not match its planned attempt"
+          })
+        : undefined
+
+    type ReplacementLedgerRequestCheck =
+      | { readonly _tag: "Valid" }
+      | { readonly _tag: "Malformed" }
+      | { readonly _tag: "Contradiction" }
+
+    const replacementLedgerRequestCheck = (
+      existing: Option.Option<CodexPurgedWorkUnitReplacementLedger>,
+      requestDigest: CodexReplacementRequestDigest
+    ): ReplacementLedgerRequestCheck => {
+      if (Option.isNone(existing)) return { _tag: "Valid" }
+      const intent = existing.value.history[1]
+      /* v8 ignore next -- @preserve A decoded replacement ledger always retains IntentRecorded at index one. */
+      if (intent === undefined || intent._tag !== "IntentRecorded") return { _tag: "Malformed" }
+      return intent.requestDigest === requestDigest ? { _tag: "Valid" } : { _tag: "Contradiction" }
+    }
+
+    const validateReplacementLedgerRequest = Effect.fn("CodexProviderWorkUnitReplacement.validateLedgerRequest")(
+      function* (
+        existing: Option.Option<CodexPurgedWorkUnitReplacementLedger>,
+        requestDigest: CodexReplacementRequestDigest
+      ) {
+        const ledgerCheck = replacementLedgerRequestCheck(existing, requestDigest)
+        /* v8 ignore next -- @preserve The store decodes the ledger Schema before returning it to this service. */
+        if (ledgerCheck._tag === "Malformed") {
+          return yield* new CodexReplacementLedgerFailure({
+            detail: "replacement ledger has no durable request intent"
+          })
+        }
+        if (ledgerCheck._tag === "Contradiction") {
+          return CodexProviderWorkUnitReplacementResult.cases.RequestIdentityReuseContradiction.make({
+            detail: "replacement request identity was reused with changed request content"
+          })
+        }
+        return undefined
+      }
+    )
+
+    const replacementRecordMatchesRequest = (
+      request: CodexProviderWorkUnitReplacementRequest,
+      record: CodexAttemptRecord
+    ): boolean =>
+      record.correlationRunId === request.plannedAttempt.runId &&
+      record.correlationAttemptId === request.plannedAttempt.attemptId &&
+      record.worktree === request.plannedAttempt.worktree &&
+      record._tag !== "EmptyPreTurn" &&
+      record._tag !== "AssociatedPreTurn"
+
+    type ReplacementPredecessor =
+      | { readonly _tag: "Evidence"; readonly evidence: CodexPurgedWorkUnitEvidence }
+      | { readonly _tag: "Result"; readonly result: ReplacementResult }
+
+    type ReplacementOwnedRecordIdentity = {
+      readonly currentToken: CodexOwnedTurnToken
+      readonly observedTurnId: CodexTurnId
+      readonly threadId: CodexThreadId
+      readonly worktree: WorktreeLocator
+    }
+
+    const replacementOwnedRecordIdentity = (record: CodexAttemptRecord): ReplacementOwnedRecordIdentity | undefined => {
+      switch (record._tag) {
+        case "TurnObserved":
+        case "Running":
+        case "SafelySuspended":
+        case "Terminal":
+          return record
+        case "AssociatedPreTurn":
+        case "EmptyPreTurn":
+        case "TurnIntentRecorded":
+          return undefined
+      }
+    }
+
+    const sameReplacementOwnedIdentity = (
+      record: ReplacementOwnedRecordIdentity,
+      token: CodexOwnedTurnToken,
+      turnId: CodexTurnId
+    ): boolean => record.currentToken === token && record.observedTurnId === turnId
+
+    const sameReplacementThreadSubject = (
+      record: ReplacementOwnedRecordIdentity,
+      evidence: CodexPurgedWorkUnitEvidence
+    ): boolean => record.threadId === evidence.threadId && record.worktree === evidence.worktree
+
+    const replacementRecordMatchesLedger = (
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      record: CodexAttemptRecord
+    ): boolean => {
+      const ownedRecord = replacementOwnedRecordIdentity(record)
+      if (ownedRecord === undefined) return false
+      const purgeEntry = ledger.history[0]
+      if (purgeEntry._tag !== "Purged") return false
+      const purge = purgeEntry.evidence
+      if (!sameReplacementThreadSubject(ownedRecord, purge)) return false
+      const recordIsPredecessor = sameReplacementOwnedIdentity(
+        ownedRecord,
+        purge.predecessorToken,
+        purge.predecessorTurnId
+      )
+      const observed = ledger.history[4]
+      const recordIsReplacement =
+        observed?._tag === "TurnObserved" &&
+        sameReplacementOwnedIdentity(ownedRecord, observed.replacementToken, observed.replacementTurnId)
+      return recordIsPredecessor || recordIsReplacement
+    }
+
+    const replacementPredecessorFor = (
+      existing: Option.Option<CodexPurgedWorkUnitReplacementLedger>,
+      record: CodexAttemptRecord
+    ): ReplacementPredecessor => {
+      if (Option.isSome(existing)) {
+        if (!replacementRecordMatchesLedger(existing.value, record)) {
+          return {
+            _tag: "Result",
+            result: CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+              detail: "durable replacement purge evidence conflicts with the current private task-work session"
+            })
+          }
+        }
+        const purge = existing.value.history[0]
+        /* v8 ignore next -- @preserve A decoded replacement ledger always begins with exact Purged evidence. */
+        if (purge._tag !== "Purged") {
+          return {
+            _tag: "Result",
+            result: CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+              detail: "durable replacement history contains no purge evidence"
+            })
+          }
+        }
+        return { _tag: "Evidence", evidence: purge.evidence }
+      }
+      if (record._tag === "TurnObserved" || record._tag === "Running" || record._tag === "SafelySuspended") {
+        return {
+          _tag: "Evidence",
+          evidence: CodexPurgedWorkUnitEvidence.make({
+            predecessorToken: record.currentToken,
+            predecessorTurnId: record.observedTurnId,
+            threadId: record.threadId,
+            worktree: record.worktree
+          })
+        }
+      }
+      return {
+        _tag: "Result",
+        result: CodexProviderWorkUnitReplacementResult.cases.PurgeUnconfirmed.make({
+          detail: "private state contains no previously observed provider work unit to prove as purged"
+        })
+      }
+    }
+
+    const readReplacementAttempt = Effect.fn("CodexProviderWorkUnitReplacement.readAttempt")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      existing: Option.Option<CodexPurgedWorkUnitReplacementLedger>
+    ) {
+      const found = yield* store.readAttempt(request.plannedAttempt.runId, request.plannedAttempt.attemptId)
+      if (Option.isNone(found)) {
+        return {
+          _tag: "Result" as const,
+          result: CodexProviderWorkUnitReplacementResult.cases.TaskWorkSessionAbsent.make({
+            detail: "private task-work session association is absent"
+          })
+        }
+      }
+      const record = found.value
+      if (!replacementRecordMatchesRequest(request, record)) {
+        return {
+          _tag: "Result" as const,
+          result: CodexProviderWorkUnitReplacementResult.cases.CorrelationConflict.make({
+            detail: "private task-work session association conflicts with the replacement request"
+          })
+        }
+      }
+      const predecessor = replacementPredecessorFor(existing, record)
+      if (predecessor._tag === "Result") return predecessor
+      return { _tag: "Ready" as const, predecessor: predecessor.evidence }
+    })
+
+    const replacementSealedResult = (
+      request: CodexProviderWorkUnitReplacementRequest,
+      ledger: CodexPurgedWorkUnitReplacementLedger
+    ): ReplacementResult =>
+      CodexProviderWorkUnitReplacementResult.cases.Replaced.make({
+        correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt),
+        operationId: ledger.operationId,
+        requestId: ledger.requestId,
+        worktree: ledger.plannedAttempt.worktree
+      })
+
+    type ReplacementSubjectPreparation =
+      | {
+          readonly _tag: "Ready"
+          readonly existing: Option.Option<CodexPurgedWorkUnitReplacementLedger>
+          readonly predecessor: CodexPurgedWorkUnitEvidence
+          readonly requestDigest: CodexReplacementRequestDigest
+        }
+      | { readonly _tag: "Result"; readonly result: ReplacementResult }
+
+    const readReplacementSubject = Effect.fn("CodexProviderWorkUnitReplacement.readSubject")(function* (
+      request: CodexProviderWorkUnitReplacementRequest
+    ) {
+      const requestFailure = replacementRequestSubjectFailure(request)
+      /* v8 ignore next -- @preserve The public request Schema establishes this invariant before service admission. */
+      if (requestFailure !== undefined) return { _tag: "Result" as const, result: requestFailure }
+      const requestDigest = yield* replacementRequestDigest(crypto, request).pipe(
+        Effect.mapError(() => new CodexReplacementLedgerFailure({ detail: "could not digest replacement request" }))
+      )
+      const existing = yield* store.readReplacementLedger(request.requestId)
+      const ledgerResult = yield* validateReplacementLedgerRequest(existing, requestDigest)
+      if (ledgerResult !== undefined) return { _tag: "Result" as const, result: ledgerResult }
+      if (Option.isSome(existing) && !replacementLedgerRequestSubjectMatches(existing.value, request)) {
+        return {
+          _tag: "Result" as const,
+          result: CodexProviderWorkUnitReplacementResult.cases.RequestIdentityReuseContradiction.make({
+            detail: "replacement request identity was reused for another retained work-unit subject"
+          })
+        }
+      }
+      const attempt = yield* readReplacementAttempt(request, existing)
+      if (attempt._tag === "Result") return attempt
+      if (Option.isSome(existing) && replacementLedgerHasPhase(existing.value, "Sealed")) {
+        return { _tag: "Result" as const, result: replacementSealedResult(request, existing.value) }
+      }
+      return { _tag: "Ready" as const, existing, predecessor: attempt.predecessor, requestDigest }
+    })
+
+    const appendReplacementEntry = Effect.fn("CodexProviderWorkUnitReplacement.appendEntry")(function* (
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      entry: CodexReplacementHistoryEntry
+    ) {
+      const appended = appendCodexReplacementHistory(ledger, entry)
+      /* v8 ignore next -- @preserve Callers append only the single phase admitted by the decoded ledger's current phase. */
+      if (appended._tag === "Contradiction") {
+        return yield* new CodexReplacementLedgerFailure({ detail: appended.detail })
+      }
+      yield* store.appendReplacementLedger(appended.ledger)
+      return appended.ledger
+    })
+
+    const ensureReplacementLedger = Effect.fn("CodexProviderWorkUnitReplacement.ensureLedger")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      subject: Extract<ReplacementSubjectPreparation, { readonly _tag: "Ready" }>
+    ) {
+      if (Option.isSome(subject.existing)) return subject.existing.value
+      const operationUuid = yield* crypto.randomUUIDv4.pipe(
+        /* v8 ignore next -- @preserve Crypto.randomUUIDv4 has an uninhabited error channel in configured services. */
+        Effect.mapError(
+          () => new CodexReplacementLedgerFailure({ detail: "could not allocate replacement operation identity" })
+        )
+      )
+      const operationId = CodexReplacementOperationId.make(operationUuid)
+      const ledger = CodexPurgedWorkUnitReplacementLedger.make({
+        history: [
+          CodexReplacementHistoryEntry.cases.Purged.make({ evidence: subject.predecessor }),
+          CodexReplacementHistoryEntry.cases.IntentRecorded.make({
+            operationId,
+            requestDigest: subject.requestDigest,
+            requestId: request.requestId
+          })
+        ],
+        operationId,
+        plannedAttempt: request.plannedAttempt,
+        requestId: request.requestId
+      })
+      yield* store.appendReplacementLedger(ledger)
+      return ledger
+    })
+
+    type ReplacementPendingPhase = "IntentRecorded" | "TurnIntentRecorded" | "TurnBoundaryCrossingBegan"
+    const replacementTurnIntentToken = (
+      entry: CodexReplacementHistoryEntry | undefined
+    ): CodexOwnedTurnToken | undefined =>
+      /* v8 ignore next -- @preserve The decoded phase tag selects this helper only for its matching history entry. */
+      entry?._tag === "TurnIntentRecorded" ? entry.replacementToken : undefined
+
+    const replacementTurnBoundaryToken = (
+      entry: CodexReplacementHistoryEntry | undefined
+    ): CodexOwnedTurnToken | undefined =>
+      /* v8 ignore next -- @preserve The decoded phase tag selects this helper only for its matching history entry. */
+      entry?._tag === "TurnBoundaryCrossingBegan" ? entry.replacementToken : undefined
+
+    const replacementTurnObservedToken = (
+      entry: CodexReplacementHistoryEntry | undefined
+    ): CodexOwnedTurnToken | undefined =>
+      /* v8 ignore next -- @preserve The decoded phase tag selects this helper only for its matching history entry. */
+      entry?._tag === "TurnObserved" ? entry.replacementToken : undefined
+
+    const replacementStoredToken = (
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      phase: CodexReplacementHistoryEntry["_tag"] | undefined
+    ): CodexOwnedTurnToken | undefined => {
+      const entry = ledger.history.at(lastElementOffset)
+      if (phase === "TurnIntentRecorded") return replacementTurnIntentToken(entry)
+      if (phase === "TurnBoundaryCrossingBegan") return replacementTurnBoundaryToken(entry)
+      // Intent is handled before token recovery, Sealed returns earlier, and
+      // decoded ledgers cannot end at Purged or undefined. The remaining
+      // admitted phase is TurnObserved; its helper still fails closed on a
+      // contradictory entry.
+      return replacementTurnObservedToken(entry)
+    }
+
+    /* v8 ignore next -- @preserve Decoded ledger phases are exhaustively routed before this defensive diagnostic helper. */
+    const replacementInvalidPhaseDetail = (phase: CodexReplacementHistoryEntry["_tag"] | undefined): string => {
+      switch (phase) {
+        case "TurnIntentRecorded":
+          return "invalid replacement turn intent"
+        case "TurnBoundaryCrossingBegan":
+          return "invalid replacement turn call"
+        case "TurnObserved":
+          return "invalid replacement observation"
+        case undefined:
+        case "IntentRecorded":
+        case "Purged":
+        case "Sealed":
+          return "invalid replacement ledger phase"
+      }
+    }
+
+    const prepareObservedReplacementPhase = Effect.fn("CodexProviderWorkUnitReplacement.prepareObservedPhase")(
+      function* (
+        ledger: CodexPurgedWorkUnitReplacementLedger,
+        thread: CodexThreadSnapshot,
+        replacementToken: CodexOwnedTurnToken
+      ) {
+        const currentPhase = ledger.history.at(lastElementOffset)?._tag
+        const observed = ledger.history.at(lastElementOffset)
+        /* v8 ignore next -- @preserve This helper is selected only after preparePhase narrows the decoded last entry to TurnObserved. */
+        if (observed === undefined || observed._tag !== "TurnObserved") {
+          return yield* new CodexReplacementLedgerFailure({ detail: replacementInvalidPhaseDetail(currentPhase) })
+        }
+        const matchingTurn = thread.turns.find(
+          (turn) => turn.id === observed.replacementTurnId && turn.ownedTurnToken === observed.replacementToken
+        )
+        if (matchingTurn === undefined) {
+          return {
+            _tag: "Result" as const,
+            result: CodexProviderWorkUnitReplacementResult.cases.ProviderTemporarilyUnreadable.make({
+              detail: "observed replacement turn is not readable after process loss"
+            })
+          }
+        }
+        return { _tag: "Observed" as const, ledger, replacementToken, turn: matchingTurn }
+      }
+    )
+
+    const prepareReplacementPhase = Effect.fn("CodexProviderWorkUnitReplacement.preparePhase")(function* (
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      thread: CodexThreadSnapshot
+    ) {
+      const currentPhase = ledger.history.at(lastElementOffset)?._tag
+      if (currentPhase === "IntentRecorded") {
+        // Persist the replacement token before any provider turn boundary.
+        const tokenUuid = yield* crypto.randomUUIDv4.pipe(
+          /* v8 ignore next -- @preserve Crypto.randomUUIDv4 has an uninhabited error channel in configured services. */
+          Effect.mapError(
+            () => new CodexReplacementLedgerFailure({ detail: "could not allocate replacement turn token" })
+          )
+        )
+        const replacementToken = CodexOwnedTurnToken.make(tokenUuid)
+        const nextLedger = yield* appendReplacementEntry(
+          ledger,
+          CodexReplacementHistoryEntry.cases.TurnIntentRecorded.make({
+            operationId: ledger.operationId,
+            replacementToken
+          })
+        )
+        return { _tag: "Ready" as const, phase: currentPhase, ledger: nextLedger, replacementToken }
+      }
+      const replacementToken = replacementStoredToken(ledger, currentPhase)
+      /* v8 ignore next -- @preserve Every decoded pending or observed phase carries the exact replacement token. */
+      if (replacementToken === undefined) {
+        return yield* new CodexReplacementLedgerFailure({ detail: replacementInvalidPhaseDetail(currentPhase) })
+      }
+      if (currentPhase === "TurnIntentRecorded" || currentPhase === "TurnBoundaryCrossingBegan") {
+        return { _tag: "Ready" as const, phase: currentPhase, ledger, replacementToken }
+      }
+      return yield* prepareObservedReplacementPhase(ledger, thread, replacementToken)
+    })
+
+    const finishReplacement = Effect.fn("CodexProviderWorkUnitReplacement.finishReplacement")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      turn: CodexTurnSnapshot,
+      predecessor: CodexPurgedWorkUnitEvidence,
+      replacementToken: CodexOwnedTurnToken
+    ) {
+      const checked = replacementTurnCheck(request, turn, predecessor, replacementToken)
+      if (checked._tag === "Rejected") return checked.result
+      const correlatedTurn = checked.turn
+      const observedEntry = CodexReplacementHistoryEntry.cases.TurnObserved.make({
+        operationId: ledger.operationId,
+        replacementToken,
+        replacementTurnId: correlatedTurn.id
+      })
+      const observedLedger =
+        replacementLedgerHasPhase(ledger, "TurnObserved") || replacementLedgerHasPhase(ledger, "Sealed")
+          ? ledger
+          : yield* appendReplacementEntry(ledger, observedEntry)
+      const observed = observedRecordFor(
+        request.plannedAttempt,
+        predecessor.threadId,
+        replacementToken,
+        correlatedTurn.id,
+        null
+      )
+      yield* save(observed)
+      const sealedLedger = replacementLedgerHasPhase(observedLedger, "Sealed")
+        ? /* v8 ignore next -- @preserve Sealed ledgers return from readSubject, so finishReplacement only appends a new seal. */
+          observedLedger
+        : yield* appendReplacementEntry(
+            observedLedger,
+            CodexReplacementHistoryEntry.cases.Sealed.make({
+              operationId: ledger.operationId,
+              replacementToken,
+              replacementTurnId: correlatedTurn.id
+            })
+          )
+      return CodexProviderWorkUnitReplacementResult.cases.Replaced.make({
+        correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt),
+        operationId: sealedLedger.operationId,
+        requestId: request.requestId,
+        worktree: predecessor.worktree
+      })
+    })
+
+    const replacementThreadObservation = Effect.fn("CodexProviderWorkUnitReplacement.observeThread")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      predecessor: CodexPurgedWorkUnitEvidence
+    ) {
+      // Rehydrate S1 before reading it so process loss does not turn a valid
+      // persisted session into a false absence or unreadable observation.
+      const read = yield* app.resumeThread(predecessor.threadId, request.plannedAttempt.worktree).pipe(Effect.result)
+      if (Result.isFailure(read)) {
+        return { _tag: "Result" as const, result: replacementResultFromAppFailure(read.failure) }
+      }
+      const thread = read.success
+      const failure = replacementThreadFactFailure(request, predecessor, thread)
+      if (failure !== undefined) return { _tag: "Result" as const, result: failure }
+      return { _tag: "Thread" as const, thread }
+    })
+
+    const replacementActivityObservation = Effect.fn("CodexProviderWorkUnitReplacement.observeActivity")(function* (
+      thread: CodexThreadSnapshot,
+      replacementToken: CodexOwnedTurnToken | undefined,
+      allowMatchingReplacementTurn: boolean
+    ) {
+      const census = yield* app.listBackgroundTerminals(thread.id).pipe(
+        Effect.flatMap((terminals) => activityCensus.observe(thread, terminals)),
+        Effect.result
+      )
+      if (Result.isFailure(census)) {
+        return {
+          _tag: "Result" as const,
+          result: CodexProviderWorkUnitReplacementResult.cases.ExclusiveRetainedOwnershipUnproved.make({
+            detail: "fresh owned-activity census was unreadable"
+          })
+        }
+      }
+      const failure = replacementActivityFailure(census.success, thread, replacementToken, allowMatchingReplacementTurn)
+      if (failure !== undefined) return { _tag: "Result" as const, result: failure }
+      return { _tag: "Ready" as const }
+    })
+
+    const replacementAuthorityObservation = Effect.fn("CodexProviderWorkUnitReplacement.observeAuthority")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      thread: CodexThreadSnapshot,
+      replacementToken: CodexOwnedTurnToken | undefined,
+      allowMatchingReplacementTurn: boolean
+    ) {
+      if (Option.isNone(replacementAuthority)) {
+        return {
+          _tag: "Result" as const,
+          result: CodexProviderWorkUnitReplacementResult.cases.ExclusiveRetainedOwnershipUnproved.make({
+            detail: "no fresh replacement authority adapter is configured"
+          })
+        }
+      }
+      const observed = yield* replacementAuthority.value.observe(request).pipe(Effect.result)
+      if (Result.isFailure(observed)) {
+        return { _tag: "Result" as const, result: replacementResultFromAuthorityFailure(observed.failure) }
+      }
+      const proof = observed.success
+      const failure = replacementAuthorityProofFailure(request, proof)
+      if (failure !== undefined) {
+        return {
+          _tag: "Result" as const,
+          result: CodexProviderWorkUnitReplacementResult.cases.ExclusiveRetainedOwnershipUnproved.make({
+            detail: failure
+          })
+        }
+      }
+      const activity = yield* replacementActivityObservation(thread, replacementToken, allowMatchingReplacementTurn)
+      if (activity._tag === "Result") return activity
+      return { _tag: "Proof" as const, proof }
+    })
+
+    type ReplacementExecutionPreparation =
+      | {
+          readonly _tag: "Ready"
+          readonly subject: Extract<ReplacementSubjectPreparation, { readonly _tag: "Ready" }>
+          readonly thread: CodexThreadSnapshot
+          readonly phase: CodexReplacementHistoryEntry["_tag"] | undefined
+          readonly authority: CodexReplacementAuthorityProof
+        }
+      | { readonly _tag: "Result"; readonly result: ReplacementResult }
+
+    const replacementExistingAuthorityState = (
+      existing: Option.Option<CodexPurgedWorkUnitReplacementLedger>
+    ): {
+      readonly phase: CodexReplacementHistoryEntry["_tag"] | undefined
+      readonly replacementToken: CodexOwnedTurnToken | undefined
+      readonly allowMatchingReplacementTurn: boolean
+    } => {
+      if (Option.isNone(existing)) {
+        return { phase: undefined, replacementToken: undefined, allowMatchingReplacementTurn: false }
+      }
+      const phase = existing.value.history.at(lastElementOffset)?._tag
+      const allowMatchingReplacementTurn = phase === "TurnBoundaryCrossingBegan" || phase === "TurnObserved"
+      return {
+        phase,
+        replacementToken: allowMatchingReplacementTurn ? replacementStoredToken(existing.value, phase) : undefined,
+        allowMatchingReplacementTurn
+      }
+    }
+
+    const prepareReplacementExecution = Effect.fn("CodexProviderWorkUnitReplacement.prepareExecution")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      subject: Extract<ReplacementSubjectPreparation, { readonly _tag: "Ready" }>
+    ) {
+      const threadObservation = yield* replacementThreadObservation(request, subject.predecessor)
+      if (threadObservation._tag === "Result") return threadObservation
+      const recovery = replacementExistingAuthorityState(subject.existing)
+      const authority = yield* replacementAuthorityObservation(
+        request,
+        threadObservation.thread,
+        recovery.replacementToken,
+        recovery.allowMatchingReplacementTurn
+      )
+      if (authority._tag === "Result") return authority
+      return {
+        _tag: "Ready" as const,
+        subject,
+        thread: threadObservation.thread,
+        phase: recovery.phase,
+        authority: authority.proof
+      }
+    })
+
+    const confirmReplacementAuthority = Effect.fn("CodexProviderWorkUnitReplacement.confirmAuthority")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      prepared: Extract<ReplacementExecutionPreparation, { readonly _tag: "Ready" }>,
+      replacementToken: CodexOwnedTurnToken
+    ) {
+      const refreshed = yield* replacementAuthorityObservation(
+        request,
+        prepared.thread,
+        replacementToken,
+        prepared.phase === "TurnBoundaryCrossingBegan"
+      )
+      if (refreshed._tag === "Result") return refreshed
+      if (!sameReplacementGitObservation(prepared.authority, refreshed.proof)) {
+        return {
+          _tag: "Result" as const,
+          result: CodexProviderWorkUnitReplacementResult.cases.ExclusiveRetainedOwnershipUnproved.make({
+            detail: "fresh Git authority changed before the replacement turn boundary"
+          })
+        }
+      }
+      return { _tag: "Ready" as const }
+    })
+
+    const reconcileReplacementCall = Effect.fn("CodexProviderWorkUnitReplacement.reconcileCall")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      thread: CodexThreadSnapshot,
+      predecessor: CodexPurgedWorkUnitEvidence,
+      replacementToken: CodexOwnedTurnToken
+    ) {
+      const calledTurn = thread.turns.find((turn) => turn.ownedTurnToken === replacementToken)
+      if (calledTurn === undefined) {
+        return CodexProviderWorkUnitReplacementResult.cases.ProviderTemporarilyUnreadable.make({
+          detail: "replacement turn call has no readable matching provider turn"
+        })
+      }
+      return yield* finishReplacement(request, ledger, calledTurn, predecessor, replacementToken)
+    })
+
+    const startReplacementTurn = Effect.fn("CodexProviderWorkUnitReplacement.startTurn")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      predecessor: CodexPurgedWorkUnitEvidence,
+      replacementToken: CodexOwnedTurnToken
+    ) {
+      const started = yield* app
+        .startTurn(
+          predecessor.threadId,
+          request.plannedAttempt.worktree,
+          replacementTaskTurnText(request.plannedAttempt, request.specification, predecessor, ledger.operationId),
+          replacementToken
+        )
+        .pipe(Effect.result)
+      if (Result.isFailure(started)) {
+        const after = yield* replacementThreadObservation(request, predecessor)
+        if (after._tag === "Result") return after.result
+        const matchingTurn = after.thread.turns.find((turn) => turn.ownedTurnToken === replacementToken)
+        if (matchingTurn === undefined) {
+          return CodexProviderWorkUnitReplacementResult.cases.ProviderTemporarilyUnreadable.make({
+            detail: "replacement turn/start crossed an ambiguous provider boundary"
+          })
+        }
+        return yield* finishReplacement(request, ledger, matchingTurn, predecessor, replacementToken)
+      }
+      return yield* finishReplacement(request, ledger, started.success, predecessor, replacementToken)
+    })
+
+    const continueReplacement = Effect.fn("CodexProviderWorkUnitReplacement.continue")(function* (
+      request: CodexProviderWorkUnitReplacementRequest,
+      prepared: Extract<ReplacementExecutionPreparation, { readonly _tag: "Ready" }>,
+      phase: ReplacementPendingPhase,
+      ledger: CodexPurgedWorkUnitReplacementLedger,
+      replacementToken: CodexOwnedTurnToken
+    ) {
+      if (phase === "TurnIntentRecorded") {
+        /* v8 ignore next -- @preserve Pre-boundary activity admission rejects an already-live turn before this continuation path. */
+        const existingTurn = prepared.thread.turns.find((turn) => turn.ownedTurnToken === replacementToken)
+        /* v8 ignore next -- @preserve Covered by the preceding admission invariant; a TurnIntent marker cannot own live provider work. */
+        if (existingTurn !== undefined) {
+          return yield* finishReplacement(request, ledger, existingTurn, prepared.subject.predecessor, replacementToken)
+        }
+      }
+      let nextLedger = ledger
+      if (phase === "IntentRecorded" || phase === "TurnIntentRecorded") {
+        // This durable marker is the final point before the provider call. A
+        // recovery from it may only reconcile the token; it must never retry
+        // turn/start blindly.
+        nextLedger = yield* appendReplacementEntry(
+          ledger,
+          CodexReplacementHistoryEntry.cases.TurnBoundaryCrossingBegan.make({
+            operationId: ledger.operationId,
+            replacementToken
+          })
+        )
+      }
+      if (phase === "TurnBoundaryCrossingBegan") {
+        return yield* reconcileReplacementCall(
+          request,
+          nextLedger,
+          prepared.thread,
+          prepared.subject.predecessor,
+          replacementToken
+        )
+      }
+      return yield* startReplacementTurn(request, nextLedger, prepared.subject.predecessor, replacementToken)
+    })
+
+    const replacement = Effect.fn("CodexProviderWorkUnitReplacement.replace")(function* (
+      request: CodexProviderWorkUnitReplacementRequest
+    ) {
+      const subject = yield* readReplacementSubject(request)
+      if (subject._tag === "Result") return subject.result
+      const prepared = yield* prepareReplacementExecution(request, subject)
+      if (prepared._tag === "Result") return prepared.result
+      const ledger = yield* ensureReplacementLedger(request, prepared.subject)
+      const phase = yield* prepareReplacementPhase(ledger, prepared.thread)
+      if (phase._tag === "Result") return phase.result
+      if (phase._tag === "Observed") {
+        return yield* finishReplacement(
+          request,
+          phase.ledger,
+          phase.turn,
+          prepared.subject.predecessor,
+          phase.replacementToken
+        )
+      }
+      const authority = yield* confirmReplacementAuthority(request, prepared, phase.replacementToken)
+      if (authority._tag === "Result") return authority.result
+      return yield* continueReplacement(request, prepared, phase.phase, phase.ledger, phase.replacementToken)
+    })
+
+    const executor: PlannedAttemptExecutorService = {
       project: (correlation) =>
         project(correlation).pipe(Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))),
       requestSuspension: (attempt) => {
@@ -1289,6 +2348,16 @@ export const codexPlannedAttemptExecutorLayer = Layer.effect(
         )
       }
     }
+    const replacementService: CodexProviderWorkUnitReplacementService = {
+      replacePurgedProviderWorkUnit: (request) => {
+        const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
+        return gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(replacement(request))))
+      }
+    }
+    return Context.empty().pipe(
+      Context.add(PlannedAttemptExecutor, executor),
+      Context.add(CodexProviderWorkUnitReplacement, replacementService)
+    )
   })
 )
 

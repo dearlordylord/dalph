@@ -7,12 +7,22 @@ export * from "./application/supervisor-exit.js"
 // records stay module-local. Consumers install only the supported production
 // composition seams below.
 export {
+  CodexReplacementRequestId,
   defaultCodexStateDirectory,
   nodeCodexAttemptStoreLayer,
   type CodexAttemptStoreConfig
 } from "./application/codex-attempt-store.js"
 export { codexAppServerNodeLayer, type CodexAppServerLayerConfig } from "./application/codex-app-server.js"
-export { nodeCodexPlannedAttemptExecutorLayer } from "./application/codex-planned-attempt-executor.js"
+export {
+  CodexReplacementAuthority,
+  CodexReplacementAuthorityFailure,
+  CodexReplacementAuthorityProof,
+  type CodexReplacementAuthorityService,
+  CodexProviderWorkUnitReplacement,
+  CodexProviderWorkUnitReplacementRequest,
+  CodexProviderWorkUnitReplacementResult,
+  nodeCodexPlannedAttemptExecutorLayer
+} from "./application/codex-planned-attempt-executor.js"
 export * from "./presentation/stdio-trace-output.js"
 export * from "./presentation/workflow-trace.js"
 export * from "./cassettes/index.js"

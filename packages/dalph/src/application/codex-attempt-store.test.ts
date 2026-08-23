@@ -19,6 +19,12 @@ import {
   CodexAttemptRecord,
   CodexAttemptStore,
   CodexOwnedTurnToken,
+  CodexPurgedWorkUnitEvidence,
+  CodexPurgedWorkUnitReplacementLedger,
+  CodexReplacementHistoryEntry,
+  CodexReplacementOperationId,
+  CodexReplacementRequestDigest,
+  CodexReplacementRequestId,
   CodexSealedTerminal,
   CodexProcessIdentity,
   CodexServerIncarnation,
@@ -272,7 +278,8 @@ it.effect("does not upcast a legacy flat attempt record", () =>
               worktree: attempt.worktree
             }
           ],
-          serverLaunch: null
+          serverLaunch: null,
+          replacements: []
         })
       )
       const result = yield* Effect.gen(function* () {
@@ -294,7 +301,7 @@ it.effect("recovers a complete legacy next snapshot after an interrupted write",
       yield* writePrivateFile(
         fileSystem,
         `${storePath}.next`,
-        JSON.stringify({ attempts: [associated], serverLaunch: launch })
+        JSON.stringify({ attempts: [associated], serverLaunch: launch, replacements: [] })
       )
       yield* Effect.gen(function* () {
         const store = yield* CodexAttemptStore
@@ -317,7 +324,7 @@ it.effect("fails closed on duplicate private attempt correlations", () =>
       yield* writePrivateFile(
         fileSystem,
         storePath,
-        JSON.stringify({ attempts: [associated, associated], serverLaunch: null })
+        JSON.stringify({ attempts: [associated, associated], serverLaunch: null, replacements: [] })
       )
       const result = yield* Effect.gen(function* () {
         const store = yield* CodexAttemptStore
@@ -343,7 +350,7 @@ it.effect("fails closed when one Codex thread is aliased to multiple attempts", 
       yield* writePrivateFile(
         fileSystem,
         storePath,
-        JSON.stringify({ attempts: [associated, second], serverLaunch: null })
+        JSON.stringify({ attempts: [associated, second], serverLaunch: null, replacements: [] })
       )
       const result = yield* Effect.gen(function* () {
         const store = yield* CodexAttemptStore
@@ -543,7 +550,11 @@ it.effect("fails closed for a symlink or foreign-permission private file", () =>
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-path-" })
       const symlinkPath = path.join(root, "executor-private-state.json")
       const target = path.join(root, "foreign-target.json")
-      yield* writePrivateFile(fileSystem, target, JSON.stringify({ attempts: [], serverLaunch: null }))
+      yield* writePrivateFile(
+        fileSystem,
+        target,
+        JSON.stringify({ attempts: [], serverLaunch: null, replacements: [] })
+      )
       yield* fileSystem.symlink(target, symlinkPath)
       const symlinkResult = yield* Effect.gen(function* () {
         yield* CodexAttemptStore
@@ -553,9 +564,11 @@ it.effect("fails closed for a symlink or foreign-permission private file", () =>
 
       const foreignRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-foreign-" })
       const foreignPath = path.join(foreignRoot, "executor-private-state.json")
-      yield* fileSystem.writeFileString(foreignPath, JSON.stringify({ attempts: [], serverLaunch: null }), {
-        mode: 0o644
-      })
+      yield* fileSystem.writeFileString(
+        foreignPath,
+        JSON.stringify({ attempts: [], serverLaunch: null, replacements: [] }),
+        { mode: 0o644 }
+      )
       const foreignResult = yield* Effect.gen(function* () {
         yield* CodexAttemptStore
         return true
@@ -617,7 +630,7 @@ it.effect("replays the newest complete checksummed snapshot after torn and inval
       const path = yield* Path.Path
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-58-store-checksum-" })
       const storePath = path.join(root, "executor-private-state.json")
-      const payload = JSON.stringify({ attempts: [associated], serverLaunch: launch })
+      const payload = JSON.stringify({ attempts: [associated], serverLaunch: launch, replacements: [] })
       const crypto = yield* Crypto.Crypto
       const digestBytes = yield* crypto.digest("SHA-256", new TextEncoder().encode(payload))
       const digest = Array.from(digestBytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
@@ -754,7 +767,9 @@ it.effect("loads initial memory snapshot associations and launch ownership", () 
     const store = yield* CodexAttemptStore
     expect(yield* store.readAttempt(attempt.runId, attempt.attemptId)).toEqual(Option.some(associated))
     expect(yield* store.readServerLaunch()).toEqual(Option.some(launch))
-  }).pipe(Effect.provide(memoryCodexAttemptStoreLayer({ attempts: [associated], serverLaunch: launch })))
+  }).pipe(
+    Effect.provide(memoryCodexAttemptStoreLayer({ attempts: [associated], serverLaunch: launch, replacements: [] }))
+  )
 )
 
 it.effect("rejects impossible private record and launch combinations before they can be stored", () =>
@@ -820,4 +835,112 @@ it.effect("rejects impossible private record and launch combinations before they
     })
     yield* Effect.void
   })
+)
+
+it.effect("persists an immutable purged-unit replacement ledger and reopens it exactly", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-111-ledger-" })
+      const storePath = path.join(root, "executor-private-state.json")
+      const requestId = CodexReplacementRequestId.make("replacement-request-111")
+      const operationId = CodexReplacementOperationId.make("replacement-operation-111")
+      const predecessorTurnId = CodexTurnId.make("codex-turn-u1")
+      const predecessorToken = CodexOwnedTurnToken.make("codex-token-u1")
+      const replacementToken = CodexOwnedTurnToken.make("codex-token-u2")
+      const replacementTurnId = CodexTurnId.make("codex-turn-u2")
+      const evidence = CodexPurgedWorkUnitEvidence.make({
+        predecessorToken,
+        predecessorTurnId,
+        threadId: associated.threadId,
+        worktree: attempt.worktree
+      })
+      const purged = CodexReplacementHistoryEntry.cases.Purged.make({ evidence })
+      const intent = CodexReplacementHistoryEntry.cases.IntentRecorded.make({
+        operationId,
+        requestDigest: CodexReplacementRequestDigest.make("a".repeat(64)),
+        requestId
+      })
+      const turnIntent = CodexReplacementHistoryEntry.cases.TurnIntentRecorded.make({ operationId, replacementToken })
+      const turnCalled = CodexReplacementHistoryEntry.cases.TurnBoundaryCrossingBegan.make({
+        operationId,
+        replacementToken
+      })
+      const observed = CodexReplacementHistoryEntry.cases.TurnObserved.make({
+        operationId,
+        replacementToken,
+        replacementTurnId
+      })
+      const sealed = CodexReplacementHistoryEntry.cases.Sealed.make({
+        operationId,
+        replacementToken,
+        replacementTurnId
+      })
+      const ledger = CodexPurgedWorkUnitReplacementLedger.make({
+        history: [purged, intent, turnIntent, turnCalled, observed, sealed],
+        operationId,
+        plannedAttempt: attempt,
+        requestId
+      })
+      const intentLedger = CodexPurgedWorkUnitReplacementLedger.make({
+        history: [purged, intent],
+        operationId,
+        plannedAttempt: attempt,
+        requestId
+      })
+      const turnIntentLedger = CodexPurgedWorkUnitReplacementLedger.make({
+        history: [purged, intent, turnIntent],
+        operationId,
+        plannedAttempt: attempt,
+        requestId
+      })
+
+      yield* Effect.gen(function* () {
+        const store = yield* CodexAttemptStore
+        expect(yield* store.readReplacementLedger(requestId)).toEqual(Option.some(intentLedger))
+        expect(
+          Option.isNone(yield* store.readReplacementLedger(CodexReplacementRequestId.make("replacement-request-none")))
+        ).toBe(true)
+        yield* store.appendReplacementLedger(intentLedger)
+        yield* store.appendReplacementLedger(turnIntentLedger)
+        expect(yield* store.readReplacementLedger(requestId)).toEqual(Option.some(turnIntentLedger))
+        expect((yield* store.appendReplacementLedger(ledger).pipe(Effect.exit))._tag).toBe("Failure")
+      }).pipe(
+        Effect.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: null, replacements: [intentLedger] }))
+      )
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          yield* store.appendReplacementLedger(ledger)
+          yield* store.appendReplacementLedger(ledger)
+          const foreignOperationId = CodexReplacementOperationId.make("replacement-operation-foreign")
+          const conflictingLedger = CodexPurgedWorkUnitReplacementLedger.make({
+            history: [
+              purged,
+              CodexReplacementHistoryEntry.cases.IntentRecorded.make({
+                operationId: foreignOperationId,
+                requestDigest: CodexReplacementRequestDigest.make("b".repeat(64)),
+                requestId
+              })
+            ],
+            operationId: foreignOperationId,
+            plannedAttempt: attempt,
+            requestId
+          })
+          expect((yield* store.appendReplacementLedger(conflictingLedger).pipe(Effect.exit))._tag).toBe("Failure")
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          const read = yield* store.readReplacementLedger(requestId)
+          expect(read).toEqual(Option.some(ledger))
+          expect(read._tag === "Some" ? read.value.history[0] : undefined).toEqual(purged)
+          expect(read._tag === "Some" ? read.value.history.at(-1) : undefined).toEqual(sealed)
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
 )

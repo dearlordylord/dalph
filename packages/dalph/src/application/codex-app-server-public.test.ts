@@ -672,7 +672,7 @@ it.effect("reconciles an exact launch-token process before starting a replacemen
         pid: null
       })
       const layer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
-        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
       )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
@@ -753,7 +753,7 @@ it.effect("classifies controlled Unix launch identity observations before replac
             pid: 301
           })
           const layer = codexAppServerNodeLayer({ executable: "/missing/controlled-codex" }, native).pipe(
-            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
           )
           const result = yield* Effect.gen(function* () {
             const app = yield* CodexAppServer
@@ -795,6 +795,8 @@ it.effect("reconciles application lease owner identity before spawning", () => {
           const store: CodexAttemptStoreService = {
             readAttempt: () => Effect.succeed(Option.none()),
             writeAttempt: () => Effect.void,
+            readReplacementLedger: () => Effect.succeed(Option.none()),
+            appendReplacementLedger: () => Effect.void,
             readServerLaunch: () => Effect.succeed(Option.none()),
             writeServerLaunch: () => Effect.void,
             clearServerLaunch: () => Effect.void,
@@ -924,7 +926,7 @@ it.effect("classifies controlled launch-token discovery candidates before replac
             pid: null
           })
           const layer = codexAppServerNodeLayer({ executable: "/missing/controlled-discovery-codex" }, native).pipe(
-            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
           )
           const result = yield* Effect.gen(function* () {
             const app = yield* CodexAppServer
@@ -957,6 +959,8 @@ it.effect("reconciles controlled detached process-group ownership before close",
           const store: CodexAttemptStoreService = {
             readAttempt: () => Effect.succeed(Option.none()),
             writeAttempt: () => Effect.void,
+            readReplacementLedger: () => Effect.succeed(Option.none()),
+            appendReplacementLedger: () => Effect.void,
             readServerLaunch: () => Effect.succeed(launch === undefined ? Option.none() : Option.some(launch)),
             writeServerLaunch: (record) => Effect.sync(() => void (launch = record)),
             clearServerLaunch: () =>
