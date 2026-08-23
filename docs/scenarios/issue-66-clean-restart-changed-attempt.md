@@ -167,8 +167,8 @@ P2 branch, or P2 worktree exists.
 ### Trigger and ordered boundary calls
 
 1. Alice invokes Dalph's one production entry for exact R and its target. Dalph
-   acquires exclusive coordinator ownership, scans every physical Journal row,
-   discovers exact R as the only unfinished Run, and reads, decodes, and
+   acquires exclusive coordinator ownership, discovers exact R from the Hot
+   Journal partition, and reads, decodes, and
    reduces R's complete history. The reduction reconstructs R's latest control
    policy, exact P1 responsibility, and safe-suspension evidence. Dalph hands
    that established Run to one bounded activation. When R was first created,

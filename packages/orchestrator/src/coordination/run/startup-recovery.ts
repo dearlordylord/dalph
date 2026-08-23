@@ -1,8 +1,16 @@
 import { type IntegrationTarget, PlannedAttemptExecutor, RunId } from "@dalph/contracts"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
-import { JournalBoundaryDecodeIssue } from "../../workflow-journal/recovery-model.js"
+import {
+  JournalBoundaryDecodeIssue,
+  JournalSemanticIssue,
+  type JournalScan
+} from "../../workflow-journal/recovery-model.js"
 import { InRunJournal, type RunLifecycleJournalService } from "../../workflow-journal/store.js"
+import {
+  journalMaintenanceDiagnosticFor,
+  type JournalMaintenanceObservationService
+} from "../../workflow-journal/maintenance.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
@@ -56,11 +64,14 @@ import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protoc
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
   JournalBoundaryDecodeIssue,
+  JournalSemanticIssue,
   WorkflowJournalHistoryIdentityIssue,
   WorkflowJournalHistorySemanticIssue,
   Schema.TaggedStruct("OtherUnfinishedRunIssue", { requestedRunId: RunId, unfinishedRunId: RunId })
 ])
 export type StartupRecoveryIssue = typeof StartupRecoveryIssue.Type
+
+const lastRecordIndex = -1
 
 /** Run establishment found preserved history that cannot be reconstructed safely. */
 export class StartupRecoveryBlocked extends Schema.TaggedError<StartupRecoveryBlocked>()("StartupRecoveryBlocked", {
@@ -73,24 +84,78 @@ const runBeganWithoutTermination = (
   reduction.records.some(({ event }) => event._tag === "WorkflowRunBegan") &&
   !reduction.records.some(({ event }) => event._tag === "WorkflowRunTerminated")
 
-/** Validates all preserved Runs and selects the requested Run without constructing an appending service. */
-export const inspectStartupRecovery = Effect.fn("StartupRecovery.inspect")(function* (
+type StartupReduction = ReturnType<typeof reduceWorkflowJournalHistory>
+
+const startupHistoriesFor = Effect.fn("StartupRecovery.readHistories")(function* (
   runId: RunId,
-  journal: RunLifecycleJournalService
+  journal: RunLifecycleJournalService,
+  scan: JournalLifecycleScan
 ) {
-  const scan = yield* journal.scan()
-  const reductions = scan.runs.map((history) => reduceWorkflowJournalHistory(history.runId, history.records))
-  const issues = [
-    ...scan.issues,
-    ...reductions.flatMap((reduction) => (reduction._tag === "InvalidWorkflowJournalHistory" ? reduction.issues : []))
-  ]
-  if (issues.length > 0) return yield* new StartupRecoveryBlocked({ issues })
-  const otherUnfinishedRuns = reductions.filter(
+  const requestedHotHistory = scan.runs.find((history) => history.runId === runId)
+  if (requestedHotHistory !== undefined) return scan.runs
+  const requestedHistory = yield* journal
+    .read(runId)
+    .pipe(Effect.map((records) => (records.length === 0 ? undefined : { records, runId })))
+  return requestedHistory === undefined ? scan.runs : [...scan.runs, requestedHistory]
+})
+
+type JournalLifecycleScan = JournalScan
+
+const startupIssuesFor = (scan: JournalLifecycleScan, reductions: ReadonlyArray<StartupReduction>) => [
+  ...scan.issues,
+  ...reductions.flatMap((reduction) => (reduction._tag === "InvalidWorkflowJournalHistory" ? reduction.issues : []))
+]
+
+const retireStartupTerminals = Effect.fn("StartupRecovery.retireTerminals")(function* (
+  reductions: ReadonlyArray<StartupReduction>,
+  journal: RunLifecycleJournalService,
+  maintenance: JournalMaintenanceObservationService,
+  retirementAttempts: Ref.Ref<ReadonlySet<RunId>> | undefined
+) {
+  for (const reduction of reductions) {
+    /* v8 ignore next -- @preserve inspectStartupRecovery blocks before this loop whenever a reduction is invalid, so only ValidWorkflowJournalHistory reaches retirement. */
+    if (reduction._tag !== "ValidWorkflowJournalHistory") continue
+    if (reduction.records.at(lastRecordIndex)?.event._tag !== "WorkflowRunTerminated") continue
+    const shouldAttempt =
+      retirementAttempts === undefined
+        ? true
+        : yield* Ref.modify(retirementAttempts, (attempted) => {
+            if (attempted.has(reduction.runId)) return [false, attempted] as const
+            return [true, new Set([...attempted, reduction.runId])] as const
+          })
+    if (!shouldAttempt) continue
+    yield* journal
+      .retireTerminalRun(reduction.runId)
+      .pipe(Effect.catch((failure) => maintenance.observe(journalMaintenanceDiagnosticFor(reduction.runId, failure))))
+  }
+})
+
+const unfinishedStartupRuns = (runId: RunId, reductions: ReadonlyArray<StartupReduction>) =>
+  reductions.filter(
     (reduction) =>
       reduction._tag === "ValidWorkflowJournalHistory" &&
       reduction.runId !== runId &&
       (runBeganWithoutTermination(reduction) || hasUnfinishedRunResponsibility(reduction.runState))
   )
+
+/** Validates all preserved Runs and selects the requested Run without constructing an appending service. */
+export const inspectStartupRecovery = Effect.fn("StartupRecovery.inspect")(function* (
+  runId: RunId,
+  journal: RunLifecycleJournalService,
+  maintenance: JournalMaintenanceObservationService,
+  retirementAttempts?: Ref.Ref<ReadonlySet<RunId>>
+) {
+  const scan = yield* journal.scanHot()
+  // Hot discovery bounds the set that can own unfinished work, but the exact
+  // requested Run may already be Cold after a prior startup or immediate
+  // retirement. Read that identity through the normal two-partition seam so a
+  // terminal Cold history cannot be mistaken for an absent Run.
+  const histories = yield* startupHistoriesFor(runId, journal, scan)
+  const reductions = histories.map((history) => reduceWorkflowJournalHistory(history.runId, history.records))
+  const issues = startupIssuesFor(scan, reductions)
+  if (issues.length > 0) return yield* new StartupRecoveryBlocked({ issues })
+  yield* retireStartupTerminals(reductions, journal, maintenance, retirementAttempts)
+  const otherUnfinishedRuns = unfinishedStartupRuns(runId, reductions)
   if (otherUnfinishedRuns.length > 0) {
     return yield* new StartupRecoveryBlocked({
       issues: otherUnfinishedRuns.map((unfinished) => ({

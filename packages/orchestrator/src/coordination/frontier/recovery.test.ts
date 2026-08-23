@@ -1149,7 +1149,9 @@ it.effect("fails closed when initial or reread workflow-journal history is inval
       read: () =>
         Ref.getAndUpdate(reads, (count) => count + 1).pipe(Effect.map((count) => (count === 0 ? [] : [invalidRecord]))),
       readRunForRecovery: () => Effect.die("unused"),
-      scan: () => Effect.succeed({ issues: [], runs: [] }),
+      scanHot: () => Effect.succeed({ issues: [], runs: [] }),
+      auditAll: () => Effect.succeed({ issues: [], runs: [] }),
+      retireTerminalRun: () => Effect.die("unused"),
       terminateRun: () => Effect.die("unused")
     })
     const recovery = yield* makeRunRecoveryProjection(runId).pipe(

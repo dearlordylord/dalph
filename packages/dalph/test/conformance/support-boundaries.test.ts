@@ -66,7 +66,7 @@ it("loads the current public surface without compatibility exports", () => {
   expect("legacyMemoryJournalStoreLayer" in PublicApi).toBe(false)
   expect("legacySqliteJournalStoreLayer" in PublicApi).toBe(false)
   expect(dryRunWorkflowInterpreterLayer).toBeDefined()
-  expect(new JournalBoundaryDecodeIssue({ detail: "bad row", rowOrdinal: 1, runId: null })._tag).toBe(
+  expect(new JournalBoundaryDecodeIssue({ detail: "bad row", partition: "Hot", rowOrdinal: 1, runId: null })._tag).toBe(
     "JournalBoundaryDecodeIssue"
   )
 })

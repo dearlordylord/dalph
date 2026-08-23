@@ -1,7 +1,9 @@
 import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { NodeCrypto } from "@effect/platform-node"
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Scope, Stream } from "effect"
+import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
+import { Context, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Ref, Scope, Stream } from "effect"
+import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { expect } from "vitest"
 import { TestClock } from "effect/testing"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
@@ -48,7 +50,6 @@ import {
   integratorSessionFixedRecordKey,
   intentRecordKey
 } from "../../workflow-journal/record-key.js"
-import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontier/run-finality.js"
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
@@ -86,6 +87,11 @@ import { integrationFinalityFixture } from "../../workflow/protocols/integration
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { deterministicOperationIdAllocatorLayer } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+import {
+  type JournalMaintenanceDiagnostic,
+  noopJournalMaintenanceObservation,
+  type JournalMaintenanceObservationService
+} from "../../workflow-journal/maintenance.js"
 
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
 const runtimePolicy = RunControlPolicy.make({
@@ -119,6 +125,8 @@ const defaultTrackerGraphReader = TrackerGraphReader.of({
   read: () => Effect.succeed(settledGraph.snapshot),
   readTaskWorkSpecification: () => Effect.die("unused")
 })
+
+const nodeFileSystemAndPath = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 
 const completedFinalityProof = (runId: RunId, target: ReturnType<typeof FixtureTarget.make>) =>
   Effect.gen(function* () {
@@ -298,7 +306,8 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   applicationExit?: ApplicationExitShellService,
   processLifecycle?: ApplicationProcessLifecycleService,
   ownership: CoordinatorOwnership["Service"] = defaultOwnership,
-  publicationCount?: Ref.Ref<number>
+  publicationCount?: Ref.Ref<number>,
+  maintenanceObservation: JournalMaintenanceObservationService = noopJournalMaintenanceObservation
 ) {
   const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
   const dependencies = Layer.mergeAll(
@@ -312,11 +321,20 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   const application = journaledRunBootstrapLayer(
     expectedRunId,
     ({ runId }) => runtimeLayer(runId, trackerGraphReader, publicationCount),
-    sharedApplicationExit
+    sharedApplicationExit,
+    maintenanceObservation
   ).pipe(Layer.provide(dependencies))
   const bootstrap = Context.get(yield* Layer.build(application), JournaledRunBootstrap)
   return { ...bootstrap, applicationExitRequestBoundary: sharedApplicationExit.requestBoundary }
 })
+
+const withTemporaryDatabase = <A, E, R>(use: (filename: JournalDatabaseLocator) => Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-bootstrap-cold-" })
+    return yield* use(JournalDatabaseLocator.make(path.join(directory, "journal.sqlite")))
+  }).pipe(Effect.provide(nodeFileSystemAndPath))
 
 it.effect("records Alice's Run cancellation once and coalesces semantic redelivery", () =>
   Effect.scoped(
@@ -954,7 +972,7 @@ it.effect("retries a pre-commit Run beginning failure without entering activatio
               attempt === 0 ? Effect.fail(preCommitFailure) : delegate.beginRun(requestedRunId, requestedTarget, policy)
             )
           ),
-        scan: () => Ref.update(scans, (count) => count + 1).pipe(Effect.andThen(delegate.scan()))
+        scanHot: () => Ref.update(scans, (count) => count + 1).pipe(Effect.andThen(delegate.scanHot()))
       })
       const bootstrap = yield* buildBootstrap(runId, storage)
       const policy = Ref.update(initialPolicyEvaluations, (count) => count + 1).pipe(Effect.as(initialPolicy))
@@ -1173,6 +1191,8 @@ it.effect("rejects a terminated Run before constructing activation", () =>
         runId,
         completedFinalityProof(runId, target)
       )
+      expect((yield* storage.scanHot()).runs).toEqual([])
+      expect((yield* storage.auditAll()).runs).toContainEqual(expect.objectContaining({ runId, partition: "Cold" }))
       const bootstrap = yield* buildBootstrap(runId, storage)
       expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunTerminated")
       const runtimeEntered = yield* Ref.make(false)
@@ -1190,6 +1210,147 @@ it.effect("rejects a terminated Run before constructing activation", () =>
 
       expect(failure).toMatchObject({ _tag: "WorkflowRunAlreadyTerminated", runId })
       expect(yield* Ref.get(runtimeEntered)).toBe(false)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rejects a reopened cold SQLite Run before constructing activation", () =>
+  Effect.scoped(
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const target = FixtureTarget.make("journaled-bootstrap-reopened-cold-sqlite")
+        const runId = yield* freshWorkflowRunId(target)
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* JournalStore
+            const terminatingBootstrap = yield* buildBootstrap(runId, storage)
+            expect(
+              yield* terminatingBootstrap.activate(
+                target,
+                Effect.succeed(initialPolicy),
+                runId,
+                completedFinalityProof(runId, target)
+              )
+            ).toEqual({ _tag: "RunMayTerminate" })
+            expect((yield* storage.scanHot()).runs).toEqual([])
+            expect((yield* storage.auditAll()).runs).toContainEqual(
+              expect.objectContaining({ runId, partition: "Cold" })
+            )
+          }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+        )
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* JournalStore
+            expect((yield* storage.scanHot()).runs).toEqual([])
+            expect((yield* storage.auditAll()).runs).toContainEqual(
+              expect.objectContaining({ runId, partition: "Cold" })
+            )
+            const bootstrap = yield* buildBootstrap(runId, storage)
+            expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunTerminated")
+            const runtimeEntered = yield* Ref.make(false)
+            const failure = yield* bootstrap
+              .activate(
+                target,
+                Effect.die("reopened terminal history must not evaluate the initial policy"),
+                runId,
+                Ref.set(runtimeEntered, true).pipe(
+                  Effect.as(
+                    finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+                  )
+                )
+              )
+              .pipe(Effect.flip)
+
+            expect(failure).toMatchObject({ _tag: "WorkflowRunAlreadyTerminated", runId })
+            expect(yield* Ref.get(runtimeEntered)).toBe(false)
+          }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+        )
+      })
+    )
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reports one immediate retirement diagnostic after termination commits and keeps the terminal Run Hot", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-retirement-failure")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      const retireAttempts = yield* Ref.make(0)
+      const diagnostics = yield* Ref.make<ReadonlyArray<JournalMaintenanceDiagnostic>>([])
+      const maintenanceObservation: JournalMaintenanceObservationService = {
+        observe: (diagnostic) => Ref.update(diagnostics, (current) => [...current, diagnostic])
+      }
+      const storage = JournalStore.of({
+        ...delegate,
+        retireTerminalRun: () =>
+          Ref.update(retireAttempts, (current) => current + 1).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new JournalStorageUnavailable({
+                  detail: "controlled immediate retirement failure",
+                  operation: "JournalStore.retireTerminalRun"
+                })
+              )
+            )
+          )
+      })
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        undefined,
+        undefined,
+        defaultOwnership,
+        undefined,
+        maintenanceObservation
+      )
+
+      const result = yield* bootstrap.activate(
+        target,
+        Effect.succeed(initialPolicy),
+        runId,
+        completedFinalityProof(runId, target)
+      )
+      const records = yield* delegate.read(runId)
+      const observed = yield* Ref.get(diagnostics)
+
+      expect(result).toEqual({ _tag: "RunMayTerminate" })
+      expect(yield* Ref.get(retireAttempts)).toBe(1)
+      expect(observed).toHaveLength(1)
+      expect(observed[0]).toMatchObject({
+        _tag: "JournalMaintenanceDiagnostic",
+        operation: "JournalStore.retireTerminalRun",
+        runId,
+        failure: {
+          _tag: "JournalStorageUnavailable",
+          detail: "controlled immediate retirement failure",
+          operation: "JournalStore.retireTerminalRun"
+        }
+      })
+      expect(records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
+      expect((yield* delegate.scanHot()).runs).toContainEqual(expect.objectContaining({ runId }))
+      expect((yield* delegate.auditAll()).runs).toContainEqual(expect.objectContaining({ runId, partition: "Hot" }))
+      expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunTerminated")
+
+      const reactivationRuntimeEntered = yield* Ref.make(false)
+      const reactivationFailure = yield* bootstrap
+        .activate(
+          target,
+          Effect.die("terminal reactivation must not evaluate the initial policy"),
+          runId,
+          Ref.set(reactivationRuntimeEntered, true).pipe(
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+          )
+        )
+        .pipe(Effect.flip)
+      expect(reactivationFailure).toMatchObject({ _tag: "WorkflowRunAlreadyTerminated", runId })
+      expect(yield* Ref.get(reactivationRuntimeEntered)).toBe(false)
+      expect(yield* Ref.get(retireAttempts)).toBe(1)
+      expect(yield* Ref.get(diagnostics)).toHaveLength(1)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

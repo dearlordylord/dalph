@@ -436,6 +436,33 @@ task-tracker history, executor-internal history, and process logs remain owned
 by their respective systems.
 _Avoid_: Run history, external-system history, current authority facts
 
+**Journal partition**:
+The durable storage provenance of one complete workflow-journal history:
+`Hot` is the ordinary startup-discovery partition and `Cold` is the retained
+partition for histories already proven terminal. A partition is not workflow
+state: a Hot history may already contain a terminal record awaiting
+maintenance, and Cold placement never proves current tracker, Git, or executor
+authority.
+_Avoid_: Run state, recovery eligibility, archive authority
+
+**Terminal-history retirement**:
+The one atomic maintenance operation that runs the canonical workflow-journal
+reducer over a complete Hot history, requires a valid final
+`WorkflowRunTerminated` occurrence, copies every persisted row to Cold, checks
+the copied key, position, event kind, version, and payload bytes, and removes
+the Hot rows in the same transaction. Repeating it over a valid Cold history
+reports that history as already retired; contradictory Hot-and-Cold membership
+and malformed history fail closed.
+_Avoid_: Deleting old rows, inferred completion, asynchronous archive job
+
+**Hot discovery and full journal audit**:
+`scanHot` is the ordinary startup operation and considers only Hot histories
+that may still require recovery validation. `auditAll` is the explicit
+partition-aware diagnostic operation over both Hot and Cold, including retained
+history and Cold decoding failures. Exact Run reads are transparent across the
+two partitions but reject contradictory membership.
+_Avoid_: Startup scan of every physical row, archive as authority, partial read
+
 **Workflow-journal history reduction**:
 The pure fold that validates one workflow-journal history, reconstructs its run
 state, and derives its recovery frontier. It returns every history issue it can

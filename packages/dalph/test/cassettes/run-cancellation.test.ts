@@ -27,6 +27,7 @@ import {
 } from "../../../orchestrator/src/workflow-journal/store.js"
 import { terminationPreconditionIssues } from "../../../orchestrator/src/workflow-journal/termination-preconditions.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
+import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { freshWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
@@ -145,9 +146,12 @@ const buildCancellationBootstrap = Effect.fn("RunCancellationTest.buildBootstrap
   )
   const applicationExit = yield* makeApplicationExitShell(cancellationOwnership, { requestEnd: () => Effect.void })
   const context = yield* Layer.build(
-    journaledRunBootstrapLayer(expectedRunId, ({ runId }) => cancellationRuntimeLayer(runId), applicationExit).pipe(
-      Layer.provide(dependencies)
-    )
+    journaledRunBootstrapLayer(
+      expectedRunId,
+      ({ runId }) => cancellationRuntimeLayer(runId),
+      applicationExit,
+      noopJournalMaintenanceObservation
+    ).pipe(Layer.provide(dependencies))
   )
   return Context.get(context, JournaledRunBootstrap)
 })

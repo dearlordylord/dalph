@@ -2,7 +2,7 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"
-import { Cause, ConfigProvider, Effect, FileSystem, Layer, Path } from "effect"
+import { Cause, ConfigProvider, Deferred, Effect, FileSystem, Fiber, Layer, Path } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import { describe, expect } from "vitest"
@@ -12,11 +12,15 @@ import {
   CoordinatorOwnership,
   InitialControlPolicy,
   JournalDatabaseLocator,
+  JournalPosition,
   JournalRecordKey,
   JournalStorageAccessDenied,
   JournalStorageCapacityExhausted,
   JournalStorageLocked,
   JournalStorageUnavailable,
+  JournalHistoryNotTerminal,
+  JournalDataCorruption,
+  JournalPartitionContradiction,
   JournalStore,
   JournalStoreContradiction,
   TaskClaimAcquisition,
@@ -37,7 +41,7 @@ import {
 import { classifyJournalStorageFailure } from "./adapters/sqlite-store.js"
 import { completedRunFinalityFixture } from "../../test/run-finality.js"
 import { validSnapshot } from "../../test/task-dag.js"
-import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
+import { intentRecordKey, outcomeRecordKey, runCancellationAppliedRecordKey } from "./record-key.js"
 import { ActiveTaskClaim } from "../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import {
@@ -45,6 +49,7 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquisitionRejectedEvent
 } from "../workflow/registry/event.js"
+import { RunCancellationAppliedEvent } from "../workflow/protocols/run-cancellation/events.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
@@ -55,6 +60,10 @@ import {
 } from "../workflow/registry/operation.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { makeRunFinalityEvidence } from "../coordination/frontier/run-finality.js"
+import { makeWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "./run-lifecycle.js"
+import { memoryJournalTestLayerFromPartitionRecords } from "./adapters/memory-store.js"
+import { encodeJournalEvent } from "./event-codec.js"
+import type { JournalRecord } from "./store.js"
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
@@ -80,6 +89,40 @@ const withSqliteClient = <A, E, R>(
     }).pipe(Effect.provide(Reactivity.layer))
   )
 
+const seedSchemaV1 = (filename: JournalDatabaseLocator, record: JournalRecord) => {
+  const encoded = encodeJournalEvent(record.event)
+  return withSqliteClient(filename, (sql) =>
+    Effect.gen(function* () {
+      yield* sql`
+        CREATE TABLE effect_sql_migrations (
+          migration_id INTEGER PRIMARY KEY NOT NULL,
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (1, 'create_current_journal_records')`
+      yield* sql`PRAGMA user_version = 1`
+      yield* sql`
+        CREATE TABLE journal_records (
+          run_id TEXT NOT NULL,
+          position INTEGER NOT NULL CHECK (position >= 1),
+          record_key TEXT NOT NULL,
+          event_kind TEXT NOT NULL,
+          event_version INTEGER NOT NULL CHECK (event_version >= 1),
+          payload_json TEXT NOT NULL,
+          PRIMARY KEY (run_id, position),
+          UNIQUE (run_id, record_key)
+        ) STRICT
+      `
+      yield* sql`
+        INSERT INTO journal_records
+          (run_id, position, record_key, event_kind, event_version, payload_json)
+        VALUES (${record.runId}, ${record.position}, ${record.key}, ${encoded.kind}, ${encoded.version}, ${encoded.payloadJson})
+      `
+    })
+  )
+}
+
 const intent = (operationId: string, taskId: string) =>
   taskTrackerReadIntent(
     WorkflowOperation.cases.ReadTrackerGraph.make({
@@ -89,6 +132,85 @@ const intent = (operationId: string, taskId: string) =>
       target: FixtureTarget.make(taskId)
     })
   )
+
+const appendTerminalDisposition = (
+  journal: JournalStore["Service"],
+  runId: RunId,
+  target: ReturnType<typeof FixtureTarget.make>,
+  disposition: "Completed" | "Blocked" | "Cancelled"
+) => {
+  const operation = makeTrackerGraphObservationOperation(
+    OperationId.make(`retirement-disposition:${disposition}:${runId}`),
+    target
+  )
+  const snapshot = validSnapshot({
+    revision: `retirement-disposition:${disposition}:${runId}`,
+    rootTaskId: "root",
+    tasks: [
+      {
+        id: "root",
+        lifecycle: {
+          _tag:
+            disposition === "Completed"
+              ? "CompletedSuccessfully"
+              : disposition === "Blocked"
+                ? "TerminalWithoutSuccess"
+                : "Open"
+        },
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+    ]
+  })
+  const cancellation =
+    disposition === "Cancelled"
+      ? RunCancellationAppliedEvent.make({
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      : undefined
+  const observedAt = cancellation === undefined ? 3 : 4
+  const evidence = makeRunFinalityEvidence({
+    observedAt: JournalPosition.make(observedAt),
+    operationId: operation.operationId,
+    readShape: operation.readShape,
+    rootTaskId: TaskId.make("root"),
+    runId,
+    snapshot,
+    target
+  })
+  return Effect.gen(function* () {
+    if (cancellation !== undefined) yield* journal.append(runId, runCancellationAppliedRecordKey, cancellation)
+    yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(operation.operationId),
+      taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
+    )
+    return yield* journal.terminateRun(runId, disposition, evidence)
+  })
+}
+
+const terminalRecordsFor = (runId: RunId, target: ReturnType<typeof FixtureTarget.make>) => {
+  const fixture = completedRunFinalityFixture({ runId, target })
+  return [
+    makeWorkflowRunBeganRecord(runId, target, initialPolicy),
+    {
+      event: fixture.intent,
+      key: intentRecordKey(fixture.operation.operationId),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: fixture.observation,
+      key: outcomeRecordKey(fixture.operation.operationId),
+      position: JournalPosition.make(3),
+      runId
+    },
+    makeWorkflowRunTerminatedRecord(runId, JournalPosition.make(4), "Completed", fixture.evidence)
+  ]
+}
 
 it.effect("opens the configured production journal only with coordinator ownership", () =>
   Effect.scoped(
@@ -110,6 +232,120 @@ it.effect("opens the configured production journal only with coordinator ownersh
     )
   )
 )
+
+it.effect("maps a controlled malformed memory terminal prefix to journal corruption", () => {
+  const runId = RunId.make("memory-controlled-malformed-retirement")
+  const target = FixtureTarget.make("memory-controlled-malformed-retirement-target")
+  const valid = terminalRecordsFor(runId, target)
+  const malformed = valid.map((record, index) =>
+    index === valid.length - 1 ? { ...record, position: JournalPosition.make(5) } : record
+  )
+  return Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const failure = yield* Effect.flip(journal.retireTerminalRun(runId))
+    expect(failure).toBeInstanceOf(JournalDataCorruption)
+    expect(yield* journal.read(runId)).toEqual(malformed)
+    expect(yield* journal.scanHot()).toMatchObject({
+      issues: [expect.objectContaining({ _tag: "JournalSemanticIssue", partition: "Hot", runId })],
+      runs: []
+    })
+    expect((yield* journal.auditAll()).issues).toContainEqual(expect.objectContaining({ partition: "Hot", runId }))
+  }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: malformed })))
+})
+
+it.effect(
+  "isolates controlled cold corruption from memory startup discovery and reports it to exact reads and audits",
+  () => {
+    const runId = RunId.make("memory-controlled-cold-corruption")
+    const target = FixtureTarget.make("memory-controlled-cold-corruption-target")
+    const valid = terminalRecordsFor(runId, target)
+    const malformed = valid.map((record, index) =>
+      index === valid.length - 1 ? { ...record, position: JournalPosition.make(5) } : record
+    )
+    return Effect.gen(function* () {
+      const journal = yield* JournalStore
+      expect(yield* journal.scanHot()).toEqual({ issues: [], runs: [] })
+      const readFailure = yield* Effect.flip(journal.read(runId))
+      expect(readFailure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+      const recoveryFailure = yield* Effect.flip(journal.readRunForRecovery(runId, target))
+      expect(recoveryFailure).toMatchObject({
+        _tag: "JournalDataCorruption",
+        operation: "JournalStore.readRunForRecovery"
+      })
+      const audit = yield* journal.auditAll()
+      expect(audit.issues).toMatchObject([{ _tag: "JournalSemanticIssue", partition: "Cold", runId }])
+      expect(yield* Effect.flip(journal.retireTerminalRun(runId))).toMatchObject({
+        _tag: "JournalDataCorruption",
+        operation: "JournalStore.retireTerminalRun"
+      })
+    }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ cold: malformed })))
+  }
+)
+
+it.effect("rejects exact reads and recovery of a nonterminal memory Cold history", () => {
+  const runId = RunId.make("memory-nonterminal-cold-read")
+  const target = FixtureTarget.make("memory-nonterminal-cold-read-target")
+  const records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
+  return Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const fixture = completedRunFinalityFixture({ runId, target })
+    expect(
+      yield* Effect.flip(journal.append(runId, JournalRecordKey.make("cold-nonterminal-append"), fixture.intent))
+    ).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.append" })
+    const readFailure = yield* Effect.flip(journal.read(runId))
+    expect(readFailure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+    const recoveryFailure = yield* Effect.flip(journal.readRunForRecovery(runId, target))
+    expect(recoveryFailure).toMatchObject({
+      _tag: "JournalDataCorruption",
+      operation: "JournalStore.readRunForRecovery"
+    })
+  }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ cold: records })))
+})
+
+it.effect("rejects termination of a semantically complete but nonterminal memory Cold history", () => {
+  const runId = RunId.make("memory-nonterminal-cold-terminate")
+  const target = FixtureTarget.make("memory-nonterminal-cold-terminate-target")
+  const fixture = completedRunFinalityFixture({ runId, target })
+  const records = terminalRecordsFor(runId, target).slice(0, 3)
+  return Effect.gen(function* () {
+    const journal = yield* JournalStore
+    expect(yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence))).toMatchObject({
+      _tag: "JournalDataCorruption",
+      operation: "JournalStore.terminateRun"
+    })
+  }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ cold: records })))
+})
+
+it.effect("rejects memory retirement when no Run history exists", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const failure = yield* Effect.flip(journal.retireTerminalRun(RunId.make("memory-missing-retirement")))
+    expect(failure).toBeInstanceOf(WorkflowRunNotBegan)
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("fails every memory operation closed when a Run is in both partitions", () => {
+  const runId = RunId.make("memory-contradictory-partitions")
+  const target = FixtureTarget.make("memory-contradictory-partitions-target")
+  const records = terminalRecordsFor(runId, target)
+  return Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const fixture = completedRunFinalityFixture({ runId, target })
+    expect(yield* Effect.flip(journal.read(runId))).toBeInstanceOf(JournalPartitionContradiction)
+    expect(yield* Effect.flip(journal.beginRun(runId, target, initialPolicy))).toBeInstanceOf(
+      JournalPartitionContradiction
+    )
+    expect(
+      yield* Effect.flip(journal.append(runId, JournalRecordKey.make("contradictory-append"), fixture.intent))
+    ).toBeInstanceOf(JournalPartitionContradiction)
+    expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toBeInstanceOf(JournalPartitionContradiction)
+    expect(yield* Effect.flip(journal.auditAll())).toBeInstanceOf(JournalPartitionContradiction)
+    expect(yield* Effect.flip(journal.retireTerminalRun(runId))).toBeInstanceOf(JournalPartitionContradiction)
+    expect(yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence))).toBeInstanceOf(
+      JournalPartitionContradiction
+    )
+  }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ cold: records, hot: records })))
+})
 
 const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<JournalStore, unknown>) => {
   const runId = RunId.make(`run-contract-${name}`)
@@ -153,6 +389,75 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         })
         expect(failure).toBeInstanceOf(WorkflowRunAlreadyTerminated)
         expect(failure).toMatchObject({ runId, terminatedAt: 4 })
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("atomically retires every valid terminal history and keeps reads transparent", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const target = FixtureTarget.make("retirement-target")
+        const began = yield* journal.beginRun(runId, target, initialPolicy)
+        const terminated = yield* terminateCompleted(journal, target)
+        const before = yield* journal.read(runId)
+
+        const retired = yield* journal.retireTerminalRun(runId)
+
+        expect(retired).toMatchObject({ _tag: "Retired", from: "Hot", to: "Cold", runId })
+        expect(yield* journal.read(runId)).toEqual(before)
+        expect(yield* journal.scanHot()).toEqual({ issues: [], runs: [] })
+        expect(yield* journal.auditAll()).toMatchObject({
+          issues: [],
+          runs: [{ partition: "Cold", runId, records: before }]
+        })
+        expect(yield* journal.retireTerminalRun(runId)).toMatchObject({
+          _tag: "AlreadyRetired",
+          partition: "Cold",
+          runId
+        })
+        expect(yield* Effect.flip(journal.beginRun(runId, target, initialPolicy))).toBeInstanceOf(
+          WorkflowRunAlreadyBegan
+        )
+        expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toBeInstanceOf(
+          WorkflowRunAlreadyTerminated
+        )
+        expect(
+          yield* Effect.flip(journal.append(runId, firstKey, intent("after-retirement", "task-1")))
+        ).toBeInstanceOf(WorkflowRunAlreadyTerminated)
+        expect(terminated.event._tag).toBe("WorkflowRunTerminated")
+        expect(began.event._tag).toBe("WorkflowRunBegan")
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("rejects retirement for a valid nonterminal history without moving rows", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(runId, FixtureTarget.make("nonterminal-retirement-target"), initialPolicy)
+
+        const failure = yield* Effect.flip(journal.retireTerminalRun(runId))
+
+        expect(failure).toBeInstanceOf(JournalHistoryNotTerminal)
+        expect((yield* journal.scanHot()).runs).toHaveLength(1)
+        expect((yield* journal.auditAll()).runs[0]?.partition).toBe("Hot")
+      }).pipe(Effect.provide(makeLayer()))
+    )
+
+    it.effect("retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence", () =>
+      Effect.gen(function* () {
+        const journal = yield* JournalStore
+        for (const disposition of ["Completed", "Blocked", "Cancelled"] as const) {
+          const dispositionRunId = RunId.make(`retirement-disposition-${name}-${disposition}`)
+          const target = FixtureTarget.make(`retirement-disposition-target-${name}-${disposition}`)
+          yield* journal.beginRun(dispositionRunId, target, initialPolicy)
+          const terminated = yield* appendTerminalDisposition(journal, dispositionRunId, target, disposition)
+          const before = yield* journal.read(dispositionRunId)
+          const retired = yield* journal.retireTerminalRun(dispositionRunId)
+          const after = yield* journal.read(dispositionRunId)
+
+          expect(terminated.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition })
+          expect(retired).toMatchObject({ _tag: "Retired", from: "Hot", to: "Cold", runId: dispositionRunId })
+          expect(after).toEqual(before)
+          expect(after.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition })
+        }
       }).pipe(Effect.provide(makeLayer()))
     )
 
@@ -528,7 +833,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         yield* journal.append(runId, firstKey, intent("one", "task-1"))
         const otherRunId = RunId.make(`${runId}-older`)
         yield* journal.append(otherRunId, firstKey, intent("one", "task-1"))
-        expect(new Set((yield* journal.scan()).runs.map(({ runId }) => runId))).toEqual(new Set([runId, otherRunId]))
+        expect(new Set((yield* journal.scanHot()).runs.map(({ runId }) => runId))).toEqual(new Set([runId, otherRunId]))
       }).pipe(Effect.provide(makeLayer()))
     )
   })
@@ -563,9 +868,288 @@ durableJournalStoreContract(
             const migrations = yield* sql`
               SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
             `
-            expect(schemaVersion).toEqual([{ user_version: 1 }])
-            expect(migrations).toEqual([{ migration_id: 1, name: "create_current_journal_records" }])
+            expect(schemaVersion).toEqual([{ user_version: 2 }])
+            expect(migrations).toEqual([
+              { migration_id: 1, name: "create_current_journal_records" },
+              { migration_id: 2, name: "create_cold_journal_records" }
+            ])
           }).pipe(Effect.provide(Reactivity.layer))
+        )
+      )
+    )
+
+    it.effect("upgrades an exact schema-v1 fixture transactionally and preserves hot rows", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("schema-v1-preserved-run")
+            const target = FixtureTarget.make("schema-v1-target")
+            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy)
+            yield* seedSchemaV1(filename, record)
+            const history = yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              return yield* journal.read(runId)
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            expect(history).toEqual([record])
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.gen(function* () {
+                const migrations = yield* sql`SELECT migration_id FROM effect_sql_migrations ORDER BY migration_id`
+                const schema = yield* sql`PRAGMA user_version`
+                const hot = yield* sql`SELECT COUNT(*) AS count FROM journal_records WHERE run_id = ${runId}`
+                const cold = yield* sql`SELECT COUNT(*) AS count FROM journal_records_cold WHERE run_id = ${runId}`
+                expect(migrations).toEqual([{ migration_id: 1 }, { migration_id: 2 }])
+                expect(schema).toEqual([{ user_version: 2 }])
+                expect(hot).toEqual([{ count: 1 }])
+                expect(cold).toEqual([{ count: 0 }])
+              })
+            )
+          })
+        )
+      )
+    )
+
+    it.effect("copies SQLite record keys, positions, versions, kinds, and payload bytes exactly", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("sqlite-retirement-byte-parity")
+            const target = FixtureTarget.make("sqlite-retirement-byte-parity-target")
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* appendTerminalDisposition(journal, runId, target, "Cancelled")
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+
+            const hot = yield* withSqliteClient(
+              filename,
+              (sql) =>
+                sql`
+                SELECT run_id, position, record_key, event_kind, event_version, payload_json
+                FROM journal_records WHERE run_id = ${runId} ORDER BY position ASC
+              `
+            )
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              yield* journal.retireTerminalRun(runId)
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            const cold = yield* withSqliteClient(
+              filename,
+              (sql) =>
+                sql`
+                SELECT run_id, position, record_key, event_kind, event_version, payload_json
+                FROM journal_records_cold WHERE run_id = ${runId} ORDER BY position ASC
+              `
+            )
+            expect(cold).toEqual(hot)
+          })
+        )
+      )
+    )
+
+    it.effect(
+      "keeps an exact read on one snapshot while an external retirement commits between membership and load",
+      () =>
+        Effect.scoped(
+          withTemporaryDatabase((filename) =>
+            Effect.gen(function* () {
+              const runId = RunId.make("sqlite-read-retirement-overlap")
+              const target = FixtureTarget.make("sqlite-read-retirement-overlap-target")
+              yield* Effect.gen(function* () {
+                const journal = yield* JournalStore
+                yield* journal.beginRun(runId, target, initialPolicy)
+                yield* appendTerminalDisposition(journal, runId, target, "Completed")
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+              const before = yield* Effect.gen(function* () {
+                const journal = yield* JournalStore
+                return yield* journal.read(runId)
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+
+              const ready = yield* Deferred.make<void>()
+              const release = yield* Deferred.make<void>()
+              const { observed, retired } = yield* Effect.gen(function* () {
+                const journal = yield* JournalStore
+                const readFiber = yield* journal.read(runId).pipe(Effect.forkScoped)
+                yield* Deferred.await(ready)
+                const retireFiber = yield* journal.retireTerminalRun(runId).pipe(Effect.forkScoped)
+                yield* Deferred.succeed(release, undefined)
+                return { observed: yield* Fiber.join(readFiber), retired: yield* Fiber.join(retireFiber) }
+              }).pipe(
+                Effect.provide(
+                  sqliteJournalTestLayer({
+                    filename,
+                    beforeReadLoad: () =>
+                      Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
+                  })
+                )
+              )
+              expect(observed).toEqual(before)
+              expect(retired).toMatchObject({ _tag: "Retired", runId })
+            })
+          )
+        )
+    )
+
+    it.effect("rolls back a retirement cut after verified copy and preserves Hot history after reopen", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("sqlite-retirement-rollback-cut")
+            const target = FixtureTarget.make("sqlite-retirement-rollback-cut-target")
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* appendTerminalDisposition(journal, runId, target, "Completed")
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+
+            const failure = yield* Effect.flip(
+              Effect.gen(function* () {
+                const journal = yield* JournalStore
+                yield* journal.retireTerminalRun(runId)
+              }).pipe(
+                Effect.provide(
+                  sqliteJournalTestLayer({
+                    filename,
+                    afterRetirementCopy: () => Effect.fail("controlled retirement cut")
+                  })
+                )
+              )
+            )
+            expect(failure).toMatchObject({
+              _tag: "JournalStorageUnavailable",
+              operation: "JournalStore.retireTerminalRun"
+            })
+
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              expect(yield* journal.read(runId)).toHaveLength(4)
+              expect((yield* journal.scanHot()).runs).toContainEqual(expect.objectContaining({ runId }))
+              expect((yield* journal.auditAll()).runs).toContainEqual(
+                expect.objectContaining({ partition: "Hot", runId })
+              )
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            expect(
+              yield* withSqliteClient(
+                filename,
+                (sql) => sql`SELECT COUNT(*) AS count FROM journal_records_cold WHERE run_id = ${runId}`
+              )
+            ).toEqual([{ count: 0 }])
+          })
+        )
+      )
+    )
+
+    it.effect("rejects a verified-copy mismatch and rolls back the SQLite retirement", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("sqlite-retirement-verification-mismatch")
+            const target = FixtureTarget.make("sqlite-retirement-verification-mismatch-target")
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* appendTerminalDisposition(journal, runId, target, "Completed")
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            yield* withSqliteClient(
+              filename,
+              (sql) =>
+                sql`CREATE TRIGGER mutate_cold_retirement AFTER INSERT ON journal_records_cold BEGIN
+                UPDATE journal_records_cold SET payload_json = '{}' WHERE run_id = NEW.run_id AND position = NEW.position;
+              END`
+            )
+            const failure = yield* Effect.flip(
+              Effect.gen(function* () {
+                const journal = yield* JournalStore
+                return yield* journal.retireTerminalRun(runId)
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            )
+            expect(failure).toMatchObject({
+              _tag: "JournalDataCorruption",
+              operation: "JournalStore.retireTerminalRun"
+            })
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              expect((yield* journal.scanHot()).runs).toContainEqual(expect.objectContaining({ runId }))
+              expect((yield* journal.auditAll()).runs).toContainEqual(
+                expect.objectContaining({ partition: "Hot", runId })
+              )
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+          })
+        )
+      )
+    )
+
+    it.effect("rolls back a failed v1-to-v2 migration without changing the v1 hot journal", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("schema-v1-rollback-run")
+            const target = FixtureTarget.make("schema-v1-rollback-target")
+            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy)
+            yield* seedSchemaV1(filename, record)
+            const failure = yield* Effect.flip(
+              Effect.gen(function* () {
+                yield* JournalStore
+              }).pipe(
+                Effect.provide(
+                  sqliteJournalTestLayer({
+                    filename,
+                    afterColdTableCreated: () => Effect.fail("controlled migration cut")
+                  })
+                )
+              )
+            )
+            expect(failure).toBeInstanceOf(JournalDataCorruption)
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.gen(function* () {
+                expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 1 }])
+                expect(yield* sql`SELECT migration_id FROM effect_sql_migrations ORDER BY migration_id`).toEqual([
+                  { migration_id: 1 }
+                ])
+                expect(yield* sql`SELECT COUNT(*) AS count FROM journal_records WHERE run_id = ${runId}`).toEqual([
+                  { count: 1 }
+                ])
+                expect(
+                  yield* sql`
+                    SELECT type, name FROM sqlite_master
+                    WHERE name = 'journal_records_cold'
+                  `
+                ).toEqual([])
+              })
+            )
+          })
+        )
+      )
+    )
+
+    it.effect("reopening after a committed v1 migration does not repeat or retire the hot history", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("schema-v1-reopen-run")
+            const target = FixtureTarget.make("schema-v1-reopen-target")
+            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy)
+            yield* seedSchemaV1(filename, record)
+            yield* Effect.gen(function* () {
+              yield* JournalStore
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            const history = yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              return yield* journal.read(runId)
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            expect(history).toEqual([record])
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.gen(function* () {
+                expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 2 }])
+                expect(yield* sql`SELECT migration_id FROM effect_sql_migrations ORDER BY migration_id`).toEqual([
+                  { migration_id: 1 },
+                  { migration_id: 2 }
+                ])
+                expect(yield* sql`SELECT COUNT(*) AS count FROM journal_records_cold WHERE run_id = ${runId}`).toEqual([
+                  { count: 0 }
+                ])
+              })
+            )
+          })
         )
       )
     )
@@ -672,7 +1256,7 @@ durableJournalStoreContract(
               }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
 
-            expect(failure).toMatchObject({ _tag: "JournalSchemaIncompatible", found: 3, supported: 1 })
+            expect(failure).toMatchObject({ _tag: "JournalSchemaIncompatible", found: 3, supported: 2 })
           })
         )
       )
@@ -702,6 +1286,172 @@ durableJournalStoreContract(
               }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
             expect(failure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+          })
+        )
+      )
+    )
+
+    it.effect("keeps malformed Cold history out of startup while full audit reports its partition and exact Run", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("cold-corruption-isolated-run")
+            const target = FixtureTarget.make("cold-corruption-isolated-target")
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* appendTerminalDisposition(journal, runId, target, "Completed")
+              yield* journal.retireTerminalRun(runId)
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.asVoid(sql`UPDATE journal_records_cold SET position = 5 WHERE run_id = ${runId} AND position = 4`)
+            )
+
+            const startup = yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              return yield* journal.scanHot()
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            expect(startup).toEqual({ issues: [], runs: [] })
+            const readFailure = yield* Effect.flip(
+              Effect.gen(function* () {
+                const journal = yield* JournalStore
+                return yield* journal.read(runId)
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            )
+            expect(readFailure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+            const recoveryFailure = yield* Effect.flip(
+              Effect.gen(function* () {
+                const journal = yield* JournalStore
+                return yield* journal.readRunForRecovery(runId, target)
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            )
+            expect(recoveryFailure).toMatchObject({
+              _tag: "JournalDataCorruption",
+              operation: "JournalStore.readRunForRecovery"
+            })
+            const audit = yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              return yield* journal.auditAll()
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            expect(audit.issues).toMatchObject([{ _tag: "JournalSemanticIssue", partition: "Cold", runId }])
+          })
+        )
+      )
+    )
+
+    it.effect(
+      "fails SQLite reads, lifecycle, retirement, and full audit closed on contradictory partition membership",
+      () =>
+        Effect.scoped(
+          withTemporaryDatabase((filename) =>
+            Effect.gen(function* () {
+              const runId = RunId.make("sqlite-contradictory-partitions")
+              const target = FixtureTarget.make("sqlite-contradictory-partitions-target")
+              yield* Effect.gen(function* () {
+                const journal = yield* JournalStore
+                yield* journal.beginRun(runId, target, initialPolicy)
+                yield* appendTerminalDisposition(journal, runId, target, "Completed")
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+              yield* withSqliteClient(filename, (sql) =>
+                Effect.asVoid(
+                  sql`
+                  INSERT INTO journal_records_cold
+                    (run_id, position, record_key, event_kind, event_version, payload_json)
+                  SELECT run_id, position, record_key, event_kind, event_version, payload_json
+                  FROM journal_records WHERE run_id = ${runId}
+                `
+                )
+              )
+
+              const failures = yield* Effect.gen(function* () {
+                const journal = yield* JournalStore
+                const fixture = completedRunFinalityFixture({ runId, target })
+                const read = yield* Effect.flip(journal.read(runId))
+                const begin = yield* Effect.flip(journal.beginRun(runId, target, initialPolicy))
+                const append = yield* Effect.flip(
+                  journal.append(runId, JournalRecordKey.make("contradictory-append"), intent("contradictory", "task"))
+                )
+                const retire = yield* Effect.flip(journal.retireTerminalRun(runId))
+                const terminate = yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence))
+                const audit = yield* Effect.flip(journal.auditAll())
+                return { append, audit, begin, read, retire, terminate }
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+              expect(failures.append).toBeInstanceOf(JournalPartitionContradiction)
+              expect(failures.read).toBeInstanceOf(JournalPartitionContradiction)
+              expect(failures.begin).toBeInstanceOf(JournalPartitionContradiction)
+              expect(failures.retire).toBeInstanceOf(JournalPartitionContradiction)
+              expect(failures.terminate).toBeInstanceOf(JournalPartitionContradiction)
+              expect(failures.audit).toBeInstanceOf(JournalPartitionContradiction)
+            })
+          )
+        )
+    )
+
+    it.effect("rejects exact reads and recovery of a nonterminal SQLite Cold history", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("sqlite-nonterminal-cold-read")
+            const target = FixtureTarget.make("sqlite-nonterminal-cold-read-target")
+            const fixture = completedRunFinalityFixture({ runId, target })
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+              yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            yield* withSqliteClient(filename, (sql) =>
+              Effect.gen(function* () {
+                yield* sql`
+                  INSERT INTO journal_records_cold
+                    (run_id, position, record_key, event_kind, event_version, payload_json)
+                  SELECT run_id, position, record_key, event_kind, event_version, payload_json
+                  FROM journal_records WHERE run_id = ${runId}
+                `
+                yield* sql`DELETE FROM journal_records WHERE run_id = ${runId}`
+              })
+            )
+            const failures = yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              return {
+                append: yield* Effect.flip(
+                  journal.append(runId, JournalRecordKey.make("cold-nonterminal-append"), fixture.intent)
+                ),
+                read: yield* Effect.flip(journal.read(runId)),
+                recovery: yield* Effect.flip(journal.readRunForRecovery(runId, target)),
+                terminate: yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence)),
+                audit: yield* journal.auditAll()
+              }
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            expect(failures.append).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.append" })
+            expect(failures.read).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+            expect(failures.recovery).toMatchObject({
+              _tag: "JournalDataCorruption",
+              operation: "JournalStore.readRunForRecovery"
+            })
+            expect(failures.terminate).toMatchObject({
+              _tag: "JournalDataCorruption",
+              operation: "JournalStore.terminateRun"
+            })
+            expect(failures.audit).toMatchObject({
+              issues: [expect.objectContaining({ _tag: "JournalSemanticIssue", partition: "Cold", runId })]
+            })
+          })
+        )
+      )
+    )
+
+    it.effect("rejects SQLite retirement for a missing Run", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const failure = yield* Effect.flip(
+              Effect.gen(function* () {
+                const journal = yield* JournalStore
+                return yield* journal.retireTerminalRun(RunId.make("sqlite-missing-retirement"))
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            )
+            expect(failure).toBeInstanceOf(WorkflowRunNotBegan)
           })
         )
       )
@@ -748,7 +1498,7 @@ durableJournalStoreContract(
             )
 
             const scan = yield* Effect.gen(function* () {
-              return yield* (yield* JournalStore).scan()
+              return yield* (yield* JournalStore).scanHot()
             }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             expect(scan.issues).toHaveLength(4)
             expect(new Set(scan.issues.map(({ runId }) => runId))).toEqual(

@@ -1387,7 +1387,9 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         beginRun: () => Effect.die("recovery must not begin the Run again"),
         read: () => Ref.get(records),
         readRunForRecovery: () => Effect.succeed(began),
-        scan: () => Effect.die("startup authority reread must not scan"),
+        scanHot: () => Effect.die("startup authority reread must not scan"),
+        auditAll: () => Effect.die("startup authority reread must not audit"),
+        retireTerminalRun: () => Effect.die("startup authority reread must not retire"),
         terminateRun: () => Effect.succeed(terminated)
       })
       const startupLayer = Layer.mergeAll(
@@ -1406,7 +1408,9 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
             beginRun: journal.beginRun,
             read: journal.read,
             readRunForRecovery: journal.readRunForRecovery,
-            scan: journal.scan,
+            scanHot: journal.scanHot,
+            auditAll: journal.auditAll,
+            retireTerminalRun: journal.retireTerminalRun,
             terminateRun: journal.terminateRun
           })
         ),

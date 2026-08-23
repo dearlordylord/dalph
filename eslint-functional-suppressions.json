@@ -224,9 +224,6 @@
     }
   },
   "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts": {
-    "functional/immutable-data": {
-      "count": 2
-    },
     "import-x/no-unused-modules": {
       "count": 1
     }

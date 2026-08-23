@@ -70,6 +70,7 @@ import {
   type JournalPosition,
   OperationId,
   JournalStore,
+  noopJournalMaintenanceObservation,
   journalStoreCapabilities,
   JournaledRunBootstrap,
   journaledRunBootstrapLayer,
@@ -1998,6 +1999,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         runId,
         runtimeLayer,
         applicationExit,
+        noopJournalMaintenanceObservation,
         operatorControlGraphReadBoundary
       ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer))
 
