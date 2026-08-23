@@ -3040,7 +3040,10 @@ it.effect("reopens the node private store at every replacement crash cut without
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
       for (const [cutIndex, cut] of reopenedReplacementCuts.entries()) {
-        const stateDirectory = yield* fileSystem.makeTempDirectoryScoped({ prefix: `dalph-issue-111-cut-${cutIndex}-` })
+        const temporaryStateDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: `dalph-issue-111-cut-${cutIndex}-`
+        })
+        const stateDirectory = yield* fileSystem.realPath(temporaryStateDirectory)
         const harness = seedReplacementHarness()
         const request = replacementRequestFor(`reopened-cut-${cutIndex}`)
         const predecessor = harness.currentRecord()
@@ -3091,7 +3094,10 @@ it.effect("reopens after U2 crossed turn/start and reconciles it without startin
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
-      const stateDirectory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-111-crossed-u2-" })
+      const temporaryStateDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "dalph-issue-111-crossed-u2-"
+      })
+      const stateDirectory = yield* fileSystem.realPath(temporaryStateDirectory)
       const harness = seedReplacementHarness({ dieAfterReplacementTurnStartOnce: true })
       const request = replacementRequestFor("reopened-after-u2-crossed")
       const predecessor = harness.currentRecord()
