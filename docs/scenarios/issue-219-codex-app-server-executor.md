@@ -419,5 +419,8 @@ review round belongs to the MVP.
 - Treating the Codex thread id as another generic executor identity.
 - Remote WebSocket deployment or a Dalph user interface for Codex history.
 - Deleting, archiving, forking, or replacing a materialized attempt thread.
+  Explicit replacement of one purged owned turn inside that retained thread is
+  separately governed by
+  [issue #111](issue-111-replace-purged-codex-work-unit.md).
 - Changing accepted-result integration, Integrator, promotion, or
   task completion semantics.

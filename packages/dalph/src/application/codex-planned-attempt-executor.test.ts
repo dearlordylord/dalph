@@ -19,15 +19,19 @@ import {
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import {
+  ActiveTaskClaim,
+  ClaimOwner,
+  ClaimToken,
   EvidenceStore,
   EvidenceStoreFailure,
   GitCommand,
   GitCommandInvocationFailure,
   memoryEvidenceStoreLayer,
+  OperationId,
   type GitCommandService
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
-import { Crypto, Effect, Layer, Option, Ref } from "effect"
+import { Crypto, Effect, FileSystem, Layer, Option, PlatformError, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
 import {
@@ -47,14 +51,29 @@ import {
   CodexAttemptStore,
   CodexAttemptStoreFailure,
   CodexOwnedTurnToken,
+  CodexPurgedWorkUnitEvidence,
+  CodexPurgedWorkUnitReplacementLedger,
+  CodexReplacementHistoryEntry,
+  mergeCodexReplacementLedger,
   CodexSealedTerminal,
   CodexServerIncarnation,
   CodexAttemptRecord,
+  CodexReplacementRequestId,
+  nodeCodexAttemptStoreLayer,
   type CodexAttemptStoreService,
   CodexThreadId,
   CodexTurnId
 } from "./codex-attempt-store.js"
-import { codexPlannedAttemptExecutorLayer } from "./codex-planned-attempt-executor.js"
+import {
+  CodexProviderWorkUnitReplacement,
+  CodexProviderWorkUnitReplacementRequest,
+  type CodexProviderWorkUnitReplacementResult,
+  type CodexReplacementAuthority,
+  CodexReplacementAuthorityFailure,
+  CodexReplacementAuthorityProof,
+  controlledCodexReplacementAuthorityLayer,
+  codexPlannedAttemptExecutorLayer
+} from "./codex-planned-attempt-executor.js"
 
 const head = GitCommitSha.make("a".repeat(40))
 const otherHead = GitCommitSha.make("b".repeat(40))
@@ -112,6 +131,7 @@ type Harness = {
   readonly associationAtTurn: () => CodexAttemptRecord | undefined
   readonly currentThread: () => CodexThreadSnapshot
   readonly currentRecord: () => CodexAttemptRecord | undefined
+  readonly replacementLedger: () => CodexPurgedWorkUnitReplacementLedger | undefined
   readonly setThread: (thread: CodexThreadSnapshot) => void
   readonly preserveResumeCwd: () => void
   readonly setRecord: (record: CodexAttemptRecord) => void
@@ -162,6 +182,12 @@ const makeHarness = (
     readonly wrongOwnedTurnToken?: boolean
     readonly keepTurnRunningOnInterruptCount?: number
     readonly interruptUnavailable?: boolean
+    readonly failAfterReplacementIntentOnce?: boolean
+    readonly failAfterReplacementTurnIntentOnce?: boolean
+    readonly failAfterReplacementCalledOnce?: boolean
+    readonly failAfterReplacementObservedOnce?: boolean
+    readonly failAfterReplacementSealOnce?: boolean
+    readonly dieAfterReplacementTurnStartOnce?: boolean
   } = {}
 ): Harness => {
   const threadId = CodexThreadId.make("codex-thread-issue-58")
@@ -194,6 +220,13 @@ const makeHarness = (
   let backgroundTerminationFailure = false
   let keepTurnRunningOnInterruptCount = options.keepTurnRunningOnInterruptCount ?? 0
   let associatedWriteFailure = false
+  const replacementLedgers = new Map<string, CodexPurgedWorkUnitReplacementLedger>()
+  let replacementIntentFailure = false
+  let replacementTurnIntentFailure = false
+  let replacementCalledFailure = false
+  let replacementObservedFailure = false
+  let replacementSealFailure = false
+  let replacementTurnStartDeath = false
 
   const manualTurn = (id: string): CodexTurnSnapshot => ({
     id: CodexTurnId.make(id),
@@ -265,6 +298,10 @@ const makeHarness = (
         }
         turns.push(currentTurn)
         currentThread = { ...currentThread, cwd, status: "active", turns }
+        if (options.dieAfterReplacementTurnStartOnce === true && !replacementTurnStartDeath) {
+          replacementTurnStartDeath = true
+          return yield* Effect.die("controlled process loss after replacement turn/start")
+        }
         if (
           ((options.loseFirstTurnResponse === true && !firstTurnResponseLost) ||
             options.loseTurnResponseAt === turnNumber) &&
@@ -343,6 +380,56 @@ const makeHarness = (
     readServerLaunch: () => Effect.succeed(Option.none()),
     writeServerLaunch: () => Effect.void,
     clearServerLaunch: () => Effect.void,
+    readReplacementLedger: (requestId) =>
+      Effect.sync(() => {
+        const ledger = replacementLedgers.get(requestId)
+        return ledger === undefined ? Option.none() : Option.some(ledger)
+      }),
+    appendReplacementLedger: (ledger) => {
+      const merged = mergeCodexReplacementLedger(replacementLedgers.get(ledger.requestId), ledger)
+      if (merged._tag === "Contradiction") {
+        return Effect.fail(
+          new CodexAttemptStoreFailure({ detail: merged.detail, operation: "appendReplacementLedger" })
+        )
+      }
+      const phase = ledger.history.at(-1)?._tag
+      const shouldFail =
+        (phase === "IntentRecorded" && options.failAfterReplacementIntentOnce === true && !replacementIntentFailure) ||
+        (phase === "TurnIntentRecorded" &&
+          options.failAfterReplacementTurnIntentOnce === true &&
+          !replacementTurnIntentFailure) ||
+        (phase === "TurnBoundaryCrossingBegan" &&
+          options.failAfterReplacementCalledOnce === true &&
+          !replacementCalledFailure) ||
+        (phase === "TurnObserved" &&
+          options.failAfterReplacementObservedOnce === true &&
+          !replacementObservedFailure) ||
+        (phase === "Sealed" && options.failAfterReplacementSealOnce === true && !replacementSealFailure)
+      if (!shouldFail) {
+        replacementLedgers.set(ledger.requestId, merged.ledger)
+        return Effect.void
+      }
+      if (phase === "IntentRecorded") replacementIntentFailure = true
+      if (phase === "TurnIntentRecorded") replacementTurnIntentFailure = true
+      if (phase === "TurnBoundaryCrossingBegan") replacementCalledFailure = true
+      if (phase === "TurnObserved") replacementObservedFailure = true
+      if (phase === "Sealed") replacementSealFailure = true
+      if (phase !== "Sealed") replacementLedgers.set(ledger.requestId, merged.ledger)
+      if (phase === "Sealed") {
+        return Effect.fail(
+          new CodexAttemptStoreFailure({
+            detail: `controlled crash before ${phase}`,
+            operation: "appendReplacementLedger"
+          })
+        )
+      }
+      return Effect.fail(
+        new CodexAttemptStoreFailure({
+          detail: `controlled crash after ${phase}`,
+          operation: "appendReplacementLedger"
+        })
+      )
+    },
     acquireServerLease: (_owner, _observe) => Effect.void,
     releaseServerLease: (_owner) => Effect.void
   }
@@ -358,6 +445,7 @@ const makeHarness = (
     associationAtTurn: () => associationAtTurn,
     currentThread: () => currentThread,
     currentRecord: () => records.get(keyOf(attempt.runId, attempt.attemptId)),
+    replacementLedger: () => [...replacementLedgers.values()].at(-1),
     setThread: (thread) => {
       currentThread = thread
     },
@@ -504,35 +592,41 @@ const defaultGitCommand: GitCommandService = {
 const layerFor = (
   harness: Harness,
   gitCommand: GitCommandService = defaultGitCommand,
-  evidenceStore: Layer.Layer<EvidenceStore> | null = memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer))
-) =>
-  codexPlannedAttemptExecutorLayer.pipe(
-    Layer.provide(
-      evidenceStore === null
-        ? Layer.mergeAll(
-            controlledCodexAppServerLayer(harness.app),
-            controlledCodexOwnedActivityCensusLayer({
-              observe: (thread, backgroundTerminals) =>
-                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
-              terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
-            }),
-            Layer.succeed(CodexAttemptStore, harness.store),
-            Layer.succeed(GitCommand, gitCommand)
-          )
-        : Layer.mergeAll(
-            controlledCodexAppServerLayer(harness.app),
-            controlledCodexOwnedActivityCensusLayer({
-              observe: (thread, backgroundTerminals) =>
-                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
-              terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
-            }),
-            Layer.succeed(CodexAttemptStore, harness.store),
-            Layer.succeed(GitCommand, gitCommand),
-            evidenceStore
-          )
-    ),
-    Layer.provide(NodeServices.layer)
-  )
+  evidenceStore: Layer.Layer<EvidenceStore> | null = memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+  authority?: Layer.Layer<CodexReplacementAuthority>,
+  store: CodexAttemptStoreService = harness.store,
+  crypto?: Crypto.Crypto
+) => {
+  const dependencies =
+    evidenceStore === null
+      ? Layer.mergeAll(
+          controlledCodexAppServerLayer(harness.app),
+          controlledCodexOwnedActivityCensusLayer({
+            observe: (thread, backgroundTerminals) =>
+              Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+            terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+          }),
+          Layer.succeed(CodexAttemptStore, store),
+          Layer.succeed(GitCommand, gitCommand)
+        )
+      : Layer.mergeAll(
+          controlledCodexAppServerLayer(harness.app),
+          controlledCodexOwnedActivityCensusLayer({
+            observe: (thread, backgroundTerminals) =>
+              Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+            terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+          }),
+          Layer.succeed(CodexAttemptStore, store),
+          Layer.succeed(GitCommand, gitCommand),
+          evidenceStore
+        )
+  const executorWithDependencies = codexPlannedAttemptExecutorLayer.pipe(Layer.provide(dependencies))
+  const executorLayer =
+    crypto === undefined
+      ? executorWithDependencies.pipe(Layer.provide(NodeServices.layer))
+      : executorWithDependencies.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto)))
+  return authority === undefined ? executorLayer : executorLayer.pipe(Layer.provide(authority))
+}
 
 const mutatedEvidenceStoreLayer = (mode: "manifest" | "reference" | "malformed"): Layer.Layer<EvidenceStore> =>
   Layer.effect(
@@ -2106,3 +2200,931 @@ it.effect("fails closed when a persisted terminal is followed by an interrupted 
     expect(restarted._tag).toBe("Failure")
   }).pipe(Effect.provide(layerFor(harness)))
 })
+
+const replacementClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("issue-111-replacement-authority"),
+  owner: ClaimOwner.make("alice"),
+  taskId: attempt.taskId,
+  token: ClaimToken.make("issue-111-claim-token")
+})
+
+const replacementRequestFor = (suffix: string): CodexProviderWorkUnitReplacementRequest =>
+  CodexProviderWorkUnitReplacementRequest.make({
+    claim: replacementClaim,
+    plannedAttempt: attempt,
+    requestId: CodexReplacementRequestId.make(`issue-111-replacement-${suffix}`),
+    specification
+  })
+
+const replacementProof = CodexReplacementAuthorityProof.make({
+  baseSha: attempt.baseSha,
+  changedPaths: ["src/retained-work.ts"],
+  claim: replacementClaim,
+  gitStatus: " M src/retained-work.ts",
+  headDescendsFromBase: true,
+  headSha: head,
+  plannedAttempt: attempt,
+  taskRevision: attempt.taskRevision,
+  worktree: attempt.worktree
+})
+
+const seedReplacementHarness = (options: Parameters<typeof makeHarness>[0] = {}): Harness => {
+  const harness = makeHarness(options)
+  const threadId = CodexThreadId.make("codex-thread-issue-58")
+  const predecessorToken = CodexOwnedTurnToken.make("issue-111-u1-token")
+  const predecessorTurnId = CodexTurnId.make("issue-111-u1-turn")
+  harness.setThread({ id: threadId, cwd: worktree, status: "idle", turns: [] })
+  harness.setRecord(
+    CodexAttemptRecord.cases.Running.make({
+      attemptId: attempt.attemptId,
+      correlationAttemptId: attempt.attemptId,
+      correlationRunId: attempt.runId,
+      currentToken: predecessorToken,
+      observedTurnId: predecessorTurnId,
+      priorObservedTurnId: null,
+      threadId,
+      worktree
+    })
+  )
+  return harness
+}
+
+const replacementAuthorityLayer = (
+  failures: ReadonlySet<number> = new Set()
+): Layer.Layer<CodexReplacementAuthority> => {
+  let calls = 0
+  return controlledCodexReplacementAuthorityLayer({
+    observe: () => {
+      const call = calls
+      calls += 1
+      return failures.has(call)
+        ? Effect.fail(
+            new CodexReplacementAuthorityFailure({
+              detail: `controlled authority failure at observation ${call}`,
+              kind: "ExclusiveRetainedOwnershipUnproved"
+            })
+          )
+        : Effect.succeed(replacementProof)
+    }
+  })
+}
+
+const runReplacement = (
+  harness: Harness,
+  request: CodexProviderWorkUnitReplacementRequest,
+  authority: Layer.Layer<CodexReplacementAuthority>,
+  store: CodexAttemptStoreService = harness.store
+) =>
+  Effect.gen(function* () {
+    const replacement = yield* CodexProviderWorkUnitReplacement
+    return yield* replacement.replacePurgedProviderWorkUnit(request)
+  }).pipe(Effect.provide(layerFor(harness, defaultGitCommand, null, authority, store)))
+
+it("rejects malformed replacement requests and authority proofs at their typed boundaries", () => {
+  const foreignTaskId = TaskId.make("issue-111-foreign-task")
+  const foreignSpecification = makeTaskWorkSpecification({
+    body: "Foreign replacement work",
+    taskId: foreignTaskId,
+    title: "Foreign replacement"
+  })
+  const foreignClaim = ActiveTaskClaim.make({ ...replacementClaim, taskId: foreignTaskId })
+  const decodeRequest = (value: unknown) => Schema.decodeUnknownSync(CodexProviderWorkUnitReplacementRequest)(value)
+  expect(() => decodeRequest({ ...replacementRequestFor("foreign-claim"), claim: foreignClaim })).toThrow()
+  expect(() =>
+    decodeRequest({ ...replacementRequestFor("foreign-specification"), specification: foreignSpecification })
+  ).toThrow()
+  expect(() =>
+    decodeRequest({
+      ...replacementRequestFor("foreign-fingerprint"),
+      specification: { ...specification, fingerprint: foreignSpecification.fingerprint }
+    })
+  ).toThrow()
+
+  const decodeProof = (value: unknown) => Schema.decodeUnknownSync(CodexReplacementAuthorityProof)(value)
+  expect(() => decodeProof({ ...replacementProof, gitStatus: "" })).toThrow()
+  expect(() => decodeProof({ ...replacementProof, changedPaths: [] })).toThrow()
+  expect(() => decodeProof({ ...replacementProof, claim: foreignClaim })).toThrow()
+  expect(() => decodeProof({ ...replacementProof, plannedAttempt: { ...attempt, taskId: foreignTaskId } })).toThrow()
+  expect(() => decodeProof({ ...replacementProof, taskRevision: foreignSpecification.fingerprint })).toThrow()
+  expect(() => decodeProof({ ...replacementProof, baseSha: otherHead })).toThrow()
+  expect(() => decodeProof({ ...replacementProof, worktree: WorktreeLocator.make("/tmp/foreign-worktree") })).toThrow()
+})
+
+it.effect("maps every fresh authority and retained-session failure before starting replacement work", () =>
+  Effect.gen(function* () {
+    const authorityKinds = [
+      "ProviderTemporarilyUnreadable",
+      "TaskWorkSessionAbsent",
+      "CorrelationConflict",
+      "ExclusiveRetainedOwnershipUnproved"
+    ] as const
+    for (const kind of authorityKinds) {
+      const harness = seedReplacementHarness()
+      const authority = controlledCodexReplacementAuthorityLayer({
+        observe: () => Effect.fail(new CodexReplacementAuthorityFailure({ detail: `controlled ${kind}`, kind }))
+      })
+      expect((yield* runReplacement(harness, replacementRequestFor(`authority-${kind}`), authority))._tag).toBe(kind)
+      expect(harness.turnCount()).toBe(0)
+    }
+
+    const appFailures = [
+      ["NotFound", "TaskWorkSessionAbsent"],
+      ["CorrelationContradiction", "CorrelationConflict"],
+      ["Unavailable", "ProviderTemporarilyUnreadable"]
+    ] as const
+    for (const [kind, expected] of appFailures) {
+      const harness = seedReplacementHarness()
+      harness.setResumeFailure(
+        new CodexAppServerFailure({ detail: `controlled ${kind}`, kind, operation: "thread/resume" })
+      )
+      expect(
+        (yield* runReplacement(harness, replacementRequestFor(`resume-${kind}`), replacementAuthorityLayer()))._tag
+      ).toBe(expected)
+      expect(harness.turnCount()).toBe(0)
+    }
+
+    const absentHarness = seedReplacementHarness()
+    const absentStore: CodexAttemptStoreService = {
+      ...absentHarness.store,
+      readAttempt: () => Effect.succeed(Option.none())
+    }
+    expect(
+      (yield* runReplacement(
+        absentHarness,
+        replacementRequestFor("absent-private-session"),
+        replacementAuthorityLayer(),
+        absentStore
+      ))._tag
+    ).toBe("TaskWorkSessionAbsent")
+
+    const unconfiguredHarness = seedReplacementHarness()
+    const replacement = yield* Effect.gen(function* () {
+      return yield* CodexProviderWorkUnitReplacement
+    }).pipe(Effect.provide(layerFor(unconfiguredHarness, defaultGitCommand, null)))
+    expect((yield* replacement.replacePurgedProviderWorkUnit(replacementRequestFor("no-authority")))._tag).toBe(
+      "ExclusiveRetainedOwnershipUnproved"
+    )
+  })
+)
+
+it.effect("fails before private reads or provider work when request hashing is unavailable", () => {
+  const harness = seedReplacementHarness()
+  const digestFailure = PlatformError.systemError({ _tag: "Unknown", method: "digest", module: "CodexReplacementTest" })
+  const crypto = Crypto.make({ digest: () => Effect.fail(digestFailure), randomBytes: (size) => new Uint8Array(size) })
+  return Effect.gen(function* () {
+    const replacement = yield* CodexProviderWorkUnitReplacement
+    const failure = yield* replacement
+      .replacePurgedProviderWorkUnit(replacementRequestFor("digest-unavailable"))
+      .pipe(Effect.flip)
+    expect(failure._tag).toBe("CodexReplacementLedgerFailure")
+    expect(harness.turnCount()).toBe(0)
+    expect(harness.resumeCwds).toHaveLength(0)
+  }).pipe(
+    Effect.provide(layerFor(harness, defaultGitCommand, null, replacementAuthorityLayer(), harness.store, crypto))
+  )
+})
+
+it.effect("fails closed for changed retained-thread, activity, and second authority observations", () =>
+  Effect.gen(function* () {
+    const cases: ReadonlyArray<{
+      readonly expected: CodexProviderWorkUnitReplacementResult["_tag"]
+      readonly mutate: (harness: Harness) => void
+      readonly name: string
+    }> = [
+      {
+        expected: "CorrelationConflict",
+        mutate: (harness) => {
+          harness.preserveResumeCwd()
+          harness.setThread({ ...harness.currentThread(), cwd: WorktreeLocator.make("/tmp/foreign-worktree") })
+        },
+        name: "changed-worktree"
+      },
+      {
+        expected: "CorrelationConflict",
+        mutate: (harness) => harness.makeForeignResume(),
+        name: "foreign-correlation"
+      },
+      {
+        expected: "ProviderTemporarilyUnreadable",
+        mutate: (harness) => harness.setThread({ ...harness.currentThread(), status: "systemError" }),
+        name: "unreadable-thread"
+      },
+      {
+        expected: "PurgeUnconfirmed",
+        mutate: (harness) => {
+          const record = harness.currentRecord()
+          if (record?._tag === "Running") {
+            harness.setThread({
+              ...harness.currentThread(),
+              turns: [
+                { id: record.observedTurnId, items: [], ownedTurnToken: record.currentToken, status: "completed" }
+              ]
+            })
+          }
+        },
+        name: "visible-predecessor"
+      },
+      {
+        expected: "ExclusiveRetainedOwnershipUnproved",
+        mutate: (harness) =>
+          harness.setActivityCensus({
+            _tag: "ExactLive",
+            activities: [
+              {
+                _tag: "BackgroundTerminal",
+                terminal: { command: "writer", cwd: worktree, itemId: "writer", osPid: null, processId: "writer" }
+              }
+            ]
+          }),
+        name: "live-writer"
+      },
+      {
+        expected: "ExclusiveRetainedOwnershipUnproved",
+        mutate: (harness) =>
+          harness.setActivityCensus({ _tag: "Unreadable", detail: "controlled unreadable activity" }),
+        name: "unreadable-activity"
+      }
+    ]
+    for (const scenario of cases) {
+      const harness = seedReplacementHarness()
+      scenario.mutate(harness)
+      expect(
+        (yield* runReplacement(harness, replacementRequestFor(scenario.name), replacementAuthorityLayer()))._tag
+      ).toBe(scenario.expected)
+      expect(harness.turnCount()).toBe(0)
+    }
+
+    const changedAuthorityHarness = seedReplacementHarness()
+    let changedAuthorityCalls = 0
+    const changedAuthority = controlledCodexReplacementAuthorityLayer({
+      observe: () => {
+        changedAuthorityCalls += 1
+        return Effect.succeed(
+          changedAuthorityCalls === 1 ? replacementProof : { ...replacementProof, headSha: otherHead }
+        )
+      }
+    })
+    expect(
+      (yield* runReplacement(changedAuthorityHarness, replacementRequestFor("changed-authority"), changedAuthority))
+        ._tag
+    ).toBe("ExclusiveRetainedOwnershipUnproved")
+    expect(changedAuthorityHarness.turnCount()).toBe(0)
+
+    const failedRereadHarness = seedReplacementHarness()
+    expect(
+      (yield* runReplacement(
+        failedRereadHarness,
+        replacementRequestFor("failed-authority-reread"),
+        replacementAuthorityLayer(new Set([1]))
+      ))._tag
+    ).toBe("ExclusiveRetainedOwnershipUnproved")
+    expect(failedRereadHarness.turnCount()).toBe(0)
+  })
+)
+
+it.effect("rejects replacement U2 token and predecessor-identity reuse", () =>
+  Effect.gen(function* () {
+    const omittedTokenHarness = seedReplacementHarness({ omitOwnedTurnToken: true })
+    expect(
+      (yield* runReplacement(
+        omittedTokenHarness,
+        replacementRequestFor("omitted-u2-token"),
+        replacementAuthorityLayer()
+      ))._tag
+    ).toBe("Replaced")
+
+    const wrongTokenHarness = seedReplacementHarness({ wrongOwnedTurnToken: true })
+    expect(
+      (yield* runReplacement(wrongTokenHarness, replacementRequestFor("wrong-u2-token"), replacementAuthorityLayer()))
+        ._tag
+    ).toBe("CorrelationConflict")
+
+    const reusedIdentityHarness = seedReplacementHarness()
+    const originalStartTurn = reusedIdentityHarness.app.startTurn
+    const reusedIdentityApp: CodexAppServerService = {
+      ...reusedIdentityHarness.app,
+      startTurn: (...args) =>
+        originalStartTurn(...args).pipe(Effect.map((turn) => ({ ...turn, id: CodexTurnId.make("issue-111-u1-turn") })))
+    }
+    const replacement = yield* Effect.gen(function* () {
+      return yield* CodexProviderWorkUnitReplacement
+    }).pipe(
+      Effect.provide(
+        codexPlannedAttemptExecutorLayer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              controlledCodexAppServerLayer(reusedIdentityApp),
+              controlledCodexOwnedActivityCensusLayer({
+                observe: (thread, terminals) =>
+                  Effect.succeed(reusedIdentityHarness.observeActivityCensus(thread, terminals)),
+                terminateDescendants: () => Effect.void
+              }),
+              Layer.succeed(CodexAttemptStore, reusedIdentityHarness.store),
+              Layer.succeed(GitCommand, defaultGitCommand)
+            )
+          ),
+          Layer.provide(replacementAuthorityLayer()),
+          Layer.provide(NodeServices.layer)
+        )
+      )
+    )
+    expect((yield* replacement.replacePurgedProviderWorkUnit(replacementRequestFor("reused-u1-id")))._tag).toBe(
+      "CorrelationConflict"
+    )
+  })
+)
+
+it.effect("fails each runtime authority-proof invariant before the U2 provider boundary", () =>
+  Effect.gen(function* () {
+    const proofMutations: ReadonlyArray<readonly [string, CodexReplacementAuthorityProof]> = [
+      [
+        "claim",
+        {
+          ...replacementProof,
+          claim: { ...replacementProof.claim, token: ClaimToken.make("foreign-claim-token") }
+        } as CodexReplacementAuthorityProof
+      ],
+      [
+        "plan",
+        {
+          ...replacementProof,
+          plannedAttempt: { ...replacementProof.plannedAttempt, runId: RunId.make("foreign-run") }
+        } as CodexReplacementAuthorityProof
+      ],
+      [
+        "facts",
+        {
+          ...replacementProof,
+          worktree: WorktreeLocator.make("/tmp/foreign-worktree")
+        } as CodexReplacementAuthorityProof
+      ],
+      ["ancestry", { ...replacementProof, headDescendsFromBase: false }]
+    ]
+    for (const [name, proof] of proofMutations) {
+      const harness = seedReplacementHarness()
+      const authority = controlledCodexReplacementAuthorityLayer({ observe: () => Effect.succeed(proof) })
+      expect((yield* runReplacement(harness, replacementRequestFor(`proof-${name}`), authority))._tag).toBe(
+        "ExclusiveRetainedOwnershipUnproved"
+      )
+      expect(harness.turnCount()).toBe(0)
+    }
+  })
+)
+
+it.effect("rejects changed D1 content and an unreadable previously observed U2", () =>
+  Effect.gen(function* () {
+    const changedRequestHarness = seedReplacementHarness({ failAfterReplacementIntentOnce: true })
+    const original = replacementRequestFor("changed-content")
+    expect(
+      (yield* runReplacement(changedRequestHarness, original, replacementAuthorityLayer()).pipe(Effect.exit))._tag
+    ).toBe("Failure")
+    const changed = CodexProviderWorkUnitReplacementRequest.make({
+      ...original,
+      claim: { ...original.claim, token: ClaimToken.make("changed-content-token") }
+    })
+    expect((yield* runReplacement(changedRequestHarness, changed, replacementAuthorityLayer()))._tag).toBe(
+      "RequestIdentityReuseContradiction"
+    )
+    expect(changedRequestHarness.turnCount()).toBe(0)
+
+    const observedHarness = seedReplacementHarness({ failAfterReplacementSealOnce: true })
+    const observedRequest = replacementRequestFor("missing-observed-u2")
+    expect(
+      (yield* runReplacement(observedHarness, observedRequest, replacementAuthorityLayer()).pipe(Effect.exit))._tag
+    ).toBe("Failure")
+    observedHarness.setThread({ ...observedHarness.currentThread(), status: "idle", turns: [] })
+    expect((yield* runReplacement(observedHarness, observedRequest, replacementAuthorityLayer()))._tag).toBe(
+      "ProviderTemporarilyUnreadable"
+    )
+    expect(observedHarness.turnCount()).toBe(1)
+  })
+)
+
+it.effect("rejects a changed private record, durable subject reuse, and an unreadable census", () =>
+  Effect.gen(function* () {
+    const changedRecordHarness = seedReplacementHarness()
+    const current = changedRecordHarness.currentRecord()
+    if (current?._tag === "Running") {
+      const changedRecord = CodexAttemptRecord.cases.Running.make({
+        ...current,
+        worktree: WorktreeLocator.make("/tmp/changed-private-worktree")
+      })
+      const changedRecordStore: CodexAttemptStoreService = {
+        ...changedRecordHarness.store,
+        readAttempt: () => Effect.succeed(Option.some(changedRecord))
+      }
+      expect(
+        (yield* runReplacement(
+          changedRecordHarness,
+          replacementRequestFor("changed-private-record"),
+          replacementAuthorityLayer(),
+          changedRecordStore
+        ))._tag
+      ).toBe("CorrelationConflict")
+    }
+
+    const reusedSubjectHarness = seedReplacementHarness({ failAfterReplacementIntentOnce: true })
+    const reusedSubjectRequest = replacementRequestFor("reused-ledger-subject")
+    expect(
+      (yield* runReplacement(reusedSubjectHarness, reusedSubjectRequest, replacementAuthorityLayer()).pipe(Effect.exit))
+        ._tag
+    ).toBe("Failure")
+    const existing = reusedSubjectHarness.replacementLedger()
+    if (existing !== undefined) {
+      const foreignLedger = CodexPurgedWorkUnitReplacementLedger.make({
+        ...existing,
+        plannedAttempt: { ...existing.plannedAttempt, runId: RunId.make("foreign-ledger-run") }
+      })
+      const foreignLedgerStore: CodexAttemptStoreService = {
+        ...reusedSubjectHarness.store,
+        readReplacementLedger: () => Effect.succeed(Option.some(foreignLedger))
+      }
+      expect(
+        (yield* runReplacement(
+          reusedSubjectHarness,
+          reusedSubjectRequest,
+          replacementAuthorityLayer(),
+          foreignLedgerStore
+        ))._tag
+      ).toBe("RequestIdentityReuseContradiction")
+    }
+
+    const censusHarness = seedReplacementHarness()
+    const replacement = yield* Effect.gen(function* () {
+      return yield* CodexProviderWorkUnitReplacement
+    }).pipe(
+      Effect.provide(
+        codexPlannedAttemptExecutorLayer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              controlledCodexAppServerLayer(censusHarness.app),
+              controlledCodexOwnedActivityCensusLayer({
+                observe: () =>
+                  Effect.fail(
+                    new CodexAppServerFailure({
+                      detail: "controlled census failure",
+                      kind: "Unavailable",
+                      operation: "thread/ownedActivity/census"
+                    })
+                  ),
+                terminateDescendants: () => Effect.void
+              }),
+              Layer.succeed(CodexAttemptStore, censusHarness.store),
+              Layer.succeed(GitCommand, defaultGitCommand)
+            )
+          ),
+          Layer.provide(replacementAuthorityLayer()),
+          Layer.provide(NodeServices.layer)
+        )
+      )
+    )
+    expect((yield* replacement.replacePurgedProviderWorkUnit(replacementRequestFor("census-failure")))._tag).toBe(
+      "ExclusiveRetainedOwnershipUnproved"
+    )
+    expect(censusHarness.turnCount()).toBe(0)
+  })
+)
+
+it.effect("replaces from every observed private record and fails closed after an unobserved turn/start loss", () =>
+  Effect.gen(function* () {
+    for (const tag of ["TurnObserved", "SafelySuspended"] as const) {
+      const harness = seedReplacementHarness()
+      const current = harness.currentRecord()
+      if (current?._tag === "Running") {
+        const { _tag: _currentTag, ...recordFields } = current
+        harness.setRecord(
+          tag === "TurnObserved"
+            ? CodexAttemptRecord.cases.TurnObserved.make(recordFields)
+            : CodexAttemptRecord.cases.SafelySuspended.make(recordFields)
+        )
+      }
+      expect(
+        (yield* runReplacement(harness, replacementRequestFor(`record-${tag}`), replacementAuthorityLayer()))._tag
+      ).toBe("Replaced")
+    }
+
+    const runLostStart = Effect.fn("CodexReplacementTest.runLostStart")(function* (resumeAlsoFails: boolean) {
+      const harness = seedReplacementHarness()
+      const lostStart = new CodexAppServerFailure({
+        detail: "controlled replacement turn/start loss",
+        kind: "Unavailable",
+        operation: "turn/start"
+      })
+      const app: CodexAppServerService = {
+        ...harness.app,
+        startTurn: () => {
+          if (resumeAlsoFails) {
+            harness.setResumeFailure(
+              new CodexAppServerFailure({
+                detail: "controlled post-start resume loss",
+                kind: "Unavailable",
+                operation: "thread/resume"
+              })
+            )
+          }
+          return Effect.fail(lostStart)
+        }
+      }
+      const replacement = yield* Effect.gen(function* () {
+        return yield* CodexProviderWorkUnitReplacement
+      }).pipe(
+        Effect.provide(
+          codexPlannedAttemptExecutorLayer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                controlledCodexAppServerLayer(app),
+                controlledCodexOwnedActivityCensusLayer({
+                  observe: (thread, terminals) => Effect.succeed(harness.observeActivityCensus(thread, terminals)),
+                  terminateDescendants: () => Effect.void
+                }),
+                Layer.succeed(CodexAttemptStore, harness.store),
+                Layer.succeed(GitCommand, defaultGitCommand)
+              )
+            ),
+            Layer.provide(replacementAuthorityLayer()),
+            Layer.provide(NodeServices.layer)
+          )
+        )
+      )
+      return yield* replacement.replacePurgedProviderWorkUnit(
+        replacementRequestFor(resumeAlsoFails ? "lost-start-and-resume" : "lost-start")
+      )
+    })
+
+    expect((yield* runLostStart(false))._tag).toBe("ProviderTemporarilyUnreadable")
+    expect((yield* runLostStart(true))._tag).toBe("ProviderTemporarilyUnreadable")
+  })
+)
+
+type ReplacementCrashWrite = {
+  readonly phase: "IntentRecorded" | "TurnIntentRecorded" | "TurnBoundaryCrossingBegan" | "TurnObserved" | "Sealed"
+  readonly persist: "BeforeCrash" | "AfterCrash"
+}
+
+const crashAtReplacementWrite = (
+  store: CodexAttemptStoreService,
+  cut: ReplacementCrashWrite
+): CodexAttemptStoreService => {
+  let crossed = false
+  return {
+    ...store,
+    appendReplacementLedger: (ledger) => {
+      const phase = ledger.history.at(-1)?._tag
+      if (crossed || phase !== cut.phase) return store.appendReplacementLedger(ledger)
+      crossed = true
+      const failure = new CodexAttemptStoreFailure({
+        detail: `controlled process loss ${cut.persist.toLowerCase()} ${cut.phase}`,
+        operation: "appendReplacementLedger"
+      })
+      return cut.persist === "BeforeCrash"
+        ? store.appendReplacementLedger(ledger).pipe(Effect.andThen(Effect.fail(failure)))
+        : Effect.fail(failure)
+    }
+  }
+}
+
+const withReopenedReplacementStore = <A, E, R>(
+  stateDirectory: string,
+  use: (store: CodexAttemptStoreService) => Effect.Effect<A, E, R>
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const store = yield* CodexAttemptStore
+      return yield* use(store)
+    }).pipe(Effect.provide(nodeCodexAttemptStoreLayer({ stateDirectory })))
+  )
+
+it.effect("covers the replacement cut before durable intent", () => {
+  const harness = seedReplacementHarness()
+  const request = replacementRequestFor("before-intent")
+  return Effect.gen(function* () {
+    const result = yield* runReplacement(harness, request, replacementAuthorityLayer(new Set([0])))
+    expect(result._tag).toBe("ExclusiveRetainedOwnershipUnproved")
+    expect(harness.replacementLedger()).toBeUndefined()
+    expect(harness.turnCount()).toBe(0)
+  })
+})
+
+it.effect("recovers after intent is durable but before the fresh authority reread", () => {
+  const harness = seedReplacementHarness({ failAfterReplacementIntentOnce: true })
+  const request = replacementRequestFor("after-intent")
+  return Effect.gen(function* () {
+    const crashed = yield* runReplacement(harness, request, replacementAuthorityLayer()).pipe(Effect.exit)
+    expect(crashed._tag).toBe("Failure")
+    expect(harness.replacementLedger()?.history.map(({ _tag }) => _tag)).toEqual(["Purged", "IntentRecorded"])
+    const recovered = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    expect(recovered._tag).toBe("Replaced")
+    expect(harness.turnCount()).toBe(1)
+  })
+})
+
+it.effect("rejects durable purge evidence for another private thread before resuming it", () => {
+  const harness = seedReplacementHarness({ failAfterReplacementIntentOnce: true })
+  const request = replacementRequestFor("foreign-durable-purge")
+  return Effect.gen(function* () {
+    const firstExit = yield* runReplacement(harness, request, replacementAuthorityLayer()).pipe(Effect.exit)
+    expect(firstExit._tag).toBe("Failure")
+    const ledger = harness.replacementLedger()
+    if (ledger === undefined) return yield* Effect.die("missing controlled durable replacement intent")
+    const purge = ledger.history[0]
+    if (purge._tag !== "Purged") return yield* Effect.die("missing controlled purge evidence")
+    const foreignLedger = CodexPurgedWorkUnitReplacementLedger.make({
+      ...ledger,
+      history: [
+        CodexReplacementHistoryEntry.cases.Purged.make({
+          evidence: CodexPurgedWorkUnitEvidence.make({
+            ...purge.evidence,
+            threadId: CodexThreadId.make("issue-111-foreign-thread")
+          })
+        }),
+        ...ledger.history.slice(1)
+      ]
+    })
+    const foreignStore: CodexAttemptStoreService = {
+      ...harness.store,
+      readReplacementLedger: () => Effect.succeed(Option.some(foreignLedger))
+    }
+    const resumeCountBeforeForeignLedger = harness.resumeCwds.length
+
+    const result = yield* runReplacement(harness, request, replacementAuthorityLayer(), foreignStore)
+    expect(result._tag).toBe("CorrelationConflict")
+    expect(harness.resumeCwds).toHaveLength(resumeCountBeforeForeignLedger)
+    expect(harness.turnCount()).toBe(0)
+  })
+})
+
+it.effect("recovers after the replacement turn intent is durable", () => {
+  const harness = seedReplacementHarness({ failAfterReplacementTurnIntentOnce: true })
+  const request = replacementRequestFor("after-turn-intent")
+  return Effect.gen(function* () {
+    const crashed = yield* runReplacement(harness, request, replacementAuthorityLayer()).pipe(Effect.exit)
+    expect(crashed._tag).toBe("Failure")
+    expect(harness.replacementLedger()?.history.map(({ _tag }) => _tag)).toEqual([
+      "Purged",
+      "IntentRecorded",
+      "TurnIntentRecorded"
+    ])
+    const recovered = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    expect(recovered._tag).toBe("Replaced")
+    expect(harness.turnCount()).toBe(1)
+  })
+})
+
+it.effect("reconciles a crossing marker without blindly retrying turn/start", () => {
+  const harness = seedReplacementHarness({ failAfterReplacementCalledOnce: true })
+  const request = replacementRequestFor("after-crossing-marker")
+  return Effect.gen(function* () {
+    const crashed = yield* runReplacement(harness, request, replacementAuthorityLayer()).pipe(Effect.exit)
+    expect(crashed._tag).toBe("Failure")
+    expect(harness.replacementLedger()?.history.map(({ _tag }) => _tag)).toEqual([
+      "Purged",
+      "IntentRecorded",
+      "TurnIntentRecorded",
+      "TurnBoundaryCrossingBegan"
+    ])
+    const noBlindRetry = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    expect(noBlindRetry._tag).toBe("ProviderTemporarilyUnreadable")
+    expect(harness.turnCount()).toBe(0)
+  })
+})
+
+it.effect("reconciles a lost turn/start response and seals one U2", () => {
+  const harness = seedReplacementHarness({ loseFirstTurnResponse: true })
+  const request = replacementRequestFor("lost-response")
+  return Effect.gen(function* () {
+    const result = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    expect(result._tag).toBe("Replaced")
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.replacementLedger()?.history.map(({ _tag }) => _tag)).toEqual([
+      "Purged",
+      "IntentRecorded",
+      "TurnIntentRecorded",
+      "TurnBoundaryCrossingBegan",
+      "TurnObserved",
+      "Sealed"
+    ])
+    expect(harness.turnTexts).toHaveLength(1)
+    expect(harness.turnTexts[0]).toContain("The preceding provider work unit was confirmed purged")
+    expect(harness.turnTexts[0]).toContain("do not describe this turn as a resumption of the purged unit")
+    expect(harness.turnTexts[0]).toContain(`retained_worktree: ${attempt.worktree}`)
+    expect(harness.turnTexts[0]).toContain("purged_predecessor_turn_id: issue-111-u1-turn")
+  })
+})
+
+it.effect("rejects a foreign U2 correlation without making it current", () => {
+  const harness = seedReplacementHarness({ foreignTurnCorrelation: true })
+  const request = replacementRequestFor("foreign-u2")
+  return Effect.gen(function* () {
+    const result = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    expect(result._tag).toBe("CorrelationConflict")
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("Running")
+    expect(harness.replacementLedger()?.history.at(-1)?._tag).toBe("TurnBoundaryCrossingBegan")
+  })
+})
+
+it.effect("recovers after U2 history is durable but before the current private record", () => {
+  const harness = seedReplacementHarness({ failAfterReplacementObservedOnce: true })
+  const request = replacementRequestFor("after-observed-before-record")
+  return Effect.gen(function* () {
+    const crashed = yield* runReplacement(harness, request, replacementAuthorityLayer()).pipe(Effect.exit)
+    expect(crashed._tag).toBe("Failure")
+    expect(harness.replacementLedger()?.history.map(({ _tag }) => _tag)).toEqual([
+      "Purged",
+      "IntentRecorded",
+      "TurnIntentRecorded",
+      "TurnBoundaryCrossingBegan",
+      "TurnObserved"
+    ])
+    const beforeRecovery = harness.currentRecord()
+    expect(beforeRecovery?._tag).toBe("Running")
+    expect(beforeRecovery?._tag === "Running" ? beforeRecovery.priorObservedTurnId : undefined).toBe(null)
+    const recovered = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    expect(recovered._tag).toBe("Replaced")
+    const afterRecovery = harness.currentRecord()
+    expect(afterRecovery?._tag).toBe("TurnObserved")
+    expect(afterRecovery?._tag === "TurnObserved" ? afterRecovery.priorObservedTurnId : undefined).toBe(null)
+  })
+})
+
+it.effect("recovers after U2 observation before the private history seal", () => {
+  const harness = seedReplacementHarness({ failAfterReplacementSealOnce: true })
+  const request = replacementRequestFor("after-observed")
+  return Effect.gen(function* () {
+    const crashed = yield* runReplacement(harness, request, replacementAuthorityLayer()).pipe(Effect.exit)
+    expect(crashed._tag).toBe("Failure")
+    expect(harness.replacementLedger()?.history.map(({ _tag }) => _tag)).toEqual([
+      "Purged",
+      "IntentRecorded",
+      "TurnIntentRecorded",
+      "TurnBoundaryCrossingBegan",
+      "TurnObserved"
+    ])
+    const recovered = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    expect(recovered._tag).toBe("Replaced")
+    expect(harness.replacementLedger()?.history.at(-1)?._tag).toBe("Sealed")
+    expect(JSON.stringify(recovered)).not.toContain("issue-111-u1-turn")
+    expect(JSON.stringify(recovered)).not.toContain("codex-thread-issue-58")
+  })
+})
+
+it.effect("returns the same sealed D1 result on exact redelivery without starting U3", () => {
+  const harness = seedReplacementHarness()
+  const request = replacementRequestFor("sealed-redelivery")
+  return Effect.gen(function* () {
+    const first = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    const sealed = harness.replacementLedger()
+    const redelivered = yield* runReplacement(harness, request, replacementAuthorityLayer())
+
+    expect(first._tag).toBe("Replaced")
+    expect(redelivered).toEqual(first)
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.replacementLedger()).toEqual(sealed)
+    expect(sealed?.history.at(-1)?._tag).toBe("Sealed")
+  })
+})
+
+const reopenedReplacementCuts: ReadonlyArray<{
+  readonly name: string
+  readonly write: ReplacementCrashWrite
+  readonly durableHistory: ReadonlyArray<string> | undefined
+  readonly recoveredResult: "ProviderTemporarilyUnreadable" | "Replaced"
+  readonly turnCount: number
+}> = [
+  {
+    name: "fresh proof before intent",
+    write: { phase: "IntentRecorded", persist: "AfterCrash" },
+    durableHistory: undefined,
+    recoveredResult: "Replaced",
+    turnCount: 1
+  },
+  {
+    name: "intent before the fresh reread",
+    write: { phase: "IntentRecorded", persist: "BeforeCrash" },
+    durableHistory: ["Purged", "IntentRecorded"],
+    recoveredResult: "Replaced",
+    turnCount: 1
+  },
+  {
+    name: "owned-turn intent before the provider boundary",
+    write: { phase: "TurnIntentRecorded", persist: "BeforeCrash" },
+    durableHistory: ["Purged", "IntentRecorded", "TurnIntentRecorded"],
+    recoveredResult: "Replaced",
+    turnCount: 1
+  },
+  {
+    name: "provider boundary may have crossed without an observed U2",
+    write: { phase: "TurnBoundaryCrossingBegan", persist: "BeforeCrash" },
+    durableHistory: ["Purged", "IntentRecorded", "TurnIntentRecorded", "TurnBoundaryCrossingBegan"],
+    recoveredResult: "ProviderTemporarilyUnreadable",
+    turnCount: 0
+  },
+  {
+    name: "U2 is durable before the current attempt record",
+    write: { phase: "TurnObserved", persist: "BeforeCrash" },
+    durableHistory: ["Purged", "IntentRecorded", "TurnIntentRecorded", "TurnBoundaryCrossingBegan", "TurnObserved"],
+    recoveredResult: "Replaced",
+    turnCount: 1
+  },
+  {
+    name: "U2 is current before U1 history is sealed",
+    write: { phase: "Sealed", persist: "AfterCrash" },
+    durableHistory: ["Purged", "IntentRecorded", "TurnIntentRecorded", "TurnBoundaryCrossingBegan", "TurnObserved"],
+    recoveredResult: "Replaced",
+    turnCount: 1
+  }
+]
+
+it.effect("reopens the node private store at every replacement crash cut without starting U3", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      for (const [cutIndex, cut] of reopenedReplacementCuts.entries()) {
+        const stateDirectory = yield* fileSystem.makeTempDirectoryScoped({ prefix: `dalph-issue-111-cut-${cutIndex}-` })
+        const harness = seedReplacementHarness()
+        const request = replacementRequestFor(`reopened-cut-${cutIndex}`)
+        const predecessor = harness.currentRecord()
+        if (predecessor === undefined) return yield* Effect.die("missing controlled predecessor record")
+
+        const firstExit = yield* withReopenedReplacementStore(stateDirectory, (store) =>
+          store
+            .writeAttempt(predecessor)
+            .pipe(
+              Effect.andThen(
+                runReplacement(harness, request, replacementAuthorityLayer(), crashAtReplacementWrite(store, cut.write))
+              ),
+              Effect.exit
+            )
+        )
+        expect(firstExit._tag, cut.name).toBe("Failure")
+
+        const afterCrash = yield* withReopenedReplacementStore(stateDirectory, (store) =>
+          store.readReplacementLedger(request.requestId)
+        )
+        expect(
+          Option.isSome(afterCrash) ? afterCrash.value.history.map(({ _tag }) => _tag) : undefined,
+          cut.name
+        ).toEqual(cut.durableHistory)
+
+        const recovered = yield* withReopenedReplacementStore(stateDirectory, (store) =>
+          runReplacement(harness, request, replacementAuthorityLayer(), store)
+        )
+        expect(recovered._tag, cut.name).toBe(cut.recoveredResult)
+        expect(harness.turnCount(), cut.name).toBe(cut.turnCount)
+
+        const finalLedger = yield* withReopenedReplacementStore(stateDirectory, (store) =>
+          store.readReplacementLedger(request.requestId)
+        )
+        if (cut.recoveredResult === "Replaced") {
+          expect(Option.isSome(finalLedger) && finalLedger.value.history.at(-1)?._tag, cut.name).toBe("Sealed")
+        } else {
+          expect(Option.isSome(finalLedger) && finalLedger.value.history.map(({ _tag }) => _tag), cut.name).toEqual(
+            cut.durableHistory
+          )
+        }
+      }
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)
+
+it.effect("reopens after U2 crossed turn/start and reconciles it without starting U3", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const stateDirectory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-111-crossed-u2-" })
+      const harness = seedReplacementHarness({ dieAfterReplacementTurnStartOnce: true })
+      const request = replacementRequestFor("reopened-after-u2-crossed")
+      const predecessor = harness.currentRecord()
+      if (predecessor === undefined) return yield* Effect.die("missing controlled predecessor record")
+
+      const firstExit = yield* withReopenedReplacementStore(stateDirectory, (store) =>
+        store
+          .writeAttempt(predecessor)
+          .pipe(Effect.andThen(runReplacement(harness, request, replacementAuthorityLayer(), store)), Effect.exit)
+      )
+      expect(firstExit._tag).toBe("Failure")
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.currentThread().turns).toHaveLength(1)
+
+      const afterCrash = yield* withReopenedReplacementStore(stateDirectory, (store) =>
+        store.readReplacementLedger(request.requestId)
+      )
+      expect(Option.isSome(afterCrash) && afterCrash.value.history.map(({ _tag }) => _tag)).toEqual([
+        "Purged",
+        "IntentRecorded",
+        "TurnIntentRecorded",
+        "TurnBoundaryCrossingBegan"
+      ])
+
+      const recovered = yield* withReopenedReplacementStore(stateDirectory, (store) =>
+        runReplacement(harness, request, replacementAuthorityLayer(), store)
+      )
+      expect(recovered._tag).toBe("Replaced")
+      expect(harness.turnCount()).toBe(1)
+      const sealed = yield* withReopenedReplacementStore(stateDirectory, (store) =>
+        store.readReplacementLedger(request.requestId)
+      )
+      expect(Option.isSome(sealed) && sealed.value.history.at(-1)?._tag).toBe("Sealed")
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)

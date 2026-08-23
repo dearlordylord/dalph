@@ -162,6 +162,8 @@ const controlledStoreWithFailure = (
 ): CodexAttemptStoreService => ({
   readAttempt: () => Effect.succeed(Option.none()),
   writeAttempt: () => Effect.void,
+  readReplacementLedger: () => Effect.succeed(Option.none()),
+  appendReplacementLedger: () => Effect.void,
   readServerLaunch: () =>
     failureMode === "read-launch"
       ? Effect.fail(new CodexAttemptStoreFailure({ detail: "launch read failed", operation: "readServerLaunch" }))
@@ -383,7 +385,7 @@ it.effect("reconciles a surviving prior server incarnation before launching a re
               })
           })
         ),
-        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
       )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
@@ -421,7 +423,7 @@ it.effect("supersedes a prior pre-spawn intent only after the application lease 
             stop: () => Effect.sync(() => void (stopped = true))
           })
         ),
-        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
       )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
@@ -466,7 +468,7 @@ it.effect("recovers and stops an exact child that survived before PID acknowledg
             stop: () => Effect.sync(() => void (stopped = true))
           })
         ),
-        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
       )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
@@ -511,7 +513,7 @@ it.effect("fails closed on duplicate, foreign, or unreadable pre-spawn token cen
                 stop: () => Effect.void
               })
             ),
-            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
           )
           const result = yield* Effect.gen(function* () {
             const app = yield* CodexAppServer
@@ -638,7 +640,7 @@ it.effect("fails closed when the recorded launch command cannot identify app-ser
         const appLayer = codexAppServerNodeLayer(
           { executable: "fixture-codex" },
           isolatedCodexProcessNativeService
-        ).pipe(Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior })))
+        ).pipe(Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] })))
         const result = yield* Effect.gen(function* () {
           const app = yield* CodexAppServer
           return yield* Effect.exit(app.startThread("/malformed-launch/worktree"))
@@ -800,7 +802,7 @@ it.effect("keeps startup closed when an existing app-server owner is unreadable 
                 stop: () => Effect.void
               })
             ),
-            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
           )
           const result = yield* Effect.gen(function* () {
             const app = yield* CodexAppServer
@@ -839,7 +841,7 @@ it.effect("does not stop a prior app-server already observed absent", () =>
             stop: () => Effect.sync(() => void (stopCalls += 1))
           })
         ),
-        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+        Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
       )
       const result = yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
@@ -894,7 +896,7 @@ it.effect("fails closed when a prior app-server cannot be stopped or never becom
                       )
               })
             ),
-            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior }))
+            Layer.provide(memoryCodexAttemptStoreLayer({ attempts: [], serverLaunch: prior, replacements: [] }))
           )
           const result = yield* Effect.gen(function* () {
             const app = yield* CodexAppServer

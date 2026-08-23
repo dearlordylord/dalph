@@ -7,11 +7,13 @@ import {
   AttemptId,
   EvidenceReference,
   GitCommitSha,
+  PlannedTaskAttempt,
   RunId,
+  samePlannedTaskAttempt,
   WorktreeLocator,
   evidenceReferenceEquals
 } from "@dalph/contracts"
-import { Config, Context, Effect, Layer, Option, Path, Ref, Result, Schema, Semaphore } from "effect"
+import { Config, Context, Effect, Layer, Option, Path, Ref, Result, Schema, Semaphore, type Crypto } from "effect"
 import {
   CodexAttemptStoreNative,
   nodeCodexAttemptStoreNativeLayer,
@@ -31,6 +33,37 @@ export type CodexTurnId = typeof CodexTurnId.Type
 export const CodexOwnedTurnToken = Schema.NonEmptyString.pipe(Schema.brand("CodexOwnedTurnToken"))
 export type CodexOwnedTurnToken = typeof CodexOwnedTurnToken.Type
 
+/** Stable operator request identity for replacing one purged provider work unit. */
+export const CodexReplacementRequestId = Schema.NonEmptyString.pipe(Schema.brand("CodexReplacementRequestId"))
+export type CodexReplacementRequestId = typeof CodexReplacementRequestId.Type
+
+/** SHA-256 content identity of the complete decoded replacement request. */
+export const CodexReplacementRequestDigest = Schema.String.check(
+  Schema.makeFilter((value) =>
+    /^[0-9a-f]{64}$/.test(value) ? undefined : "replacement request digest must be SHA-256 hex"
+  )
+).pipe(Schema.brand("CodexReplacementRequestDigest"))
+export type CodexReplacementRequestDigest = typeof CodexReplacementRequestDigest.Type
+
+const hexadecimalRadix = 16
+const hexadecimalByteLength = 2
+
+/** Computes the stable request content identity from a canonical request encoding. */
+export const codexReplacementRequestDigestFromCanonical = (crypto: Crypto.Crypto, canonical: string) =>
+  crypto
+    .digest("SHA-256", new TextEncoder().encode(canonical))
+    .pipe(
+      Effect.map((digest) =>
+        CodexReplacementRequestDigest.make(
+          [...digest].map((byte) => byte.toString(hexadecimalRadix).padStart(hexadecimalByteLength, "0")).join("")
+        )
+      )
+    )
+
+/** Fresh private operation identity allocated once replacement intent becomes durable. */
+export const CodexReplacementOperationId = Schema.NonEmptyString.pipe(Schema.brand("CodexReplacementOperationId"))
+export type CodexReplacementOperationId = typeof CodexReplacementOperationId.Type
+
 /** Identifies one launch incarnation of the application-owned app-server child. */
 export const CodexServerIncarnation = Schema.NonEmptyString.pipe(Schema.brand("CodexServerIncarnation"))
 export type CodexServerIncarnation = typeof CodexServerIncarnation.Type
@@ -49,6 +82,327 @@ export const CodexSealedTerminal = Schema.TaggedUnion({
   Failed: {}
 })
 export type CodexSealedTerminal = typeof CodexSealedTerminal.Type
+
+/** Evidence that a readable retained thread omitted a turn previously observed by Dalph. */
+export const CodexPurgedWorkUnitEvidence = Schema.Struct({
+  predecessorToken: CodexOwnedTurnToken,
+  predecessorTurnId: CodexTurnId,
+  threadId: CodexThreadId,
+  worktree: WorktreeLocator
+})
+export type CodexPurgedWorkUnitEvidence = typeof CodexPurgedWorkUnitEvidence.Type
+
+/** Append-only private facts for one purged predecessor and its replacement operation. */
+export const CodexReplacementHistoryEntry = Schema.TaggedUnion({
+  Purged: { evidence: CodexPurgedWorkUnitEvidence },
+  IntentRecorded: {
+    operationId: CodexReplacementOperationId,
+    requestDigest: CodexReplacementRequestDigest,
+    requestId: CodexReplacementRequestId
+  },
+  TurnIntentRecorded: { operationId: CodexReplacementOperationId, replacementToken: CodexOwnedTurnToken },
+  TurnBoundaryCrossingBegan: { operationId: CodexReplacementOperationId, replacementToken: CodexOwnedTurnToken },
+  TurnObserved: {
+    operationId: CodexReplacementOperationId,
+    replacementToken: CodexOwnedTurnToken,
+    replacementTurnId: CodexTurnId
+  },
+  Sealed: {
+    operationId: CodexReplacementOperationId,
+    replacementToken: CodexOwnedTurnToken,
+    replacementTurnId: CodexTurnId
+  }
+})
+export type CodexReplacementHistoryEntry = typeof CodexReplacementHistoryEntry.Type
+
+const replacementIntentIndex = 1
+const replacementTurnIntentIndex = 2
+const replacementTurnBoundaryIndex = 3
+const replacementTurnObservedIndex = 4
+const replacementSealedIndex = 5
+const replacementMinimumHistoryLength = replacementTurnIntentIndex
+const replacementMaximumHistoryLength = replacementSealedIndex + 1
+const lastElementOffset = -1
+
+const replacementHistoryTagFailure = (history: ReadonlyArray<CodexReplacementHistoryEntry>): string | undefined => {
+  const expected: ReadonlyArray<CodexReplacementHistoryEntry["_tag"]> = [
+    "Purged",
+    "IntentRecorded",
+    "TurnIntentRecorded",
+    "TurnBoundaryCrossingBegan",
+    "TurnObserved",
+    "Sealed"
+  ]
+  for (const [index, entry] of history.entries()) {
+    if (entry._tag !== expected[index]) return `replacement history has an invalid phase at ${index}`
+  }
+  return undefined
+}
+
+const replacementHistoryShapeFailure = (history: ReadonlyArray<CodexReplacementHistoryEntry>): string | undefined => {
+  const first = history[0]
+  /* v8 ignore next -- @preserve The ledger-level purge filter and NonEmptyArray schema reject this before history validation. */
+  if (first === undefined || first._tag !== "Purged") return "replacement history must begin with purge evidence"
+  /* v8 ignore next -- @preserve The ledger-level intent filter rejects a missing second entry before history validation. */
+  if (history.length < replacementMinimumHistoryLength)
+    /* v8 ignore next -- @preserve Covered by the preceding schema-ordering guard. */
+    return "replacement ledger must retain operator intent with purge evidence"
+  if (history.length > replacementMaximumHistoryLength)
+    return "replacement history contains more than one replacement operation"
+  return replacementHistoryTagFailure(history)
+}
+
+const replacementPhaseTagMismatch = (
+  entry: CodexReplacementHistoryEntry | undefined,
+  expected: CodexReplacementHistoryEntry["_tag"]
+): boolean => entry !== undefined && entry._tag !== expected
+
+const replacementHistoryPhaseFailure = (
+  turnIntent: CodexReplacementHistoryEntry | undefined,
+  turnCalled: CodexReplacementHistoryEntry | undefined,
+  observed: CodexReplacementHistoryEntry | undefined,
+  sealed: CodexReplacementHistoryEntry | undefined
+): string | undefined => {
+  /* v8 ignore next -- @preserve The earlier exact tag-sequence validation rejects every phase-position mismatch. */
+  if (replacementPhaseTagMismatch(turnIntent, "TurnIntentRecorded")) return "replacement turn intent is malformed"
+  /* v8 ignore next -- @preserve The earlier exact tag-sequence validation rejects every phase-position mismatch. */
+  if (replacementPhaseTagMismatch(turnCalled, "TurnBoundaryCrossingBegan")) return "replacement turn call is malformed"
+  /* v8 ignore next -- @preserve The earlier exact tag-sequence validation rejects every phase-position mismatch. */
+  if (replacementPhaseTagMismatch(observed, "TurnObserved")) return "replacement observation is malformed"
+  /* v8 ignore next -- @preserve The earlier exact tag-sequence validation rejects every phase-position mismatch. */
+  if (replacementPhaseTagMismatch(sealed, "Sealed")) return "replacement seal is malformed"
+  return undefined
+}
+
+const replacementHistoryOperationFailure = (
+  history: ReadonlyArray<CodexReplacementHistoryEntry>,
+  operationId: CodexReplacementOperationId
+): string | undefined => {
+  for (const entry of history.slice(replacementTurnIntentIndex)) {
+    if (entry._tag !== "Purged" && entry.operationId !== operationId) {
+      return "replacement history phases must retain one operation identity"
+    }
+  }
+  return undefined
+}
+
+const replacementHistoryTokenFailure = (
+  turnIntent: CodexReplacementHistoryEntry | undefined,
+  turnCalled: CodexReplacementHistoryEntry | undefined,
+  observed: CodexReplacementHistoryEntry | undefined,
+  sealed: CodexReplacementHistoryEntry | undefined
+): string | undefined => {
+  if (turnIntent === undefined || turnIntent._tag !== "TurnIntentRecorded") return undefined
+  if (replacementCallTokenMismatch(turnCalled, turnIntent.replacementToken)) {
+    return "replacement call must retain its turn token"
+  }
+  if (replacementObservedTokenMismatch(observed, turnIntent.replacementToken)) {
+    return "replacement observation must retain its turn token"
+  }
+  if (replacementSealTokenMismatch(sealed, turnIntent.replacementToken)) {
+    return "replacement seal must retain its turn token"
+  }
+  return undefined
+}
+
+const replacementCallTokenMismatch = (
+  entry: CodexReplacementHistoryEntry | undefined,
+  expected: CodexOwnedTurnToken
+): boolean => entry !== undefined && entry._tag === "TurnBoundaryCrossingBegan" && entry.replacementToken !== expected
+
+const replacementObservedTokenMismatch = (
+  entry: CodexReplacementHistoryEntry | undefined,
+  expected: CodexOwnedTurnToken
+): boolean => entry !== undefined && entry._tag === "TurnObserved" && entry.replacementToken !== expected
+
+const replacementSealTokenMismatch = (
+  entry: CodexReplacementHistoryEntry | undefined,
+  expected: CodexOwnedTurnToken
+): boolean => entry !== undefined && entry._tag === "Sealed" && entry.replacementToken !== expected
+
+const replacementHistorySealFailure = (
+  predecessorTurnId: CodexTurnId,
+  observed: CodexReplacementHistoryEntry | undefined,
+  sealed: CodexReplacementHistoryEntry | undefined
+): string | undefined => {
+  if (observed === undefined || observed._tag !== "TurnObserved") return undefined
+  if (sealed === undefined || sealed._tag !== "Sealed") return undefined
+  if (observed.replacementTurnId !== sealed.replacementTurnId) return "replacement seal must retain its turn id"
+  if (observed.replacementTurnId === predecessorTurnId) {
+    return "replacement turn must be distinct from its purged predecessor"
+  }
+  return undefined
+}
+
+const replacementHistoryFailure = (history: ReadonlyArray<CodexReplacementHistoryEntry>): string | undefined => {
+  const shapeFailure = replacementHistoryShapeFailure(history)
+  if (shapeFailure !== undefined) return shapeFailure
+  const first = history[0]
+  const intent = history[replacementIntentIndex]
+  /* v8 ignore next -- @preserve Successful shape validation proves the first entry is Purged. */
+  if (first === undefined || first._tag !== "Purged") return "replacement history must begin with purge evidence"
+  /* v8 ignore next -- @preserve Successful shape validation proves the second entry is IntentRecorded. */
+  if (intent === undefined || intent._tag !== "IntentRecorded") return "replacement intent phase is malformed"
+  const turnIntent = history[replacementTurnIntentIndex]
+  const turnCalled = history[replacementTurnBoundaryIndex]
+  const observed = history[replacementTurnObservedIndex]
+  const sealed = history[replacementSealedIndex]
+  const failures = [
+    replacementHistoryPhaseFailure(turnIntent, turnCalled, observed, sealed),
+    replacementHistoryOperationFailure(history, intent.operationId),
+    replacementHistoryTokenFailure(turnIntent, turnCalled, observed, sealed),
+    replacementHistorySealFailure(first.evidence.predecessorTurnId, observed, sealed)
+  ]
+  return failures.find((failure): failure is string => failure !== undefined)
+}
+
+type CodexPurgedWorkUnitReplacementLedgerShape = {
+  readonly history: ReadonlyArray<CodexReplacementHistoryEntry>
+  readonly operationId: CodexReplacementOperationId
+  readonly plannedAttempt: PlannedTaskAttempt
+  readonly requestId: CodexReplacementRequestId
+}
+
+const replacementLedgerPurgeEvidenceFailure = (
+  ledger: CodexPurgedWorkUnitReplacementLedgerShape
+): string | undefined => {
+  const first = ledger.history[0]
+  if (first === undefined || first._tag !== "Purged") {
+    return "replacement ledger must retain exact predecessor purge evidence"
+  }
+  return first.evidence.worktree !== ledger.plannedAttempt.worktree
+    ? "replacement purge evidence must retain the planned attempt worktree"
+    : undefined
+}
+
+const replacementLedgerIntentFailure = (ledger: CodexPurgedWorkUnitReplacementLedgerShape): string | undefined => {
+  const intent = ledger.history[replacementIntentIndex]
+  if (intent === undefined || intent._tag !== "IntentRecorded") {
+    return "replacement intent must retain exact request and operation identities"
+  }
+  return intent.operationId !== ledger.operationId || intent.requestId !== ledger.requestId
+    ? "replacement intent must retain exact request and operation identities"
+    : undefined
+}
+
+const replacementLedgerFailure = (ledger: CodexPurgedWorkUnitReplacementLedgerShape): string | undefined =>
+  replacementLedgerPurgeEvidenceFailure(ledger) ??
+  replacementLedgerIntentFailure(ledger) ??
+  replacementHistoryFailure(ledger.history)
+
+/** Immutable ledger retaining the exact planned attempt and U1 purge evidence. */
+export const CodexPurgedWorkUnitReplacementLedger = Schema.Struct({
+  history: Schema.NonEmptyArray(CodexReplacementHistoryEntry),
+  operationId: CodexReplacementOperationId,
+  plannedAttempt: PlannedTaskAttempt,
+  requestId: CodexReplacementRequestId
+}).check(Schema.makeFilter(replacementLedgerFailure))
+export type CodexPurgedWorkUnitReplacementLedger = typeof CodexPurgedWorkUnitReplacementLedger.Type
+
+/** Explicit representation of one append-only ledger write outcome. */
+type CodexReplacementLedgerMerge =
+  | { readonly _tag: "Inserted"; readonly ledger: CodexPurgedWorkUnitReplacementLedger }
+  | { readonly _tag: "Appended"; readonly ledger: CodexPurgedWorkUnitReplacementLedger }
+  | { readonly _tag: "Idempotent"; readonly ledger: CodexPurgedWorkUnitReplacementLedger }
+  | { readonly _tag: "Contradiction"; readonly detail: string }
+
+const sameReplacementIntent = (
+  left: CodexPurgedWorkUnitReplacementLedger,
+  right: CodexPurgedWorkUnitReplacementLedger
+): boolean => {
+  const leftIntent = left.history[1]
+  const rightIntent = right.history[1]
+  /* v8 ignore next -- @preserve Both operands have already decoded as ledgers whose second entry is IntentRecorded. */
+  if (
+    leftIntent === undefined ||
+    rightIntent === undefined ||
+    leftIntent._tag !== "IntentRecorded" ||
+    rightIntent._tag !== "IntentRecorded"
+  ) {
+    return false
+  }
+  return (
+    left.requestId === right.requestId &&
+    left.operationId === right.operationId &&
+    leftIntent.requestDigest === rightIntent.requestDigest
+  )
+}
+
+const sameReplacementPlannedSubject = (
+  left: CodexPurgedWorkUnitReplacementLedger,
+  right: CodexPurgedWorkUnitReplacementLedger
+): boolean => samePlannedTaskAttempt(left.plannedAttempt, right.plannedAttempt)
+
+const sameReplacementPurgeSubject = (
+  left: CodexPurgedWorkUnitReplacementLedger,
+  right: CodexPurgedWorkUnitReplacementLedger
+): boolean => {
+  const leftPurge = left.history[0]
+  const rightPurge = right.history[0]
+  /* v8 ignore next -- @preserve Both operands have already decoded as ledgers whose first entry is Purged. */
+  if (leftPurge._tag !== "Purged" || rightPurge._tag !== "Purged") return false
+  return (
+    leftPurge.evidence.threadId === rightPurge.evidence.threadId &&
+    leftPurge.evidence.worktree === rightPurge.evidence.worktree &&
+    leftPurge.evidence.predecessorTurnId === rightPurge.evidence.predecessorTurnId &&
+    leftPurge.evidence.predecessorToken === rightPurge.evidence.predecessorToken
+  )
+}
+
+const sameReplacementLedgerSubject = (
+  left: CodexPurgedWorkUnitReplacementLedger,
+  right: CodexPurgedWorkUnitReplacementLedger
+): boolean =>
+  sameReplacementIntent(left, right) &&
+  sameReplacementPlannedSubject(left, right) &&
+  sameReplacementPurgeSubject(left, right)
+
+const replacementHistoryEquivalence = Schema.toEquivalence(CodexReplacementHistoryEntry)
+const replacementLedgerEquivalence = Schema.toEquivalence(CodexPurgedWorkUnitReplacementLedger)
+const isHistoryPrefix = (
+  prefix: ReadonlyArray<CodexReplacementHistoryEntry>,
+  value: ReadonlyArray<CodexReplacementHistoryEntry>
+): boolean =>
+  prefix.every((entry, index) => value[index] !== undefined && replacementHistoryEquivalence(entry, value[index]))
+
+/** Merges one candidate ledger without permitting request-subject or history mutation. */
+export const mergeCodexReplacementLedger = (
+  current: CodexPurgedWorkUnitReplacementLedger | undefined,
+  next: CodexPurgedWorkUnitReplacementLedger
+): CodexReplacementLedgerMerge => {
+  if (current === undefined) return { _tag: "Inserted", ledger: next }
+  if (!sameReplacementLedgerSubject(current, next)) {
+    return { _tag: "Contradiction", detail: "replacement request identity was reused for another subject" }
+  }
+  if (replacementLedgerEquivalence(current, next)) return { _tag: "Idempotent", ledger: current }
+  if (next.history.length === current.history.length + 1 && isHistoryPrefix(current.history, next.history)) {
+    return { _tag: "Appended", ledger: next }
+  }
+  return { _tag: "Contradiction", detail: "replacement history is not one append-only successor" }
+}
+
+/** Appends one private replacement phase, retaining every predecessor entry. */
+export const appendCodexReplacementHistory = (
+  ledger: CodexPurgedWorkUnitReplacementLedger,
+  entry: CodexReplacementHistoryEntry
+): CodexReplacementLedgerMerge => {
+  const last = ledger.history.at(lastElementOffset)
+  if (last !== undefined && replacementHistoryEquivalence(last, entry)) return { _tag: "Idempotent", ledger }
+  const candidate = Schema.decodeUnknownResult(CodexPurgedWorkUnitReplacementLedger)({
+    ...ledger,
+    history: [...ledger.history, entry]
+  })
+  if (candidate._tag === "Failure") {
+    return { _tag: "Contradiction", detail: String(candidate.failure) }
+  }
+  return mergeCodexReplacementLedger(ledger, candidate.success)
+}
+
+export const encodeCodexPurgedWorkUnitReplacementLedger = (ledger: CodexPurgedWorkUnitReplacementLedger): string =>
+  JSON.stringify(Schema.encodeUnknownSync(CodexPurgedWorkUnitReplacementLedger)(ledger))
+
+export const decodeCodexPurgedWorkUnitReplacementLedger = (encoded: string): CodexPurgedWorkUnitReplacementLedger =>
+  Schema.decodeUnknownSync(CodexPurgedWorkUnitReplacementLedger)(JSON.parse(encoded))
 
 const invalidCodexAttemptCorrelation = (attemptId: AttemptId, correlationAttemptId: AttemptId): string | undefined =>
   attemptId !== correlationAttemptId
@@ -200,7 +554,8 @@ export type CodexServerLeaseOwnerProjection =
 /** One private store snapshot. It is intentionally separate from the workflow Journal. */
 const CodexAttemptStoreSnapshot = Schema.Struct({
   attempts: Schema.Array(CodexAttemptRecord),
-  serverLaunch: Schema.NullOr(CodexServerLaunchRecord)
+  serverLaunch: Schema.NullOr(CodexServerLaunchRecord),
+  replacements: Schema.Array(CodexPurgedWorkUnitReplacementLedger)
 }).check(
   Schema.makeFilter((snapshot) => {
     const keys = new Set(snapshot.attempts.map((record) => keyOf(record.correlationRunId, record.correlationAttemptId)))
@@ -210,9 +565,13 @@ const CodexAttemptStoreSnapshot = Schema.Struct({
         record._tag !== "EmptyPreTurn"
     )
     const threadIds = new Set(associatedAttempts.map((record) => record.threadId))
-    return threadIds.size === associatedAttempts.length
+    if (threadIds.size !== associatedAttempts.length)
+      return "private attempt snapshot aliases one Codex thread to multiple attempts"
+    const replacements = snapshot.replacements
+    const requestIds = new Set(replacements.map((replacement) => replacement.requestId))
+    return requestIds.size === replacements.length
       ? undefined
-      : "private attempt snapshot aliases one Codex thread to multiple attempts"
+      : "private replacement snapshot contains duplicate requests"
   })
 )
 type CodexAttemptStoreSnapshot = typeof CodexAttemptStoreSnapshot.Type
@@ -225,6 +584,8 @@ const CodexAttemptStoreOperation = Schema.Literals([
   "readServerLaunch",
   "writeServerLaunch",
   "clearServerLaunch",
+  "readReplacementLedger",
+  "appendReplacementLedger",
   "acquireServerLease",
   "releaseServerLease"
 ])
@@ -257,6 +618,14 @@ export interface CodexAttemptStoreService {
   readonly readServerLaunch: () => Effect.Effect<Option.Option<CodexServerLaunchRecord>, CodexAttemptStoreFailure>
   readonly writeServerLaunch: (record: CodexServerLaunchRecord) => Effect.Effect<void, CodexAttemptStoreFailure>
   readonly clearServerLaunch: (incarnation: CodexServerIncarnation) => Effect.Effect<void, CodexAttemptStoreFailure>
+  /** Reads one private replacement operation by its stable operator request identity. */
+  readonly readReplacementLedger: (
+    requestId: CodexReplacementRequestId
+  ) => Effect.Effect<Option.Option<CodexPurgedWorkUnitReplacementLedger>, CodexAttemptStoreFailure>
+  /** Appends exactly one replacement phase or accepts an exact idempotent redelivery. */
+  readonly appendReplacementLedger: (
+    ledger: CodexPurgedWorkUnitReplacementLedger
+  ) => Effect.Effect<void, CodexAttemptStoreFailure>
   /** Cross-process exclusive admission lease for the application child. */
   readonly acquireServerLease: (
     owner: CodexServerLeaseRecord,
@@ -269,7 +638,7 @@ export class CodexAttemptStore extends Context.Service<CodexAttemptStore, CodexA
   "@dalph/CodexAttemptStore"
 ) {}
 
-const emptySnapshot: CodexAttemptStoreSnapshot = { attempts: [], serverLaunch: null }
+const emptySnapshot: CodexAttemptStoreSnapshot = { attempts: [], serverLaunch: null, replacements: [] }
 
 export const errorCode = (error: unknown): string =>
   typeof error === "object" && error !== null && "code" in error ? String(error.code) : ""
@@ -282,6 +651,9 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
       )
       const launch = yield* Ref.make<Option.Option<CodexServerLaunchRecord>>(
         initial.serverLaunch === null ? Option.none() : Option.some(initial.serverLaunch)
+      )
+      const replacements = yield* Ref.make<ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>>(
+        new Map(initial.replacements.map((ledger) => [ledger.requestId, ledger]))
       )
       const snapshotGate = yield* Semaphore.make(1)
       const readAttempt = Effect.fn("CodexAttemptStore.Memory.readAttempt")(function* (
@@ -299,7 +671,7 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
               ...current,
               [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const
             ])
-            yield* validateSnapshot(next, yield* Ref.get(launch), "writeAttempt")
+            yield* validateSnapshot(next, yield* Ref.get(launch), yield* Ref.get(replacements), "writeAttempt")
             yield* Ref.set(attempts, next)
           })
         )
@@ -311,7 +683,7 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
         yield* snapshotGate.withPermit(
           Effect.gen(function* () {
             const next = Option.some(record)
-            yield* validateSnapshot(yield* Ref.get(attempts), next, "writeServerLaunch")
+            yield* validateSnapshot(yield* Ref.get(attempts), next, yield* Ref.get(replacements), "writeServerLaunch")
             yield* Ref.set(launch, next)
           })
         )
@@ -323,6 +695,30 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
           Option.isSome(current) && current.value.incarnation === incarnation ? Option.none() : current
         )
       })
+      const readReplacementLedger: NonNullable<CodexAttemptStoreService["readReplacementLedger"]> = (requestId) =>
+        Ref.get(replacements).pipe(
+          Effect.map((current) => {
+            const value = current.get(requestId)
+            return value === undefined ? Option.none() : Option.some(value)
+          })
+        )
+      const appendReplacementLedger: NonNullable<CodexAttemptStoreService["appendReplacementLedger"]> = (ledger) =>
+        snapshotGate.withPermit(
+          Effect.gen(function* () {
+            const current = yield* Ref.get(replacements)
+            const merged = mergeCodexReplacementLedger(current.get(ledger.requestId), ledger)
+            if (merged._tag === "Contradiction") {
+              return yield* new CodexAttemptStoreFailure({
+                detail: merged.detail,
+                operation: "appendReplacementLedger"
+              })
+            }
+            if (merged._tag === "Idempotent") return
+            const next = new Map([...current, [ledger.requestId, merged.ledger] as const])
+            yield* validateSnapshot(yield* Ref.get(attempts), yield* Ref.get(launch), next, "appendReplacementLedger")
+            yield* Ref.set(replacements, next)
+          })
+        )
       const lease = yield* Ref.make<Option.Option<CodexServerLeaseRecord>>(Option.none())
       const leaseGate = yield* Semaphore.make(1)
       const sameLeaseOwner = (left: CodexServerLeaseRecord, right: CodexServerLeaseRecord) =>
@@ -377,6 +773,8 @@ const memoryStore = (initial: CodexAttemptStoreSnapshot = emptySnapshot) =>
         readServerLaunch,
         writeServerLaunch,
         clearServerLaunch,
+        readReplacementLedger,
+        appendReplacementLedger,
         acquireServerLease,
         releaseServerLease
       })
@@ -823,24 +1221,28 @@ const parseSnapshotDocument = (text: string): CodexAttemptStoreSnapshot => {
 
 const encodeSnapshot = (
   attempts: ReadonlyMap<string, CodexAttemptRecord>,
-  serverLaunch: Option.Option<CodexServerLaunchRecord>
+  serverLaunch: Option.Option<CodexServerLaunchRecord>,
+  replacements: ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>
 ): string =>
   JSON.stringify({
     attempts: [...attempts.values()],
-    serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null
+    serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null,
+    replacements: [...replacements.values()]
   })
 
 /** Validates the complete next snapshot before one store operation crosses persistence. */
 const validateSnapshot = (
   attempts: ReadonlyMap<string, CodexAttemptRecord>,
   serverLaunch: Option.Option<CodexServerLaunchRecord>,
+  replacements: ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>,
   operation: CodexAttemptStoreOperation
 ): Effect.Effect<void, CodexAttemptStoreFailure> =>
   Effect.try({
     try: () => {
       Schema.decodeUnknownSync(CodexAttemptStoreSnapshot)({
         attempts: [...attempts.values()],
-        serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null
+        serverLaunch: Option.isSome(serverLaunch) ? serverLaunch.value : null,
+        replacements: [...replacements.values()]
       })
     },
     catch: (error) => new CodexAttemptStoreFailure({ detail: String(error), operation })
@@ -915,6 +1317,9 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
       const launch = yield* Ref.make<Option.Option<CodexServerLaunchRecord>>(
         initial.snapshot.serverLaunch === null ? Option.none() : Option.some(initial.snapshot.serverLaunch)
       )
+      const replacements = yield* Ref.make<ReadonlyMap<string, CodexPurgedWorkUnitReplacementLedger>>(
+        new Map(initial.snapshot.replacements.map((ledger) => [ledger.requestId, ledger]))
+      )
       const loadFailure = yield* Ref.make<Option.Option<CodexAttemptStoreFailure>>(initial.failure)
       const persistence = yield* Semaphore.make(1)
       const guard = <A>(
@@ -934,7 +1339,11 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
             operation,
             Effect.gen(function* () {
               yield* validatePrivateFilesystem(parent, filename, temporary, leaseFilename, native)
-              const text = encodeSnapshot(yield* Ref.get(attempts), yield* Ref.get(launch))
+              const text = encodeSnapshot(
+                yield* Ref.get(attempts),
+                yield* Ref.get(launch),
+                yield* Ref.get(replacements)
+              )
               // The private state file is an append-only checksummed boundary.
               // It never re-resolves a validated temporary path for rename;
               // O_NOFOLLOW + one descriptor owns the write and fsync.
@@ -961,7 +1370,7 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
               ...current,
               [keyOf(record.correlationRunId, record.correlationAttemptId), record] as const
             ])
-            yield* validateSnapshot(next, yield* Ref.get(launch), "writeAttempt")
+            yield* validateSnapshot(next, yield* Ref.get(launch), yield* Ref.get(replacements), "writeAttempt")
             yield* Ref.set(attempts, next)
           })
         ).pipe(
@@ -975,7 +1384,7 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
           "writeServerLaunch",
           Effect.gen(function* () {
             const next = Option.some(record)
-            yield* validateSnapshot(yield* Ref.get(attempts), next, "writeServerLaunch")
+            yield* validateSnapshot(yield* Ref.get(attempts), next, yield* Ref.get(replacements), "writeServerLaunch")
             yield* Ref.set(launch, next)
           })
         ).pipe(
@@ -991,6 +1400,37 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
         ).pipe(
           Effect.andThen(persist("clearServerLaunch")),
           Effect.tapError(rememberStoreFailure.bind(undefined, loadFailure, "clearServerLaunch"))
+        )
+      const readReplacementLedger: NonNullable<CodexAttemptStoreService["readReplacementLedger"]> = (requestId) =>
+        guard(
+          "readReplacementLedger",
+          Ref.get(replacements).pipe(
+            Effect.map((current) => {
+              const value = current.get(requestId)
+              return value === undefined ? Option.none<CodexPurgedWorkUnitReplacementLedger>() : Option.some(value)
+            })
+          )
+        )
+      const appendReplacementLedger: NonNullable<CodexAttemptStoreService["appendReplacementLedger"]> = (ledger) =>
+        guard(
+          "appendReplacementLedger",
+          Effect.gen(function* () {
+            const current = yield* Ref.get(replacements)
+            const merged = mergeCodexReplacementLedger(current.get(ledger.requestId), ledger)
+            if (merged._tag === "Contradiction") {
+              return yield* new CodexAttemptStoreFailure({
+                detail: merged.detail,
+                operation: "appendReplacementLedger"
+              })
+            }
+            if (merged._tag === "Idempotent") return
+            const next = new Map([...current, [ledger.requestId, merged.ledger] as const])
+            yield* validateSnapshot(yield* Ref.get(attempts), yield* Ref.get(launch), next, "appendReplacementLedger")
+            yield* Ref.set(replacements, next)
+          })
+        ).pipe(
+          Effect.andThen(persist("appendReplacementLedger")),
+          Effect.tapError(rememberStoreFailure.bind(undefined, loadFailure, "appendReplacementLedger"))
         )
       const heldLease = yield* Ref.make<
         Option.Option<{ readonly file: FileHandle; readonly owner: CodexServerLeaseRecord }>
@@ -1160,6 +1600,8 @@ const codexAttemptStoreLayer = (config: CodexAttemptStoreConfig = {}) =>
         readServerLaunch,
         writeServerLaunch,
         clearServerLaunch,
+        readReplacementLedger,
+        appendReplacementLedger,
         acquireServerLease,
         releaseServerLease
       })
