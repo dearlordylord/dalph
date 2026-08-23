@@ -18,6 +18,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../test/support/evidence.js"
+import { completedRunFinalityFixture } from "../../test/run-finality.js"
 import { GitCommand } from "../authorities/git/command.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
@@ -203,6 +204,21 @@ const graphSnapshot = projectTrackerSnapshot({
 })
 
 const snapshot = Option.getOrThrow(graphSnapshot._tag === "Valid" ? Option.some(graphSnapshot.snapshot) : Option.none())
+const retiredGraphSnapshot = projectTrackerSnapshot({
+  revision: "trace-reader-retired-revision",
+  rootTaskId: TaskId.make("root"),
+  tasks: [
+    {
+      id: TaskId.make("root"),
+      lifecycle: { _tag: "CompletedSuccessfully" as const },
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
+  ]
+})
+const retiredSnapshot = Option.getOrThrow(
+  retiredGraphSnapshot._tag === "Valid" ? Option.some(retiredGraphSnapshot.snapshot) : Option.none()
+)
 
 const appendGraphObservation = Effect.fn("TraceReaderTest.appendGraphObservation")(function* (
   journal: JournalStore["Service"],
@@ -217,6 +233,54 @@ const appendGraphObservation = Effect.fn("TraceReaderTest.appendGraphObservation
     outcomeRecordKey(operation.operationId),
     taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
   )
+})
+
+const appendGraphObservationFor = Effect.fn("TraceReaderTest.appendGraphObservationFor")(function* (
+  journal: JournalStore["Service"],
+  observedRunId: RunId,
+  observedTarget: TrackerTarget,
+  operationId: OperationId,
+  predecessorOperationIds: ReadonlyArray<OperationId> = [],
+  observationSnapshot: typeof snapshot = snapshot
+) {
+  const operation = makeTrackerGraphObservationOperation(operationId, observedTarget, predecessorOperationIds)
+  yield* journal.append(observedRunId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+  yield* journal.append(
+    observedRunId,
+    outcomeRecordKey(operation.operationId),
+    taskTrackerFactsObservedEvent(
+      operation.operationId,
+      makeCompleteTaskTrackerFactsObserved(operation, observationSnapshot)
+    )
+  )
+})
+
+const seedRetiredTrace = Effect.fn("TraceReaderTest.seedRetiredTrace")(function* (
+  journal: JournalStore["Service"],
+  retiredRunId: RunId,
+  retiredTarget: TrackerTarget
+) {
+  yield* journal.beginRun(retiredRunId, retiredTarget, initialPolicy)
+  const firstOperationId = OperationId.make(`retired-trace-first:${retiredRunId}`)
+  const secondOperationId = OperationId.make(`retired-trace-second:${retiredRunId}`)
+  yield* appendGraphObservationFor(journal, retiredRunId, retiredTarget, firstOperationId, [], retiredSnapshot)
+  yield* appendGraphObservationFor(
+    journal,
+    retiredRunId,
+    retiredTarget,
+    secondOperationId,
+    [firstOperationId],
+    retiredSnapshot
+  )
+  const fixture = completedRunFinalityFixture({
+    observedAt: JournalPosition.make(7),
+    runId: retiredRunId,
+    target: retiredTarget
+  })
+  yield* journal.append(retiredRunId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+  yield* journal.append(retiredRunId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+  yield* journal.terminateRun(retiredRunId, "Completed", fixture.evidence)
+  return { firstOperationId, secondOperationId }
 })
 
 const appendIncompleteGraphObservation = Effect.fn("TraceReaderTest.appendIncompleteGraphObservation")(function* (
@@ -1383,6 +1447,83 @@ it.effect("keeps the fixed cursor when the passive current status is explicitly 
 )
 
 const nodeFileSystemAndPath = Layer.merge(NodeFileSystem.layer, NodePath.layer)
+
+it.effect("reads actual Cold memory and reopened SQLite history with identical cursors, causality, and evidence", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-retired-trace-" })
+      const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+      const retiredRunId = RunId.make("trace-reader-retired-cold")
+      const retiredTarget = FixtureTarget.make("trace-reader-retired-cold-target")
+      const capture = (layer: Layer.Layer<TraceReader | JournalStore | RunLifecycleJournal, unknown, never>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const journal = yield* JournalStore
+            const { firstOperationId, secondOperationId } = yield* seedRetiredTrace(
+              journal,
+              retiredRunId,
+              retiredTarget
+            )
+            const reader = yield* TraceReader
+            const before = yield* reader.read(retiredRunId)
+            const beforeAt = yield* reader.readAt(
+              TraceCursor.make({ position: JournalPosition.make(5), runId: retiredRunId })
+            )
+            const beforeCausal = yield* reader.causalPredecessor(
+              TraceCursor.make({ position: JournalPosition.make(5), runId: retiredRunId }),
+              secondOperationId,
+              firstOperationId
+            )
+            yield* journal.retireTerminalRun(retiredRunId)
+            const after = yield* reader.read(retiredRunId)
+            const afterAt = yield* reader.readAt(
+              TraceCursor.make({ position: JournalPosition.make(5), runId: retiredRunId })
+            )
+            const afterCausal = yield* reader.causalPredecessor(
+              TraceCursor.make({ position: JournalPosition.make(5), runId: retiredRunId }),
+              secondOperationId,
+              firstOperationId
+            )
+            const audit = yield* journal.auditAll()
+            return { after, afterAt, afterCausal, audit, before, beforeAt, beforeCausal }
+          }).pipe(Effect.provide(layer))
+        )
+
+      const memory = yield* capture(readerLayer)
+      const sqlite = yield* capture(sqliteReaderLayer(filename))
+      const reopened = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const reader = yield* TraceReader
+          const cursor = TraceCursor.make({ position: JournalPosition.make(5), runId: retiredRunId })
+          return {
+            at: yield* reader.readAt(cursor),
+            history: yield* reader.read(retiredRunId),
+            predecessor: yield* reader.causalPredecessor(
+              cursor,
+              OperationId.make(`retired-trace-second:${retiredRunId}`),
+              OperationId.make(`retired-trace-first:${retiredRunId}`)
+            )
+          }
+        }).pipe(Effect.provide(sqliteReaderLayer(filename)))
+      )
+
+      expect(memory.after).toEqual(memory.before)
+      expect(memory.afterAt).toEqual(memory.beforeAt)
+      expect(memory.afterCausal).toEqual(memory.beforeCausal)
+      expect(memory.audit.runs).toContainEqual(expect.objectContaining({ runId: retiredRunId, partition: "Cold" }))
+      expect(sqlite.after).toEqual(sqlite.before)
+      expect(sqlite.afterAt).toEqual(sqlite.beforeAt)
+      expect(sqlite.afterCausal).toEqual(sqlite.beforeCausal)
+      expect(sqlite.audit.runs).toContainEqual(expect.objectContaining({ runId: retiredRunId, partition: "Cold" }))
+      expect(reopened.history).toEqual(sqlite.after)
+      expect(reopened.at).toEqual(sqlite.afterAt)
+      expect(reopened.predecessor).toEqual(sqlite.afterCausal)
+      expect(sqlite.after.items.at(-1)).toEqual(memory.after.items.at(-1))
+    }).pipe(Effect.provide(nodeFileSystemAndPath))
+  )
+)
 
 it.effect("replays a committed occurrence at its original Run and JournalPosition after output is lost", () =>
   Effect.scoped(

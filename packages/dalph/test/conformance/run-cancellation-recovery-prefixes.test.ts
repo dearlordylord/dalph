@@ -16,6 +16,7 @@ import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/ru
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { validatedRunActivationLayer } from "../../../orchestrator/src/coordination/run/startup-recovery.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
+import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
 import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
 import { DeliveryActionExecutor } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
 import { deliveryRuntime } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-adapter.js"
@@ -138,7 +139,8 @@ const runProductionRecovery = (prefix: RecoveryPrefix, lane: "memory" | "sqlite"
         journaledRunBootstrapLayer(
           runId,
           ({ runId: activeRunId }) => productionRuntimeLayer(activeRunId, graph),
-          applicationExit
+          applicationExit,
+          noopJournalMaintenanceObservation
         ).pipe(Layer.provide(dependencies))
       )
       const bootstrap = Context.get(bootstrapContext, JournaledRunBootstrap)

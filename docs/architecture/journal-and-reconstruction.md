@@ -82,14 +82,36 @@ See
 
 ## Complete-history reconstruction
 
-On every entry and while holding coordinator ownership, Dalph scans every
-physical journal row and discovers every unfinished Run without an age cutoff.
-It validates the selected exact Run's complete record history in canonical
-position order before it allows one activation to continue.
+On startup, while holding coordinator ownership, Dalph calls `scanHot` to
+discover the histories whose rows remain in the ordinary Hot partition. It
+does not make a startup decision by scanning Cold retention rows: Cold is
+storage provenance for a history already proven terminal, not a claim about
+current tracker, Git, or executor authority. A terminal history that has not
+yet been retired may remain in Hot and is maintenance debt, so Hot itself does
+not prove that a Run is unfinished.
+
+An exact `read` and recovery read check both partitions in one SQLite snapshot
+or one memory state transition. They return the complete history from whichever
+partition contains it and fail closed if the Run appears in both. The explicit
+`auditAll` operation scans both Hot and Cold with partition-bearing issues and
+does not silently omit retained or malformed rows. It is the diagnostic and
+repair-evidence boundary; it is not ordinary startup discovery.
+
+When a terminal history is ready for maintenance, terminal-history retirement
+runs the canonical reducer over every decoded record, requires a valid final
+`WorkflowRunTerminated` occurrence, copies every persisted row from Hot to
+Cold, verifies the exact key, position, event kind, version, and payload bytes,
+and deletes Hot rows atomically. A valid nonterminal Hot prefix is reported as
+`JournalHistoryNotTerminal`; malformed, gapped, or semantically invalid
+history is `JournalDataCorruption`. A Cold nonterminal history is impossible
+storage state and is also corruption. A failed immediate or startup
+maintenance attempt emits typed `JournalMaintenanceObservation`; there is no
+timer retry loop.
 
 Journal storage, decoding, and reduction are separate seams:
 
-1. Storage returns every physical row in canonical order.
+1. Hot discovery returns Hot rows in canonical order; an explicit full audit
+   returns both partition scans and preserves each row's storage provenance.
 2. Schema decoding produces typed records or explicit row/envelope/payload
    issues.
 3. One pure composed reducer validates the decoded history and reconstructs

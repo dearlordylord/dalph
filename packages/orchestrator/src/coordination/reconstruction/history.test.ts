@@ -39,6 +39,7 @@ import {
   WorkflowRunTerminatedEvent
 } from "../../workflow/registry/event.js"
 import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "./history.js"
+import { workflowJournalHistoryIssueDetail } from "./history-result.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -305,6 +306,9 @@ it("lower reducer identifies duplicate unfinished planned-attempt executor work"
 
   expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
   if (reduction._tag !== "InvalidWorkflowJournalHistory") return
+  const duplicate = reduction.issues.find(({ _tag }) => _tag === "DuplicateUnfinishedTaskAttemptIssue")
+  if (duplicate === undefined) return
+  expect(workflowJournalHistoryIssueDetail(duplicate)).toContain("task A has unfinished attempts")
   expect(reduction.issues).toContainEqual(
     expect.objectContaining({
       _tag: "DuplicateUnfinishedTaskAttemptIssue",

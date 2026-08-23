@@ -64,6 +64,7 @@ import {
 import { journaledCurrentDeliveryFrameOf } from "../../../orchestrator/src/coordination/run/current-delivery-frame.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
+import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
@@ -781,8 +782,11 @@ const makeStorage = (
     beginRun,
     read: () => Effect.succeed(readRecords()),
     readRunForRecovery,
-    scan: () =>
+    scanHot: () =>
       Effect.succeed({ issues: [], runs: readRecords().length === 0 ? [] : [{ records: readRecords(), runId }] }),
+    auditAll: () => Effect.succeed({ issues: [], runs: [] }),
+    retireTerminalRun: (eventRunId) =>
+      Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
     terminateRun
   }
 }
@@ -962,7 +966,8 @@ const makeCancellationDriverImplementation = () => {
       journaledRunBootstrapLayer(
         runId,
         ({ runId: activeRunId }) => runtimeLayer(activeRunId, executorForSettlement, workflowInterpreterForSettlement),
-        exitShell
+        exitShell,
+        noopJournalMaintenanceObservation
       ).pipe(Layer.provide(dependencies))
     ).pipe(Effect.provideService(Scope.Scope, scope))
     applicationExit = exitShell

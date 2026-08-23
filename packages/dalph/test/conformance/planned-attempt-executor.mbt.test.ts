@@ -198,7 +198,10 @@ const executorConformanceDriver = defineDriver(
       beginRun: () => Effect.die("executor model does not own Run lifecycle"),
       read: (requestedRunId) => Effect.succeed(records.filter(({ runId }) => runId === requestedRunId)),
       readRunForRecovery: () => Effect.die("executor model reconstructs its exact journal locally"),
-      scan: () => Effect.die("executor model never scans all Runs"),
+      scanHot: () => Effect.die("executor model never scans all Runs"),
+      auditAll: () => Effect.die("executor model never audits all Runs"),
+      retireTerminalRun: (eventRunId) =>
+        Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
       terminateRun: () => Effect.die("executor model never terminates its Run")
     })
     const journalLayer = unpublishedInRunJournalTestLayer.pipe(

@@ -65,6 +65,7 @@ import {
 } from "../../workflow-journal/store.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+import { noopJournalMaintenanceObservation } from "../../workflow-journal/maintenance.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
@@ -424,7 +425,10 @@ const countingStore = (delegate: JournalStore["Service"], calls: Ref.Ref<Boundar
     read: (...input) => increment(calls, "journalStore").pipe(Effect.andThen(delegate.read(...input))),
     readRunForRecovery: (...input) =>
       increment(calls, "journalStore").pipe(Effect.andThen(delegate.readRunForRecovery(...input))),
-    scan: () => increment(calls, "journalStore").pipe(Effect.andThen(delegate.scan())),
+    scanHot: () => increment(calls, "journalStore").pipe(Effect.andThen(delegate.scanHot())),
+    auditAll: (...input) => increment(calls, "journalStore").pipe(Effect.andThen(delegate.auditAll(...input))),
+    retireTerminalRun: (...input) =>
+      increment(calls, "journalStore").pipe(Effect.andThen(delegate.retireTerminalRun(...input))),
     terminateRun: (...input) => increment(calls, "journalStore").pipe(Effect.andThen(delegate.terminateRun(...input)))
   })
 
@@ -440,7 +444,8 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
   const application = journaledRunBootstrapLayer(
     runId,
     ({ runId }) => runtimeLayer(runId, graph, calls, reconcileTaskWorktree),
-    yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
+    yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void }),
+    noopJournalMaintenanceObservation
   ).pipe(
     Layer.provide(
       Layer.mergeAll(

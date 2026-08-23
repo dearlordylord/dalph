@@ -35,6 +35,12 @@ export type WorkflowJournalHistoryIssue =
   | WorkflowJournalHistoryIdentityIssue
   | WorkflowJournalHistorySemanticIssue
 
+/** Preserves the reducer's exact reason when a storage boundary reports semantic corruption. */
+export const workflowJournalHistoryIssueDetail = (issue: WorkflowJournalHistoryIssue): string =>
+  "detail" in issue
+    ? issue.detail
+    : `task ${issue.taskId} has unfinished attempts ${issue.first.attemptId} at position ${issue.first.position} and ${issue.second.attemptId} at position ${issue.second.position}`
+
 export const duplicateUnfinishedTaskAttemptIssue = (
   runId: RunId,
   first: PlannedTaskAttempt,

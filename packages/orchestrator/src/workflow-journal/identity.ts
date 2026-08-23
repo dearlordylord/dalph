@@ -17,3 +17,11 @@ export const JournalSchemaVersion = Schema.Int.check(Schema.isGreaterThanOrEqual
   Schema.brand("JournalSchemaVersion")
 )
 export type JournalSchemaVersion = typeof JournalSchemaVersion.Type
+
+/**
+ * Records the physical storage provenance of one durable workflow-journal
+ * history. It is not workflow state and does not prove that Hot history owns
+ * live recovery work or that Cold history is complete.
+ */
+export const JournalPartition = Schema.Literals(["Hot", "Cold"])
+export type JournalPartition = typeof JournalPartition.Type

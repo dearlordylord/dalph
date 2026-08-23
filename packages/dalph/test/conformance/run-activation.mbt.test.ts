@@ -35,7 +35,8 @@ import {
   TaskAttemptPlannedEvent,
   TaskWorkCapacity,
   TaskWorkCapacityChangedEvent,
-  workflowJournalEventVersion
+  workflowJournalEventVersion,
+  noopJournalMaintenanceObservation
 } from "@dalph/orchestrator"
 import { CoordinatorOwnership } from "../../../orchestrator/src/authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
@@ -570,7 +571,7 @@ const makeRunActivationDriverImplementation = () => {
     read: (eventRunId) => Effect.succeed(eventRunId === runId ? records : otherRecords),
     readRunForRecovery: (eventRunId, eventTarget) =>
       readRecoverableRunBeginning(eventRunId === runId ? records : otherRecords, eventRunId, eventTarget),
-    scan: () =>
+    scanHot: () =>
       Effect.succeed({
         issues: [],
         runs: [
@@ -578,6 +579,9 @@ const makeRunActivationDriverImplementation = () => {
           ...(otherRecords.length === 0 ? [] : [{ records: otherRecords, runId: otherRunId }])
         ]
       }),
+    auditAll: () => Effect.succeed({ issues: [], runs: [] }),
+    retireTerminalRun: (eventRunId) =>
+      Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
     terminateRun: (eventRunId, disposition, evidence) =>
       Effect.sync(() => {
         const decision = decideWorkflowRunTermination(
@@ -675,7 +679,8 @@ const makeRunActivationDriverImplementation = () => {
           journaledRunBootstrapLayer(
             expectedRunId,
             runtimeLayer,
-            yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
+            yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void }),
+            noopJournalMaintenanceObservation
           ).pipe(Layer.provide(dependencies))
         )
         return yield* use(Context.get(context, JournaledRunBootstrap))

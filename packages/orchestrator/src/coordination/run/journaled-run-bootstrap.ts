@@ -61,6 +61,10 @@ import {
   RunLifecycleJournal,
   WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
+import {
+  journalMaintenanceDiagnosticFor,
+  type JournalMaintenanceObservationService
+} from "../../workflow-journal/maintenance.js"
 import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
@@ -195,6 +199,7 @@ export const journaledRunBootstrapLayer = (
   expectedRunId: RunId,
   runtimeLayer: (input: JournaledRuntimeLayerInput) => JournaledRuntimeLayer,
   applicationExit: ApplicationExitShellService,
+  maintenanceObservation: JournalMaintenanceObservationService,
   operatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = identityOperatorControlGraphReadBoundary
 ) =>
   Layer.effect(
@@ -205,6 +210,7 @@ export const journaledRunBootstrapLayer = (
       const lifecycle = yield* RunLifecycleJournal
       const admission = applicationExit.admission
       const unresolvedProducedWrites = yield* Ref.make<ReadonlyMap<string, ApplicationExitDiagnostic>>(new Map())
+      const startupRetirementAttempts = yield* Ref.make<ReadonlySet<RunId>>(new Set())
       const observeProducedWrite = <A, E, R>(
         writeKey: string,
         operation: "append" | "begin" | "terminate",
@@ -213,9 +219,7 @@ export const journaledRunBootstrapLayer = (
         write.pipe(
           Effect.tap(() =>
             Ref.update(unresolvedProducedWrites, (current) => {
-              const unresolved = new Map(current)
-              unresolved.delete(writeKey)
-              return unresolved
+              return new Map([...current].filter(([key]) => key !== writeKey))
             })
           ),
           Effect.tapError(() =>
@@ -421,6 +425,19 @@ export const journaledRunBootstrapLayer = (
           "terminate",
           lifecycle.terminateRun(runId, terminalProof.disposition, terminalProof.evidence)
         ).pipe(Effect.ensuring(owner.value.release))
+        const shouldAttemptRetirement = yield* Ref.modify(startupRetirementAttempts, (attempted) => {
+          /* v8 ignore next -- @preserve lifecycle.terminateRun accepts one terminal append per Run; a second finish for the same Run is rejected before this guard. */
+          if (attempted.has(runId)) return [false, attempted] as const
+          return [true, new Set([...attempted, runId])] as const
+        })
+        /* v8 ignore next -- @preserve the preceding lifecycle invariant makes this false branch unreachable; repeated inspections use StartupRecovery's guard. */
+        if (shouldAttemptRetirement) {
+          yield* lifecycle
+            .retireTerminalRun(runId)
+            .pipe(
+              Effect.catch((failure) => maintenanceObservation.observe(journalMaintenanceDiagnosticFor(runId, failure)))
+            )
+        }
         return proof.decision
       })
 
@@ -445,7 +462,12 @@ export const journaledRunBootstrapLayer = (
                 if (runId !== expectedRunId) {
                   return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
                 }
-                const current = yield* inspectStartupRecovery(runId, lifecycle)
+                const current = yield* inspectStartupRecovery(
+                  runId,
+                  lifecycle,
+                  maintenanceObservation,
+                  startupRetirementAttempts
+                )
                 if (current === undefined) {
                   const initialControlPolicy = yield* initialControlPolicySource
                   yield* observeProducedWrite(
@@ -457,9 +479,7 @@ export const journaledRunBootstrapLayer = (
                       lifecycle.readRunForRecovery(runId, target).pipe(
                         Effect.tap(() =>
                           Ref.update(unresolvedProducedWrites, (current) => {
-                            const unresolved = new Map(current)
-                            unresolved.delete(`begin:${runId}`)
-                            return unresolved
+                            return new Map([...current].filter(([key]) => key !== `begin:${runId}`))
                           })
                         ),
                         Effect.asVoid,

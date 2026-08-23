@@ -66,6 +66,7 @@ on the issue while later dependent work proceeds.
 | `issue-210-linux-supervisor-exit.md` | 210 |
 | `issue-69-disposition-cleanup.md` | 69 |
 | `issue-77-production-cleanup-qualification.md` | 77 |
+| `issue-70-terminal-history-retirement.md` | 70 |
 
 **Accepted, not yet implemented** — the owning issue is open. These state
 required behavior and must not be read as a description of what Dalph does

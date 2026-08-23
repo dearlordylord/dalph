@@ -219,6 +219,7 @@ export {
   githubTrackerMutationNodeLayer
 } from "./authorities/task-tracker/github/claim-mutation.js"
 export * from "./workflow-journal/event-codec.js"
+export * from "./workflow-journal/identity.js"
 export { describeJournalEvent } from "./workflow/registry/event-descriptor.js"
 export * from "./workflow/kernel/event.js"
 export * from "./workflow-journal/record-key.js"
@@ -228,6 +229,9 @@ export {
   JournalPositionGap,
   JournalRecordMismatch,
   JournalDataCorruption,
+  JournalHistoryNotTerminal,
+  JournalPartitionContradiction,
+  JournalTerminalHistoryRetirement,
   type JournalAppendError,
   type JournalError,
   JournalSchemaIncompatible,
@@ -252,6 +256,15 @@ export {
   WorkflowRunNotBegan,
   WorkflowRunTargetMismatch
 } from "./workflow-journal/store.js"
+export {
+  JournalMaintenanceDiagnostic,
+  JournalMaintenanceFailure,
+  JournalMaintenanceObservation,
+  defaultJournalMaintenanceObservation,
+  journalMaintenanceDiagnosticFor,
+  noopJournalMaintenanceObservation,
+  type JournalMaintenanceObservationService
+} from "./workflow-journal/maintenance.js"
 export {
   JournalReadSource,
   journalReadSourceLayer,

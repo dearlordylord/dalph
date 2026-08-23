@@ -568,7 +568,10 @@ const taskFactReconciliationDriver = defineDriver(
         }),
       read: (eventRunId) => Effect.succeed(records.filter(({ runId: recorded }) => recorded === eventRunId)),
       readRunForRecovery: () => Effect.die("model driver uses one already-begun Run"),
-      scan: () => Effect.succeed({ issues: [], runs: [{ records, runId }] }),
+      scanHot: () => Effect.succeed({ issues: [], runs: [{ records, runId }] }),
+      auditAll: () => Effect.succeed({ issues: [], runs: [] }),
+      retireTerminalRun: (eventRunId) =>
+        Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
       terminateRun: () => Effect.die("model driver never terminates its Run")
     })
     const journalLayer = unpublishedInRunJournalTestLayer.pipe(

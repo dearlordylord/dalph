@@ -3,7 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey, JournalSchemaVersion } from "./identity.js"
 import { TrackerTarget } from "../authorities/task-tracker/target.js"
-import type { JournalScan } from "./recovery-model.js"
+import type { JournalAudit, JournalScan } from "./recovery-model.js"
 import {
   type WorkflowJournalEvent,
   WorkflowJournalEvent as WorkflowJournalEventSchema
@@ -36,7 +36,10 @@ const JournalStoreOperation = Schema.Literals([
   "JournalStore.read",
   "JournalStore.beginRun",
   "JournalStore.terminateRun",
-  "JournalStore.readRunForRecovery"
+  "JournalStore.readRunForRecovery",
+  "JournalStore.scanHot",
+  "JournalStore.auditAll",
+  "JournalStore.retireTerminalRun"
 ])
 
 /** Journal storage could not perform an operation and may become available later. */
@@ -82,12 +85,32 @@ export type JournalStoreError =
   | JournalStorageCapacityExhausted
   | JournalStorageLocked
   | JournalStorageUnavailable
+  | JournalPartitionContradiction
 
 /** The same durable key was presented with unequal workflow-journal-history content. */
 export class JournalStoreContradiction extends Schema.TaggedError<JournalStoreContradiction>()(
   "JournalStoreContradiction",
   { runId: RunId, key: JournalRecordKey, existingPosition: JournalPosition }
 ) {}
+
+/** One Run was found in both storage partitions, so neither copy may be used. */
+export class JournalPartitionContradiction extends Schema.TaggedError<JournalPartitionContradiction>()(
+  "JournalPartitionContradiction",
+  { runId: RunId }
+) {}
+
+/** A complete history lacks the valid final termination occurrence required for retirement. */
+export class JournalHistoryNotTerminal extends Schema.TaggedError<JournalHistoryNotTerminal>()(
+  "JournalHistoryNotTerminal",
+  { runId: RunId }
+) {}
+
+/** The exact result of one atomic terminal-history retirement attempt. */
+export const JournalTerminalHistoryRetirement = Schema.Union([
+  Schema.TaggedStruct("Retired", { from: Schema.Literal("Hot"), runId: RunId, to: Schema.Literal("Cold") }),
+  Schema.TaggedStruct("AlreadyRetired", { partition: Schema.Literal("Cold"), runId: RunId })
+])
+export type JournalTerminalHistoryRetirement = typeof JournalTerminalHistoryRetirement.Type
 
 /** An in-Run capability was used for a Run other than the one installed behind it. */
 export class InRunJournalRunMismatch extends Schema.TaggedError<InRunJournalRunMismatch>()("InRunJournalRunMismatch", {
@@ -182,7 +205,17 @@ export interface JournalStoreService {
     JournalRecord,
     JournalStoreError | WorkflowRunAlreadyTerminated | WorkflowRunNotBegan | WorkflowRunTargetMismatch
   >
-  readonly scan: () => Effect.Effect<JournalScan, JournalStoreError>
+  /** Discovers only histories whose rows remain eligible to own recovery work. */
+  readonly scanHot: () => Effect.Effect<JournalScan, JournalStoreError>
+  /** Explicitly audits both physical partitions, including cold historical rows. */
+  readonly auditAll: () => Effect.Effect<JournalAudit, JournalStoreError>
+  /** Atomically moves one complete valid terminal history from hot to cold. */
+  readonly retireTerminalRun: (
+    runId: RunId
+  ) => Effect.Effect<
+    JournalTerminalHistoryRetirement,
+    JournalStoreError | WorkflowRunNotBegan | JournalHistoryNotTerminal
+  >
   readonly terminateRun: (
     runId: RunId,
     disposition: RunTerminationDisposition,
@@ -200,7 +233,9 @@ export interface RunLifecycleJournalService {
   readonly beginRun: JournalStoreService["beginRun"]
   readonly read: JournalStoreService["read"]
   readonly readRunForRecovery: JournalStoreService["readRunForRecovery"]
-  readonly scan: JournalStoreService["scan"]
+  readonly scanHot: JournalStoreService["scanHot"]
+  readonly auditAll: JournalStoreService["auditAll"]
+  readonly retireTerminalRun: JournalStoreService["retireTerminalRun"]
   readonly terminateRun: JournalStoreService["terminateRun"]
 }
 
@@ -223,7 +258,9 @@ export const journalStoreCapabilities = <E, R>(
             beginRun: journal.beginRun,
             read: journal.read,
             readRunForRecovery: journal.readRunForRecovery,
-            scan: journal.scan,
+            scanHot: journal.scanHot,
+            auditAll: journal.auditAll,
+            retireTerminalRun: journal.retireTerminalRun,
             terminateRun: journal.terminateRun
           })
         )

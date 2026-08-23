@@ -44,7 +44,8 @@ import {
   type InitialControlPolicySource,
   type CurrentSignal,
   type TrackerTarget,
-  WorkflowRunAlreadyTerminated
+  WorkflowRunAlreadyTerminated,
+  defaultJournalMaintenanceObservation
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Duration, Effect, Layer, Schema } from "effect"
@@ -69,6 +70,8 @@ const defaultProductionRunReactivationInterval = ProductionRunReactivationInterv
 export interface ProductionRunReactivationOptions {
   readonly activationInterval?: ProductionRunReactivationInterval
   readonly failureCooldown?: ProductionRunReactivationInterval
+  /** Optional process-local timer lifecycle observation for diagnostics. */
+  readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
   /** Optional host-owned current-first tracker notification adapter; values remain hints. */
   readonly trackerNotificationSource?: CurrentSignal<unknown>
   /** Required boundary for typed tracker/Git/journal failures; no activation failure is swallowed. */
@@ -116,6 +119,7 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
     onFailure: options.onFailure,
     readControl,
     runId,
+    ...(options.onTimerStateChange === undefined ? {} : { onTimerStateChange: options.onTimerStateChange }),
     ...(options.trackerNotificationSource === undefined
       ? {}
       : { trackerNotificationSource: options.trackerNotificationSource })
@@ -233,7 +237,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
         )
       }
       return Layer.merge(
-        journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(Layer.provide(journalLayer)),
+        journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit, defaultJournalMaintenanceObservation).pipe(
+          Layer.provide(journalLayer)
+        ),
         Layer.mergeAll(
           Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary),
           // Keep the process-wide shell available so Exit can invoke the

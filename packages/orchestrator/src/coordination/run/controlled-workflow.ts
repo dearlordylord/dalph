@@ -17,6 +17,7 @@ import { runWorkflow } from "./run.js"
 import { validatedRunActivationLayer } from "./startup-recovery.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 import { ApplicationExitRequestBoundary, makeApplicationExitShell } from "../application-exit/application-shell.js"
+import { defaultJournalMaintenanceObservation } from "../../workflow-journal/maintenance.js"
 
 const controlledOwnership = CoordinatorOwnership.of({
   /* v8 ignore next -- #167 owns controlled coordinator-lock behavior; #195 only installs the ordinary capability. */
@@ -59,7 +60,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
         )
       }
       return Layer.merge(
-        journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit).pipe(
+        journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit, defaultJournalMaintenanceObservation).pipe(
           Layer.provide(memoryJournalStoreLayer),
           Layer.provide(controlledOwnershipLayer)
         ),
