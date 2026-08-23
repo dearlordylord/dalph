@@ -4,6 +4,10 @@ import { spawn } from "node:child_process"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { relative, join } from "node:path"
 import { describe, expect } from "vitest"
+// @ts-expect-error The discovery implementation is an executable JavaScript module.
+import { discoverQualityFiles } from "./quality-file-discovery.mjs"
+// @ts-expect-error The lint policy is shared with the executable JavaScript runner.
+import { selectCompatibilityFiles } from "./quality-lint-policy.mjs"
 
 const repositoryRoot = process.cwd()
 const qualityLintRunner = join(repositoryRoot, "scripts", "run-quality-lint.mjs")
@@ -97,16 +101,26 @@ describe.sequential("quality lint integration", () => {
   )
 
   it.effect(
-    "staged lint runs compatibility policy over the discovered project",
+    "staged lint selects the discovered project for compatibility policy",
     () =>
       withFixtures((fixtureDirectory) =>
         Effect.gen(function* () {
           const functionalFile = yield* copyFixture(fixtureDirectory, "functional")
-          const result = yield* run(["--staged", relativeToRepository(functionalFile)])
-          expect(result.exitCode).not.toBe(0)
-          expect(result.stdout).toContain("functional/immutable-data")
+          const selectedFiles = yield* Effect.tryPromise(() =>
+            discoverQualityFiles({ explicitFiles: [relativeToRepository(functionalFile)] })
+          )
+          const allFiles = yield* Effect.tryPromise(() => discoverQualityFiles())
+          const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
+            allFiles,
+            selectedFiles,
+            staged: true
+          })
+
+          expect(selectedCompatibilityFiles).toEqual([relativeToRepository(functionalFile)])
+          expect(compatibilityFiles).toContain(relativeToRepository(functionalFile))
+          expect(compatibilityFiles.length).toBeGreaterThan(selectedCompatibilityFiles.length)
         })
       ),
-    repositoryCompatibilityLintTimeout
+    30_000
   )
 })

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process"
 import { extname, join } from "node:path"
 import { discoverQualityFiles } from "./quality-file-discovery.mjs"
+import { selectCompatibilityFiles } from "./quality-lint-policy.mjs"
 
 const options = new Set(process.argv.slice(2).filter((argument) => argument.startsWith("--")))
 const explicitFiles = process.argv.slice(2).filter((argument) => !argument.startsWith("--"))
@@ -9,7 +10,6 @@ const fix = options.has("--fix")
 const allFiles = await discoverQualityFiles()
 const selectedFiles = explicitFiles.length === 0 ? allFiles : await discoverQualityFiles({ explicitFiles })
 const lintableExtensions = new Set([".js", ".mjs", ".ts", ".tsx"])
-const typedExtensions = new Set([".ts", ".tsx"])
 const executable = (name) =>
   join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? `${name}.cmd` : name)
 
@@ -24,10 +24,7 @@ if (nativeFiles.length > 0) {
   run(executable("oxlint"), ["-c", ".oxlintrc.json", "--deny-warnings", ...(fix ? ["--fix"] : []), ...nativeFiles])
 }
 
-const allCompatibilityFiles = allFiles.filter((file) => typedExtensions.has(extname(file)))
-const compatibilityFileSet = new Set(allCompatibilityFiles)
-const selectedCompatibilityFiles = selectedFiles.filter((file) => compatibilityFileSet.has(file))
-const compatibilityFiles = staged ? allCompatibilityFiles : selectedCompatibilityFiles
+const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles, staged })
 const runCompatibility = (files, shouldFix) => {
   if (files.length === 0) return
   run(executable("eslint"), [
