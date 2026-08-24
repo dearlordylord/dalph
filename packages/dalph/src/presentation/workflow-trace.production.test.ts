@@ -44,9 +44,9 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
 import {
-  type encodeTraceAtCursor,
+  encodeTraceAtCursor,
   encodeTraceControlDispositionFacet,
-  type encodeTraceHistoryItem,
+  encodeTraceHistoryItem,
   HistoricalTraceConsole,
   type TraceConsoleStatus,
   historicalTraceConsoleLayer,
@@ -179,6 +179,8 @@ it("canonicalizes the production cursor view without changing its committed iden
     JournalPosition.make(4)
   ])
   expect(canonical.items[0]?.identity).toEqual({ position: JournalPosition.make(2), runId })
+  expect(JSON.parse(encodeTraceHistoryItem(historyItem))).toEqual(historyItem)
+  expect(JSON.parse(encodeTraceAtCursor(traceAtCursor))).toEqual(traceAtCursor)
   expect(JSON.parse(encodeTraceControlDispositionFacet(traceAtCursor))).toEqual(traceAtCursor.facets.controlDisposition)
   expect(renderTraceAtCursor(traceAtCursor)).toEqual([
     "Historical snapshot · Run console-production-trace-run · through journal position 4",
