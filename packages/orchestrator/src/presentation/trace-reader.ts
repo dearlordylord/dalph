@@ -103,7 +103,7 @@ import {
 import { validateCancelledAttemptHistoryPrefix } from "../coordination/reconstruction/cancelled-attempt-history.js"
 import {
   workflowJournalHistoryIssueDetail,
-  type WorkflowJournalHistoryIssue
+  type WorkflowJournalHistorySemanticIssue
 } from "../coordination/reconstruction/history-result.js"
 import { makeIntegrationHistoryIndexes } from "../coordination/reconstruction/integration-history.js"
 import type { CurrentSignal } from "../coordination/delivery/relations.js"
@@ -1962,11 +1962,10 @@ const cleanupHistoryIssue = (records: ReadonlyArray<JournalRecord>): string | un
   return undefined
 }
 
-const canonicalHistoryIssue = (issues: ReadonlyArray<WorkflowJournalHistoryIssue>): string | undefined => {
+const canonicalHistoryIssue = (issues: ReadonlyArray<WorkflowJournalHistorySemanticIssue>): string | undefined => {
   const issue = issues[0]
   if (issue === undefined) return undefined
-  const position = "position" in issue ? issue.position : issue.second.position
-  return `${workflowJournalHistoryIssueDetail(issue)} at journal position ${position}`
+  return `${workflowJournalHistoryIssueDetail(issue)} at journal position ${issue.position}`
 }
 
 const cancelledAttemptHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
@@ -2102,6 +2101,7 @@ const outsideAuthorityAcknowledgementAt = (
   if (observationOperationId === undefined) return undefined
   const action = operationItem(items, observationOperationId)
   const observation = occurrenceItemAt(items, record.position)
+  /* v8 ignore next -- @preserve validated observation histories project both the intended operation and its exact observation occurrence before relationships are derived. */
   if (action === undefined || observation === undefined) return undefined
   return { action: action.identity, actionOperationId: observationOperationId, observation: observation.identity }
 }
@@ -2113,6 +2113,7 @@ const processLocalResourceSerializationAt = (
   if (record.event._tag !== "IntegrationStarted") return undefined
   const earlier = occurrenceItemAt(items, record.event.responsibilityBeganAt)
   const later = occurrenceItemAt(items, record.position)
+  /* v8 ignore next -- @preserve validated IntegrationStarted history binds both responsibility-began and start positions, and projection emits both before relationships are derived. */
   if (earlier === undefined || later === undefined) return undefined
   return { earlier: earlier.identity, later: later.identity, target: record.event.integrationTarget }
 }
@@ -2467,7 +2468,12 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
             /* v8 ignore stop */
             const cached = views.get(cursor.position)
             return cached === undefined
-              ? atCursorFromCompleteIndex(cursor, index, graphByIndex.get(index) ?? new Map()).pipe(
+              ? atCursorFromCompleteIndex(
+                  cursor,
+                  index,
+                  /* v8 ignore next -- @preserve completeTraceIndexFor installs the graph map before publishing this index. */
+                  graphByIndex.get(index) ?? new Map()
+                ).pipe(
                   Effect.tap((view) =>
                     Effect.sync(() => {
                       views.set(cursor.position, view)

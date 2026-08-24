@@ -10,11 +10,18 @@ const fix = options.has("--fix")
 const allFiles = await discoverQualityFiles()
 const selectedFiles = explicitFiles.length === 0 ? allFiles : await discoverQualityFiles({ explicitFiles })
 const lintableExtensions = new Set([".js", ".mjs", ".ts", ".tsx"])
+// Compatibility lint loads the complete TypeScript import graph even when a
+// single explicit file is selected. Give that child process enough heap for
+// the repository-scale graph instead of depending on the caller's Node limit.
+const compatibilityLintEnvironment = {
+  ...process.env,
+  NODE_OPTIONS: [process.env.NODE_OPTIONS, "--max-old-space-size=12288"].filter(Boolean).join(" ")
+}
 const executable = (name) =>
   join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? `${name}.cmd` : name)
 
-const run = (command, arguments_) => {
-  const result = spawnSync(command, arguments_, { stdio: "inherit" })
+const run = (command, arguments_, environment = process.env) => {
+  const result = spawnSync(command, arguments_, { env: environment, stdio: "inherit" })
   if (result.error !== undefined) throw result.error
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
@@ -27,17 +34,21 @@ if (nativeFiles.length > 0) {
 const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles, staged })
 const runCompatibility = (files, shouldFix) => {
   if (files.length === 0) return
-  run(executable("eslint"), [
-    "--config",
-    "eslint.compat.config.mjs",
-    "--max-warnings",
-    "0",
-    "--suppressions-location",
-    "eslint-functional-suppressions.json",
-    "--no-error-on-unmatched-pattern",
-    ...(shouldFix ? ["--fix"] : []),
-    ...files
-  ])
+  run(
+    executable("eslint"),
+    [
+      "--config",
+      "eslint.compat.config.mjs",
+      "--max-warnings",
+      "0",
+      "--suppressions-location",
+      "eslint-functional-suppressions.json",
+      "--no-error-on-unmatched-pattern",
+      ...(shouldFix ? ["--fix"] : []),
+      ...files
+    ],
+    compatibilityLintEnvironment
+  )
 }
 
 if (staged && fix) {

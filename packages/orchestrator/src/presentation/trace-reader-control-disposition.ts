@@ -13,7 +13,6 @@ import type {
 } from "../workflow/protocols/disposition-cleanup/worktree.js"
 import type { TraceCleanupProgress, TraceCleanupStatus, TraceHistoryItem, TraceItemIdentity } from "./trace-reader.js"
 import type { HistoricalFacetFactories, HistoricalFacetReductionState } from "./trace-reader-historical-facets.js"
-import { Match } from "effect"
 
 type CleanupResultTag = "AlreadyAbsent" | "DefinitelyNotApplied" | "Removed" | "Unknown"
 
@@ -48,74 +47,79 @@ const cleanupStatusForEvent = (
   event: CleanupJournalEvent,
   source: TraceItemIdentity,
   factories: HistoricalFacetFactories
-): TraceCleanupStatus =>
-  Match.valueTags(event, {
-    BranchCleanupAbsenceConfirmed: () => factories.cleanupStatus.Absent.make({ source }),
-    BranchCleanupAuthorized: () => factories.cleanupStatus.Authorized.make({ source }),
-    BranchCleanupContradicted: (value) => factories.cleanupStatus.Contradicted.make({ detail: value.detail, source }),
-    BranchCleanupMutationIntended: () => factories.cleanupStatus.MutationPending.make({ source }),
-    BranchCleanupMutationResultRecorded: (value) =>
-      factories.cleanupStatus.MutationResultRecorded.make({ result: cleanupMutationResultTag(value.result), source }),
-    BranchCleanupObservationIntended: () => factories.cleanupStatus.ObservationPending.make({ source }),
-    BranchCleanupObserved: (value) => cleanupObservationStatus(value.observation, source, factories),
-    BranchCleanupSettled: (value) => factories.cleanupStatus.Settled.make({ result: value.result._tag, source }),
-    IntegratorCandidateCleanupAbsenceConfirmed: () => factories.cleanupStatus.Absent.make({ source }),
-    IntegratorCandidateCleanupAuthorized: () => factories.cleanupStatus.Authorized.make({ source }),
-    IntegratorCandidateCleanupContradicted: (value) =>
-      factories.cleanupStatus.Contradicted.make({ detail: value.detail, source }),
-    IntegratorCandidateCleanupMutationIntended: () => factories.cleanupStatus.MutationPending.make({ source }),
-    IntegratorCandidateCleanupMutationResultRecorded: (value) =>
-      factories.cleanupStatus.MutationResultRecorded.make({ result: cleanupMutationResultTag(value.result), source }),
-    IntegratorCandidateCleanupObservationIntended: () => factories.cleanupStatus.ObservationPending.make({ source }),
-    IntegratorCandidateCleanupObserved: (value) => cleanupObservationStatus(value.observation, source, factories),
-    IntegratorCandidateCleanupSettled: (value) =>
-      factories.cleanupStatus.Settled.make({ result: value.result._tag, source }),
-    WorktreeCleanupAbsenceConfirmed: () => factories.cleanupStatus.Absent.make({ source }),
-    WorktreeCleanupAuthorized: () => factories.cleanupStatus.Authorized.make({ source }),
-    WorktreeCleanupContradicted: (value) => factories.cleanupStatus.Contradicted.make({ detail: value.detail, source }),
-    WorktreeCleanupMutationIntended: () => factories.cleanupStatus.MutationPending.make({ source }),
-    WorktreeCleanupMutationResultRecorded: (value) =>
-      factories.cleanupStatus.MutationResultRecorded.make({ result: cleanupMutationResultTag(value.result), source }),
-    WorktreeCleanupObservationIntended: () => factories.cleanupStatus.ObservationPending.make({ source }),
-    WorktreeCleanupObserved: (value) => cleanupObservationStatus(value.observation, source, factories),
-    WorktreeCleanupSettled: (value) => factories.cleanupStatus.Settled.make({ result: value.result._tag, source })
-  })
+): TraceCleanupStatus => {
+  switch (event._tag) {
+    case "BranchCleanupAbsenceConfirmed":
+    case "IntegratorCandidateCleanupAbsenceConfirmed":
+    case "WorktreeCleanupAbsenceConfirmed":
+      return factories.cleanupStatus.Absent.make({ source })
+    case "BranchCleanupAuthorized":
+    case "IntegratorCandidateCleanupAuthorized":
+    case "WorktreeCleanupAuthorized":
+      return factories.cleanupStatus.Authorized.make({ source })
+    case "BranchCleanupContradicted":
+    case "IntegratorCandidateCleanupContradicted":
+    case "WorktreeCleanupContradicted":
+      return factories.cleanupStatus.Contradicted.make({ detail: event.detail, source })
+    case "BranchCleanupMutationIntended":
+    case "IntegratorCandidateCleanupMutationIntended":
+    case "WorktreeCleanupMutationIntended":
+      return factories.cleanupStatus.MutationPending.make({ source })
+    case "BranchCleanupMutationResultRecorded":
+    case "IntegratorCandidateCleanupMutationResultRecorded":
+    case "WorktreeCleanupMutationResultRecorded":
+      return factories.cleanupStatus.MutationResultRecorded.make({
+        result: cleanupMutationResultTag(event.result),
+        source
+      })
+    case "BranchCleanupObservationIntended":
+    case "IntegratorCandidateCleanupObservationIntended":
+    case "WorktreeCleanupObservationIntended":
+      return factories.cleanupStatus.ObservationPending.make({ source })
+    case "BranchCleanupObserved":
+    case "IntegratorCandidateCleanupObserved":
+    case "WorktreeCleanupObserved":
+      return cleanupObservationStatus(event.observation, source, factories)
+    case "BranchCleanupSettled":
+    case "IntegratorCandidateCleanupSettled":
+    case "WorktreeCleanupSettled":
+      return factories.cleanupStatus.Settled.make({ result: event.result._tag, source })
+  }
+}
 
 const reduceCleanupFamily = <
   Event extends CleanupJournalEvent,
-  Step extends { readonly event: Event; readonly source: TraceItemIdentity }
+  Step extends { readonly event: Event; readonly source: TraceItemIdentity },
+  Tag extends TraceCleanupProgress["_tag"]
 >(
   occurrence: { readonly event: Event },
   item: TraceHistoryItem,
   state: HistoricalFacetReductionState,
-  progressTag: TraceCleanupProgress["_tag"],
+  progressTag: Tag,
   makeStep: (event: Event, source: TraceItemIdentity) => Step,
   makeProgress: (
-    current: TraceCleanupProgress | undefined,
+    current: Extract<TraceCleanupProgress, { readonly _tag: Tag }> | undefined,
     input: {
       readonly event: Event
       readonly authorization: Event["authorization"]
       readonly status: TraceCleanupStatus
       readonly step: Step
     }
-  ) => TraceCleanupProgress | undefined
+  ) => Extract<TraceCleanupProgress, { readonly _tag: Tag }>
 ): void => {
   const event = occurrence.event
   const status = cleanupStatusForEvent(event, item.identity, state.factories)
   const step = makeStep(event, item.identity)
-  const index = state.cleanup.findIndex(
-    (progress) =>
+  const current = state.cleanup.find(
+    (progress): progress is Extract<TraceCleanupProgress, { readonly _tag: Tag }> =>
       progress._tag === progressTag && progress.authorization.operationId === event.authorization.operationId
   )
-  if (index < 0) {
-    const progress = makeProgress(undefined, { authorization: event.authorization, event, status, step })
-    if (progress !== undefined) state.cleanup.push(progress)
+  if (current === undefined) {
+    state.cleanup.push(makeProgress(undefined, { authorization: event.authorization, event, status, step }))
     return
   }
-  const current = state.cleanup[index]
-  if (current === undefined || current._tag !== progressTag) return
-  const progress = makeProgress(current, { authorization: event.authorization, event, status, step })
-  if (progress !== undefined) state.cleanup.splice(index, 1, progress)
+  const index = state.cleanup.indexOf(current)
+  state.cleanup.splice(index, 1, makeProgress(current, { authorization: event.authorization, event, status, step }))
 }
 
 const reduceWorktreeCleanup = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
@@ -130,7 +134,6 @@ const reduceWorktreeCleanup = (item: TraceHistoryItem, state: HistoricalFacetRed
       if (current === undefined) {
         return state.factories.cleanupProgress.Worktree.make({ authorization, status, steps: [step] })
       }
-      if (current._tag !== "Worktree") return undefined
       return state.factories.cleanupProgress.Worktree.make({
         authorization: current.authorization,
         status,
@@ -152,7 +155,6 @@ const reduceBranchCleanup = (item: TraceHistoryItem, state: HistoricalFacetReduc
       if (current === undefined) {
         return state.factories.cleanupProgress.Branch.make({ authorization, status, steps: [step] })
       }
-      if (current._tag !== "Branch") return undefined
       return state.factories.cleanupProgress.Branch.make({
         authorization: current.authorization,
         status,
@@ -174,7 +176,6 @@ const reduceIntegratorCandidateCleanup = (item: TraceHistoryItem, state: Histori
       if (current === undefined) {
         return state.factories.cleanupProgress.IntegratorCandidate.make({ authorization, status, steps: [step] })
       }
-      if (current._tag !== "IntegratorCandidate") return undefined
       return state.factories.cleanupProgress.IntegratorCandidate.make({
         authorization: current.authorization,
         status,

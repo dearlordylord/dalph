@@ -80,7 +80,7 @@ const identityIssue = (
 }
 
 const semanticIssue = (
-  issues: Array<WorkflowJournalHistoryIssue>,
+  issues: Array<WorkflowJournalHistoryIssue> | Array<WorkflowJournalHistorySemanticIssue>,
   runId: RunId,
   position: JournalPosition,
   detail: string
@@ -874,8 +874,8 @@ const validateAttemptStop = (
 export const validateAttemptStopHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
-): ReadonlyArray<WorkflowJournalHistoryIssue> => {
-  const issues = new Array<WorkflowJournalHistoryIssue>()
+): ReadonlyArray<WorkflowJournalHistorySemanticIssue> => {
+  const issues = new Array<WorkflowJournalHistorySemanticIssue>()
   let indexes = emptyIndexes()
   for (const record of records) {
     indexes = validateAttemptStop(record, runId, records, indexes, issues)
@@ -2308,8 +2308,8 @@ const validateCancellationMultiplicity = (
 export const validateCancellationMultiplicityHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
-): ReadonlyArray<WorkflowJournalHistoryIssue> => {
-  const issues = new Array<WorkflowJournalHistoryIssue>()
+): ReadonlyArray<WorkflowJournalHistorySemanticIssue> => {
+  const issues = new Array<WorkflowJournalHistorySemanticIssue>()
   validateCancellationMultiplicity(
     runId,
     records.filter(({ event }) => event._tag === "RunCancellationApplied"),
