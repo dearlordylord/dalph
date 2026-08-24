@@ -44,6 +44,7 @@ separately and are not current implementation authority.
 | `issue-224-outer-integrator-application-exit.md` | 224 |
 | `issue-225-remove-legacy-split-integration.md` | 225 |
 | `issue-142-qualify-recovery-prefix-harness.md` | 142 |
+| `issue-54-resize-task-admission.md` | 54 |
 
 **Describes implemented behavior with an intentionally open owning issue** —
 the implementation evidence and post-implementation choices audit are recorded
@@ -75,7 +76,6 @@ today.
 | File | Issue |
 |---|---|
 | `issue-102-terminate-settled-run.md` | 102 |
-| `issue-54-resize-task-admission.md` | 54 |
 | `issue-55-localize-task-conflicts.md` | 55 |
 | `issue-56-queue-accepted-integration.md` | 56 |
 | `issue-63-observe-pause-progress.md` | 63 |
@@ -83,6 +83,13 @@ today.
 | `issue-66-clean-restart-changed-attempt.md` | 66 |
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-71-qualify-real-github-graph-membership-claims.md` | 71 |
+
+**Proposed for maintainer acceptance** — these files freshen an open issue but
+do not authorize implementation until their status changes to accepted.
+
+| File | Issue |
+|---|---|
+| `issue-64-revise-future-technical-attempt-ceiling.md` | 64 |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
