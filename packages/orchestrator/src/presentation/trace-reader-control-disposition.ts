@@ -43,48 +43,69 @@ const cleanupObservationStatus = (
 
 const cleanupMutationResultTag = (result: { readonly _tag: CleanupResultTag }): CleanupResultTag => result._tag
 
+type CleanupSettledEvent = Extract<CleanupJournalEvent, { readonly _tag: `${string}CleanupSettled` }>
+type StaticCleanupStatusKind = "Absent" | "Authorized" | "MutationPending" | "ObservationPending"
+
+const cleanupSettledEventTags: ReadonlySet<CleanupJournalEvent["_tag"]> = new Set([
+  "BranchCleanupSettled",
+  "IntegratorCandidateCleanupSettled",
+  "WorktreeCleanupSettled"
+])
+
+const staticCleanupStatusByEventTag = {
+  BranchCleanupAbsenceConfirmed: "Absent",
+  BranchCleanupAuthorized: "Authorized",
+  BranchCleanupMutationIntended: "MutationPending",
+  BranchCleanupObservationIntended: "ObservationPending",
+  IntegratorCandidateCleanupAbsenceConfirmed: "Absent",
+  IntegratorCandidateCleanupAuthorized: "Authorized",
+  IntegratorCandidateCleanupMutationIntended: "MutationPending",
+  IntegratorCandidateCleanupObservationIntended: "ObservationPending",
+  WorktreeCleanupAbsenceConfirmed: "Absent",
+  WorktreeCleanupAuthorized: "Authorized",
+  WorktreeCleanupMutationIntended: "MutationPending",
+  WorktreeCleanupObservationIntended: "ObservationPending"
+} as const satisfies Record<
+  Exclude<
+    CleanupJournalEvent["_tag"],
+    `${string}CleanupContradicted` | `${string}CleanupObserved` | `${string}ResultRecorded` | `${string}CleanupSettled`
+  >,
+  StaticCleanupStatusKind
+>
+
+const isCleanupSettledEvent = (event: CleanupJournalEvent): event is CleanupSettledEvent =>
+  cleanupSettledEventTags.has(event._tag)
+
+const staticCleanupStatus = (
+  kind: StaticCleanupStatusKind,
+  source: TraceItemIdentity,
+  factories: HistoricalFacetFactories
+): TraceCleanupStatus => {
+  switch (kind) {
+    case "Absent":
+      return factories.cleanupStatus.Absent.make({ source })
+    case "Authorized":
+      return factories.cleanupStatus.Authorized.make({ source })
+    case "MutationPending":
+      return factories.cleanupStatus.MutationPending.make({ source })
+    case "ObservationPending":
+      return factories.cleanupStatus.ObservationPending.make({ source })
+  }
+}
+
 const cleanupStatusForEvent = (
   event: CleanupJournalEvent,
   source: TraceItemIdentity,
   factories: HistoricalFacetFactories
 ): TraceCleanupStatus => {
-  switch (event._tag) {
-    case "BranchCleanupAbsenceConfirmed":
-    case "IntegratorCandidateCleanupAbsenceConfirmed":
-    case "WorktreeCleanupAbsenceConfirmed":
-      return factories.cleanupStatus.Absent.make({ source })
-    case "BranchCleanupAuthorized":
-    case "IntegratorCandidateCleanupAuthorized":
-    case "WorktreeCleanupAuthorized":
-      return factories.cleanupStatus.Authorized.make({ source })
-    case "BranchCleanupContradicted":
-    case "IntegratorCandidateCleanupContradicted":
-    case "WorktreeCleanupContradicted":
-      return factories.cleanupStatus.Contradicted.make({ detail: event.detail, source })
-    case "BranchCleanupMutationIntended":
-    case "IntegratorCandidateCleanupMutationIntended":
-    case "WorktreeCleanupMutationIntended":
-      return factories.cleanupStatus.MutationPending.make({ source })
-    case "BranchCleanupMutationResultRecorded":
-    case "IntegratorCandidateCleanupMutationResultRecorded":
-    case "WorktreeCleanupMutationResultRecorded":
-      return factories.cleanupStatus.MutationResultRecorded.make({
-        result: cleanupMutationResultTag(event.result),
-        source
-      })
-    case "BranchCleanupObservationIntended":
-    case "IntegratorCandidateCleanupObservationIntended":
-    case "WorktreeCleanupObservationIntended":
-      return factories.cleanupStatus.ObservationPending.make({ source })
-    case "BranchCleanupObserved":
-    case "IntegratorCandidateCleanupObserved":
-    case "WorktreeCleanupObserved":
-      return cleanupObservationStatus(event.observation, source, factories)
-    case "BranchCleanupSettled":
-    case "IntegratorCandidateCleanupSettled":
-    case "WorktreeCleanupSettled":
-      return factories.cleanupStatus.Settled.make({ result: event.result._tag, source })
+  if ("detail" in event) return factories.cleanupStatus.Contradicted.make({ detail: event.detail, source })
+  if ("observation" in event) return cleanupObservationStatus(event.observation, source, factories)
+  if ("result" in event) {
+    return isCleanupSettledEvent(event)
+      ? factories.cleanupStatus.Settled.make({ result: event.result._tag, source })
+      : factories.cleanupStatus.MutationResultRecorded.make({ result: cleanupMutationResultTag(event.result), source })
   }
+  return staticCleanupStatus(staticCleanupStatusByEventTag[event._tag], source, factories)
 }
 
 const reduceCleanupFamily = <
