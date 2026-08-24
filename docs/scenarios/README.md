@@ -73,6 +73,7 @@ on the issue while later dependent work proceeds.
 | `issue-84-truthful-actor-capability-presentation.md` | 84 |
 | `issue-85-large-run-navigation.md` | 85 |
 | `issue-87-hermetic-concurrency-and-serialized-integration.md` | 87 |
+| `issue-89-tracker-release-and-resource-census.md` | 89 |
 
 **Accepted, not yet implemented** — the owning issue is open. These state
 required behavior and must not be read as a description of what Dalph does

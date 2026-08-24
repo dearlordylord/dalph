@@ -961,6 +961,8 @@ it.effect(
         expect(terminationRecords).toHaveLength(1)
         expect(terminationRecords[0]?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
         expect(records.at(-1)?.event).toEqual(terminationRecords[0]?.event)
+        expect(eventTags.some((tag) => tag === "WorktreeCleanupSettled")).toBe(false)
+        expect(eventTags.some((tag) => tag === "BranchCleanupSettled")).toBe(false)
         expect(graphRecords.length).toBeGreaterThanOrEqual(2)
         expect(
           (yield* Ref.get(graphSnapshots)).some(
@@ -997,6 +999,10 @@ it.effect(
         expect(yield* Ref.get(claims)).toEqual(
           new Map<TaskKey, TrackerClaim>(taskKeys.map((task) => [task, UnclaimedTask.make({ taskId: taskIdOf(task) })]))
         )
+        expect(yield* fileSystem.exists(journalFilename)).toBe(true)
+        expect(yield* fileSystem.exists(evidenceDirectory)).toBe(true)
+        expect(yield* fileSystem.exists(repository)).toBe(true)
+        expect(yield* fileSystem.exists(bareRemote)).toBe(true)
         const completePrerequisitesGraph = graphRecords.find(({ event }) => {
           if (event.observation._tag !== "CompleteTaskTrackerFacts") return false
           const lifecycles = event.observation.factFamilies[1].lifecycles
