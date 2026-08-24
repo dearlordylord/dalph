@@ -2061,7 +2061,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         }),
       reportIntegratorCandidateOne31: () =>
         Effect.gen(function* () {
-          const correlation = correlationFor(1n)
+          const correlation = runFor(1n)
           const result = IntegratorResult.cases.PreparedCandidate.make({
             candidateText: candidateTextOf(31n),
             correlation
@@ -2071,7 +2071,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         }),
       reportIntegratorCandidateOne32: () =>
         Effect.gen(function* () {
-          const correlation = correlationFor(1n)
+          const correlation = runFor(1n)
           const result = IntegratorResult.cases.PreparedCandidate.make({
             candidateText: candidateTextOf(32n),
             correlation
@@ -2081,7 +2081,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         }),
       reportIntegratorNotPreparedOne: () =>
         Effect.gen(function* () {
-          const correlation = correlationFor(1n)
+          const correlation = runFor(1n)
           const result = IntegratorResult.cases.NotPrepared.make({ correlation, detail: notPreparedDetail })
           yield* appendIntegratorResult(1n, result)
           yield* Effect.exit(runtime.runProtocol(1n))

@@ -200,8 +200,8 @@ const makeHistory = Effect.fn("ProviderFailureTest.makeHistory")(function* () {
   return { journal, run, session }
 })
 
-const providerFailure = (session: IntegratorSessionCorrelation): IntegratorProviderActivityAbsent =>
-  IntegratorProviderActivityAbsent.make({ correlation: session, detail })
+const providerFailure = (run: IntegratorRunCorrelation): IntegratorProviderActivityAbsent =>
+  IntegratorProviderActivityAbsent.make({ correlation: run, detail })
 
 const absenceRecordFor = (run: IntegratorRunCorrelation, position: number, absenceDetail = detail): JournalRecord => ({
   event: IntegrationProviderRunActivityAbsentEvent.make({
@@ -218,10 +218,7 @@ const absenceRecordFor = (run: IntegratorRunCorrelation, position: number, absen
 
 const makeRetryHistory = Effect.fn("ProviderFailureTest.makeRetryHistory")(function* () {
   const history = yield* makeHistory()
-  const first = yield* appendProviderRunFailureQuarantine({
-    run: history.run,
-    failure: providerFailure(history.session)
-  })
+  const first = yield* appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
   const subject = IntegrationQuarantineDirectionSubject.make({
     quarantineAt: first.quarantine.position,
     sessionId: history.session.sessionId
@@ -283,10 +280,7 @@ const makeRetryHistory = Effect.fn("ProviderFailureTest.makeRetryHistory")(funct
 
 const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory")(function* () {
   const history = yield* makeHistory()
-  const first = yield* appendProviderRunFailureQuarantine({
-    run: history.run,
-    failure: providerFailure(history.session)
-  })
+  const first = yield* appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
   const subject = IntegrationQuarantineDirectionSubject.make({
     quarantineAt: first.quarantine.position,
     sessionId: history.session.sessionId
@@ -390,13 +384,10 @@ const expectProviderReconciliationRejected = (
 it.effect("records provider-owned absence before one idempotent provider-failure quarantine", () =>
   Effect.gen(function* () {
     const history = yield* makeHistory()
-    const first = yield* appendProviderRunFailureQuarantine({
-      run: history.run,
-      failure: providerFailure(history.session)
-    })
+    const first = yield* appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
     const second = yield* appendProviderRunFailureQuarantine({
       run: history.run,
-      failure: providerFailure(history.session)
+      failure: providerFailure(history.run)
     })
     const records = yield* history.journal.read(runId)
 
@@ -413,7 +404,7 @@ it.effect("records a run-two provider absence only after authorized Retry Q1/D/L
     const history = yield* makeRetryHistory()
     const second = yield* appendProviderRunFailureQuarantine({
       run: history.retryRun,
-      failure: providerFailure(history.session)
+      failure: providerFailure(history.retryRun)
     })
     const records = yield* history.journal.read(runId)
 
@@ -457,7 +448,7 @@ it.effect("quarantines provider absence for the FullRerun successor session S2",
     const history = yield* makeSuccessorHistory()
     const result = yield* appendProviderRunFailureQuarantine({
       run: history.successorRun,
-      failure: providerFailure(history.successorSession)
+      failure: providerFailure(history.successorRun)
     })
     const records = yield* history.journal.read(runId)
 
@@ -547,9 +538,12 @@ it.effect("rejects a provider outcome bound to a foreign session", () =>
   Effect.gen(function* () {
     const history = yield* makeHistory()
     const foreignFailure = new IntegratorProviderActivityAbsent({
-      correlation: IntegratorSessionCorrelation.make({
-        ...history.session,
-        sessionId: IntegratorSessionId.make("foreign-session")
+      correlation: IntegratorRunCorrelation.make({
+        ordinal: history.run.ordinal,
+        session: IntegratorSessionCorrelation.make({
+          ...history.session,
+          sessionId: IntegratorSessionId.make("foreign-session")
+        })
       }),
       detail: "provider activity was not proven absent"
     })
@@ -776,7 +770,7 @@ it.effect("rejects provider absence when its run predecessors or exact Journal f
       ...startRecord,
       event: IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.NotPrepared.make({
-          correlation: history.session,
+          correlation: history.run,
           detail: IntegratorNotPreparedDetail.make("provider fixture result")
         }),
         run: history.run,
@@ -883,7 +877,7 @@ it.effect("covers exact fixed-session, run-start, and provider-evidence boundary
     const resultAfterAbsence = {
       event: IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.NotPrepared.make({
-          correlation: history.session,
+          correlation: history.run,
           detail: IntegratorNotPreparedDetail.make("result after absence")
         }),
         run: history.run,
@@ -1357,7 +1351,7 @@ it.effect("rejects successor, Retry, and legacy provider histories before record
     const resultRecord = {
       event: IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.NotPrepared.make({
-          correlation: successorHistory.successorSession,
+          correlation: successorHistory.successorRun,
           detail: IntegratorNotPreparedDetail.make("provider result blocks absence")
         }),
         run: successorHistory.successorRun,
@@ -2035,7 +2029,7 @@ it.effect("rejects malformed provider predecessor matrices before writing absenc
         {
           event: IntegratorRunResultRecordedEvent.make({
             result: IntegratorResult.cases.NotPrepared.make({
-              correlation: direct.session,
+              correlation: direct.run,
               detail: IntegratorNotPreparedDetail.make("provider result before absence")
             }),
             run: direct.run,

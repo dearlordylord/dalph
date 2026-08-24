@@ -63,6 +63,7 @@ import {
   IntegratorSessionId,
   IntegratorSuccessorSessionFixedEvent
 } from "./events.js"
+import type { IntegratorRunCorrelation } from "./events.js"
 import { IntegratorJournalContradiction } from "./errors.js"
 import {
   appendRunGitReadIntentIfNeeded,
@@ -188,10 +189,10 @@ const runResultRecord = (
 ): JournalRecord =>
   record(position, IntegratorRunResultRecordedEvent.make({ result, run, version: workflowJournalEventVersion }), key)
 
-const preparedResult = (correlation: IntegratorSessionCorrelation = session): IntegratorResult =>
+const preparedResult = (correlation: IntegratorRunCorrelation = runOne): IntegratorResult =>
   IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation })
 
-const notPreparedResult = (correlation: IntegratorSessionCorrelation = session): IntegratorResult =>
+const notPreparedResult = (correlation: IntegratorRunCorrelation = runOne): IntegratorResult =>
   IntegratorResult.cases.NotPrepared.make({ correlation, detail })
 
 const candidateObservation = (
@@ -617,7 +618,10 @@ describe("Integrator reconstruction states", () => {
         [
           ...complete,
           runResultRecord(
-            IntegratorResult.cases.NotPrepared.make({ correlation: fixture.successor, detail }),
+            IntegratorResult.cases.NotPrepared.make({
+              correlation: integratorRunCorrelationForSession(fixture.successor, IntegratorRunOrdinal.make(1)),
+              detail
+            }),
             successorRunOne,
             17
           )
@@ -1065,7 +1069,12 @@ describe("Integrator reconstruction history indexes", () => {
         result: {
           ...previousResult,
           event: runResultRecord(
-            preparedResult(IntegratorSessionCorrelation.make({ ...session, expectedTargetHead: sha("f") })),
+            preparedResult(
+              integratorRunCorrelationForSession(
+                IntegratorSessionCorrelation.make({ ...session, expectedTargetHead: sha("f") }),
+                IntegratorRunOrdinal.make(1)
+              )
+            ),
             runOne,
             9
           ).event
@@ -1176,9 +1185,14 @@ describe("Integrator journal-record reconciliation", () => {
         sessionId: IntegratorSessionId.make("integrator-session:foreign-reconcile")
       })
       expect(
-        yield* runResultFromAppendedRecord(runResultRecord(preparedResult(foreign)), runOne, expectedResult).pipe(
-          Effect.flip
-        )
+        yield* runResultFromAppendedRecord(
+          runResultRecord(
+            preparedResult(integratorRunCorrelationForSession(foreign, IntegratorRunOrdinal.make(1))),
+            runOne
+          ),
+          runOne,
+          expectedResult
+        ).pipe(Effect.flip)
       ).toBeInstanceOf(IntegratorJournalContradiction)
 
       const wrongObservation = yield* runObservationFromAppendedRecord(
