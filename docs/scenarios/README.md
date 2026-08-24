@@ -86,6 +86,7 @@ today.
 | `issue-66-clean-restart-changed-attempt.md` | 66 |
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-71-qualify-real-github-graph-membership-claims.md` | 71 |
+| `issue-87-hermetic-concurrency-and-serialized-integration.md` | 87 |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
