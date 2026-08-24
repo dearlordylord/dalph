@@ -12,6 +12,7 @@ import {
   TaskClaimAcquisition,
   TaskClaimAcquisitionDidNotConverge,
   TaskClaimConflict,
+  type TaskClaimObservation,
   TaskClaimReadFailure,
   TaskClaimRequestFailure,
   TrackerMutation,
@@ -45,7 +46,7 @@ it.effect("rereads tracker authority after an ambiguously applied acquisition", 
             )
           )
         ),
-      readTaskClaim: (taskId) =>
+      readTaskClaim: (taskId): Effect.Effect<TaskClaimObservation, TaskClaimReadFailure> =>
         Ref.update(calls, (current) => [...current, "read"]).pipe(Effect.andThen(controlled.readTaskClaim(taskId))),
       releaseTaskClaim: controlled.releaseTaskClaim
     })
@@ -147,12 +148,11 @@ it.effect("reads tracker after the third and final ambiguous acquisition request
             )
           )
         ),
-      readTaskClaim: (taskId) =>
+      readTaskClaim: (taskId): Effect.Effect<TaskClaimObservation, TaskClaimReadFailure> =>
         Ref.updateAndGet(reads, (count) => count + 1).pipe(
-          Effect.flatMap((readNumber) =>
-            readNumber === 4
-              ? Effect.succeed(ActiveTaskClaim.make(acquisition))
-              : Effect.succeed(UnclaimedTask.make({ taskId }))
+          Effect.map(
+            (readNumber): TaskClaimObservation =>
+              readNumber === 4 ? ActiveTaskClaim.make(acquisition) : UnclaimedTask.make({ taskId })
           ),
           Effect.tap(() => Ref.update(calls, (current) => [...current, "read"]))
         ),
