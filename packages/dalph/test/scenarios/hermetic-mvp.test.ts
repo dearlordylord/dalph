@@ -70,48 +70,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { ConfigProvider, Effect, FileSystem, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
 
 type TrackerClaim = ActiveTaskClaim | CompletionTaskClaim | UnclaimedTask
 const maxActivationPasses = 64
-
-const requireSuccessfulGit = Effect.fn("HermeticMvp.requireSuccessfulGit")(function* (
-  result: Effect.Success<ReturnType<GitCommand["Service"]["run"]>>,
-  description: string
-) {
-  if (result.exitCode !== 0) return yield* Effect.die(`${description}: ${result.stderr}`)
-  return result.stdout.trim()
-})
-
-const runInWorktree = Effect.fn("HermeticMvp.runInWorktree")(function* (
-  git: GitCommand["Service"],
-  worktree: string,
-  args: ReadonlyArray<string>,
-  description: string
-) {
-  return yield* requireSuccessfulGit(yield* git.runInWorktree(worktree, args), description)
-})
-
-const runInGitDirectory = Effect.fn("HermeticMvp.runInGitDirectory")(function* (
-  git: GitCommand["Service"],
-  directory: string,
-  args: ReadonlyArray<string>,
-  description: string
-) {
-  return yield* requireSuccessfulGit(yield* git.run(directory, args), description)
-})
-
-const acceptedManifestBytes = (plannedAttempt: PlannedTaskAttempt, commit: GitCommitSha): Uint8Array =>
-  new TextEncoder().encode(
-    JSON.stringify(
-      AcceptedResultEvidenceManifest.make({
-        commit,
-        correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
-        formatVersion: 1,
-        outcome: "Accepted",
-        predecessor: null
-      })
-    )
-  )
 
 it.effect(
   "runs one task through real local production boundaries and tears down only its owned resources",
