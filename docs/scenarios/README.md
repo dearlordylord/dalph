@@ -88,6 +88,7 @@ today.
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-71-qualify-real-github-graph-membership-claims.md` | 71 |
 | `issue-88-crash-after-target-promotion.md` | 88 |
+| `issue-85-large-run-navigation.md` | 85 |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
