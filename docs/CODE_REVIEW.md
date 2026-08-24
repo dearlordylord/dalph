@@ -58,6 +58,11 @@ operational explanation.
   provide.
 - Tests substitute services through Layers. They do not patch modules, depend
   on real sleeps, or merely restate compile-time guarantees.
+- When an accepted scenario requires an action exactly once, before or after
+  another action, for one exact identity or correlation, or not at all, the
+  acceptance test directly asserts that count, order, identity, correlation,
+  or absence at the relevant boundary or durable record. A matching final
+  state alone does not prove those causal requirements.
 - Dalph domain types do not admit impossible field combinations. Tagged variants
   replace sentinel values and bags of conditionally related optional fields.
 - Current task state is read through the task tracker, Git state from Git,
