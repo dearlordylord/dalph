@@ -93,9 +93,12 @@ import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interprete
 import {
   AppliedControlDirection,
   decodeWorkflowOccurrence,
+  describeWorkflowOccurrence,
   originatingActionForPlannedAttemptWorktreeObservation,
   originatingActionForTargetLineageObservation,
   originatingActionForTrackerObservation,
+  PlannedAttemptExecutorWorkReported,
+  PlannedAttemptExecutorWorkResponsibilityBegan,
   plannedAttemptExecutorResponsibilityForReport,
   presentWorkflowOccurrence,
   projectWorkflowOccurrences,
@@ -1492,6 +1495,75 @@ it.effect("generic occurrence consumer renders every runtime classification with
       { classification: "NonActionOccurrence" },
       { actor: "Operator", classification: "InitiatedAction" }
     ])
+  })
+)
+
+it.effect("presents only the proven actor and keeps executor or Integrator details opaque", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(1, taskTrackerReadIntent(operation)),
+      record(
+        2,
+        taskTrackerGraphFactsObserved(operation, {
+          revision: TrackerRevision.make("truthful-presentation-revision"),
+          taskIds: []
+        })
+      )
+    ])
+    const initiated = projection.occurrences[0]
+    const observed = projection.occurrences[1]
+    if (initiated === undefined || observed === undefined) return yield* Effect.die("presentation fixture is empty")
+
+    expect(describeWorkflowOccurrence(initiated)).toEqual({
+      actorLabel: "Dalph coordinator",
+      presentation: { actor: "DalphCoordinator", classification: "InitiatedAction" },
+      text: "Dalph coordinator initiated tracker read"
+    })
+    expect(describeWorkflowOccurrence(observed)).toEqual({
+      actorLabel: "no actor is proven",
+      presentation: { classification: "NonActionOccurrence" },
+      text: "tracker facts observed; no actor is proven"
+    })
+    const operatorAction = AppliedControlDirection.make({
+      direction: "Unpause",
+      initiatedBy: WorkflowActor.cases.Operator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      recordedAt: JournalPosition.make(1),
+      subject: { _tag: "Run", runId }
+    })
+    expect(describeWorkflowOccurrence(operatorAction)).toEqual({
+      actorLabel: "Operator",
+      presentation: { actor: "Operator", classification: "InitiatedAction" },
+      text: "Operator initiated control direction"
+    })
+    expect(describeWorkflowOccurrence(initiated).text).not.toMatch(/(?:session|turn|transcript)/iu)
+
+    const responsibility = PlannedAttemptExecutorWorkResponsibilityBegan.make({
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      plannedAttempt,
+      recordedAt: JournalPosition.make(3),
+      runId
+    })
+    expect(describeWorkflowOccurrence(responsibility).text).toBe(
+      "Dalph coordinator initiated coordinator responsibility record"
+    )
+    expect(describeWorkflowOccurrence(responsibility).text).not.toContain("executor activity")
+
+    const report = PlannedAttemptExecutorWorkReported.make({
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      recordedAt: JournalPosition.make(4),
+      report: PlannedAttemptExecutorReport.cases.Running.make({
+        correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+      }),
+      runId
+    })
+    expect(describeWorkflowOccurrence(report)).toMatchObject({
+      actorLabel: "no actor is proven",
+      text: "executor report observed; no actor is proven"
+    })
   })
 )
 

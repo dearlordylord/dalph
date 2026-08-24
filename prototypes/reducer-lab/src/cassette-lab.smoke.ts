@@ -42,7 +42,11 @@ import {
   runAllSummaryText
 } from "./cassette-lab-view.ts"
 import { deliverySourceExplanationAt } from "./delivery-source-explanation.ts"
-import { dominantTaskTone } from "./cassette-lab-workbench.ts"
+import {
+  dominantTaskTone,
+  makeDeliveryWorkbenchPlaybackRuntime,
+  renderCassetteDeliveryWorkbench
+} from "./cassette-lab-workbench.ts"
 import {
   TraceCursorSelected,
   auxiliaryTraceCorrelation,
@@ -918,6 +922,128 @@ await scenario("selects exact production cursors for Lab back/forward history wh
   assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex - 1]?.cursor.position), "Back must select the preceding production cursor")
   panel.querySelector<HTMLButtonElement>("button[data-role='trace-next-cursor']")?.click()
   assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex]?.cursor.position), "Forward must restore the exact later production cursor")
+})
+
+await scenario("renders truthful actors, opaque internals, and distinct repeated promotion identities", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:targetPromotionAmbiguityExhaustion"
+  )
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+    throw new Error("The repeated-promotion trace fixture is missing")
+  }
+  const latest = result.traceHistories.at(-1)
+  if (latest === undefined) throw new Error("The repeated-promotion trace has no terminal cursor")
+  const attempts = latest.items.filter(({ occurrence }) => occurrence._tag === "TargetPromotionAttemptRequested")
+  assert(attempts.length === 3, "The terminal trace must retain all three promotion attempts")
+  assert(
+    new Set(attempts.map(({ identity }) => `${identity.runId}:${identity.position}`)).size === attempts.length,
+    "Repeated promotion attempts must retain distinct exact TraceItemIdentity values"
+  )
+
+  const done = settled(singleCassetteSettledEvent)
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const panel = document.querySelector<HTMLElement>("[data-role='trace-history']")
+  if (panel === null) throw new Error("The production trace history panel is missing")
+  const legend = panel.querySelector<HTMLElement>("[data-role='trace-history-legend']")
+  const legendText = legend?.textContent ?? ""
+  assert(legendText.includes("initiated action · actor proven"), "The history legend must explain proven actors")
+  assert(legendText.includes("non-action occurrence · no actor is proven"), "The history legend must explain absent actors")
+  assert(legendText.includes("executor and Integrator internals remain opaque"), "The history legend must explain opaque internals")
+  assert(legendText.includes("no continuous transcript"), "The history legend must state that streaming is unavailable")
+  assert(panel.querySelector("[data-role='trace-current-status']") !== null, "Passive current status must have a separate region")
+  const exactItems = [...panel.querySelectorAll<HTMLElement>("[data-role='trace-history-item']")]
+  assert(exactItems.length >= attempts.length, "Each repeated promotion attempt must render one history item")
+  for (const attempt of attempts) {
+    const identity = `${attempt.identity.runId}:${attempt.identity.position}`
+    assert(exactItems.some((item) => item.dataset.identity === identity), `The Lab must render exact identity ${identity}`)
+  }
+})
+
+await scenario("updates only the passive status region when its source disconnects and reconnects", () => {
+  const { document } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:targetPromotionSuccess")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+    throw new Error("The passive-status trace fixture is missing")
+  }
+  const host = document.createElement("div")
+  const controller = renderCassetteDeliveryWorkbench(
+    host,
+    row,
+    { _tag: "Settled", result },
+    makeDeliveryWorkbenchPlaybackRuntime()
+  )
+  const panel = host.querySelector<HTMLElement>("[data-role='trace-history']")
+  const historyItems = panel?.querySelector<HTMLElement>("[data-role='trace-history-items']")
+  const status = panel?.querySelector<HTMLElement>("[data-role='trace-current-status']")
+  if (panel === null || panel === undefined || historyItems === null || historyItems === undefined || status === null || status === undefined) {
+    throw new Error("The trace history and passive status regions are missing")
+  }
+  const initialHistoryMarkup = historyItems.innerHTML
+  controller.update({ _tag: "Running", deliveryFrames: null, observationMoments: null })
+  assert(status.dataset.status === "Running", "A running passive source must render Running")
+  assert(historyItems.innerHTML === initialHistoryMarkup, "A status change must not rewrite historical items")
+  controller.update({ _tag: "NotRun" })
+  assert(status.dataset.status === "Unavailable", "A disconnected passive source must render Unavailable")
+  assert(historyItems.innerHTML === initialHistoryMarkup, "Disconnect must retain exact historical item markup")
+  controller.updateTraceStatus({ _tag: "Running", deliveryFrames: null, observationMoments: null })
+  assert(status.dataset.status === "Running", "A direct passive update must render Running")
+  assert(historyItems.innerHTML === initialHistoryMarkup, "A direct status update must retain exact historical item markup")
+  controller.updateTraceStatus({ _tag: "Settled", result })
+  assert(status.dataset.status === "Waiting", "A reconnected settled source must render Waiting")
+  assert(historyItems.innerHTML === initialHistoryMarkup, "Reconnect must retain exact historical item markup")
+  assert(status.textContent?.includes("Waiting") === true, "The passive status region must expose its current value")
+})
+
+await scenario("keeps the selected browser history and cursor through a running reconnect", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:targetPromotionSuccess")
+  if (row === undefined) throw new Error("The browser reconnect fixture is missing")
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  const runButton = document.querySelector<HTMLButtonElement>("article .selected-cassette-controls button")
+  if (runButton === null) throw new Error("The browser run control is missing")
+  const firstDone = settled(singleCassetteSettledEvent)
+  runButton.click()
+  await firstDone
+  const panel = document.querySelector<HTMLElement>("[data-role='trace-history']")
+  const historyHost = panel?.querySelector<HTMLElement>("[data-role='trace-history-items']")
+  const selectedCursor = panel?.querySelector<HTMLElement>("[data-role='trace-cursor']")
+  if (panel === null || panel === undefined || historyHost === null || historyHost === undefined || selectedCursor === null || selectedCursor === undefined) {
+    throw new Error("The selected browser trace is missing")
+  }
+  const historyIdentities = [...historyHost.querySelectorAll<HTMLElement>("[data-role='trace-history-item']")]
+    .map(({ dataset }) => dataset.identity)
+  const cursorIdentity = { runId: selectedCursor.dataset.runId, position: selectedCursor.dataset.journalPosition }
+  const initialMarkup = historyHost.innerHTML
+
+  const secondDone = settled(singleCassetteSettledEvent)
+  runButton.click()
+  const runningPanel = document.querySelector<HTMLElement>("[data-role='trace-history']")
+  const runningHistoryHost = runningPanel?.querySelector<HTMLElement>("[data-role='trace-history-items']")
+  const runningCursor = runningPanel?.querySelector<HTMLElement>("[data-role='trace-cursor']")
+  const runningStatus = runningPanel?.querySelector<HTMLElement>("[data-role='trace-current-status']")
+  assert(runningPanel === panel, "A passive running update must not remount the trace panel")
+  assert(runningHistoryHost === historyHost, "A passive running update must not remount history items")
+  assert(runningStatus?.dataset.status === "Running", "The browser must show the running passive status")
+  assert(runningCursor?.dataset.runId === cursorIdentity.runId, "Running must retain the selected Run identity")
+  assert(runningCursor?.dataset.journalPosition === cursorIdentity.position, "Running must retain the selected journal position")
+  assert(
+    [...(runningHistoryHost?.querySelectorAll<HTMLElement>("[data-role='trace-history-item']") ?? [])]
+      .map(({ dataset }) => dataset.identity).join("|") === historyIdentities.join("|"),
+    "Running must retain every exact historical TraceItemIdentity"
+  )
+  assert(runningHistoryHost?.innerHTML === initialMarkup, "Running must retain exact historical markup")
+  await secondDone
+  const reconnectedStatus = panel.querySelector<HTMLElement>("[data-role='trace-current-status']")
+  const reconnectedCursor = panel.querySelector<HTMLElement>("[data-role='trace-cursor']")
+  assert(reconnectedStatus?.dataset.status === "Waiting", "A settled reconnect must restore the passive Waiting status")
+  assert(reconnectedCursor?.dataset.runId === cursorIdentity.runId, "Reconnect must retain the selected Run identity")
+  assert(reconnectedCursor?.dataset.journalPosition === cursorIdentity.position, "Reconnect must retain the selected journal position")
+  assert(historyHost.innerHTML === initialMarkup, "Reconnect must retain exact historical markup")
 })
 
 await scenario("renders exact trace facet payloads and source correlations in the Lab", async () => {

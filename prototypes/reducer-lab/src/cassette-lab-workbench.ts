@@ -5,7 +5,12 @@ import type {
 import type { AttemptId } from "../../../packages/contracts/src/planned-attempt.ts"
 import { TaskId, type TaskId as TaskIdType } from "../../../packages/contracts/src/task-identity.ts"
 import type { RunId } from "../../../packages/contracts/src/workflow-identity.ts"
-import { deliveryProposalOrderTaskId, type TraceAtCursor } from "@dalph/orchestrator"
+import {
+  deliveryProposalOrderTaskId,
+  describeWorkflowOccurrence,
+  makeTracePresentation,
+  type TraceAtCursor
+} from "@dalph/orchestrator"
 import { Match } from "effect"
 import {
   deliveryGraphEncoding,
@@ -19,7 +24,7 @@ import {
   type DeliverySourceStageId
 } from "./delivery-source-explanation.ts"
 import type { maintainedCassetteRows } from "./cassette-lab.ts"
-import type { CassetteState } from "./cassette-lab-view.ts"
+import { cassetteStateStatusText, type CassetteState } from "./cassette-lab-view.ts"
 import {
   DeliveryFrameIndex,
   deliveryPlaybackShortcutMessage,
@@ -775,6 +780,8 @@ interface DeliveryTimelineController {
 
 export interface DeliveryWorkbenchController {
   readonly update: (state: CassetteState) => void
+  /** Updates only the passive status region; the selected historical trace is not reread. */
+  readonly updateTraceStatus: (state: CassetteState) => void
 }
 
 type AuthoredObligationDiagnostic = AuthoredDeliveryFrame["deliveries"][number]["obligations"][number]
@@ -891,11 +898,29 @@ const auxiliaryTraceCorrelations = (
 
 const noSelectedTraceCursorIndex = -1
 
+/** Maps the existing passive Lab state to a truthful current-status label. */
+const passiveTraceStatus = (state: CassetteState): { readonly tag: "Unavailable" | "Waiting" | "Running"; readonly text: string } => {
+  if (state._tag === "Running") {
+    return { tag: "Running", text: `Running · ${cassetteStateStatusText(state)}` }
+  }
+  if (state._tag === "Settled") {
+    return { tag: "Waiting", text: `Waiting · ${cassetteStateStatusText(state)}` }
+  }
+  return { tag: "Unavailable", text: `Unavailable · ${cassetteStateStatusText(state)}` }
+}
+
+interface TraceHistoryController {
+  /** Reconnects or changes the passive source without rereading historical items. */
+  readonly updateStatus: (state: CassetteState) => void
+}
+
 const renderProductionTraceHistory = (
   parent: HTMLElement,
   histories: ReadonlyArray<TraceAtCursor>,
-  moments: ReadonlyArray<AuthoredObservationMoment>
-): void => {
+  moments: ReadonlyArray<AuthoredObservationMoment>,
+  /** The process-local CassetteState is passive status input, not journal evidence. */
+  initialStatus: CassetteState
+): TraceHistoryController => {
   const section = document.createElement("section")
   section.className = "production-trace-history"
   section.dataset.role = "trace-history"
@@ -906,6 +931,33 @@ const renderProductionTraceHistory = (
     "Durable history, task graph, and workflow-causal relationships below are read from the schema-versioned production trace reader. Authored story and runtime-owner observations remain auxiliary chronology and never select or renumber a journal cursor.",
     "trace-history-explanation"
   )
+  const legend = document.createElement("ul")
+  legend.dataset.role = "trace-history-legend"
+  appendText(legend, "li", "initiated action · actor proven from the occurrence")
+  appendText(legend, "li", "non-action occurrence · no actor is proven")
+  appendText(legend, "li", "executor and Integrator internals remain opaque")
+  appendText(legend, "li", "no continuous transcript; this is a committed snapshot")
+  section.append(legend)
+  const currentStatus = appendText(section, "p", "", "trace-current-status")
+  currentStatus.dataset.role = "trace-current-status"
+
+  let passiveStatusState = initialStatus
+  let selectedHistory: TraceAtCursor | undefined
+  const renderPassiveStatus = (): void => {
+    if (selectedHistory === undefined) {
+      currentStatus.textContent = "Passive current status · Unavailable · no historical cursor is selected."
+      currentStatus.dataset.status = "Unavailable"
+      return
+    }
+    const presentation = makeTracePresentation(selectedHistory, passiveStatusState)
+    const status = passiveTraceStatus(presentation.currentStatus)
+    currentStatus.textContent = `${status.text} · separate from the selected historical cursor and may be unavailable.`
+    currentStatus.dataset.status = status.tag
+  }
+  const updateStatus = (state: CassetteState): void => {
+    passiveStatusState = state
+    renderPassiveStatus()
+  }
 
   let model = makeTraceCursorSelectionModel(
     histories.map(({ cursor }) => cursor),
@@ -994,6 +1046,8 @@ const renderProductionTraceHistory = (
       selector.append(option)
     }
     if (projection.cursor === null) {
+      selectedHistory = undefined
+      renderPassiveStatus()
       cursor.textContent = "No production journal cursor is available."
       graphHost.replaceChildren()
       causalHost.replaceChildren()
@@ -1005,6 +1059,8 @@ const renderProductionTraceHistory = (
     cursor.dataset.runId = projection.cursor.runId
     cursor.dataset.journalPosition = String(projection.cursor.position)
     const history = historyAtCursor(histories, projection.cursor)
+    selectedHistory = history
+    renderPassiveStatus()
     graphHost.replaceChildren()
     causalHost.replaceChildren()
     itemsHost.replaceChildren()
@@ -1085,14 +1141,21 @@ const renderProductionTraceHistory = (
     appendText(itemsHost, "h5", `Workflow history items · ${history.items.length}`)
     const itemList = document.createElement("ul")
     for (const item of history.items) {
+      const description = describeWorkflowOccurrence(item.occurrence)
       const historyItem = appendText(
         itemList,
         "li",
-        `Run ${item.identity.runId} · journal position ${item.identity.position} · ${item.occurrence._tag} · operations ${item.operationIds.length === 0 ? "none" : item.operationIds.join(", ")}`
+        `Run ${item.identity.runId} · journal position ${item.identity.position} · ${description.text} · operations ${item.operationIds.length === 0 ? "none" : item.operationIds.join(", ")}`
       )
+      historyItem.dataset.role = "trace-history-item"
       historyItem.dataset.runId = item.identity.runId
       historyItem.dataset.journalPosition = String(item.identity.position)
-      appendExactJson(historyItem, "Exact projected occurrence", item.occurrence, "trace-history-item-exact")
+      historyItem.dataset.identity = `${item.identity.runId}:${item.identity.position}`
+      historyItem.dataset.classification = description.presentation.classification
+      historyItem.dataset.actor = description.presentation.classification === "InitiatedAction"
+        ? description.presentation.actor
+        : "none"
+      appendExactJson(historyItem, "Exact projected occurrence (schema evidence)", item.occurrence, "trace-history-item-exact")
     }
     if (history.items.length === 0) appendText(itemList, "li", "No projected workflow occurrence is visible at this cursor.")
     itemsHost.append(itemList)
@@ -1193,6 +1256,7 @@ const renderProductionTraceHistory = (
   })
   renderSelected()
   parent.append(section)
+  return { updateStatus }
 }
 
 const renderTimeline = (
@@ -1774,10 +1838,14 @@ export const renderCassetteDeliveryWorkbench = (
   cassetteControls?: HTMLElement
 ): DeliveryWorkbenchController => {
   host.replaceChildren()
-  if (row.surface._tag !== "AuthoredDeliverySurface") return { update: () => undefined }
+  if (row.surface._tag !== "AuthoredDeliverySurface") {
+    return { update: () => undefined, updateTraceStatus: () => undefined }
+  }
   const authoredRow: AuthoredRow = { ...row, surface: row.surface }
   let currentState = state
   let timeline: DeliveryTimelineController | undefined
+  let traceHistory: TraceHistoryController | undefined
+  let renderedTraceHistories: ReadonlyArray<TraceAtCursor> | null | undefined
   const section = document.createElement("section")
   section.className = "delivery-workbench"
   section.dataset.role = "delivery-workbench"
@@ -1804,9 +1872,16 @@ export const renderCassetteDeliveryWorkbench = (
   const renderContents = (): void => {
     const moments = observationMomentsFrom(currentState)
     const traceHistories = productionTraceHistoriesFrom(currentState)
-    historicalTraceHost.replaceChildren()
-    if (traceHistories !== null && traceHistories.length > 0) {
-      renderProductionTraceHistory(historicalTraceHost, traceHistories, moments ?? [])
+    const shouldReplaceTraceHistory = traceHistories !== null && traceHistories !== renderedTraceHistories
+    if (shouldReplaceTraceHistory) {
+      historicalTraceHost.replaceChildren()
+      traceHistory = undefined
+      renderedTraceHistories = traceHistories
+      if (traceHistories !== null && traceHistories.length > 0) {
+        traceHistory = renderProductionTraceHistory(historicalTraceHost, traceHistories, moments ?? [], currentState)
+      }
+    } else {
+      traceHistory?.updateStatus(currentState)
     }
     if (timeline !== undefined && moments !== null && moments.length > 0) {
       timeline.update(moments, currentState._tag === "Running")
@@ -1828,6 +1903,7 @@ export const renderCassetteDeliveryWorkbench = (
     update: (nextState) => {
       currentState = nextState
       renderContents()
-    }
+    },
+    updateTraceStatus: (nextState) => traceHistory?.updateStatus(nextState)
   }
 }
