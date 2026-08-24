@@ -2,6 +2,7 @@ import { Context, Effect, Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import {
   JournalDataCorruption,
+  JournalHistoryCorruption,
   JournalHistoryNotTerminal,
   JournalPartitionContradiction,
   JournalSchemaIncompatible,
@@ -16,6 +17,7 @@ import {
 /** Typed failures that can leave one already-terminated Run in hot storage. */
 export const JournalMaintenanceFailure = Schema.Union([
   JournalDataCorruption,
+  JournalHistoryCorruption,
   JournalHistoryNotTerminal,
   JournalPartitionContradiction,
   JournalSchemaIncompatible,

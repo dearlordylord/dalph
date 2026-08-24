@@ -20,6 +20,7 @@ import {
   JournalStorageUnavailable,
   JournalHistoryNotTerminal,
   JournalDataCorruption,
+  JournalHistoryCorruption,
   JournalPartitionContradiction,
   JournalStore,
   JournalStoreContradiction,
@@ -41,7 +42,12 @@ import {
 import { classifyJournalStorageFailure } from "./adapters/sqlite-store.js"
 import { completedRunFinalityFixture } from "../../test/run-finality.js"
 import { validSnapshot } from "../../test/task-dag.js"
-import { intentRecordKey, outcomeRecordKey, runCancellationAppliedRecordKey } from "./record-key.js"
+import {
+  controlDirectionAppliedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  runCancellationAppliedRecordKey
+} from "./record-key.js"
 import { ActiveTaskClaim } from "../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import {
@@ -64,6 +70,11 @@ import { makeWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "./r
 import { memoryJournalTestLayerFromPartitionRecords } from "./adapters/memory-store.js"
 import { encodeJournalEvent } from "./event-codec.js"
 import type { JournalRecord } from "./store.js"
+import { makeTraceReader } from "../presentation/trace-reader.js"
+import {
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionAppliedEvent
+} from "../workflow/protocols/control-direction-application/events.js"
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
@@ -243,7 +254,8 @@ it.effect("maps a controlled malformed memory terminal prefix to journal corrupt
   return Effect.gen(function* () {
     const journal = yield* JournalStore
     const failure = yield* Effect.flip(journal.retireTerminalRun(runId))
-    expect(failure).toBeInstanceOf(JournalDataCorruption)
+    expect(failure).toBeInstanceOf(JournalHistoryCorruption)
+    expect(failure).toMatchObject({ partition: "Hot", runId })
     expect(yield* journal.read(runId)).toEqual(malformed)
     expect(yield* journal.scanHot()).toMatchObject({
       issues: [expect.objectContaining({ _tag: "JournalSemanticIssue", partition: "Hot", runId })],
@@ -266,17 +278,26 @@ it.effect(
       const journal = yield* JournalStore
       expect(yield* journal.scanHot()).toEqual({ issues: [], runs: [] })
       const readFailure = yield* Effect.flip(journal.read(runId))
-      expect(readFailure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+      expect(readFailure).toMatchObject({
+        _tag: "JournalHistoryCorruption",
+        operation: "JournalStore.read",
+        partition: "Cold",
+        runId
+      })
       const recoveryFailure = yield* Effect.flip(journal.readRunForRecovery(runId, target))
       expect(recoveryFailure).toMatchObject({
-        _tag: "JournalDataCorruption",
-        operation: "JournalStore.readRunForRecovery"
+        _tag: "JournalHistoryCorruption",
+        operation: "JournalStore.readRunForRecovery",
+        partition: "Cold",
+        runId
       })
       const audit = yield* journal.auditAll()
       expect(audit.issues).toMatchObject([{ _tag: "JournalSemanticIssue", partition: "Cold", runId }])
       expect(yield* Effect.flip(journal.retireTerminalRun(runId))).toMatchObject({
-        _tag: "JournalDataCorruption",
-        operation: "JournalStore.retireTerminalRun"
+        _tag: "JournalHistoryCorruption",
+        operation: "JournalStore.retireTerminalRun",
+        partition: "Cold",
+        runId
       })
     }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ cold: malformed })))
   }
@@ -291,13 +312,20 @@ it.effect("rejects exact reads and recovery of a nonterminal memory Cold history
     const fixture = completedRunFinalityFixture({ runId, target })
     expect(
       yield* Effect.flip(journal.append(runId, JournalRecordKey.make("cold-nonterminal-append"), fixture.intent))
-    ).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.append" })
+    ).toMatchObject({ _tag: "JournalHistoryCorruption", operation: "JournalStore.append", partition: "Cold", runId })
     const readFailure = yield* Effect.flip(journal.read(runId))
-    expect(readFailure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+    expect(readFailure).toMatchObject({
+      _tag: "JournalHistoryCorruption",
+      operation: "JournalStore.read",
+      partition: "Cold",
+      runId
+    })
     const recoveryFailure = yield* Effect.flip(journal.readRunForRecovery(runId, target))
     expect(recoveryFailure).toMatchObject({
-      _tag: "JournalDataCorruption",
-      operation: "JournalStore.readRunForRecovery"
+      _tag: "JournalHistoryCorruption",
+      operation: "JournalStore.readRunForRecovery",
+      partition: "Cold",
+      runId
     })
   }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ cold: records })))
 })
@@ -310,8 +338,10 @@ it.effect("rejects termination of a semantically complete but nonterminal memory
   return Effect.gen(function* () {
     const journal = yield* JournalStore
     expect(yield* Effect.flip(journal.terminateRun(runId, "Completed", fixture.evidence))).toMatchObject({
-      _tag: "JournalDataCorruption",
-      operation: "JournalStore.terminateRun"
+      _tag: "JournalHistoryCorruption",
+      operation: "JournalStore.terminateRun",
+      partition: "Cold",
+      runId
     })
   }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ cold: records })))
 })
@@ -428,16 +458,58 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       }).pipe(Effect.provide(makeLayer()))
     )
 
-    it.effect("rejects retirement for a valid nonterminal history without moving rows", () =>
+    it.effect("rejects unfinished, paused, temporarily quiescent, quarantined, and merely old histories", () =>
       Effect.gen(function* () {
         const journal = yield* JournalStore
-        yield* journal.beginRun(runId, FixtureTarget.make("nonterminal-retirement-target"), initialPolicy)
-
-        const failure = yield* Effect.flip(journal.retireTerminalRun(runId))
-
-        expect(failure).toBeInstanceOf(JournalHistoryNotTerminal)
-        expect((yield* journal.scanHot()).runs).toHaveLength(1)
-        expect((yield* journal.auditAll()).runs[0]?.partition).toBe("Hot")
+        const conditions = [
+          { name: "unfinished", prefix: "intent-pending", selectorFact: "OrdinaryRecovery" },
+          { name: "paused", prefix: "pause-applied", selectorFact: "OrdinaryRecovery" },
+          { name: "temporarily-quiescent", prefix: "operation-settled", selectorFact: "OrdinaryRecovery" },
+          { name: "quarantined", prefix: "intent-pending", selectorFact: "ExternalQuarantine" },
+          { name: "merely-old", prefix: "began-only-with-no-clock-fact", selectorFact: "OrdinaryRecovery" }
+        ] as const
+        for (const condition of conditions) {
+          const conditionRunId = RunId.make(`nonterminal-retirement-${name}-${condition.name}`)
+          const target = FixtureTarget.make(`nonterminal-retirement-target-${condition.name}`)
+          yield* journal.beginRun(conditionRunId, target, initialPolicy)
+          const fixture = completedRunFinalityFixture({ runId: conditionRunId, target })
+          if (condition.prefix === "intent-pending" || condition.prefix === "operation-settled") {
+            yield* journal.append(conditionRunId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+          }
+          if (condition.prefix === "operation-settled") {
+            yield* journal.append(conditionRunId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+          }
+          if (condition.prefix === "pause-applied") {
+            const ordinal = ControlDirectionApplicationOrdinal.make(1)
+            yield* journal.append(
+              conditionRunId,
+              controlDirectionAppliedRecordKey(ordinal),
+              ControlDirectionAppliedEvent.make({
+                direction: "Pause",
+                initiatedBy: { _tag: "Operator" },
+                occurrenceClassification: "InitiatedAction",
+                ordinal,
+                subject: { _tag: "Run", runId: conditionRunId },
+                version: workflowJournalEventVersion
+              })
+            )
+          }
+          const before = yield* journal.read(conditionRunId)
+          // Quarantine selects this Run outside JournalStore. The store has no
+          // quarantine parameter and must decide only from the exact prefix.
+          if (condition.selectorFact === "ExternalQuarantine") expect(condition.name).toBe("quarantined")
+          // Merely old has no distinct Journal occurrence or Clock boundary:
+          // retirement receives only the Run identity and the complete prefix.
+          if (condition.prefix === "began-only-with-no-clock-fact") expect(before).toHaveLength(1)
+          expect(yield* Effect.flip(journal.retireTerminalRun(conditionRunId))).toBeInstanceOf(
+            JournalHistoryNotTerminal
+          )
+          expect(yield* journal.read(conditionRunId)).toEqual(before)
+          expect((yield* journal.scanHot()).runs).toContainEqual(expect.objectContaining({ runId: conditionRunId }))
+          expect((yield* journal.auditAll()).runs).toContainEqual(
+            expect.objectContaining({ partition: "Hot", runId: conditionRunId })
+          )
+        }
       }).pipe(Effect.provide(makeLayer()))
     )
 
@@ -946,47 +1018,46 @@ durableJournalStoreContract(
       )
     )
 
-    it.effect(
-      "keeps an exact read on one snapshot while an external retirement commits between membership and load",
-      () =>
-        Effect.scoped(
-          withTemporaryDatabase((filename) =>
-            Effect.gen(function* () {
-              const runId = RunId.make("sqlite-read-retirement-overlap")
-              const target = FixtureTarget.make("sqlite-read-retirement-overlap-target")
-              yield* Effect.gen(function* () {
-                const journal = yield* JournalStore
-                yield* journal.beginRun(runId, target, initialPolicy)
-                yield* appendTerminalDisposition(journal, runId, target, "Completed")
-              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
-              const before = yield* Effect.gen(function* () {
-                const journal = yield* JournalStore
-                return yield* journal.read(runId)
-              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+    it.effect("keeps an overlapping SQLite TraceReader read on one complete snapshot while retirement commits", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("sqlite-read-retirement-overlap")
+            const target = FixtureTarget.make("sqlite-read-retirement-overlap-target")
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* appendTerminalDisposition(journal, runId, target, "Completed")
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            const before = yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              return yield* makeTraceReader({ read: journal.read }).read(runId)
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
-              const ready = yield* Deferred.make<void>()
-              const release = yield* Deferred.make<void>()
-              const { observed, retired } = yield* Effect.gen(function* () {
-                const journal = yield* JournalStore
-                const readFiber = yield* journal.read(runId).pipe(Effect.forkScoped)
-                yield* Deferred.await(ready)
-                const retireFiber = yield* journal.retireTerminalRun(runId).pipe(Effect.forkScoped)
-                yield* Deferred.succeed(release, undefined)
-                return { observed: yield* Fiber.join(readFiber), retired: yield* Fiber.join(retireFiber) }
-              }).pipe(
-                Effect.provide(
-                  sqliteJournalTestLayer({
-                    filename,
-                    beforeReadLoad: () =>
-                      Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
-                  })
-                )
+            const ready = yield* Deferred.make<void>()
+            const release = yield* Deferred.make<void>()
+            const { observed, retired } = yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              const reader = makeTraceReader({ read: journal.read })
+              const readFiber = yield* reader.read(runId).pipe(Effect.forkScoped)
+              yield* Deferred.await(ready)
+              const retireFiber = yield* journal.retireTerminalRun(runId).pipe(Effect.forkScoped)
+              yield* Deferred.succeed(release, undefined)
+              return { observed: yield* Fiber.join(readFiber), retired: yield* Fiber.join(retireFiber) }
+            }).pipe(
+              Effect.provide(
+                sqliteJournalTestLayer({
+                  filename,
+                  beforeReadLoad: () =>
+                    Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
+                })
               )
-              expect(observed).toEqual(before)
-              expect(retired).toMatchObject({ _tag: "Retired", runId })
-            })
-          )
+            )
+            expect(observed).toEqual(before)
+            expect(retired).toMatchObject({ _tag: "Retired", runId })
+          })
         )
+      )
     )
 
     it.effect("rolls back a retirement cut after verified copy and preserves Hot history after reopen", () =>
@@ -1033,6 +1104,51 @@ durableJournalStoreContract(
                 (sql) => sql`SELECT COUNT(*) AS count FROM journal_records_cold WHERE run_id = ${runId}`
               )
             ).toEqual([{ count: 0 }])
+          })
+        )
+      )
+    )
+
+    it.effect("reopens after a committed retirement response is lost and reports the Run already Cold", () =>
+      Effect.scoped(
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const runId = RunId.make("sqlite-retirement-committed-response-lost")
+            const target = FixtureTarget.make("sqlite-retirement-committed-response-lost-target")
+            const first = yield* Effect.flip(
+              Effect.gen(function* () {
+                const journal = yield* JournalStore
+                yield* journal.beginRun(runId, target, initialPolicy)
+                yield* appendTerminalDisposition(journal, runId, target, "Completed")
+                const history = yield* journal.read(runId)
+                yield* journal.retireTerminalRun(runId)
+                return history
+              }).pipe(
+                Effect.provide(
+                  sqliteJournalTestLayer({
+                    filename,
+                    afterRetirementCommit: () => Effect.fail("controlled lost retirement response")
+                  })
+                )
+              )
+            )
+            expect(first).toMatchObject({
+              _tag: "JournalStorageUnavailable",
+              operation: "JournalStore.retireTerminalRun"
+            })
+
+            yield* Effect.gen(function* () {
+              const journal = yield* JournalStore
+              expect(yield* journal.retireTerminalRun(runId)).toMatchObject({
+                _tag: "AlreadyRetired",
+                partition: "Cold",
+                runId
+              })
+              const history = yield* journal.read(runId)
+              expect(history).toHaveLength(4)
+              expect(yield* journal.scanHot()).toEqual({ issues: [], runs: [] })
+              expect((yield* journal.auditAll()).runs).toEqual([{ partition: "Cold", records: history, runId }])
+            }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
           })
         )
       )
@@ -1285,7 +1401,12 @@ durableJournalStoreContract(
                 return yield* journal.read(runId)
               }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
-            expect(failure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+            expect(failure).toMatchObject({
+              _tag: "JournalHistoryCorruption",
+              operation: "JournalStore.read",
+              partition: "Hot",
+              runId
+            })
           })
         )
       )
@@ -1318,7 +1439,12 @@ durableJournalStoreContract(
                 return yield* journal.read(runId)
               }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
-            expect(readFailure).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+            expect(readFailure).toMatchObject({
+              _tag: "JournalHistoryCorruption",
+              operation: "JournalStore.read",
+              partition: "Cold",
+              runId
+            })
             const recoveryFailure = yield* Effect.flip(
               Effect.gen(function* () {
                 const journal = yield* JournalStore
@@ -1326,8 +1452,22 @@ durableJournalStoreContract(
               }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             )
             expect(recoveryFailure).toMatchObject({
-              _tag: "JournalDataCorruption",
-              operation: "JournalStore.readRunForRecovery"
+              _tag: "JournalHistoryCorruption",
+              operation: "JournalStore.readRunForRecovery",
+              partition: "Cold",
+              runId
+            })
+            const retirementFailure = yield* Effect.flip(
+              Effect.gen(function* () {
+                const journal = yield* JournalStore
+                return yield* journal.retireTerminalRun(runId)
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+            )
+            expect(retirementFailure).toMatchObject({
+              _tag: "JournalHistoryCorruption",
+              operation: "JournalStore.retireTerminalRun",
+              partition: "Cold",
+              runId
             })
             const audit = yield* Effect.gen(function* () {
               const journal = yield* JournalStore
@@ -1423,15 +1563,29 @@ durableJournalStoreContract(
                 audit: yield* journal.auditAll()
               }
             }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
-            expect(failures.append).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.append" })
-            expect(failures.read).toMatchObject({ _tag: "JournalDataCorruption", operation: "JournalStore.read" })
+            expect(failures.append).toMatchObject({
+              _tag: "JournalHistoryCorruption",
+              operation: "JournalStore.append",
+              partition: "Cold",
+              runId
+            })
+            expect(failures.read).toMatchObject({
+              _tag: "JournalHistoryCorruption",
+              operation: "JournalStore.read",
+              partition: "Cold",
+              runId
+            })
             expect(failures.recovery).toMatchObject({
-              _tag: "JournalDataCorruption",
-              operation: "JournalStore.readRunForRecovery"
+              _tag: "JournalHistoryCorruption",
+              operation: "JournalStore.readRunForRecovery",
+              partition: "Cold",
+              runId
             })
             expect(failures.terminate).toMatchObject({
-              _tag: "JournalDataCorruption",
-              operation: "JournalStore.terminateRun"
+              _tag: "JournalHistoryCorruption",
+              operation: "JournalStore.terminateRun",
+              partition: "Cold",
+              runId
             })
             expect(failures.audit).toMatchObject({
               issues: [expect.objectContaining({ _tag: "JournalSemanticIssue", partition: "Cold", runId })]

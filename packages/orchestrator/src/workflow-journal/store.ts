@@ -1,7 +1,7 @@
 // @effect-diagnostics lazyEffect:off
 import { Context, Effect, Layer, Schema } from "effect"
 import { RunId } from "@dalph/contracts"
-import { JournalPosition, JournalRecordKey, JournalSchemaVersion } from "./identity.js"
+import { JournalPartition, JournalPosition, JournalRecordKey, JournalSchemaVersion } from "./identity.js"
 import { TrackerTarget } from "../authorities/task-tracker/target.js"
 import type { JournalAudit, JournalScan } from "./recovery-model.js"
 import {
@@ -29,7 +29,7 @@ export type AppendableWorkflowJournalEvent = Exclude<
   { readonly _tag: "WorkflowRunBegan" | "WorkflowRunTerminated" }
 >
 
-const JournalStoreOperation = Schema.Literals([
+export const JournalStoreOperation = Schema.Literals([
   "JournalStore.open",
   "JournalStore.migrate",
   "JournalStore.append",
@@ -41,6 +41,7 @@ const JournalStoreOperation = Schema.Literals([
   "JournalStore.auditAll",
   "JournalStore.retireTerminalRun"
 ])
+export type JournalStoreOperation = typeof JournalStoreOperation.Type
 
 /** Journal storage could not perform an operation and may become available later. */
 export class JournalStorageUnavailable extends Schema.TaggedError<JournalStorageUnavailable>()(
@@ -72,6 +73,12 @@ export class JournalDataCorruption extends Schema.TaggedError<JournalDataCorrupt
   detail: Schema.String
 }) {}
 
+/** One exact Run history is malformed in one physical Journal partition. */
+export class JournalHistoryCorruption extends Schema.TaggedError<JournalHistoryCorruption>()(
+  "JournalHistoryCorruption",
+  { operation: JournalStoreOperation, detail: Schema.String, partition: JournalPartition, runId: RunId }
+) {}
+
 /** The database belongs to a journal schema this Dalph cannot safely open. */
 export class JournalSchemaIncompatible extends Schema.TaggedError<JournalSchemaIncompatible>()(
   "JournalSchemaIncompatible",
@@ -80,6 +87,7 @@ export class JournalSchemaIncompatible extends Schema.TaggedError<JournalSchemaI
 
 export type JournalStoreError =
   | JournalDataCorruption
+  | JournalHistoryCorruption
   | JournalSchemaIncompatible
   | JournalStorageAccessDenied
   | JournalStorageCapacityExhausted

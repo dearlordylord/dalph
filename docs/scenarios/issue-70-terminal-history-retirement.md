@@ -140,12 +140,12 @@ an empty read during a crash cut.
 
 Acceptance tests: the property case **“makes terminal-history retirement
 idempotent and keeps one exclusive partition”** in
-`retirement.property.test.ts`; SQLite **“rolls back a failed v1-to-v2
-migration without changing the v1 hot journal”**, **“reopening after a
-committed v1 migration does not repeat or retire the hot history”**, and the
-shared retirement contract cover transaction/reopen behavior. The store
-rollback test uses an explicit controlled migration cut, not a production-only
-index or view.
+`retirement.property.test.ts`; **“keeps one complete partition across generated
+SQLite retirement crash cuts”** generates before-move, pre-commit, and
+post-commit cuts. SQLite **“reopens after a committed retirement response is
+lost and reports the Run already Cold”** proves the exact post-commit retry.
+The migration rollback/reopen tests use explicit controlled seams, not a
+production-only index or view.
 
 ## 6. A trace read overlaps retirement
 
@@ -161,10 +161,12 @@ two-partition lookup.
 
 Visible result: the caller gets one complete, ordered, contiguous history with
 the same identities. Forbidden result: empty, mixed, duplicated, or gapped
-history. Acceptance evidence is the property test **“makes a concurrent
-in-memory read observe one complete partition state, never a partial move”**
-plus the shared memory/SQLite contract **“atomically retires every valid
-terminal history and keeps reads transparent”** in `store.test.ts`.
+history. Acceptance evidence is the property test **“makes an overlapping
+in-memory TraceReader read observe one complete partition state”**, SQLite
+**“keeps an overlapping SQLite TraceReader read on one complete snapshot while
+retirement commits”**, and the shared memory/SQLite contract **“atomically
+retires every valid terminal history and keeps reads transparent”** in
+`store.test.ts`.
 
 ## 7. Historical reads are transparent after retirement
 
@@ -229,10 +231,17 @@ Visible result: recoverable responsibility remains Hot and readable. Forbidden
 result: retirement inferred from age, inactivity, a bare event tag, storage
 pressure, or a partial terminal evidence set.
 
-Acceptance tests: **“rejects retirement for a valid nonterminal history
-without moving rows”** in the shared memory/SQLite contract and the property
-case **“never treats a valid nonterminal prefix as eligible for retirement”**
-in `retirement.property.test.ts`.
+Acceptance tests: **“rejects unfinished, paused, temporarily quiescent,
+quarantined, and merely old histories”** in the shared memory/SQLite contract
+uses, respectively, a pending intent, an applied Run Pause, a settled operation
+without Run termination, an external quarantine-selection fact paired with a
+valid pending prefix, and a begun-only prefix. Quarantine selection is not
+passed across the `JournalStore` boundary, so it cannot replace the missing
+termination occurrence. The merely-old case has no Clock seam because age is
+not a Journal fact and `retireTerminalRun` receives only the Run identity. The property case
+**“never treats a valid nonterminal prefix as eligible for retirement”** in
+`retirement.property.test.ts` generates begun, intent-pending, and
+operation-settled prefixes independently of those named examples.
 
 ## 10. Malformed Hot history blocks safe startup
 
@@ -367,11 +376,11 @@ bootstrap failure and that the activation program is never entered.
 | 2 | `store.test.ts` “retires Completed, Blocked, and Cancelled histories without rewriting disposition evidence” |
 | 3 | `journaled-run-bootstrap.test.ts` immediate diagnostic test; memory/SQLite startup failure tests |
 | 4 | All four terminal-Hot startup reconciliation tests; both bootstrap cold-history tests |
-| 5 | `retirement.property.test.ts` idempotence property; SQLite migration rollback/reopen tests |
-| 6 | `retirement.property.test.ts` concurrent in-memory partition property and shared retirement/read contract |
+| 5 | `retirement.property.test.ts` idempotence and generated SQLite crash-cut properties; SQLite retirement lost-response reopen test; migration rollback tests |
+| 6 | Concurrent memory and SQLite TraceReader/retirement tests and shared retirement/read contract |
 | 7 | TraceReader Cold memory/SQLite/reopen parity; trace/reducer property |
 | 8 | Shared lifecycle contract and both real bootstrap cold-history tests |
-| 9 | Shared nonterminal rejection and nonterminal property |
+| 9 | Shared parameterized rejection for all five named nonterminal conditions and nonterminal-prefix property |
 | 10 | Memory/SQLite malformed-Hot startup tests and invalid-prefix bootstrap test |
 | 11 | SQLite malformed-Cold startup/full-audit test |
 | 12 | Memory and SQLite contradictory-partition contract tests |

@@ -118,18 +118,38 @@ it("preserves exact order and encoded event bytes for arbitrary terminal Run ide
 
 it("never treats a valid nonterminal prefix as eligible for retirement", async () => {
   await fc.assert(
-    fc.asyncProperty(fc.string({ minLength: 1, maxLength: 24 }), async (suffix) => {
-      const runId = RunId.make(`retirement-nonterminal-${suffix}`)
-      const failure = await runMemory(
-        Effect.gen(function* () {
-          const journal = yield* JournalStore
-          const target = FixtureTarget.make(`retirement-nonterminal-target-${suffix}`)
-          yield* journal.beginRun(runId, target, initialPolicy)
-          return yield* Effect.flip(journal.retireTerminalRun(runId))
-        })
-      )
-      expect(failure._tag).toBe("JournalHistoryNotTerminal")
-    }),
+    fc.asyncProperty(
+      fc.string({ minLength: 1, maxLength: 24 }),
+      fc.integer({ min: 1, max: 3 }),
+      async (suffix, prefixLength) => {
+        const runId = RunId.make(`retirement-nonterminal-prefix-${suffix}`)
+        const failure = await runMemory(
+          Effect.gen(function* () {
+            const journal = yield* JournalStore
+            const target = FixtureTarget.make(`retirement-nonterminal-target-${suffix}`)
+            yield* journal.beginRun(runId, target, initialPolicy)
+            const fixture = completedRunFinalityFixture({ runId, target })
+            if (prefixLength >= 2) {
+              yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+            }
+            if (prefixLength >= 3) {
+              yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+            }
+            const before = yield* journal.read(runId)
+            const retirementFailure = yield* Effect.flip(journal.retireTerminalRun(runId))
+            return {
+              before,
+              failure: retirementFailure,
+              hot: yield* journal.scanHot(),
+              after: yield* journal.read(runId)
+            }
+          })
+        )
+        expect(failure.failure._tag).toBe("JournalHistoryNotTerminal")
+        expect(failure.after).toEqual(failure.before)
+        expect(failure.hot.runs).toContainEqual(expect.objectContaining({ runId }))
+      }
+    ),
     { numRuns: 40 }
   )
 })
@@ -161,15 +181,16 @@ it("keeps the canonical reducer and read-only trace projection equivalent across
   )
 })
 
-it("makes a concurrent in-memory read observe one complete partition state, never a partial move", async () => {
+it("makes an overlapping in-memory TraceReader read observe one complete partition state", async () => {
   await fc.assert(
     fc.asyncProperty(fc.string({ minLength: 1, maxLength: 24 }), async (suffix) => {
       const runId = RunId.make(`retirement-crash-cut-${suffix}`)
       const result = await runMemory(
         Effect.gen(function* () {
           const journal = yield* terminalHistoryFor(runId)
-          const before = yield* journal.read(runId)
-          const [, observed] = yield* Effect.all([journal.retireTerminalRun(runId), journal.read(runId)], {
+          const reader = makeTraceReader({ read: journal.read })
+          const before = yield* reader.read(runId)
+          const [, observed] = yield* Effect.all([journal.retireTerminalRun(runId), reader.read(runId)], {
             concurrency: "unbounded"
           })
           const audit = yield* journal.auditAll()
@@ -202,6 +223,65 @@ it("makes terminal-history retirement idempotent and keeps one exclusive partiti
       expect(result.audit.runs.filter(({ runId: candidate }) => candidate === runId)).toHaveLength(1)
       expect(result.audit.runs[0]?.partition).toBe("Cold")
     })
+  )
+})
+
+it("keeps one complete partition across generated SQLite retirement crash cuts", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.string({ minLength: 1, maxLength: 24 }),
+      fc.constantFrom("BeforeMove", "BeforeCommit", "AfterCommit"),
+      async (suffix, cut) => {
+        const runId = RunId.make(`retirement-sqlite-crash-cut-${cut}-${suffix}`)
+        const result = await Effect.runPromise(
+          Effect.scoped(
+            withTemporaryDatabase((filename) =>
+              Effect.gen(function* () {
+                const before = yield* terminalHistoryFor(runId).pipe(
+                  Effect.flatMap((journal) => journal.read(runId)),
+                  Effect.provide(sqliteJournalTestLayer({ filename }))
+                )
+                if (cut !== "BeforeMove") {
+                  yield* Effect.flip(
+                    Effect.gen(function* () {
+                      return yield* (yield* JournalStore).retireTerminalRun(runId)
+                    }).pipe(
+                      Effect.provide(
+                        sqliteJournalTestLayer({
+                          filename,
+                          ...(cut === "BeforeCommit"
+                            ? { afterRetirementCopy: () => Effect.fail("generated pre-commit cut") }
+                            : { afterRetirementCommit: () => Effect.fail("generated post-commit cut") })
+                        })
+                      )
+                    )
+                  )
+                }
+                const reopened = yield* Effect.gen(function* () {
+                  const journal = yield* JournalStore
+                  const repeated = yield* journal.retireTerminalRun(runId)
+                  return {
+                    after: yield* journal.read(runId),
+                    audit: yield* journal.auditAll(),
+                    hot: yield* journal.scanHot(),
+                    repeated
+                  }
+                }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+                return { ...reopened, before }
+              })
+            )
+          )
+        )
+        expect(result.after).toEqual(result.before)
+        expect(result.after).toEqual(result.audit.runs[0]?.records)
+        expect(result.after).toHaveLength(4)
+        expect(result.audit.runs).toHaveLength(1)
+        expect(result.audit.runs[0]?.partition).toBe("Cold")
+        expect(result.hot.runs).toEqual([])
+        expect(result.repeated._tag).toBe(cut === "AfterCommit" ? "AlreadyRetired" : "Retired")
+      }
+    ),
+    { numRuns: 15 }
   )
 })
 

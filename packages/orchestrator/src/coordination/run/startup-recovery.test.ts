@@ -260,8 +260,10 @@ it.effect("blocks reopened SQLite startup before activating around a malformed H
           return yield* Effect.flip(journal.retireTerminalRun(seeded.terminalRunId))
         }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
         expect(retirementFailure).toMatchObject({
-          _tag: "JournalDataCorruption",
-          operation: "JournalStore.retireTerminalRun"
+          _tag: "JournalHistoryCorruption",
+          operation: "JournalStore.retireTerminalRun",
+          partition: "Hot",
+          runId: seeded.terminalRunId
         })
 
         const failure = yield* Effect.scoped(

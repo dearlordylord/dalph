@@ -4,7 +4,7 @@ import { JournalPosition, type JournalRecordKey } from "../identity.js"
 import {
   type AppendableWorkflowJournalEvent,
   type JournalRecord,
-  JournalDataCorruption,
+  JournalHistoryCorruption,
   JournalHistoryNotTerminal,
   JournalPartitionContradiction,
   JournalStore,
@@ -25,11 +25,10 @@ import {
   decideWorkflowRunTermination,
   readRecoverableRunBeginning
 } from "../run-lifecycle.js"
-import { workflowJournalHistoryIssueDetail } from "../../coordination/reconstruction/history-result.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
 import type { RunFinalityEvidence, RunTerminationDisposition } from "../../coordination/frontier/run-finality.js"
-import { JournalSemanticIssue } from "../recovery-model.js"
-import { reduceWorkflowJournalHistory } from "../../coordination/reconstruction/history.js"
+import { decideJournalPartitionHistory } from "../partition-history.js"
+import type { JournalScan } from "../recovery-model.js"
 
 interface MemoryJournalState {
   readonly hotRecordsByRun: ReadonlyMap<RunId, ReadonlyArray<JournalRecord>>
@@ -37,8 +36,6 @@ interface MemoryJournalState {
 }
 
 const emptyMemoryJournalState = (): MemoryJournalState => ({ coldRecordsByRun: new Map(), hotRecordsByRun: new Map() })
-
-const lastRecordIndex = -1
 
 const recordsByRun = (records: ReadonlyArray<JournalRecord>): ReadonlyMap<RunId, ReadonlyArray<JournalRecord>> => {
   return records.reduce(
@@ -56,37 +53,22 @@ const sameEvent = (left: WorkflowJournalEvent, right: WorkflowJournalEvent): boo
   JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(left)) ===
   JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))
 
-const semanticIssueFor = (partition: "Hot" | "Cold", runId: RunId, records: ReadonlyArray<JournalRecord>) => {
-  const reduction = reduceWorkflowJournalHistory(runId, records)
-  if (reduction._tag === "InvalidWorkflowJournalHistory") {
-    return new JournalSemanticIssue({
-      detail: reduction.issues.map(workflowJournalHistoryIssueDetail).join("; "),
-      partition,
-      runId
-    })
-  }
-  if (partition === "Cold" && reduction.records.at(lastRecordIndex)?.event._tag !== "WorkflowRunTerminated") {
-    return new JournalSemanticIssue({ detail: "Cold history is not terminal", partition, runId })
-  }
-  return undefined
-}
-
 const readColdHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>,
   operation: "JournalStore.read" | "JournalStore.readRunForRecovery"
-): Effect.Effect<ReadonlyArray<JournalRecord>, JournalDataCorruption> => {
-  const issue = semanticIssueFor("Cold", runId, records)
-  return issue === undefined
+): Effect.Effect<ReadonlyArray<JournalRecord>, JournalHistoryCorruption> => {
+  const decision = decideJournalPartitionHistory("Cold", runId, records)
+  return decision._tag === "ValidPartitionHistory"
     ? Effect.succeed(records)
-    : Effect.fail(new JournalDataCorruption({ detail: issue.detail, operation }))
+    : Effect.fail(new JournalHistoryCorruption({ detail: decision.issue.detail, operation, partition: "Cold", runId }))
 }
 
 type MemoryAppendError =
   | JournalStoreContradiction
   | WorkflowRunAlreadyTerminated
   | JournalPartitionContradiction
-  | JournalDataCorruption
+  | JournalHistoryCorruption
 type MemoryAppendTransition = readonly [Effect.Effect<JournalRecord, MemoryAppendError>, MemoryJournalState]
 
 const existingMemoryAppendTransition = (
@@ -104,9 +86,11 @@ const existingMemoryAppendTransition = (
   if (cold !== undefined) {
     return [
       Effect.fail(
-        new JournalDataCorruption({
+        new JournalHistoryCorruption({
           detail: "cold partition contains nonterminal history",
-          operation: "JournalStore.append"
+          operation: "JournalStore.append",
+          partition: "Cold",
+          runId
         })
       ),
       current
@@ -138,7 +122,7 @@ const memoryAppendTransition = (
 }
 
 type MemoryRetirementError =
-  | JournalDataCorruption
+  | JournalHistoryCorruption
   | JournalPartitionContradiction
   | WorkflowRunNotBegan
   | JournalHistoryNotTerminal
@@ -152,10 +136,17 @@ const coldMemoryRetirementTransition = (
   runId: RunId,
   cold: ReadonlyArray<JournalRecord>
 ): MemoryRetirementTransition => {
-  const issue = semanticIssueFor("Cold", runId, cold)
-  if (issue !== undefined) {
+  const decision = decideJournalPartitionHistory("Cold", runId, cold)
+  if (decision._tag === "InvalidPartitionHistory") {
     return [
-      Effect.fail(new JournalDataCorruption({ detail: issue.detail, operation: "JournalStore.retireTerminalRun" })),
+      Effect.fail(
+        new JournalHistoryCorruption({
+          detail: decision.issue.detail,
+          operation: "JournalStore.retireTerminalRun",
+          partition: "Cold",
+          runId
+        })
+      ),
       current
     ]
   }
@@ -167,19 +158,21 @@ const hotMemoryRetirementTransition = (
   runId: RunId,
   hot: ReadonlyArray<JournalRecord>
 ): MemoryRetirementTransition => {
-  const reduction = reduceWorkflowJournalHistory(runId, hot)
-  if (reduction._tag === "InvalidWorkflowJournalHistory") {
+  const decision = decideJournalPartitionHistory("Hot", runId, hot)
+  if (decision._tag === "InvalidPartitionHistory") {
     return [
       Effect.fail(
-        new JournalDataCorruption({
-          detail: reduction.issues.map(workflowJournalHistoryIssueDetail).join("; "),
-          operation: "JournalStore.retireTerminalRun"
+        new JournalHistoryCorruption({
+          detail: decision.issue.detail,
+          operation: "JournalStore.retireTerminalRun",
+          partition: "Hot",
+          runId
         })
       ),
       current
     ]
   }
-  if (reduction.records.at(lastRecordIndex)?.event._tag !== "WorkflowRunTerminated") {
+  if (!decision.isTerminal) {
     return [Effect.fail(new JournalHistoryNotTerminal({ runId })), current]
   }
   const coldRecordsByRun = new Map([...current.coldRecordsByRun, [runId, hot] as const])
@@ -263,14 +256,15 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
 
       const scanHot = Effect.fn("JournalStore.Memory.scanHot")(function* () {
         const recordsByRun = (yield* Ref.get(state)).hotRecordsByRun
-        const issues = [...recordsByRun].flatMap(([runId, records]) => {
-          const issue = semanticIssueFor("Hot", runId, records)
-          return issue === undefined ? [] : [issue]
-        })
-        const runs = [...recordsByRun].flatMap(([runId, records]) =>
-          semanticIssueFor("Hot", runId, records) === undefined ? [{ records, runId }] : []
+        return [...recordsByRun].reduce<JournalScan>(
+          (scan, [runId, records]) => {
+            const decision = decideJournalPartitionHistory("Hot", runId, records)
+            return decision._tag === "InvalidPartitionHistory"
+              ? { issues: [...scan.issues, decision.issue], runs: scan.runs }
+              : { issues: scan.issues, runs: [...scan.runs, { records, runId }] }
+          },
+          { issues: [], runs: [] }
         )
-        return { issues, runs }
       })
 
       const auditAll = Effect.fn("JournalStore.Memory.auditAll")(function* () {
@@ -284,12 +278,12 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
         const cold = [...current.coldRecordsByRun]
         const issues = [
           ...hot.flatMap(([runId, records]) => {
-            const issue = semanticIssueFor("Hot", runId, records)
-            return issue === undefined ? [] : [issue]
+            const decision = decideJournalPartitionHistory("Hot", runId, records)
+            return decision._tag === "InvalidPartitionHistory" ? [decision.issue] : []
           }),
           ...cold.flatMap(([runId, records]) => {
-            const issue = semanticIssueFor("Cold", runId, records)
-            return issue === undefined ? [] : [issue]
+            const decision = decideJournalPartitionHistory("Cold", runId, records)
+            return decision._tag === "InvalidPartitionHistory" ? [decision.issue] : []
           })
         ]
         const runs = [
@@ -318,7 +312,7 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
             | WorkflowRunNotBegan
             | WorkflowRunTerminationEvidenceInvalid
             | JournalPartitionContradiction
-            | JournalDataCorruption
+            | JournalHistoryCorruption
           >,
           MemoryJournalState
         ] => {
@@ -333,9 +327,11 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
           if (cold !== undefined) {
             return [
               Effect.fail(
-                new JournalDataCorruption({
+                new JournalHistoryCorruption({
                   detail: "cold partition contains nonterminal history",
-                  operation: "JournalStore.terminateRun"
+                  operation: "JournalStore.terminateRun",
+                  partition: "Cold",
+                  runId
                 })
               ),
               current
