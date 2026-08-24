@@ -42,6 +42,7 @@ import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
 import {
   encodeTraceAtCursor,
+  encodeTraceControlDispositionFacet,
   encodeTraceHistoryItem,
   HistoricalTraceConsole,
   historicalTraceConsoleLayer,
@@ -128,6 +129,7 @@ const traceAtCursor = TraceAtCursor.make({
     workflowCausalEdges: []
   }),
   facets: TraceHistoricalFacets.make({
+    controlDisposition: { cleanup: [], controls: [], dispositions: [], version: 1 },
     integration: { facts: [] },
     recovery: {
       observationGaps: [
@@ -168,6 +170,7 @@ it("canonicalizes the production cursor view without changing its committed iden
     JournalPosition.make(4)
   ])
   expect(canonical.items[0]?.identity).toEqual({ position: JournalPosition.make(2), runId })
+  expect(JSON.parse(encodeTraceControlDispositionFacet(traceAtCursor))).toEqual(traceAtCursor.facets.controlDisposition)
   expect(renderTraceAtCursor(traceAtCursor)).toEqual([
     encodeTraceHistoryItem(historyItem),
     encodeTraceHistoryItem(laterHistoryItem),
@@ -221,6 +224,7 @@ it.effect("reads one exact production cursor through TraceReader and writes its 
     expect(view.items[0]?.occurrence._tag).toBe("TaskTrackerReadInitiated")
     expect(encoded).toEqual(view)
     expect(encoded.facets).toEqual(view.facets)
+    expect(JSON.parse(encodeTraceControlDispositionFacet(view))).toEqual(view.facets.controlDisposition)
     expect(historyAfterPresentation).toEqual(historyBeforePresentation)
     expect(presentationLayerOutput).toBe(true)
   })

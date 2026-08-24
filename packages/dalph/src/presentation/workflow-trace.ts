@@ -1,5 +1,6 @@
 import {
   TraceAtCursor,
+  TraceControlDispositionFacet,
   TraceHistoryItem,
   TraceItem,
   TraceOutput,
@@ -30,6 +31,12 @@ export const encodeTraceHistoryItem = (item: TraceHistoryItem): string =>
 /** Encodes the complete production view, including its graph and distinct relationship sets. */
 export const encodeTraceAtCursor = (history: TraceAtCursor): string =>
   JSON.stringify(Schema.encodeUnknownSync(TraceAtCursor)(semanticTraceAtCursor(history)))
+
+/** Encodes the shared control/disposition/cleanup facet without adding presentation-specific state. */
+export const encodeTraceControlDispositionFacet = (history: TraceAtCursor): string =>
+  JSON.stringify(
+    Schema.encodeUnknownSync(TraceControlDispositionFacet)(semanticTraceAtCursor(history).facets.controlDisposition)
+  )
 
 /** Renders recorded occurrences in their committed order; task ordering remains a separate derived view. */
 export const renderTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<string> =>

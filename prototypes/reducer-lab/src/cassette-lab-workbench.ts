@@ -1141,7 +1141,41 @@ const renderProductionTraceHistory = (
       item.dataset.sourcePosition = String(fact.source.position)
       appendExactJson(item, "Exact integration fact", fact, "trace-facet-exact")
     }
-    if (facetList.childElementCount === 0) appendText(facetList, "li", "No recovery or integration facet is visible at this cursor.")
+    appendText(facetsHost, "h5", "Control, disposition, and cleanup facet")
+    const controlDispositionSummary = appendText(
+      facetsHost,
+      "p",
+      `Shared TraceAtCursor control-disposition schema v${history.facets.controlDisposition.version} · controls ${history.facets.controlDisposition.controls.length} · dispositions ${history.facets.controlDisposition.dispositions.length} · cleanup authorizations ${history.facets.controlDisposition.cleanup.length}.`,
+      "trace-control-disposition-summary"
+    )
+    controlDispositionSummary.dataset.role = "trace-control-disposition-summary"
+    for (const control of history.facets.controlDisposition.controls) {
+      const item = appendText(facetList, "li", `Control · ${control._tag} · source journal ${control.source.position}`)
+      item.dataset.facetTag = control._tag
+      item.dataset.sourceRunId = control.source.runId
+      item.dataset.sourcePosition = String(control.source.position)
+      appendExactJson(item, "Exact control fact", control, "trace-facet-exact")
+    }
+    for (const disposition of history.facets.controlDisposition.dispositions) {
+      const item = appendText(facetList, "li", `Control disposition · ${disposition._tag} · source journal ${disposition.source.position}`)
+      item.dataset.facetTag = disposition._tag
+      item.dataset.sourceRunId = disposition.source.runId
+      item.dataset.sourcePosition = String(disposition.source.position)
+      appendExactJson(item, "Exact control disposition", disposition, "trace-facet-exact")
+    }
+    for (const cleanup of history.facets.controlDisposition.cleanup) {
+      const source = cleanup.steps[cleanup.steps.length - 1]?.source ?? cleanup.status.source
+      const item = appendText(
+        facetList,
+        "li",
+        `Cleanup · ${cleanup._tag} · ${cleanup.status._tag} · source journal ${source.position}`
+      )
+      item.dataset.facetTag = cleanup._tag
+      item.dataset.sourceRunId = source.runId
+      item.dataset.sourcePosition = String(source.position)
+      appendExactJson(item, "Exact cleanup progress", cleanup, "trace-facet-exact")
+    }
+    if (facetList.childElementCount === 0) appendText(facetList, "li", "No recovery, integration, control, disposition, or cleanup facet is visible at this cursor.")
     facetsHost.append(facetList)
   }
 

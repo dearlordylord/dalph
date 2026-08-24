@@ -156,6 +156,13 @@ import {
 } from "../workflow/task-tracker-facts/observation.js"
 import {
   TraceAtCursor,
+  TraceBranchCleanupStep,
+  TraceCleanupProgress,
+  TraceCleanupStatus,
+  TraceControlDispositionFacet,
+  TraceControlFact,
+  TraceDispositionFact,
+  TraceIntegratorCandidateCleanupStep,
   TraceCursor,
   TraceHistoricalFacets,
   TraceItemIdentity,
@@ -165,6 +172,7 @@ import {
   TraceJournalPrefixInvalid,
   TraceProjectionInvalid,
   TraceRetainedResponsibility,
+  TraceWorktreeCleanupStep,
   makeTraceReader
 } from "./trace-reader.js"
 import { traceHistoricalFacetsIssue, type HistoricalFacetFactories } from "./trace-reader-historical-facets.js"
@@ -217,10 +225,24 @@ const independentAttempt = PlannedTaskAttempt.make({
 })
 
 const historicalFacetFactories = {
+  branchCleanupStep: { make: (input: Omit<TraceBranchCleanupStep, "_tag">) => TraceBranchCleanupStep.make(input) },
+  cleanupProgress: TraceCleanupProgress.cases,
+  cleanupStatus: TraceCleanupStatus.cases,
+  controlDisposition: {
+    make: (input: Omit<TraceControlDispositionFacet, "_tag">) => TraceControlDispositionFacet.make(input)
+  },
+  controlFact: TraceControlFact.cases,
+  dispositionFact: TraceDispositionFact.cases,
+  integratorCandidateCleanupStep: {
+    make: (input: Omit<TraceIntegratorCandidateCleanupStep, "_tag">) => TraceIntegratorCandidateCleanupStep.make(input)
+  },
   observationGap: TraceObservationGap.cases,
   preservationDisposition: TracePreservationDisposition.cases,
   retainedResponsibility: TraceRetainedResponsibility.cases,
   integrationFact: TraceIntegrationFact.cases,
+  worktreeCleanupStep: {
+    make: (input: Omit<TraceWorktreeCleanupStep, "_tag">) => TraceWorktreeCleanupStep.make(input)
+  },
   facets: TraceHistoricalFacets
 } satisfies HistoricalFacetFactories
 

@@ -85,7 +85,7 @@ const actionAdapterForbiddenImportFragments = [
 ]
 
 const passiveForbiddenBindings =
-  /\b(?:GitCommand(?:Service)?|GitWorktree(?:Service)?|IntegrationCandidateGit|TargetPromotionGit|TargetVerificationBoundary|IntegrationTargetResourceController|JournalStore|JournalService|InRunJournal|WorkflowInterpreter|TrackerMutation(?:Service)?|TaskClaimMutation|GithubTrackerMutation|TaskTrackerMutation|DeliveryActionExecutor|run(?:TaskClaim|Completion|Target(?:Verification|Promotion)|IntegrationCandidate)|queueAcceptedResultIntegrationResponsibility|startQueuedIntegration|Cleanup|cleanup|JournalAppend|appendJournal)\b/u
+  /\b(?:GitCommand(?:Service)?|GitWorktree(?:Service)?|IntegrationCandidateGit|TargetPromotionGit|TargetVerificationBoundary|IntegrationTargetResourceController|JournalStore|JournalService|InRunJournal|WorkflowInterpreter|TrackerMutation(?:Service)?|TaskClaimMutation|GithubTrackerMutation|TaskTrackerMutation|DeliveryActionExecutor|run(?:TaskClaim|Completion|Target(?:Verification|Promotion)|IntegrationCandidate)|queueAcceptedResultIntegrationResponsibility|startQueuedIntegration|Cleanup(?:Boundary|Capability|Service|Controller|Mutation)|cleanup(?:Boundary|Capability|Service|Controller|Mutation)|run(?:Worktree|Branch|IntegratorCandidate)Cleanup|JournalAppend|appendJournal)\b/u
 
 const passiveForbiddenEffects =
   /\b(?:Schedule|Fiber|Queue|Semaphore)\b|\bEffect\.(?:fork|forkScoped|forkChild|retry|repeat|acquireRelease|acquireUseRelease)\b|\.\s*(?:retry|retryOrElse|repeat)\s*\(/u

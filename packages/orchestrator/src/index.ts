@@ -437,16 +437,25 @@ export {
 export { TraceOutput, TraceOutputError } from "./presentation/trace-output.js"
 export {
   TraceAtCursor,
+  TraceBranchCleanupProgress,
+  TraceBranchCleanupStep,
   TraceCausalPredecessorContradiction,
   TraceCausalPredecessorMissing,
   TraceCausalPredecessorNotProjected,
   TraceCursor,
+  TraceCleanupProgress,
+  TraceCleanupStatus,
+  TraceControlDispositionFacet,
+  TraceControlFact,
   TraceCursorNotCommitted,
   TraceDerivedTaskOrder,
+  TraceDispositionFact,
   TraceHistory,
   TraceHistoricalFacets,
   TraceHistoryItem,
   TraceIntegrationFact,
+  TraceIntegratorCandidateCleanupProgress,
+  TraceIntegratorCandidateCleanupStep,
   TraceItemIdentity,
   TraceObservationGap,
   TracePositionIdentity,
@@ -465,6 +474,8 @@ export {
   TraceWorkflowCausalEdge,
   TraceOutsideAuthorityAcknowledgement,
   TraceRelationships,
+  TraceWorktreeCleanupProgress,
+  TraceWorktreeCleanupStep,
   makeTracePresentation,
   makeTracePresentationWithStatusSource,
   makeTraceReader,
@@ -480,6 +491,9 @@ export {
 export {
   AttemptImplementationAbandoned,
   AttemptStoppageIntended,
+  BranchCleanupOccurred,
+  CancelledAttemptClaimNoReleaseObserved,
+  CancelledAttemptImplementationResponsibilityRelinquished,
   IntegrationClaimDeletionOccurred,
   IntegrationClaimReplacementOccurred,
   HistoricalWorkflowOccurrence,
@@ -489,6 +503,7 @@ export {
   IntegrationProviderRunActivityAbsent,
   IntegrationQuarantineDirectionApplied,
   IntegrationQuarantined,
+  IntegratorCandidateCleanupOccurred,
   IntegratorCandidateQualificationInitiated,
   IntegratorCandidateQualificationObserved,
   IntegratorRunResultRecorded,
@@ -506,7 +521,9 @@ export {
   TaskClaimAcquisitionInitiated,
   TaskClaimReleased,
   TaskClaimReleaseInitiated,
-  TaskWorktreeReady
+  TaskWorktreeReady,
+  RunCancellationApplied,
+  WorktreeCleanupOccurred
 } from "./workflow/registry/historical-occurrence.js"
 export {
   FixtureReader,

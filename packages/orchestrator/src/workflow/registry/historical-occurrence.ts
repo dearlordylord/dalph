@@ -58,6 +58,22 @@ import {
   PostPromotionBlockerCandidateAncestryReadIntendedEvent,
   PostPromotionBlockerCandidateAncestryObservedEvent
 } from "../protocols/integration-finality/events.js"
+import {
+  BranchCleanupOccurred,
+  CancelledAttemptClaimNoReleaseObserved,
+  CancelledAttemptImplementationResponsibilityRelinquished,
+  IntegratorCandidateCleanupOccurred,
+  RunCancellationApplied,
+  WorktreeCleanupOccurred
+} from "./historical-control-disposition-occurrence.js"
+export {
+  BranchCleanupOccurred,
+  CancelledAttemptClaimNoReleaseObserved,
+  CancelledAttemptImplementationResponsibilityRelinquished,
+  IntegratorCandidateCleanupOccurred,
+  RunCancellationApplied,
+  WorktreeCleanupOccurred
+} from "./historical-control-disposition-occurrence.js"
 
 const successorGeneration = 2 as const // eslint-disable-line no-magic-numbers
 
@@ -396,6 +412,9 @@ export type IntegrationFinalityOccurred = typeof IntegrationFinalityOccurred.Typ
 export const HistoricalWorkflowOccurrence = Schema.Union([
   AttemptImplementationAbandoned,
   AttemptStoppageIntended,
+  BranchCleanupOccurred,
+  CancelledAttemptClaimNoReleaseObserved,
+  CancelledAttemptImplementationResponsibilityRelinquished,
   IntegrationClaimDeletionOccurred,
   IntegrationClaimReplacementOccurred,
   IntegrationFinalitySettledOccurred,
@@ -403,12 +422,14 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   IntegrationProviderRunActivityAbsent,
   IntegrationQuarantineDirectionApplied,
   IntegrationQuarantined,
+  IntegratorCandidateCleanupOccurred,
   IntegratorCandidateQualificationInitiated,
   IntegratorCandidateQualificationObserved,
   IntegratorRunResultRecorded,
   IntegratorRunStarted,
   IntegratorSessionFixed,
   IntegratorSuccessorSessionFixed,
+  RunCancellationApplied,
   StoppedAttemptClaimPreserved,
   TargetPromotionAttemptRequested,
   TargetPromotionNonConvergent,
@@ -421,6 +442,7 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   TaskClaimReleased,
   TaskClaimReleaseInitiated,
   TaskWorktreeReady,
-  TaskWorktreeReconciliationInitiated
+  TaskWorktreeReconciliationInitiated,
+  WorktreeCleanupOccurred
 ])
 export type HistoricalWorkflowOccurrence = typeof HistoricalWorkflowOccurrence.Type

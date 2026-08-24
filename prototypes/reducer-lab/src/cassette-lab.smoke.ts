@@ -261,8 +261,15 @@ await scenario("drives Reducer Lab durable history, graph, and causal navigation
   )
   assert(result.traceHistories.some(({ graph }) => graph !== null), "The Lab must consume a production graph-at-history view")
   assert(
-    result.traceHistories.every(({ facets }) => facets.recovery.observationGaps !== undefined && facets.integration.facts !== undefined),
-    "The Lab must consume the shared recovery and integration facets"
+    result.traceHistories.every(({ facets }) =>
+      facets.recovery.observationGaps !== undefined
+      && facets.integration.facts !== undefined
+      && facets.controlDisposition.version === 1
+      && facets.controlDisposition.controls !== undefined
+      && facets.controlDisposition.dispositions !== undefined
+      && facets.controlDisposition.cleanup !== undefined
+    ),
+    "The Lab must consume the shared recovery, integration, control, disposition, and cleanup facets"
   )
   assert(
     result.traceHistories.some(({ relationships }) => relationships.workflowCausalEdges.length > 0),
@@ -954,6 +961,10 @@ await scenario("renders exact trace facet payloads and source correlations in th
     assert(exactFacts.includes(String(expected)), `The Lab must render exact trace value ${String(expected)}`)
   }
   assert(exactItems.includes(String(candidate.candidateCommit)), "Exact projected occurrences must retain candidate payloads")
+  assert(
+    panel.querySelector<HTMLElement>("[data-role='trace-control-disposition-summary']")?.textContent?.includes("control-disposition schema v1") === true,
+    "The Lab must render the shared control-disposition facet summary"
+  )
 })
 
 await scenario("fails visibly when a displayed production predecessor is not projected", async () => {

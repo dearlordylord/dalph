@@ -58,12 +58,18 @@ import {
   type TargetPromotionAttemptIntendedEvent,
   type TargetPromotionIntendedEvent
 } from "../protocols/target-promotion/events.js"
+import { BranchCleanupJournalEvent } from "../protocols/disposition-cleanup/branch.js"
+import { IntegratorCandidateCleanupJournalEvent } from "../protocols/disposition-cleanup/integrator-candidate.js"
+import { WorktreeCleanupJournalEvent } from "../protocols/disposition-cleanup/worktree.js"
 export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integration-occurrence.js"
 export { WorkflowActor } from "./actor.js"
 
 const {
   AttemptImplementationAbandoned,
   AttemptStoppageIntended,
+  BranchCleanupOccurred,
+  CancelledAttemptClaimNoReleaseObserved,
+  CancelledAttemptImplementationResponsibilityRelinquished,
   HistoricalWorkflowOccurrence,
   IntegrationClaimDeletionOccurred,
   IntegrationClaimReplacementOccurred,
@@ -72,12 +78,14 @@ const {
   IntegrationProviderRunActivityAbsent,
   IntegrationQuarantined,
   IntegrationQuarantineDirectionApplied,
+  IntegratorCandidateCleanupOccurred,
   IntegratorCandidateQualificationInitiated,
   IntegratorCandidateQualificationObserved,
   IntegratorRunResultRecorded,
   IntegratorRunStarted,
   IntegratorSessionFixed,
   IntegratorSuccessorSessionFixed,
+  RunCancellationApplied,
   StoppedAttemptClaimPreserved,
   TargetPromotionAttemptRequested,
   TargetPromotionNonConvergent,
@@ -90,7 +98,8 @@ const {
   TaskClaimReleased,
   TaskClaimReleaseInitiated,
   TaskWorktreeReady,
-  TaskWorktreeReconciliationInitiated
+  TaskWorktreeReconciliationInitiated,
+  WorktreeCleanupOccurred
 } = HistoricalOccurrence
 type HistoricalWorkflowOccurrence = HistoricalOccurrence.HistoricalWorkflowOccurrence
 
@@ -859,6 +868,25 @@ const noOccurrence = (event: NonProjectedJournalEvent): ReadonlyArray<WorkflowOc
   void nonProjectedJournalEventKinds[event._tag]
   return []
 }
+
+type ControlCancellationJournalEvent = Extract<
+  NonProjectedJournalEvent,
+  {
+    readonly _tag:
+      | "RunCancellationApplied"
+      | "CancelledAttemptImplementationResponsibilityRelinquished"
+      | "CancelledAttemptClaimNoReleaseObserved"
+  }
+>
+
+const controlCancellationEventKinds = {
+  CancelledAttemptClaimNoReleaseObserved: true,
+  CancelledAttemptImplementationResponsibilityRelinquished: true,
+  RunCancellationApplied: true
+} satisfies Record<ControlCancellationJournalEvent["_tag"], true>
+
+const isControlCancellationJournalEvent = (event: WorkflowJournalEvent): event is ControlCancellationJournalEvent =>
+  Object.hasOwn(controlCancellationEventKinds, event._tag)
 
 /** A tracker result cannot prove which same-run read action observed it. */
 export class TrackerOutcomeWithoutReadIntent extends Schema.TaggedError<TrackerOutcomeWithoutReadIntent>()(
@@ -1874,6 +1902,84 @@ const projectHistoricalOccurrence = (
   if (isHistoricalFinalityStepEvent(event)) return projectHistoricalFinalityStep(record, event)
   return Effect.void
 }
+
+/**
+ * Trace presentation retains disposition events as typed historical items.
+ * The generic occurrence projection leaves these protocol records out so its
+ * semantic occurrence consumers keep their existing contract.
+ */
+const controlCleanupOccurrenceFor = (record: JournalRecord): WorkflowOccurrence | undefined => {
+  const event = record.event
+  if (Schema.is(WorktreeCleanupJournalEvent)(event)) {
+    return WorktreeCleanupOccurred.make({
+      event,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  }
+  if (Schema.is(BranchCleanupJournalEvent)(event)) {
+    return BranchCleanupOccurred.make({
+      event,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  }
+  if (Schema.is(IntegratorCandidateCleanupJournalEvent)(event)) {
+    return IntegratorCandidateCleanupOccurred.make({
+      event,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  }
+  return undefined
+}
+
+const controlCancellationOccurrenceFor = (record: JournalRecord): WorkflowOccurrence | undefined => {
+  const event = record.event
+  if (!isControlCancellationJournalEvent(event)) return undefined
+  switch (event._tag) {
+    case "RunCancellationApplied":
+      return RunCancellationApplied.make({
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: "InitiatedAction",
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    case "CancelledAttemptImplementationResponsibilityRelinquished":
+      return CancelledAttemptImplementationResponsibilityRelinquished.make({
+        authorizedClaim: event.authorizedClaim,
+        cancellationAppliedAt: event.cancellationAppliedAt,
+        initiatedBy: event.initiatedBy,
+        occurrenceClassification: "InitiatedAction",
+        plannedAttempt: event.plannedAttempt,
+        proof: event.proof,
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    case "CancelledAttemptClaimNoReleaseObserved":
+      return CancelledAttemptClaimNoReleaseObserved.make({
+        cancellationAppliedAt: event.cancellationAppliedAt,
+        expectedClaim: event.expectedClaim,
+        observation: event.observation,
+        observationOperationId: event.observationOperationId,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt: event.plannedAttempt,
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    default:
+      return undefined
+  }
+}
+
+const controlDispositionOccurrenceFor = (record: JournalRecord): WorkflowOccurrence | undefined => {
+  const cleanup = controlCleanupOccurrenceFor(record)
+  if (cleanup !== undefined) return cleanup
+  return controlCancellationOccurrenceFor(record)
+}
 type TrackerReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerReadIntentRecorded" }>
 type GitReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "GitReadIntentRecorded" }>
 type GitObservationJournalEvent = Extract<
@@ -1907,6 +2013,7 @@ type ProjectionError =
  * process receives a new decoded array and must project durable rows again.
  */
 const projectionsByRecords = new WeakMap<ReadonlyArray<JournalRecord>, WorkflowOccurrenceProjection>()
+const traceProjectionsByRecords = new WeakMap<ReadonlyArray<JournalRecord>, WorkflowOccurrenceProjection>()
 
 const projectTrackerReadIntent = (
   record: JournalRecord,
@@ -2145,10 +2252,28 @@ const projectJournalRecord = (
  * Projects immutable journal records in one pass. Missing relationships fail
  * before any partial semantic projection becomes visible.
  */
-export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project")(function* (
-  records: ReadonlyArray<JournalRecord>
+const projectWorkflowRecord = Effect.fn("WorkflowOccurrence.projectRecord")(function* (
+  record: JournalRecord,
+  context: ProjectionContext,
+  historicalContext: HistoricalProjectionContext,
+  includeControlDisposition: boolean
 ) {
-  const cached = projectionsByRecords.get(records)
+  const occurrence = isHistoricalJournalEvent(record.event)
+    ? yield* projectHistoricalOccurrence(record, record.event, historicalContext)
+    : yield* projectJournalRecord(record, context)
+  if (occurrence !== undefined) context.occurrences.push(occurrence)
+  if (!includeControlDisposition) return
+  const controlDispositionOccurrence = controlDispositionOccurrenceFor(record)
+  if (controlDispositionOccurrence !== undefined) context.occurrences.push(controlDispositionOccurrence)
+})
+
+export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project")(function* (
+  records: ReadonlyArray<JournalRecord>,
+  options: { readonly includeControlDisposition?: boolean } = {}
+) {
+  const includeControlDisposition = options.includeControlDisposition === true
+  const projectionCache = includeControlDisposition ? traceProjectionsByRecords : projectionsByRecords
+  const cached = projectionCache.get(records)
   if (cached !== undefined) return cached
 
   const occurrences: Array<WorkflowOccurrence> = []
@@ -2172,17 +2297,14 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
   }
 
   for (const record of records) {
-    const occurrence = isHistoricalJournalEvent(record.event)
-      ? yield* projectHistoricalOccurrence(record, record.event, historicalContext)
-      : yield* projectJournalRecord(record, context)
-    if (occurrence !== undefined) occurrences.push(occurrence)
+    yield* projectWorkflowRecord(record, context, historicalContext, includeControlDisposition)
   }
 
   const projection = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
     occurrences,
     version: workflowOccurrenceProjectionVersion
   })
-  projectionsByRecords.set(records, projection)
+  projectionCache.set(records, projection)
   return projection
 })
 

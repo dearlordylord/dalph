@@ -38,6 +38,8 @@ export interface RecoveryStoreReplay {
   readonly resumption?: unknown
 }
 
+type ExpectedRecoveryPrefix = Pick<RecoveryStoreReplay, "decodedRecords" | "historyTag" | "projection">
+
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 
 const canonical = (value: unknown): string => JSON.stringify(value)
@@ -272,7 +274,7 @@ export const recoveryPrefixMismatch = (
 /** Computes the expected decoded history and production projection once per source prefix. */
 export const expectedRecoveryPrefix = Effect.fn("RecoveryStoreLanes.expectedRecoveryPrefix")(function* (
   prefix: RecoveryPrefix
-) {
+): Effect.fn.Return<ExpectedRecoveryPrefix, unknown> {
   const runId = prefix.records[0].runId
   const history = reduceWorkflowJournalHistory(runId, prefix.records)
   const projection = yield* projectWorkflowOccurrences(prefix.records)
