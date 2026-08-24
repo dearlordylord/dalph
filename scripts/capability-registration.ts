@@ -64,6 +64,7 @@ interface ContractInvocation {
   readonly selector?:
     | { readonly _tag: "ObjectProperty"; readonly property: string; readonly value: string }
     | { readonly _tag: "StringArgument"; readonly index: number; readonly value: string }
+    | { readonly _tag: "ArgumentReference"; readonly index: number; readonly value: string }
 }
 
 interface CompositionReference {
@@ -102,6 +103,10 @@ interface CompositionSource {
  */
 interface CompositionSupportBinding {
   readonly identity: string
+  /** Authored source containing the support value's declaration. */
+  readonly source: string
+  /** Declaration name resolved in the support source. */
+  readonly marker: string
   readonly reason: string
 }
 
@@ -138,6 +143,13 @@ const composed = (source: string, marker: string): CompositionReference => ({ _t
 const supplied = (source: string, marker: string): CompositionReference => ({
   _tag: "SuppliedAtBoundary",
   marker,
+  source
+})
+
+const support = (identity: string, reason: string, source: string): CompositionSupportBinding => ({
+  identity,
+  marker: identity,
+  reason,
   source
 })
 
@@ -178,7 +190,8 @@ const journalContract = contract("JournalStore", [
   },
   {
     invocation: {
-      marker: "durableJournalStoreContract(",
+      marker: "journalAppendContract(",
+      selector: { _tag: "StringArgument", index: 0, value: "sqlite" },
       source: "packages/orchestrator/src/workflow-journal/store.test.ts"
     },
     marker: "journalAppendContract",
@@ -553,7 +566,7 @@ export const capabilityRegistrationInventory = {
       controlled: implementation(
         "controlledIntegratorGit",
         "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
-        "IntegratorGit.of",
+        "controlledIntegratorGit",
         controlledComposition(
           "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
           "controlledIntegratorGit"
@@ -608,7 +621,7 @@ export const capabilityRegistrationInventory = {
       controlled: implementation(
         "controlledIntegrator",
         "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
-        "Integrator.of",
+        "controlledIntegrator",
         controlledComposition(
           "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
           "controlledIntegrator"
@@ -749,56 +762,184 @@ export const capabilityRegistrationInventory = {
     { role: "controlled", source: "packages/dalph/src/application/dry-run.ts" }
   ],
   compositionSupportBindings: [
-    { identity: "attemptChoiceControlLayer", reason: "operator-control protocol support" },
-    { identity: "coordinatorOwnershipLayer", reason: "coordinator wrapper implementation support" },
-    {
-      identity: "coordinatorOwnedGitWorktreeLayer",
-      reason: "coordinator wrapper around the registered Git worktree boundary"
-    },
-    {
-      identity: "coordinatorOwnedTrackerMutationLayer",
-      reason: "coordinator wrapper around the registered tracker claim boundary"
-    },
-    { identity: "controlDirectionApplicationLayer", reason: "operator-control protocol support" },
-    { identity: "controlledWorkflowInterpreterLayer", reason: "controlled composition assembly" },
-    { identity: "deterministicOperationIdAllocatorLayer", reason: "controlled identity allocation support" },
-    { identity: "deterministicPlannedTaskAttemptLayer", reason: "controlled planning support" },
-    { identity: "deterministicTaskClaimAcquisitionPlannerLayer", reason: "controlled planning support" },
-    { identity: "dryCliEnvironmentLayer", reason: "dry-run denied host environment" },
-    { identity: "dryRunOperationIdAllocatorLayer", reason: "dry-run planning support" },
-    { identity: "dryRunPlannedTaskAttemptLayer", reason: "dry-run planning support" },
-    { identity: "dryRunTaskClaimPlannerLayer", reason: "dry-run planning support" },
-    { identity: "fixtureReaderFileLayer", reason: "fixture input support for controlled graph reads" },
-    { identity: "freshOperationIdAllocatorLayer", reason: "production identity allocation support" },
-    {
-      identity: "githubGraphqlClientNodeLayer",
-      reason: "GitHub transport support behind the registered tracker provider"
-    },
-    { identity: "journalLayer", reason: "journaled application runtime support" },
-    { identity: "journaledRunBootstrapLayer", reason: "journal establishment support" },
-    { identity: "journaledWorkflowInterpreterLayer", reason: "journaled workflow support" },
-    { identity: "nodeCodexAttemptStoreLayer", reason: "implementation-private Codex executor storage" },
-    { identity: "nodeCodexProcessNativeLayer", reason: "implementation-private Codex process support" },
-    { identity: "nodeGitCommandLayer", reason: "shared Git command dependency of registered Git boundaries" },
-    {
-      identity: "sqliteJournalStoreLayer",
-      reason: "implementation-private storage beneath the registered journal boundary"
-    },
-    { identity: "operatorControlLayer", reason: "operator-control protocol support" },
-    { identity: "productionRunReactivationLayer", reason: "application lifecycle composition" },
-    { identity: "productionCoordinatorOwnershipLayer", reason: "production coordinator ownership assembly" },
-    { identity: "productionWorkflowInterpreterLayer", reason: "application composition entry" },
-    { identity: "runReactivationOwnerLayer", reason: "application lifecycle composition" },
-    { identity: "taskClaimReacquisitionControlLayer", reason: "claim-control protocol support" },
-    { identity: "taskWorkCapacityControlLayer", reason: "task-work capacity protocol support" },
-    { identity: "traceOutputStdioLayer", reason: "dry-run trace output support" },
-    { identity: "unpublishedInRunJournalTestLayer", reason: "SQLite test-only journal support" },
-    { identity: "validatedRunActivationLayer", reason: "Run activation support" },
-    { identity: "workflowInterpreterLayer", reason: "shared workflow composition" },
-    { identity: "workflowTraceOutputLayer", reason: "dry-run trace output support" },
-    { identity: "codexAppServerNodeLayer", reason: "Codex app-server host support" },
-    { identity: "makeDryRunTrackerGraphReaderLayer", reason: "dry-run tracker adapter selection support" },
-    { identity: "dryRunTrackerGraphReaderLayer", reason: "dry-run tracker adapter selection support" }
+    support(
+      "attemptChoiceControlLayer",
+      "operator-control protocol support",
+      "packages/orchestrator/src/workflow/protocols/attempt-choice/control.ts"
+    ),
+    support(
+      "coordinatorOwnershipLayer",
+      "coordinator wrapper implementation support",
+      "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
+    ),
+    support(
+      "coordinatorOwnedGitWorktreeLayer",
+      "coordinator wrapper around the registered Git worktree boundary",
+      "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
+    ),
+    support(
+      "coordinatorOwnedTrackerMutationLayer",
+      "coordinator wrapper around the registered tracker claim boundary",
+      "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
+    ),
+    support(
+      "controlDirectionApplicationLayer",
+      "operator-control protocol support",
+      "packages/orchestrator/src/workflow/protocols/control-direction-application/protocol.ts"
+    ),
+    support(
+      "controlledWorkflowInterpreterLayer",
+      "controlled composition assembly",
+      "packages/orchestrator/src/workflow/interpretation/layers.ts"
+    ),
+    support(
+      "deterministicOperationIdAllocatorLayer",
+      "controlled identity allocation support",
+      "packages/orchestrator/src/workflow/protocols/task-attempt-planning/plan.ts"
+    ),
+    support(
+      "deterministicPlannedTaskAttemptLayer",
+      "controlled planning support",
+      "packages/orchestrator/src/workflow/protocols/task-attempt-planning/plan.ts"
+    ),
+    support(
+      "deterministicTaskClaimAcquisitionPlannerLayer",
+      "controlled planning support",
+      "packages/orchestrator/src/workflow/protocols/task-claim-acquisition/plan.ts"
+    ),
+    support("dryCliEnvironmentLayer", "dry-run denied host environment", "packages/dalph/src/application/dry-run.ts"),
+    support(
+      "dryRunOperationIdAllocatorLayer",
+      "dry-run planning support",
+      "packages/dalph/src/application/composition.ts"
+    ),
+    support(
+      "dryRunPlannedTaskAttemptLayer",
+      "dry-run planning support",
+      "packages/dalph/src/application/composition.ts"
+    ),
+    support("dryRunTaskClaimPlannerLayer", "dry-run planning support", "packages/dalph/src/application/composition.ts"),
+    support(
+      "fixtureReaderFileLayer",
+      "fixture input support for controlled graph reads",
+      "packages/orchestrator/src/authorities/task-tracker/graph-reader.ts"
+    ),
+    support(
+      "freshOperationIdAllocatorLayer",
+      "production identity allocation support",
+      "packages/orchestrator/src/workflow/protocols/task-attempt-planning/plan.ts"
+    ),
+    support(
+      "githubGraphqlClientNodeLayer",
+      "GitHub transport support behind the registered tracker provider",
+      "packages/orchestrator/src/authorities/task-tracker/github/graphql-client.ts"
+    ),
+    support("journalLayer", "journaled application runtime support", "packages/dalph/src/application/production.ts"),
+    support(
+      "journaledRunBootstrapLayer",
+      "journal establishment support",
+      "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts"
+    ),
+    support(
+      "journaledWorkflowInterpreterLayer",
+      "journaled workflow support",
+      "packages/orchestrator/src/workflow-journal/journaled-interpreter.ts"
+    ),
+    support(
+      "nodeCodexAttemptStoreLayer",
+      "implementation-private Codex executor storage",
+      "packages/dalph/src/application/codex-attempt-store.ts"
+    ),
+    support(
+      "nodeCodexProcessNativeLayer",
+      "implementation-private Codex process support",
+      "packages/dalph/src/application/codex-process-native.ts"
+    ),
+    support(
+      "nodeGitCommandLayer",
+      "shared Git command dependency of registered Git boundaries",
+      "packages/orchestrator/src/authorities/git/command.ts"
+    ),
+    support(
+      "sqliteJournalStoreLayer",
+      "implementation-private storage beneath the registered journal boundary",
+      "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts"
+    ),
+    support(
+      "operatorControlLayer",
+      "operator-control protocol support",
+      "packages/dalph/src/application/production.ts"
+    ),
+    support(
+      "productionRunReactivationLayer",
+      "application lifecycle composition",
+      "packages/dalph/src/application/production.ts"
+    ),
+    support(
+      "productionCoordinatorOwnershipLayer",
+      "production coordinator ownership assembly",
+      "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
+    ),
+    support(
+      "productionWorkflowInterpreterLayer",
+      "application composition entry",
+      "packages/dalph/src/application/production.ts"
+    ),
+    support(
+      "runReactivationOwnerLayer",
+      "application lifecycle composition",
+      "packages/orchestrator/src/coordination/run/run-reactivation-owner.ts"
+    ),
+    support(
+      "taskClaimReacquisitionControlLayer",
+      "claim-control protocol support",
+      "packages/orchestrator/src/workflow/protocols/task-claim-reacquisition/control.ts"
+    ),
+    support(
+      "taskWorkCapacityControlLayer",
+      "task-work capacity protocol support",
+      "packages/orchestrator/src/control/task-work-capacity.ts"
+    ),
+    support(
+      "traceOutputStdioLayer",
+      "dry-run trace output support",
+      "packages/dalph/src/presentation/stdio-trace-output.ts"
+    ),
+    support(
+      "unpublishedInRunJournalTestLayer",
+      "SQLite test-only journal support",
+      "packages/orchestrator/src/workflow-journal/store.ts"
+    ),
+    support(
+      "validatedRunActivationLayer",
+      "Run activation support",
+      "packages/orchestrator/src/coordination/run/startup-recovery.ts"
+    ),
+    support(
+      "workflowInterpreterLayer",
+      "shared workflow composition",
+      "packages/orchestrator/src/workflow/interpretation/layers.ts"
+    ),
+    support(
+      "workflowTraceOutputLayer",
+      "dry-run trace output support",
+      "packages/dalph/src/presentation/workflow-trace.ts"
+    ),
+    support(
+      "codexAppServerNodeLayer",
+      "Codex app-server host support",
+      "packages/dalph/src/application/codex-app-server.ts"
+    ),
+    support(
+      "makeDryRunTrackerGraphReaderLayer",
+      "dry-run tracker adapter selection support",
+      "packages/dalph/src/application/dry-run.ts"
+    ),
+    support(
+      "dryRunTrackerGraphReaderLayer",
+      "dry-run tracker adapter selection support",
+      "packages/dalph/src/application/dry-run.ts"
+    )
   ]
 } satisfies CapabilityRegistrationInventory
 
@@ -870,6 +1011,11 @@ export const capabilityRegistrationIssues = (
     supportIdentities.add(support.identity)
     if (compositionIdentities.includes(support.identity))
       issues.push(`capability identity is incorrectly support-listed ${support.identity}`)
+    if (support.reason.trim() === "") issues.push(`support binding ${support.identity} has an empty reason`)
+    if (support.source.trim() === "") issues.push(`support binding ${support.identity} has an empty source`)
+    if (support.marker.trim() === "") issues.push(`support binding ${support.identity} has an empty marker`)
+    if (support.marker !== support.identity)
+      issues.push(`support binding ${support.identity} identity does not match declaration marker ${support.marker}`)
   }
   /* eslint-enable functional/immutable-data */
   return issues

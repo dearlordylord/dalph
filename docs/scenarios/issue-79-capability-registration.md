@@ -22,7 +22,8 @@ implementation identities and explicit support bindings. It also checks that
 each registered implementation and contract marker still exists at the named
 source location and that every implementation side has a named shared-contract
 call. It also checks that the declared implementation identity is the value
-consumed by its composition marker. TypeScript source parsing recognizes direct
+consumed by its composition marker, resolving the declaration and runtime
+binding rather than accepting a same-name local value. TypeScript source parsing recognizes direct
 Layer values, typed Layer values, local aliases, default/namespace exports, and
 relative re-exports without executing the source. A contract call is accepted
 only when its AST binding resolves to the named shared contract source and its
@@ -77,15 +78,20 @@ implementation through its named contract family`, `rejects a missing family
 even when the inventory is otherwise unchanged`, `rejects duplicate family and
 implementation registrations`, `rejects stale implementation and composition
 evidence`, `rejects one-sided contract evidence`, `rejects a production
-contract test that stops invoking the shared helper`, `rejects comment and
-string residue when shared-contract execution is removed`, `rejects a
-local same-name contract function that is not the imported public contract`,
-`rejects one cleanup family when its same-helper production call is removed`,
-`rejects only the removed evidence implementation call by its label argument`,
-`runtime value consumption excludes type-only references`,
-`rejects a registered implementation identity that is not consumed by its
-declared composition`, `keeps the required family denominator outside a
-mutated inventory`, and `is part of check:all`.
+contract test that stops invoking the shared helper`, `rejects journal production
+when its shared contract edge is removed`, `rejects comment and string residue
+when shared-contract execution is removed`, `rejects a local same-name contract
+function that is not the imported public contract`, `rejects a destructuring
+shadow of an imported shared contract`, `rejects one cleanup family when its
+same-helper production call is removed`, `rejects only the removed evidence
+implementation call by its label argument`, `runtime value consumption
+excludes type-only references`, `rejects a registered implementation identity
+that is not consumed by its declared composition`, `rejects implementation
+evidence pointed at a consumer instead of its declaration`, `rejects a
+same-name local composition value that shadows the registered Layer`, `requires
+source-backed support binding evidence and a concrete reason`, `keeps the
+required family denominator outside a mutated inventory`, and `is part of
+check:all`.
 
 ## Scenario-to-test handoff
 
@@ -102,4 +108,9 @@ mutated inventory`, and `is part of check:all`.
 | Existing registration changed | Removing one of several same-helper cleanup or evidence calls fails only that family/role through semantic AST arguments. | `rejects one cleanup family when its same-helper production call is removed`; `rejects only the removed evidence implementation call by its label argument` |
 | Existing registration changed | Type-only references do not count as runtime Layer consumption. | `runtime value consumption excludes type-only references` |
 | Existing registration changed | A valid implementation declaration paired with an unrelated existing composition marker fails closed. | `rejects a registered implementation identity that is not consumed by its declared composition` |
+| Existing registration changed | Pointing implementation evidence at a consumer/import file fails because the source must contain the named declaration. | `rejects implementation evidence pointed at a consumer instead of its declaration` |
+| Existing registration changed | A same-name local value cannot satisfy a composition; the runtime reference must resolve to the registered declaration. | `rejects a same-name local composition value that shadows the registered Layer` |
+| Existing registration changed | Removing the journal suite's direct SQLite shared-contract call fails only the journal production execution. | `rejects journal production when its shared contract edge is removed` |
+| Existing registration changed | A destructured local helper shadow cannot satisfy an imported shared-contract execution. | `rejects a destructuring shadow of an imported shared contract` |
+| Existing registration changed | Every non-capability support layer has declaration-backed evidence and a concrete reason. | `requires source-backed support binding evidence and a concrete reason` |
 | Existing registration changed | The focused gate cannot be omitted from the repository acceptance path. | `is part of check:all`; `pnpm check:all` |

@@ -140,6 +140,26 @@ describe("capability registration gate", () => {
     )
   })
 
+  it("rejects journal production when its shared contract edge is removed", () => {
+    const removedJournalEdge = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/workflow-journal/store.test.ts"
+        ? {
+            ...file,
+            source: file.source
+              .replace("  journalAppendContract(name, makeLayer)\n", "")
+              .replace(
+                'journalAppendContract("sqlite", () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))\n',
+                ""
+              )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, removedJournalEdge)).toContain(
+      "journal production contract invocation marker is stale: journalAppendContract("
+    )
+  })
+
   it("rejects a local same-name contract function that is not the imported public contract", () => {
     const localContract = sourceFiles.map((file) =>
       file.path === "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts"
@@ -246,6 +266,93 @@ describe("capability registration gate", () => {
 
     expect(issuesFor(unconsumed)).toContain(
       "git-worktree production composition does not consume implementation identity nodeGitTargetLineageLayer"
+    )
+  })
+
+  it("rejects implementation evidence pointed at a consumer instead of its declaration", () => {
+    const consumerAsImplementationSource = {
+      ...capabilityRegistrationInventory,
+      capabilities: capabilityRegistrationInventory.capabilities.map((capability) =>
+        capability.family === "git-worktree"
+          ? {
+              ...capability,
+              production: { ...capability.production, source: "packages/dalph/src/application/production.ts" }
+            }
+          : capability
+      )
+    }
+
+    expect(issuesFor(consumerAsImplementationSource)).toContain(
+      "git-worktree production implementation marker is stale: nodeGitWorktreeLayer"
+    )
+  })
+
+  it("rejects a same-name local composition value that shadows the registered Layer", () => {
+    const shadowedComposition = sourceFiles.map((file) =>
+      file.path === "packages/dalph/src/application/production.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "  const gitWorktreeLayer = coordinatorOwnedGitWorktreeLayer(\n",
+              "  const nodeGitWorktreeLayer = 1\n  const gitWorktreeLayer = coordinatorOwnedGitWorktreeLayer(\n"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, shadowedComposition)).toContain(
+      "git-worktree production composition does not consume implementation identity nodeGitWorktreeLayer"
+    )
+  })
+
+  it("rejects a destructuring shadow of an imported shared contract", () => {
+    const destructuredShadow = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              'trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })\n',
+              '{\n  const { trackerMutationContract } = { trackerMutationContract: () => undefined }\n  trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })\n}\n'
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, destructuredShadow)).toContain(
+      "task-tracker-claim contract invocation marker is stale: trackerMutationContract("
+    )
+  })
+
+  it("requires source-backed support binding evidence and a concrete reason", () => {
+    const malformedSupport = {
+      ...capabilityRegistrationInventory,
+      compositionSupportBindings: capabilityRegistrationInventory.compositionSupportBindings.map((binding) =>
+        binding.identity === "attemptChoiceControlLayer"
+          ? {
+              ...binding,
+              marker: "attemptChoiceControlLayer",
+              reason: "",
+              source: "packages/dalph/src/application/production.ts"
+            }
+          : binding
+      )
+    }
+
+    expect(issuesFor(malformedSupport)).toContain("support binding attemptChoiceControlLayer has an empty reason")
+    expect(issuesFor(malformedSupport)).toContain(
+      "support binding attemptChoiceControlLayer declaration source is stale: packages/dalph/src/application/production.ts"
+    )
+
+    const arbitrarySupport = {
+      ...capabilityRegistrationInventory,
+      compositionSupportBindings: capabilityRegistrationInventory.compositionSupportBindings.map((binding) =>
+        binding.identity === "attemptChoiceControlLayer"
+          ? { ...binding, identity: "arbitrarySupportLayer", marker: "attemptChoiceControlLayer" }
+          : binding
+      )
+    }
+    expect(capabilityRegistrationIssues(arbitrarySupport)).toContain(
+      "support binding arbitrarySupportLayer identity does not match declaration marker attemptChoiceControlLayer"
     )
   })
 

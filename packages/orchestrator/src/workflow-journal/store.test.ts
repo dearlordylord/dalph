@@ -913,14 +913,14 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
 
 const durableJournalStoreContract = (
   name: string,
-  makeLayer: () => Layer.Layer<JournalStore, unknown>,
+  _makeLayer: () => Layer.Layer<JournalStore, unknown>,
   registerLifecycleAndFailureCases: () => void
 ) => {
-  journalAppendContract(name, makeLayer)
   describe(`${name} durable JournalStore contract`, registerLifecycleAndFailureCases)
 }
 
 journalAppendContract("memory", () => memoryJournalTestLayer)
+journalAppendContract("sqlite", () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))
 durableJournalStoreContract(
   "sqlite",
   () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }),
