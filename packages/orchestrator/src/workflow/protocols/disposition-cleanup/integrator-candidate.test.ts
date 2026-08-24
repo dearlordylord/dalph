@@ -36,6 +36,7 @@ import {
   IntegratorCandidateCleanupAuthorizedEvent,
   IntegratorCandidateCleanupContradictedEvent,
   IntegratorCandidateCleanupObservationIntendedEvent,
+  IntegratorCandidateCleanupBoundary,
   integratorCandidateCleanupTestLayer,
   runIntegratorCandidateCleanup,
   TestIntegratorCandidateCleanupBoundary
@@ -58,6 +59,7 @@ import {
   integratorCandidateCleanupContradictedRecordKey,
   worktreeCleanupSettledRecordKey
 } from "../../../workflow-journal/record-key.js"
+import { dispositionCleanupContract } from "../../../../test/contracts/disposition-cleanup-contract.js"
 
 const acceptedResult = AcceptedResult.make({
   commit: baseSha,
@@ -108,6 +110,32 @@ const present = IntegratorCandidateCleanupObservation.cases.Present.make({
   sessionId: predecessor.sessionId,
   writerQuiescent: true
 })
+
+it.effect("controlled candidate cleanup satisfies the shared boundary contract", () =>
+  Effect.gen(function* () {
+    const boundary = yield* IntegratorCandidateCleanupBoundary
+    yield* dispositionCleanupContract({ authorization, boundary })
+  }).pipe(
+    Effect.provide(
+      integratorCandidateCleanupTestLayer({
+        observations: [
+          present,
+          IntegratorCandidateCleanupObservation.cases.Absent.make({
+            locator: authorization.locator,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+            locator: authorization.locator,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(2),
+            sessionId: authorization.owner.sessionId
+          })
+        ]
+      })
+    )
+  )
+)
 
 it.effect("table-reconciles changed candidate owner, locator, and revision without a mutation", () =>
   Effect.gen(function* () {

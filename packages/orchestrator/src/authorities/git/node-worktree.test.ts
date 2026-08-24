@@ -32,6 +32,7 @@ import {
 } from "./worktree.js"
 import { nodeGitWorktreeLayer } from "./node-worktree.js"
 import { observePlannedAttemptWorktree } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
+import { gitWorktreeContract } from "../../../test/contracts/git-worktree-contract.js"
 
 const run = Effect.fn("GitWorktree.Test.runGit")(function* (cwd: string, ...args: ReadonlyArray<string>) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -86,6 +87,27 @@ const withRepository = <A, E, R>(
 
 const adapterLayer = (gitDirectory: GitCommonDirectoryTarget) =>
   nodeGitWorktreeLayer(gitDirectory).pipe(Layer.provide(nodeGitCommandLayer), Layer.provide(NodeServices.layer))
+
+const contractPlan = makePlan(
+  GitCommitSha.make("0123456789abcdef0123456789abcdef01234567"),
+  "contract",
+  "/worktrees/contract"
+)
+const nodeContractLayer = nodeGitWorktreeLayer(GitCommonDirectoryTarget.make("/repositories/contract.git")).pipe(
+  Layer.provide(
+    Layer.succeed(
+      GitCommand,
+      GitCommand.of({
+        run: (_directory, args) => Effect.succeed(args[0] === "worktree" ? commandResult(0, "") : commandResult(1)),
+        runInWorktree: () => Effect.die("unused worktree command"),
+        runBytesInWorktree: () => Effect.die("unused byte worktree command")
+      })
+    )
+  ),
+  Layer.provide(NodeServices.layer)
+)
+
+gitWorktreeContract({ layer: nodeContractLayer, name: "command-backed", plan: contractPlan })
 
 const commandResult = (exitCode: number, stdout = "", stderr = "") =>
   GitCommandResult.make({ exitCode, stderr, stdout })

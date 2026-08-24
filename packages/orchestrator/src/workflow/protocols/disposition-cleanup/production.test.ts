@@ -39,7 +39,6 @@ import {
   BranchCleanupAuthorization,
   BranchCleanupEvidenceRevision,
   BranchCleanupOwner,
-  CleanupMutationOrdinal,
   IntegratorCandidateCleanupAuthorization,
   IntegratorCandidateCleanupDisposition,
   IntegratorCandidateCleanupEvidenceRevision,
@@ -65,6 +64,7 @@ import {
   IntegratorSessionCorrelation,
   IntegratorSessionId
 } from "../integrator/events.js"
+import { dispositionCleanupContract } from "../../../../test/contracts/disposition-cleanup-contract.js"
 import {
   IntegratorCandidateCleanupBoundary,
   IntegratorCandidateCleanupMutationResult,
@@ -224,16 +224,8 @@ it.effect(
           Effect.provide(NodeServices.layer)
         )
 
-        expect((yield* boundaries.worktree.observe(worktreeAuthorization))._tag).toBe("Present")
-        expect((yield* boundaries.worktree.remove(worktreeAuthorization, CleanupMutationOrdinal.make(1)))._tag).toBe(
-          "Removed"
-        )
-        expect((yield* boundaries.worktree.observe(worktreeAuthorization))._tag).toBe("Absent")
-        expect((yield* boundaries.branch.observe(branchAuthorization))._tag).toBe("Present")
-        expect((yield* boundaries.branch.remove(branchAuthorization, CleanupMutationOrdinal.make(1)))._tag).toBe(
-          "Removed"
-        )
-        expect((yield* boundaries.branch.observe(branchAuthorization))._tag).toBe("Absent")
+        yield* dispositionCleanupContract({ authorization: worktreeAuthorization, boundary: boundaries.worktree })
+        yield* dispositionCleanupContract({ authorization: branchAuthorization, boundary: boundaries.branch })
 
         expect(yield* fileSystem.exists(unrelatedWorktree)).toBe(true)
         expect(yield* runGit(git, repository, "show-ref", "--verify", `refs/heads/${unrelatedBranch}`)).toContain(
@@ -615,6 +607,71 @@ it.effect(
       }
       expect(yield* Ref.get(providerMutations)).toBe(0)
     })
+)
+
+it.effect("production candidate cleanup satisfies the shared boundary contract", () =>
+  Effect.gen(function* () {
+    const active = yield* Ref.make(true)
+    const providerAuthorityLayer = Layer.succeed(
+      IntegratorCandidateProviderAuthority,
+      IntegratorCandidateProviderAuthority.of({
+        observe: (subject) =>
+          Ref.get(active).pipe(
+            Effect.map((isActive) =>
+              isActive
+                ? IntegratorCandidateCleanupObservation.cases.Present.make({
+                    locator: subject.locator,
+                    revision: subject.evidenceRevision,
+                    sessionId: subject.owner.sessionId,
+                    writerQuiescent: true
+                  })
+                : IntegratorCandidateCleanupObservation.cases.Absent.make({
+                    locator: subject.locator,
+                    revision: subject.evidenceRevision
+                  })
+            )
+          ),
+        remove: (subject) =>
+          Ref.set(active, false).pipe(
+            Effect.as(
+              IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+                locator: subject.locator,
+                revision: subject.evidenceRevision,
+                sessionId: subject.owner.sessionId
+              })
+            )
+          )
+      })
+    )
+    const candidate = yield* Effect.gen(function* () {
+      return yield* IntegratorCandidateCleanupBoundary
+    }).pipe(
+      Effect.provide(
+        gitDispositionCleanupBoundaryLayer(
+          GitCommonDirectoryTarget.make("/tmp/production-provider-contract"),
+          providerAuthorityLayer
+        )
+      ),
+      Effect.provide(
+        Layer.succeed(
+          GitCommand,
+          GitCommand.of({
+            run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
+            runInWorktree: () => Effect.succeed({ exitCode: 1, stderr: "not a git repository", stdout: "" }),
+            runBytesInWorktree: () => Effect.die("byte command is outside provider contract")
+          })
+        )
+      ),
+      Effect.provide(
+        Layer.succeed(
+          CoordinatorOwnership,
+          CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+        )
+      ),
+      Effect.provide(NodeServices.layer)
+    )
+    yield* dispositionCleanupContract({ authorization: candidateAuthorization, boundary: candidate })
+  })
 )
 
 it.effect("production current quarantine performs no cleanup boundary call", () =>

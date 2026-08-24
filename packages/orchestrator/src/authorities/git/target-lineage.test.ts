@@ -9,6 +9,7 @@ import {
   nodeGitTargetLineageLayer,
   TestGitTargetLineage
 } from "./target-lineage.js"
+import { gitTargetLineageContract } from "../../../test/contracts/git-target-lineage-contract.js"
 
 const base = GitCommitSha.make("1".repeat(40))
 const head = GitCommitSha.make("2".repeat(40))
@@ -35,6 +36,48 @@ const readWith = (results: ReadonlyArray<GitCommandResult>) =>
       Effect.provide(Layer.succeed(GitCommand, commands))
     )
   })
+
+const nodeContractLayer = nodeGitTargetLineageLayer.pipe(
+  Layer.provide(
+    Layer.effect(
+      GitCommand,
+      Effect.gen(function* () {
+        const remaining = yield* Ref.make<ReadonlyArray<GitCommandResult>>([
+          GitCommandResult.make({ exitCode: 0, stderr: "", stdout: `${head}\n` }),
+          GitCommandResult.make({ exitCode: 0, stderr: "", stdout: "" })
+        ])
+        return GitCommand.of({
+          run: () =>
+            Ref.modify(remaining, ([next, ...rest]) => [
+              next ?? GitCommandResult.make({ exitCode: 2, stderr: "missing contract response", stdout: "" }),
+              rest
+            ]),
+          runBytesInWorktree: () => Effect.die("unused"),
+          runInWorktree: () => Effect.die("unused")
+        })
+      })
+    )
+  )
+)
+
+gitTargetLineageContract({
+  base,
+  expected: { plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: base, targetHeadSha: head },
+  layer: gitTargetLineageTestLayer({
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: base,
+    targetHeadSha: head
+  }),
+  name: "controlled",
+  target
+})
+gitTargetLineageContract({
+  base,
+  expected: { plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: base, targetHeadSha: head },
+  layer: nodeContractLayer,
+  name: "command-backed",
+  target
+})
 
 it.effect("reads compatible and rewritten target lineage without mutating Git", () =>
   Effect.gen(function* () {

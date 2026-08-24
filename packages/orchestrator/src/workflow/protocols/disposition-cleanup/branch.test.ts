@@ -29,6 +29,7 @@ import {
   BranchCleanupObservation,
   BranchCleanupAuthorizedEvent,
   BranchCleanupObservationIntendedEvent,
+  BranchCleanupBoundary,
   branchCleanupTestLayer,
   runBranchCleanup,
   TestBranchCleanupBoundary
@@ -49,6 +50,7 @@ import {
   replacementWorktreeObservationOperationIdFor
 } from "./provenance-fixtures.js"
 import { activateDispositionCleanup } from "./loop.js"
+import { dispositionCleanupContract } from "../../../../test/contracts/disposition-cleanup-contract.js"
 
 const branchAuthorization = BranchCleanupAuthorization.make({
   causalPredecessors: [authorization.operationId, ...replacementPredecessorsFor(attempt)],
@@ -147,6 +149,31 @@ const present = BranchCleanupObservation.cases.Present.make({
   registeredWorktree: null,
   revision: BranchCleanupEvidenceRevision.make(1)
 })
+
+it.effect("controlled branch cleanup satisfies the shared boundary contract", () =>
+  Effect.gen(function* () {
+    const boundary = yield* BranchCleanupBoundary
+    yield* dispositionCleanupContract({ authorization: branchAuthorization, boundary })
+  }).pipe(
+    Effect.provide(
+      branchCleanupTestLayer({
+        observations: [
+          present,
+          BranchCleanupObservation.cases.Absent.make({
+            branch: branchAuthorization.locator,
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ],
+        mutations: [
+          BranchCleanupMutationResult.cases.Removed.make({
+            branch: branchAuthorization.locator,
+            revision: BranchCleanupEvidenceRevision.make(2)
+          })
+        ]
+      })
+    )
+  )
+)
 
 it.effect("table-reconciles changed branch owner, head, and revision without a branch mutation", () =>
   Effect.gen(function* () {

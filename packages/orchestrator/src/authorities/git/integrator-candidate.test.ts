@@ -2,9 +2,14 @@ import { it } from "@effect/vitest"
 import { GitCommitSha, GitRepositoryLocator, IntegrationTarget, IntegrationTargetRef } from "@dalph/contracts"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
-import { IntegratorCandidateText, IntegratorGit } from "../../workflow/protocols/integrator/protocol.js"
+import {
+  IntegratorCandidateText,
+  IntegratorGit,
+  IntegratorGitObservation
+} from "../../workflow/protocols/integrator/protocol.js"
 import { GitCommand, GitCommandInvocationFailure, GitCommandResult } from "./command.js"
 import { nodeGitIntegratorCandidateLayer } from "./integrator-candidate.js"
+import { integratorCandidateContract } from "../../../test/contracts/integrator-candidate-contract.js"
 
 const target = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/main"),
@@ -33,6 +38,73 @@ const readWith = (results: ReadonlyArray<GitCommandResult>) =>
       Effect.provide(Layer.succeed(GitCommand, commands))
     )
   })
+
+const controlledContractLayer = Layer.succeed(
+  IntegratorGit,
+  IntegratorGit.of({
+    readCandidate: () =>
+      Effect.succeed(
+        IntegratorGitObservation.cases.Commit.make({
+          candidateText,
+          commit: candidate,
+          directParents: [head, accepted]
+        })
+      )
+  })
+)
+
+const nodeContractLayer = nodeGitIntegratorCandidateLayer.pipe(
+  Layer.provide(
+    Layer.effect(
+      GitCommand,
+      Effect.gen(function* () {
+        const remaining = yield* Ref.make<ReadonlyArray<GitCommandResult>>([
+          GitCommandResult.make({ exitCode: 0, stderr: "", stdout: `${candidate}\n` }),
+          GitCommandResult.make({ exitCode: 0, stderr: "", stdout: "commit\n" }),
+          GitCommandResult.make({
+            exitCode: 0,
+            stderr: "",
+            stdout: `tree ${"a".repeat(40)}\nparent ${head}\nparent ${accepted}\n\nmessage\n`
+          })
+        ])
+        return GitCommand.of({
+          run: () =>
+            Ref.modify(remaining, ([next, ...rest]) => [
+              next ?? GitCommandResult.make({ exitCode: 2, stderr: "missing contract response", stdout: "" }),
+              rest
+            ]),
+          runBytesInWorktree: () => Effect.die("unused"),
+          runInWorktree: () => Effect.die("unused")
+        })
+      })
+    )
+  )
+)
+
+integratorCandidateContract({
+  candidate,
+  candidateText,
+  expected: IntegratorGitObservation.cases.Commit.make({
+    candidateText,
+    commit: candidate,
+    directParents: [head, accepted]
+  }),
+  layer: controlledContractLayer,
+  name: "controlled",
+  target
+})
+integratorCandidateContract({
+  candidate,
+  candidateText,
+  expected: IntegratorGitObservation.cases.Commit.make({
+    candidateText,
+    commit: candidate,
+    directParents: [head, accepted]
+  }),
+  layer: nodeContractLayer,
+  name: "command-backed",
+  target
+})
 
 it.effect("canonicalizes the reported text and reads that commit's exact ordered direct parents", () =>
   Effect.gen(function* () {

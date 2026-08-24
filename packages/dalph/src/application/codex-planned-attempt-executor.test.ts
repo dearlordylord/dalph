@@ -34,6 +34,7 @@ import { NodeServices } from "@effect/platform-node"
 import { Crypto, Effect, FileSystem, Layer, Option, PlatformError, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
+import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
 import {
   CodexAppServerFailure,
   controlledCodexOwnedActivityCensusLayer,
@@ -788,6 +789,7 @@ const codexConformanceImplementation = {
 }
 
 definePlannedAttemptExecutorConformanceSuite(codexConformanceImplementation)
+plannedAttemptExecutorContract({ layer: layerFor(makeHarness()), name: "Codex app-server" })
 
 it.effect("persists the exact association before the first turn and seals Accepted from reread evidence", () => {
   const harness = makeHarness()

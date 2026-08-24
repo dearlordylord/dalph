@@ -37,6 +37,7 @@ import {
   TargetPromotionCompareAndSetResult,
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
+  TargetPromotionGitRequest,
   type TargetPromotionGitService,
   TargetPromotionGitReadObservation,
   type TargetPromotionCorrelation,
@@ -47,6 +48,7 @@ import { GitCommand, GitCommandInvocationFailure, GitCommandResult, nodeGitComma
 import { GitTargetLineage, GitTargetLineageReadFailure, nodeGitTargetLineageLayer } from "./target-lineage.js"
 import { nodeGitIntegratorCandidateLayer } from "./integrator-candidate.js"
 import { nodeGitTargetPromotionLayer } from "./target-promotion.js"
+import { targetPromotionContract } from "../../../test/contracts/target-promotion-contract.js"
 
 type Repository = {
   readonly gitDirectory: GitRepositoryLocator
@@ -103,6 +105,45 @@ const nodeTargetPromotionLayer = nodeGitTargetPromotionLayer.pipe(
   Layer.provide(nodeGitCommandLayer),
   Layer.provide(NodeServices.layer)
 )
+
+const contractTarget = IntegrationTarget.make({
+  ref: IntegrationTargetRef.make("refs/heads/contract"),
+  repository: GitRepositoryLocator.make("repo:target-promotion-contract")
+})
+const contractExpectedHead = GitCommitSha.make("1".repeat(40))
+const contractCandidate = GitCommitSha.make("2".repeat(40))
+const contractRequest = TargetPromotionGitRequest.make({
+  candidateCommit: contractCandidate,
+  expectedTargetHead: contractExpectedHead,
+  integrationTarget: contractTarget
+})
+const contractNodeLayer = nodeGitTargetPromotionLayer.pipe(
+  Layer.provide(
+    Layer.succeed(
+      GitCommand,
+      GitCommand.of({
+        run: (_directory, args) =>
+          Effect.succeed(
+            args[0] === "rev-parse"
+              ? GitCommandResult.make({ exitCode: 0, stderr: "", stdout: `${contractExpectedHead}\n` })
+              : GitCommandResult.make({ exitCode: 1, stderr: "", stdout: "" })
+          ),
+        runInWorktree: () => Effect.die("unused worktree command"),
+        runBytesInWorktree: () => Effect.die("unused byte worktree command")
+      })
+    )
+  ),
+  Layer.provide(NodeServices.layer)
+)
+
+targetPromotionContract({
+  expected: TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+    currentHeadSha: contractExpectedHead
+  }),
+  layer: contractNodeLayer,
+  name: "command-backed",
+  request: contractRequest
+})
 
 const evidence = EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("a".repeat(64)) })
 

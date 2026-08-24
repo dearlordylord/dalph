@@ -24,6 +24,10 @@ import {
   TaskClaimRequestFailure,
   TrackerMutation
 } from "../../../index.js"
+import {
+  trackerMutationContract,
+  trackerMutationContractFixture
+} from "../../../../test/contracts/tracker-mutation-contract.js"
 
 const repositoryNodeId = GithubRepositoryNodeId.make("repository-node")
 const issueNodeId = GithubIssueNodeId.make("issue-node")
@@ -99,6 +103,8 @@ const githubClaimFixtureLayer = Layer.effectContext(
 )
 
 const layer = githubTrackerMutationLayer.pipe(Layer.provide(githubClaimFixtureLayer), Layer.provide(NodeCrypto.layer))
+
+trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })
 
 const adapterLayer = (
   execute: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError>

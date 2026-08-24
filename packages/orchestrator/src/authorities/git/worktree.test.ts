@@ -25,6 +25,7 @@ import {
   TestGitWorktree,
   WorktreeBaseMismatch
 } from "./worktree.js"
+import { gitWorktreeContract } from "../../../test/contracts/git-worktree-contract.js"
 import {
   CoordinatorLockObservationContradiction,
   CoordinatorOwnershipLost,
@@ -42,6 +43,8 @@ const plan = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make("revision-45"),
   worktree: WorktreeLocator.make("/worktrees/attempt-45")
 })
+
+gitWorktreeContract({ layer: gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})), name: "controlled", plan })
 
 describe("GitWorktree contract", () => {
   it.effect("creates the exact absent worktree and proves Base is HEAD's ancestor", () =>

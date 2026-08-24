@@ -15,6 +15,10 @@ import {
   TrackerMutation
 } from "../../index.js"
 import type { ActiveTaskClaim } from "../../index.js"
+import {
+  trackerMutationContract,
+  trackerMutationContractFixture
+} from "../../../test/contracts/tracker-mutation-contract.js"
 
 const taskId = TaskId.make("tracker-task")
 
@@ -28,6 +32,11 @@ const acquisition = (operation: string, owner: string, token: string) =>
 
 const release = (claim: ActiveTaskClaim, operation: string) =>
   TaskClaimRelease.make({ claim, operationId: OperationId.make(operation) })
+
+trackerMutationContract({
+  ...trackerMutationContractFixture(taskId, "controlled"),
+  layer: controlledTrackerMutationLayer
+})
 
 describe("controlled TrackerMutation contract", () => {
   it.effect("starts from the exact claims supplied by reconstruction", () => {
