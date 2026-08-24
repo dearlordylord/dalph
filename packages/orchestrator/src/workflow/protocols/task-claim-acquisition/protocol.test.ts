@@ -14,7 +14,8 @@ import {
   TaskClaimConflict,
   TaskClaimReadFailure,
   TaskClaimRequestFailure,
-  TrackerMutation
+  TrackerMutation,
+  UnclaimedTask
 } from "../../../index.js"
 
 const acquisition = TaskClaimAcquisition.make({
@@ -104,18 +105,148 @@ it.effect("stops when atomic acquisition reports a competing claim", () =>
 it.effect("returns typed non-convergence after bounded unknown outcomes", () =>
   Effect.gen(function* () {
     const controlled = yield* TrackerMutation
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const requests = yield* Ref.make(0)
     const unavailable = TrackerMutation.of({
       ...controlled,
       acquireTaskClaim: (request) =>
-        Effect.fail(
-          new TaskClaimRequestFailure({ acquisition: request, detail: "outcome stays unknown", outcome: "Unknown" })
-        )
+        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+          Effect.andThen(Ref.update(requests, (count) => count + 1)),
+          Effect.andThen(
+            Effect.fail(
+              new TaskClaimRequestFailure({ acquisition: request, detail: "outcome stays unknown", outcome: "Unknown" })
+            )
+          )
+        ),
+      readTaskClaim: (taskId) =>
+        Ref.update(calls, (current) => [...current, "read"]).pipe(Effect.andThen(controlled.readTaskClaim(taskId)))
     })
 
     const failure = yield* runTaskClaimAcquisitionProtocol(unavailable, acquisition).pipe(Effect.flip)
     expect(failure).toBeInstanceOf(TaskClaimAcquisitionDidNotConverge)
     expect(failure).toMatchObject({ attempts: 3 })
+    expect(yield* Ref.get(requests)).toBe(3)
+    expect(yield* Ref.get(calls)).toEqual(["read", "acquire", "read", "acquire", "read", "acquire", "read"])
   }).pipe(Effect.provide(controlledTrackerMutationLayer))
+)
+
+it.effect("reads tracker after the third and final ambiguous acquisition request", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const reads = yield* Ref.make(0)
+    const tracker = TrackerMutation.of({
+      acquireTaskClaim: (request) =>
+        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new TaskClaimRequestFailure({
+                acquisition: request,
+                detail: "response lost after GitHub accepted the claim",
+                outcome: "Unknown"
+              })
+            )
+          )
+        ),
+      readTaskClaim: (taskId) =>
+        Ref.updateAndGet(reads, (count) => count + 1).pipe(
+          Effect.flatMap((readNumber) =>
+            readNumber === 4
+              ? Effect.succeed(ActiveTaskClaim.make(acquisition))
+              : Effect.succeed(UnclaimedTask.make({ taskId }))
+          ),
+          Effect.tap(() => Ref.update(calls, (current) => [...current, "read"]))
+        ),
+      releaseTaskClaim: () => Effect.void
+    })
+
+    const claim = yield* runTaskClaimAcquisitionProtocol(tracker, acquisition)
+
+    expect(claim).toEqual(ActiveTaskClaim.make(acquisition))
+    expect(yield* Ref.get(reads)).toBe(4)
+    expect(yield* Ref.get(calls)).toEqual(["read", "acquire", "read", "acquire", "read", "acquire", "read"])
+    expect(
+      yield* Ref.get(calls).pipe(Effect.map((entries) => entries.filter((entry) => entry === "acquire")))
+    ).toHaveLength(3)
+  })
+)
+
+it.effect("returns a conflict when the final reconciliation observes a foreign claim", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const reads = yield* Ref.make(0)
+    const foreign = ActiveTaskClaim.make({
+      ...acquisition,
+      operationId: OperationId.make("final-foreign-operation"),
+      owner: ClaimOwner.make("final-foreign-owner"),
+      token: ClaimToken.make("final-foreign-token")
+    })
+    const tracker = TrackerMutation.of({
+      acquireTaskClaim: (request) =>
+        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new TaskClaimRequestFailure({
+                acquisition: request,
+                detail: "response remained unknown",
+                outcome: "Unknown"
+              })
+            )
+          )
+        ),
+      readTaskClaim: (taskId) =>
+        Effect.gen(function* () {
+          const readNumber = yield* Ref.updateAndGet(reads, (count) => count + 1)
+          yield* Ref.update(calls, (current) => [...current, "read"])
+          return readNumber === 4 ? foreign : UnclaimedTask.make({ taskId })
+        }),
+      releaseTaskClaim: () => Effect.void
+    })
+
+    const failure = yield* runTaskClaimAcquisitionProtocol(tracker, acquisition).pipe(Effect.flip)
+
+    expect(failure).toBeInstanceOf(TaskClaimConflict)
+    expect(failure).toMatchObject({ attempted: acquisition, observed: foreign })
+    expect(yield* Ref.get(reads)).toBe(4)
+    expect(yield* Ref.get(calls)).toEqual(["read", "acquire", "read", "acquire", "read", "acquire", "read"])
+  })
+)
+
+it.effect("returns a read failure when the final reconciliation is unreadable", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const reads = yield* Ref.make(0)
+    const tracker = TrackerMutation.of({
+      acquireTaskClaim: (request) =>
+        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new TaskClaimRequestFailure({
+                acquisition: request,
+                detail: "response remained unknown",
+                outcome: "Unknown"
+              })
+            )
+          )
+        ),
+      readTaskClaim: (taskId) =>
+        Effect.gen(function* () {
+          const readNumber = yield* Ref.updateAndGet(reads, (count) => count + 1)
+          yield* Ref.update(calls, (current) => [...current, "read"])
+          if (readNumber === 4) {
+            return yield* new TaskClaimReadFailure({ detail: "GitHub response was malformed", taskId })
+          }
+          return UnclaimedTask.make({ taskId })
+        }),
+      releaseTaskClaim: () => Effect.void
+    })
+
+    const failure = yield* runTaskClaimAcquisitionProtocol(tracker, acquisition).pipe(Effect.flip)
+
+    expect(failure).toBeInstanceOf(TaskClaimReadFailure)
+    expect(failure).toMatchObject({ taskId: acquisition.taskId })
+    expect(yield* Ref.get(reads)).toBe(4)
+    expect(yield* Ref.get(calls)).toEqual(["read", "acquire", "read", "acquire", "read", "acquire", "read"])
+  })
 )
 
 it.effect("returns an already-owned exact claim without another mutation", () =>

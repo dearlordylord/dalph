@@ -72,7 +72,17 @@ export const runTaskClaimAcquisitionProtocol = Effect.fn("TrackerMutation.runTas
         | TaskClaimRequestFailure
       > =>
         failure instanceof RepeatTaskClaimObservation
-          ? Effect.fail(new TaskClaimAcquisitionDidNotConverge({ acquisition, attempts: taskClaimObservationBound }))
+          ? Effect.gen(function* () {
+              // The final allowed request is ambiguous just like every other
+              // request, so reconcile it with one last authoritative read.
+              const observation = yield* tracker.readTaskClaim(acquisition.taskId)
+              if (observation._tag === "ActiveTaskClaim") {
+                return isExactTaskClaim(observation, attemptedClaim)
+                  ? observation
+                  : yield* new TaskClaimConflict({ attempted: acquisition, observed: observation })
+              }
+              return yield* new TaskClaimAcquisitionDidNotConverge({ acquisition, attempts: taskClaimObservationBound })
+            })
           : Effect.fail(failure)
     )
   )
