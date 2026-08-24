@@ -35,9 +35,11 @@ import {
   memoryJournalStoreLayer,
   taskTrackerReadIntent,
   traceControlDispositionFacetVersion,
-  traceReaderSchemaVersion
+  traceReaderSchemaVersion,
+  currentSignalFromCurrentFirstStream,
+  type CurrentSignal
 } from "@dalph/orchestrator"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, Ref, SubscriptionRef } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
@@ -46,8 +48,10 @@ import {
   encodeTraceControlDispositionFacet,
   type encodeTraceHistoryItem,
   HistoricalTraceConsole,
+  type TraceConsoleStatus,
   historicalTraceConsoleLayer,
   renderTraceAtCursor,
+  renderTraceAtCursorWithStatus,
   semanticTraceAtCursor,
   traceCursorAt,
   writeTraceAtCursor
@@ -61,11 +65,15 @@ type ConsoleCursorUsesProductionIdentity = Assert<IsExactly<ReturnType<typeof tr
 type HistoricalConsoleUsesProductionCursor = Assert<
   IsExactly<Parameters<HistoricalTraceConsole["Service"]["presentAt"]>[0], TraceCursor>
 >
+type HistoricalConsoleUsesPassiveStatus = Assert<
+  IsExactly<Parameters<HistoricalTraceConsole["Service"]["presentAtWithStatus"]>[1], CurrentSignal<TraceConsoleStatus>>
+>
 
 const consoleViewUsesProductionView: ConsoleViewUsesProductionView = true
 const consoleItemUsesProductionUnion: ConsoleItemUsesProductionUnion = true
 const consoleCursorUsesProductionIdentity: ConsoleCursorUsesProductionIdentity = true
 const historicalConsoleUsesProductionCursor: HistoricalConsoleUsesProductionCursor = true
+const historicalConsoleUsesPassiveStatus: HistoricalConsoleUsesPassiveStatus = true
 
 const runId = RunId.make("console-production-trace-run")
 const target = FixtureTarget.make("console-production-trace-target")
@@ -176,8 +184,8 @@ it("canonicalizes the production cursor view without changing its committed iden
     "Historical snapshot · Run console-production-trace-run · through journal position 4",
     "Journal position 2 · Dalph coordinator initiated tracker read",
     "Journal position 3 · Dalph coordinator initiated tracker read",
-    "Journal position 4 · Dalph coordinator initiated executor activity",
-    "Current status is separate and is not included in this historical snapshot."
+    "Journal position 4 · Dalph coordinator initiated coordinator responsibility record",
+    "Passive current status · Unavailable · no passive status source was supplied."
   ])
 })
 
@@ -197,7 +205,7 @@ it("renders an exact historical cursor without a transcript or internal executor
   expect(lines[0]).toContain("Historical snapshot")
   expect(lines[0]).toContain("Run console-production-trace-run")
   expect(lines[0]).toContain("journal position 4")
-  expect(lines.at(-1)).toBe("Current status is separate and is not included in this historical snapshot.")
+  expect(lines.at(-1)).toBe("Passive current status · Unavailable · no passive status source was supplied.")
   expect(lines.join("\n")).not.toMatch(/(?:transcript|session|turn|expectedTargetHead|acceptedResult)/iu)
   expect(lines.filter((line) => line.includes("Journal position 4"))).toHaveLength(1)
 })
@@ -245,6 +253,61 @@ it.effect("reads one exact production cursor through TraceReader and writes its 
   })
 )
 
+it.effect("retries the same cursor while passive status changes without rewriting history", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const output = TraceOutput.of({ writeLine: (line) => Ref.update(lines, (current) => [...current, line]) })
+      const statusState = yield* SubscriptionRef.make<TraceConsoleStatus>({
+        _tag: "Waiting",
+        reason: "connected owner"
+      })
+      const status = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(statusState))
+      const presentationLayer = historicalTraceConsoleLayer.pipe(
+        Layer.provide(TraceReaderLayer.pipe(Layer.provide(memoryJournalStoreLayer))),
+        Layer.provide(Layer.succeed(TraceOutput, output))
+      )
+      const consoleLayer = Layer.merge(presentationLayer, memoryJournalStoreLayer)
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(
+          runId,
+          target,
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        )
+        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        const console = yield* HistoricalTraceConsole
+        const cursor = TraceCursor.make({ position: JournalPosition.make(2), runId })
+        const first = yield* console.presentAtWithStatus(cursor, status)
+        const firstStatus = yield* first.currentStatus.get
+        expect(firstStatus).toEqual({ _tag: "Waiting", reason: "connected owner" })
+
+        yield* SubscriptionRef.set<TraceConsoleStatus>(statusState, { _tag: "Running", reason: "reconnected owner" })
+        yield* console.refreshStatus(first)
+        const second = yield* console.presentAtWithStatus(cursor, status)
+        const secondStatus = yield* second.currentStatus.get
+        expect(secondStatus).toEqual({ _tag: "Running", reason: "reconnected owner" })
+        expect(first.history.cursor).toEqual(second.history.cursor)
+        expect(first.history.items.map(({ identity }) => identity)).toEqual(
+          second.history.items.map(({ identity }) => identity)
+        )
+        expect(renderTraceAtCursorWithStatus(first.history, firstStatus).slice(0, -1)).toEqual(
+          renderTraceAtCursorWithStatus(second.history, secondStatus).slice(0, -1)
+        )
+        const rendered = yield* Ref.get(lines)
+        expect(rendered.some((line) => line.includes("Passive current status · Waiting · connected owner"))).toBe(true)
+        expect(rendered.some((line) => line.includes("Passive current status · Running · reconnected owner"))).toBe(
+          true
+        )
+        expect((yield* journal.read(runId)).map(({ position }) => position)).toEqual([
+          JournalPosition.make(1),
+          JournalPosition.make(2)
+        ])
+      }).pipe(Effect.provide(consoleLayer))
+    })
+  )
+)
+
 it("keeps console and other presentation consumers on the exact production schema surface", () => {
   const source = readFileSync(fileURLToPath(new URL("./workflow-trace.ts", import.meta.url)), "utf8")
 
@@ -252,6 +315,7 @@ it("keeps console and other presentation consumers on the exact production schem
   expect(consoleItemUsesProductionUnion).toBe(true)
   expect(consoleCursorUsesProductionIdentity).toBe(true)
   expect(historicalConsoleUsesProductionCursor).toBe(true)
+  expect(historicalConsoleUsesPassiveStatus).toBe(true)
   expect(source).toContain("TraceAtCursor")
   expect(source).toContain("TraceCursor")
   expect(source).toContain("TraceHistoryItem")

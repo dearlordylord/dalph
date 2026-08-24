@@ -5,10 +5,19 @@ import {
   TraceItem,
   TraceOutput,
   TraceReader,
+  makeTracePresentation,
+  readTracePresentation,
   WorkflowTrace,
   describeWorkflowOccurrence
 } from "@dalph/orchestrator"
-import type { JournalStoreError, TraceCursor, TraceOutputError, TraceReaderError } from "@dalph/orchestrator"
+import type {
+  CurrentSignal,
+  JournalStoreError,
+  TraceCursor,
+  TraceOutputError,
+  TracePresentation,
+  TraceReaderError
+} from "@dalph/orchestrator"
 import { Context, Effect, Layer, Schema } from "effect"
 
 /** Legacy transient dry-run items emitted by WorkflowTrace; they are not durable historical trace views. */
@@ -39,8 +48,34 @@ export const encodeTraceControlDispositionFacet = (history: TraceAtCursor): stri
     Schema.encodeUnknownSync(TraceControlDispositionFacet)(semanticTraceAtCursor(history).facets.controlDisposition)
   )
 
-/** Renders one immutable committed cursor with truthful actors and no internal transcript. */
-export const renderTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<string> => {
+/** The passive status visible beside a fixed historical cursor; it is not journal evidence. */
+export type TraceConsoleStatus =
+  | { readonly _tag: "Waiting"; readonly reason: string }
+  | { readonly _tag: "Running"; readonly reason: string }
+  | { readonly _tag: "Unavailable"; readonly reason: string }
+
+const unavailableTraceStatus: TraceConsoleStatus = {
+  _tag: "Unavailable",
+  reason: "no passive status source was supplied"
+}
+
+/** Renders only the current-status signal, keeping it separate from historical trace lines. */
+export const renderTraceStatus = (status: TraceConsoleStatus): string => {
+  switch (status._tag) {
+    case "Waiting":
+      return `Waiting · ${status.reason}`
+    case "Running":
+      return `Running · ${status.reason}`
+    case "Unavailable":
+      return `Unavailable · ${status.reason}`
+  }
+}
+
+/** Renders one fixed historical cursor together with a separately read passive status value. */
+export const renderTraceAtCursorWithStatus = (
+  history: TraceAtCursor,
+  status: TraceConsoleStatus
+): ReadonlyArray<string> => {
   const canonical = semanticTraceAtCursor(history)
   return [
     `Historical snapshot · Run ${canonical.cursor.runId} · through journal position ${canonical.cursor.position}`,
@@ -48,22 +83,53 @@ export const renderTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<strin
       ({ identity, occurrence }) =>
         `Journal position ${identity.position} · ${describeWorkflowOccurrence(occurrence).text}`
     ),
-    "Current status is separate and is not included in this historical snapshot."
+    `Passive current status · ${renderTraceStatus(status)}.`
   ]
 }
+
+/** Renders one immutable committed cursor with truthful actors and no internal transcript. */
+export const renderTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<string> =>
+  renderTraceAtCursorWithStatus(history, unavailableTraceStatus)
+
+/** Writes only the passive current-status region; it never rereads or rewrites history. */
+export const writeTraceStatus = (
+  output: Pick<TraceOutput["Service"], "writeLine">,
+  status: TraceConsoleStatus
+): Effect.Effect<void, TraceOutputError> => output.writeLine(`Passive current status · ${renderTraceStatus(status)}.`)
+
+/** Writes one fixed historical view and its separately sourced passive status. */
+export const writeTraceAtCursorWithStatus = (
+  output: Pick<TraceOutput["Service"], "writeLine">,
+  presentation: TracePresentation<TraceConsoleStatus>
+): Effect.Effect<void, TraceOutputError> =>
+  Effect.forEach(renderTraceAtCursorWithStatus(presentation.history, presentation.currentStatus), output.writeLine, {
+    discard: true
+  })
 
 /** Writes one read-only production historical view through the existing console output boundary. */
 export const writeTraceAtCursor = (
   output: Pick<TraceOutput["Service"], "writeLine">,
   history: TraceAtCursor
 ): Effect.Effect<void, TraceOutputError> =>
-  Effect.forEach(renderTraceAtCursor(history), output.writeLine, { discard: true })
+  writeTraceAtCursorWithStatus(output, makeTracePresentation(history, unavailableTraceStatus))
 
 /** Read-only production console service: one exact cursor is read and its view is written once. */
 export interface HistoricalTraceConsoleService {
   readonly presentAt: (
     cursor: TraceCursor
   ) => Effect.Effect<TraceAtCursor, JournalStoreError | TraceOutputError | TraceReaderError>
+  /** Reads one fixed cursor and a separate current-first passive status source. */
+  readonly presentAtWithStatus: (
+    cursor: TraceCursor,
+    currentStatus: CurrentSignal<TraceConsoleStatus>
+  ) => Effect.Effect<
+    TracePresentation<CurrentSignal<TraceConsoleStatus>>,
+    JournalStoreError | TraceOutputError | TraceReaderError
+  >
+  /** Writes a changed passive status without rereading or rewriting the selected history. */
+  readonly refreshStatus: (
+    presentation: TracePresentation<CurrentSignal<TraceConsoleStatus>>
+  ) => Effect.Effect<void, TraceOutputError>
 }
 
 /** Presentation receives only the production TraceReader read capability and TraceOutput sink. */
@@ -78,7 +144,19 @@ export const historicalTraceConsoleLayer = Layer.effect(
     const reader = yield* TraceReader
     const output = yield* TraceOutput
     return HistoricalTraceConsole.of({
-      presentAt: (cursor) => reader.readAt(cursor).pipe(Effect.tap((history) => writeTraceAtCursor(output, history)))
+      presentAt: (cursor) => reader.readAt(cursor).pipe(Effect.tap((history) => writeTraceAtCursor(output, history))),
+      presentAtWithStatus: (cursor, currentStatus) =>
+        readTracePresentation({ currentStatus, traceReader: reader }, cursor).pipe(
+          Effect.flatMap((presentation) =>
+            Effect.gen(function* () {
+              const status = yield* presentation.currentStatus.get
+              yield* writeTraceAtCursorWithStatus(output, makeTracePresentation(presentation.history, status))
+              return presentation
+            })
+          )
+        ),
+      refreshStatus: (presentation) =>
+        presentation.currentStatus.get.pipe(Effect.flatMap((status) => writeTraceStatus(output, status)))
     })
   })
 )

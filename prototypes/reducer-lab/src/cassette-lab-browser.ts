@@ -261,6 +261,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     readonly catalogKey: MaintainedCassetteKey
     readonly update: (state: CassetteState) => void
     readonly updateDeliveryFrame: (state: CassetteState) => void
+    readonly updateTraceStatus: (state: CassetteState) => void
   } | undefined
   const playbackByKey = new Map<MaintainedCassetteKey, ReturnType<typeof makeDeliveryWorkbenchPlaybackRuntime>>()
 
@@ -477,6 +478,9 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       runButton.disabled = busy
       status.dataset.status = displayState
       status.textContent = cassetteStateStatusText(nextState)
+      if (nextState._tag === "Running" || nextState._tag === "NotRun") {
+        workbench.updateTraceStatus(nextState)
+      }
       if (renderedState === nextState) return
       renderedState = nextState
       workbench.update(nextState)
@@ -499,7 +503,11 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     selectedSurface = {
       catalogKey: row.catalogKey,
       update,
-      updateDeliveryFrame: (nextState) => workbench.update(nextState)
+      updateDeliveryFrame: (nextState) => {
+        workbench.updateTraceStatus(nextState)
+        workbench.update(nextState)
+      },
+      updateTraceStatus: (nextState) => workbench.updateTraceStatus(nextState)
     }
     sharedSurface.replaceChildren(article)
     update(state)

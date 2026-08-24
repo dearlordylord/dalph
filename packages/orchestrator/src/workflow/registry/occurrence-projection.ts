@@ -388,7 +388,8 @@ export type WorkflowOccurrenceDescription =
 const workflowOccurrenceSubjectRules = [
   [/^TaskTrackerReadInitiated$/u, "tracker read"],
   [/^TaskTrackerFactsObserved$/u, "tracker facts observed"],
-  [/Executor/u, "executor activity"],
+  [/^PlannedAttemptExecutorWorkResponsibilityBegan$/u, "coordinator responsibility record"],
+  [/^PlannedAttemptExecutorWorkReported$/u, "executor report observed"],
   [/Integrator|Integration/u, "integration activity"],
   [/TargetPromotion/u, "target promotion"],
   [/TaskClaim/u, "task claim activity"],

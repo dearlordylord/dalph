@@ -97,6 +97,8 @@ import {
   originatingActionForPlannedAttemptWorktreeObservation,
   originatingActionForTargetLineageObservation,
   originatingActionForTrackerObservation,
+  PlannedAttemptExecutorWorkReported,
+  PlannedAttemptExecutorWorkResponsibilityBegan,
   plannedAttemptExecutorResponsibilityForReport,
   presentWorkflowOccurrence,
   projectWorkflowOccurrences,
@@ -1536,6 +1538,32 @@ it.effect("presents only the proven actor and keeps executor or Integrator detai
       text: "Operator initiated control direction"
     })
     expect(describeWorkflowOccurrence(initiated).text).not.toMatch(/(?:session|turn|transcript)/iu)
+
+    const responsibility = PlannedAttemptExecutorWorkResponsibilityBegan.make({
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      plannedAttempt,
+      recordedAt: JournalPosition.make(3),
+      runId
+    })
+    expect(describeWorkflowOccurrence(responsibility).text).toBe(
+      "Dalph coordinator initiated coordinator responsibility record"
+    )
+    expect(describeWorkflowOccurrence(responsibility).text).not.toContain("executor activity")
+
+    const report = PlannedAttemptExecutorWorkReported.make({
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      recordedAt: JournalPosition.make(4),
+      report: PlannedAttemptExecutorReport.cases.Running.make({
+        correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+      }),
+      runId
+    })
+    expect(describeWorkflowOccurrence(report)).toMatchObject({
+      actorLabel: "no actor is proven",
+      text: "executor report observed; no actor is proven"
+    })
   })
 )
 
