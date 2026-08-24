@@ -92,16 +92,27 @@ first, the immutable accepted result second.
 
 **16.** Dalph offers the candidate by compare-and-set against that exact
 expected head. The head has moved. The offer does not apply, and the stale head
-selects reconciliation rather than a force update.
+selects reconciliation rather than a force update. Dalph records the rejected
+offer and one exact promotion-stale quarantine `Q` for A's Integrator session
+`S`. `Q` preserves A's accepted result, claim, queue position, `S`, candidate,
+isolated resource, Git qualification, and integration history. Only after `Q`
+is durable does Dalph release the process-local integration-target position.
+It creates no successor session automatically.
 
-**17.** Dalph re-reads the target head and follows the accepted stale-head
-session reconciliation before a fresh Integrator session reports a candidate
-for that head. Dalph Git-qualifies and promotes that candidate. The physical
-integration-target position is released, but promotion does not settle A.
-Dalph replaces A's exact active claim with a
-promotion-correlated completion claim. A later complete tracker read reports A
-successfully completed in `G₃` with that exact completion claim. Dalph deletes
-only that claim, records A's delivery settlement, and removes A's retained
+**17.** Alice chooses *Full rerun* for exact `(S, Q)`. Dalph records the first
+valid `(S, Q, FullRerun)` direction and then records and performs a fresh target-
+lineage read. Git reports compatible current head `H₂`. Dalph preserves `S` and
+its resource as predecessor evidence, preserves A's same integration
+responsibility and queue position, and fixes exactly one distinct successor
+session `S₂` and isolated resource against `H₂`. Ordinary delivery gives `S₂`,
+`H₂`, and A's immutable accepted result to the Integrator. The Integrator
+reports candidate `M₂`; Dalph asks Git to prove exact ordered parents
+`[H₂, C]`, then promotes only `M₂` by compare-and-set against `H₂`. The
+physical integration-target position is released, but promotion does not
+settle A. Dalph replaces A's exact active claim with a promotion-correlated
+completion claim. A later focused tracker read reports A successfully
+completed in `G₃` with that exact completion claim. Dalph deletes only that
+claim, records A's delivery settlement, and removes A's retained
 integration-completion responsibility.
 
 **18.** Alice reopens C. `G₄`. Only the lifecycle wait clears; every other fact
@@ -146,8 +157,8 @@ record normal termination.
 | 13 | A accepted; B admitted | G₂ | 2 | B D | A C | — | D10 D24 |
 | 14 | A queued for integration | G₂ | 2 | B D | A C | — | D10 |
 | 15 | Integrator reports candidate; Dalph proves its parents | G₂ | 2 | B D | A C | — | **D26 D28** |
-| 16 | promotion finds a stale head | G₂ | 2 | B D | A C | — | **D27** |
-| 17 | A promoted; exact completion claim deleted after a focused task read proves success; A settles | G₃ | 2 | B D | C | — | D24 D27 D28 D33 |
+| 16 | rejected promotion quarantines exact S; no successor starts | G₂ | 2 | B D | A C | A | **D27 D44** |
+| 17 | Alice authorizes FullRerun; exact S₂ promotes; focused success permits exact claim deletion and A settles | G₃ | 2 | B D | C | — | D24 D27 D28 D33 D44 |
 | 18 | C reopened | G₄ | 2 | B D | C | — | D9 D19 |
 | 19 | capacity 2 → 3; C admitted | G₄ | 3 | B C D | — | — | D6 D13 |
 | 20 | F and G added | G₅ | 3 | B C D | — | — | D7 D9 |
@@ -165,7 +176,7 @@ the ceiling governs admission, never eviction.
 
 ## Where the story does not converge
 
-Two beats open branches that have no terminal path under current rules.
+Three beats open branches that have no terminal path under current rules.
 
 **Beat 5, if Alice never chooses.** B stays retained with its work preserved
 and its position released. The Run keeps an unsettled obligation, so it must
@@ -177,6 +188,12 @@ showing the task open again. There is no operator choice for this case: the
 three choices at beat 5 belong to changed instructions, not to a closed task.
 So a task that Alice closes and leaves closed keeps its attempt retained
 forever, and the Run cannot reach beat 22.
+
+**Beat 17, if Alice never chooses Full rerun.** A remains retained at its
+promotion-stale quarantine with `S`, `M`, the accepted result, queue position,
+claim, resource, and evidence preserved. The process-local target position is
+free, but later work for the same target cannot pass A. Dalph does not choose
+for Alice, retry `S`, or create `S₂`, so the Run cannot reach beat 22.
 
 The same holds for a task that leaves the target closure entirely, which
 derives a membership constraint with the same shape and the same absent exit.
