@@ -856,6 +856,7 @@ it.effect(
         }
         expect(acceptedAReport.position).toBeLessThan(aIntegrationResponsibility.position)
         expect(acceptedBReport.position).toBeLessThan(bIntegrationResponsibility.position)
+        expect(aIntegrationResponsibility.position).toBeLessThan(acceptedBReport.position)
         expect(aIntegrationResponsibility.position).toBeLessThan(bIntegrationResponsibility.position)
         expect(acceptedAReport.position).toBeLessThan(firstIntegratorRun.position)
         expect(acceptedBReport.position).toBeLessThan(firstIntegratorRun.position)
