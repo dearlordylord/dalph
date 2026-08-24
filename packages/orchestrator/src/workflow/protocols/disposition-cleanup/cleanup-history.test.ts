@@ -274,7 +274,7 @@ const absence = (
 
 const contradiction = (
   position: number,
-  eventOperationId = authorization.operationId,
+  eventOperationId = observationOperationId(1),
   eventAuthorization = authorization,
   key = worktreeCleanupContradictedRecordKey(eventAuthorization.operationId)
 ): JournalRecord =>
@@ -407,7 +407,8 @@ const descriptor: CleanupHistoryDescriptor<WorktreeCleanupAuthorization> = {
     contradiction: (event) =>
       event._tag === "WorktreeCleanupContradicted"
         ? {
-            identityMatches: event.operationId === authorization.operationId,
+            identityMatches:
+              event.operationId === observationOperationId(1) || event.operationId === observationOperationId(2),
             observationOperationId: event.operationId,
             recordKey: worktreeCleanupContradictedRecordKey(event.authorization.operationId)
           }
@@ -489,6 +490,27 @@ describe("cleanup history chronology", () => {
 
   it("accepts a fresh absence after a mutation intent whose response was lost", () => {
     expect(validateCleanupHistory(validRecords(false), descriptor)._tag).toBe("Valid")
+  })
+
+  it("accepts a current observation contradiction but rejects one after a newer pending intent", () => {
+    expect(
+      validateCleanupHistory(
+        [authorized(), observationIntent(2, 1), observed(3, 1), contradiction(4, observationOperationId(1))],
+        descriptor
+      )._tag
+    ).toBe("Valid")
+    expect(
+      validateCleanupHistory(
+        [
+          authorized(),
+          observationIntent(2, 1),
+          observed(3, 1),
+          observationIntent(4, 2),
+          contradiction(5, observationOperationId(1))
+        ],
+        descriptor
+      )._tag
+    ).toBe("Invalid")
   })
 
   it("ignores a typed family event without an authorization subject", () => {

@@ -100,6 +100,7 @@ import {
   validateAttemptStopHistory,
   validateCancellationMultiplicityHistory
 } from "../coordination/reconstruction/history.js"
+import { validateCancelledAttemptHistoryPrefix } from "../coordination/reconstruction/cancelled-attempt-history.js"
 import {
   workflowJournalHistoryIssueDetail,
   type WorkflowJournalHistoryIssue
@@ -1968,28 +1969,9 @@ const canonicalHistoryIssue = (issues: ReadonlyArray<WorkflowJournalHistoryIssue
   return `${workflowJournalHistoryIssueDetail(issue)} at journal position ${position}`
 }
 
-/** Cancellation dispositions must point to the exact earlier applied cancellation. */
-const cancellationHistoryIssue = (records: ReadonlyArray<JournalRecord>): string | undefined => {
-  const applied = new Map<JournalPosition, JournalRecord>()
-  for (const record of records) {
-    if (record.event._tag === "RunCancellationApplied") applied.set(record.position, record)
-  }
-  for (const record of records) {
-    if (
-      record.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished" &&
-      record.event._tag !== "CancelledAttemptClaimNoReleaseObserved"
-    ) {
-      continue
-    }
-    const appliedRecord = applied.get(record.event.cancellationAppliedAt)
-    if (appliedRecord === undefined) {
-      return `Cancellation disposition at ${record.position} must identify an earlier RunCancellationApplied record`
-    }
-    if (appliedRecord.position >= record.position) {
-      return `Cancellation disposition at ${record.position} must follow its RunCancellationApplied record`
-    }
-  }
-  return undefined
+const cancelledAttemptHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+  const issue = validateCancelledAttemptHistoryPrefix(runId, records)
+  return issue === undefined ? undefined : `${issue.detail} at journal position ${issue.position}`
 }
 
 /** Validates all nested Run identities before any complete or cursor trace is presented. */
@@ -2001,7 +1983,7 @@ const fullHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): 
   return (
     canonicalHistoryIssue(validateAttemptStopHistory(runId, records)) ??
     canonicalHistoryIssue(validateCancellationMultiplicityHistory(runId, records)) ??
-    cancellationHistoryIssue(records) ??
+    cancelledAttemptHistoryIssue(runId, records) ??
     cleanupHistoryIssue(records) ??
     integrationHistoryIssue(runId, records) ??
     finalityHistoryIssue(runId, records)

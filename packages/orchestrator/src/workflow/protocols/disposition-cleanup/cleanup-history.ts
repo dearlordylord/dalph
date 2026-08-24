@@ -310,10 +310,14 @@ export const validateCleanupHistory = <Authorization>(
       const latestObservation = latest(state.observations)
       const latestObservationIdentity =
         latestObservation === undefined ? undefined : strategies.observationResult(latestObservation.event)
+      const latestObservationIntent = latest(state.intents)
+      const latestObservationIntentIdentity =
+        latestObservationIntent === undefined ? undefined : strategies.observationIntent(latestObservationIntent.event)
       if (
         identity === undefined ||
         latestObservation === undefined ||
         latestObservation.event._tag !== data.observedTag ||
+        latestObservationIntentIdentity?.key !== latestObservationIdentity?.key ||
         latestObservationIdentity?.operationId !== identity.observationOperationId ||
         !exactRecord(record, data.runId, identity.recordKey) ||
         !identity.identityMatches

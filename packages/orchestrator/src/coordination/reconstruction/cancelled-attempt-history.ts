@@ -754,3 +754,18 @@ export const validateCancelledAttemptHistory = (
   validateCancellationReleaseIntent(record, runId, records, onInvalid)
   validateCancellationReleaseOutcome(record, runId, records, onInvalid)
 }
+
+/** Validates every cancellation settlement event in one immutable journal prefix. */
+export const validateCancelledAttemptHistoryPrefix = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): { readonly position: JournalPosition; readonly detail: string } | undefined => {
+  for (const record of records) {
+    let detail: string | undefined
+    validateCancelledAttemptHistory(record, runId, records, (candidate) => {
+      detail ??= candidate
+    })
+    if (detail !== undefined) return { detail, position: record.position }
+  }
+  return undefined
+}

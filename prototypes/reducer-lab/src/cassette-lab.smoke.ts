@@ -12,7 +12,11 @@ import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packa
 import { maintainedApplicationExitProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette-domain.ts"
 import { maintainedCodexPlannedAttemptExecutorCassetteCatalog } from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette-domain.ts"
 import { dispositionCleanupAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/disposition-cleanup-cassette.ts"
-import { deliveryProposalOrderTaskId, traceReaderSchemaVersion } from "@dalph/orchestrator"
+import {
+  deliveryProposalOrderTaskId,
+  traceControlDispositionFacetVersion,
+  traceReaderSchemaVersion
+} from "@dalph/orchestrator"
 import { parseHTML } from "linkedom"
 import {
   cassetteSettledEvent,
@@ -264,7 +268,7 @@ await scenario("drives Reducer Lab durable history, graph, and causal navigation
     result.traceHistories.every(({ facets }) =>
       facets.recovery.observationGaps !== undefined
       && facets.integration.facts !== undefined
-      && facets.controlDisposition.version === 1
+      && facets.controlDisposition.version === traceControlDispositionFacetVersion
       && facets.controlDisposition.controls !== undefined
       && facets.controlDisposition.dispositions !== undefined
       && facets.controlDisposition.cleanup !== undefined

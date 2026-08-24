@@ -43,6 +43,7 @@ import {
 } from "../workflow/protocols/attempt-choice/events.js"
 import {
   CancelledAttemptClaimNoReleaseObservedEvent,
+  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
   RunCancellationAppliedEvent
 } from "../workflow/protocols/run-cancellation/events.js"
 import {
@@ -67,10 +68,16 @@ import {
   IntegratorSuccessorPreparationInput,
   integratorSuccessorCorrelationFor
 } from "../workflow/protocols/integrator/session.js"
-import { WorkflowRunBeganEvent } from "../workflow/registry/event.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  WorkflowRunBeganEvent
+} from "../workflow/registry/event.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { OperationId } from "../workflow/identity.js"
+import { makeTaskAttemptPlanOperation, makeTaskClaimAcquisitionOperation } from "../workflow/registry/operation.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -111,6 +118,7 @@ import {
   TraceAtCursor,
   TraceCursor,
   TraceProjectionInvalid,
+  traceControlDispositionFacetVersion,
   traceReaderSchemaVersion
 } from "./trace-reader.js"
 
@@ -291,6 +299,90 @@ const controlRecords = (recordRunId: RunId = runId): ReadonlyArray<JournalRecord
   ]
 }
 
+const cancellationSettlementRecords = (): ReadonlyArray<JournalRecord> => {
+  const claimOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("issue-83-cancel-settlement-claim"),
+      owner: ClaimOwner.make("issue-83-cancel-settlement-owner"),
+      taskId: controlAttempt.taskId,
+      token: ClaimToken.make("issue-83-cancel-settlement-token")
+    },
+    predecessorOperationIds: []
+  })
+  const claim = ActiveTaskClaim.make(claimOperation.acquisition)
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("issue-83-cancel-settlement-plan"),
+    plannedAttempt: controlAttempt,
+    predecessorOperationIds: [claim.operationId]
+  })
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+  const cancellationAppliedAt = JournalPosition.make(8)
+  return [
+    runBeginningFor(runId, target),
+    record(
+      2,
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion }),
+      runId
+    ),
+    record(3, TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion }), runId),
+    record(4, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion }), runId),
+    record(
+      5,
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: controlAttempt,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      6,
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
+        plannedAttempt: controlAttempt,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      7,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: reportOrdinal,
+        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+          correlation: { attemptId: controlAttempt.attemptId, runId }
+        }),
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      Number(cancellationAppliedAt),
+      RunCancellationAppliedEvent.make({
+        initiatedBy: WorkflowActor.cases.Operator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      9,
+      CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+        authorizedClaim: claim,
+        cancellationAppliedAt,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        plannedAttempt: controlAttempt,
+        proof: { _tag: "CommandResponse", reportOrdinal },
+        version: workflowJournalEventVersion
+      }),
+      runId
+    )
+  ]
+}
+
 const appendRecords = Effect.fn("TraceReaderControlDispositionTest.appendRecords")(function* (
   journal: JournalStore["Service"],
   records: ReadonlyArray<JournalRecord>
@@ -365,7 +457,7 @@ it.effect("projects applied Pause Unpause Continue Restart and Stop at the exact
       TraceCursor.make({ position: JournalPosition.make(6), runId })
     )
     expect(view.version).toBe(traceReaderSchemaVersion)
-    expect(view.facets.controlDisposition.version).toBe(1)
+    expect(view.facets.controlDisposition.version).toBe(traceControlDispositionFacetVersion)
     expect(view.facets.controlDisposition.controls.map(({ _tag }) => _tag)).toEqual([
       "Direction",
       "Direction",
@@ -474,6 +566,69 @@ it.effect("records an applied Run cancellation as its own Operator disposition",
         source: { runId, position: JournalPosition.make(2) }
       }
     ])
+  })
+)
+
+it.effect("fails closed for a cancelled-attempt relinquishment with malformed executor proof", () =>
+  Effect.gen(function* () {
+    const records = cancellationSettlementRecords()
+    const relinquishment = records.at(-1)
+    if (relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
+      return yield* Effect.die("cancellation settlement fixture lacks relinquishment")
+    }
+    const malformed = [
+      ...records.slice(0, -1),
+      {
+        ...relinquishment,
+        event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+          ...relinquishment.event,
+          proof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2) }
+        })
+      }
+    ]
+    const last = malformed.at(-1)
+    if (last === undefined) return yield* Effect.die("malformed cancellation fixture is empty")
+    const failure = yield* Effect.flip(
+      makeTraceReader({ read: () => Effect.succeed(malformed) }).readAt(
+        TraceCursor.make({ position: last.position, runId })
+      )
+    )
+    expect(failure).toBeInstanceOf(TraceProjectionInvalid)
+    if (failure._tag !== "TraceProjectionInvalid") return
+    expect(failure.detail).toContain(
+      "cancelled-attempt relinquishment requires current safe or terminal executor evidence"
+    )
+  })
+)
+
+it.effect("fails closed for forward executor work after Run cancellation", () =>
+  Effect.gen(function* () {
+    const records = cancellationSettlementRecords()
+    const last = records.at(-1)
+    if (last === undefined) return yield* Effect.die("cancellation settlement fixture is empty")
+    const forwardWork = record(
+      Number(last.position) + 1,
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+        plannedAttempt: controlAttempt,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    )
+    const malformed = [...records, forwardWork]
+    const failure = yield* Effect.flip(
+      makeTraceReader({ read: () => Effect.succeed(malformed) }).readAt(
+        TraceCursor.make({ position: forwardWork.position, runId })
+      )
+    )
+    expect(failure).toBeInstanceOf(TraceProjectionInvalid)
+    if (failure._tag !== "TraceProjectionInvalid") return
+    expect(failure.detail).toContain(
+      "post-cancellation history cannot record forward-work event PlannedAttemptExecutorCommandIntended"
+    )
   })
 )
 
