@@ -159,12 +159,6 @@ const implementationBinding = (
 
 const composed = (source: string, marker: string): CompositionReference => ({ _tag: "Assembled", marker, source })
 
-const supplied = (source: string, marker: string): CompositionReference => ({
-  _tag: "SuppliedAtBoundary",
-  marker,
-  source
-})
-
 const support = (identity: string, reason: string, source: string): CompositionSupportBinding => ({
   identity,
   marker: identity,
@@ -252,9 +246,9 @@ const trackerGraphContract = contract("TrackerGraphReader", [
     role: "production",
     source: "packages/orchestrator/test/contracts/tracker-graph-reader-contract.ts",
     implementation: implementationBinding(
-      "githubTrackerGraphReaderNodeLayer",
+      "githubTrackerGraphReaderLayer",
       "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts",
-      "githubTrackerGraphReaderNodeLayer",
+      "githubTrackerGraphReaderLayer",
       { _tag: "ObjectProperty", property: "layer" }
     ),
     invocation: {
@@ -464,9 +458,9 @@ const executorContract = contract("PlannedAttemptExecutor", [
     role: "production",
     source: "packages/orchestrator/test/contracts/planned-attempt-executor-contract.ts",
     implementation: implementationBinding(
-      "nodeCodexPlannedAttemptExecutorLayer",
+      "codexPlannedAttemptExecutorLayer",
       "packages/dalph/src/application/codex-planned-attempt-executor.ts",
-      "nodeCodexPlannedAttemptExecutorLayer",
+      "codexPlannedAttemptExecutorLayer",
       { _tag: "ObjectProperty", property: "layer" }
     )
   }
@@ -515,7 +509,7 @@ const evidenceContract = contract("EvidenceStore", [
     },
     marker: "evidenceStoreContract",
     role: "production",
-    source: "packages/orchestrator/src/workflow/protocols/evidence-store.ts",
+    source: "packages/orchestrator/test/contracts/evidence-store-contract.ts",
     implementation: implementationBinding(
       "nodeEvidenceStoreLayer",
       "packages/orchestrator/src/workflow/protocols/evidence-store.ts",
@@ -528,6 +522,8 @@ const evidenceContract = contract("EvidenceStore", [
 const cleanupContract = (
   familyMarker: string,
   controlledInvocationSource: string,
+  controlledImplementationIdentity: string,
+  controlledImplementationSource: string,
   productionAuthorization: string
 ): ContractEvidence =>
   contract(familyMarker, [
@@ -535,7 +531,13 @@ const cleanupContract = (
       invocation: { marker: "dispositionCleanupContract({", source: controlledInvocationSource },
       marker: "dispositionCleanupContract",
       role: "controlled",
-      source: "packages/orchestrator/test/contracts/disposition-cleanup-contract.ts"
+      source: "packages/orchestrator/test/contracts/disposition-cleanup-contract.ts",
+      implementation: implementationBinding(
+        controlledImplementationIdentity,
+        controlledImplementationSource,
+        controlledImplementationIdentity,
+        { _tag: "InvocationScope" }
+      )
     },
     {
       invocation: {
@@ -545,7 +547,13 @@ const cleanupContract = (
       },
       marker: "dispositionCleanupContract",
       role: "production",
-      source: "packages/orchestrator/test/contracts/disposition-cleanup-contract.ts"
+      source: "packages/orchestrator/test/contracts/disposition-cleanup-contract.ts",
+      implementation: implementationBinding(
+        "gitDispositionCleanupBoundaryLayer",
+        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.ts",
+        "gitDispositionCleanupBoundaryLayer",
+        { _tag: "InvocationScope" }
+      )
     }
   ])
 
@@ -621,10 +629,13 @@ export const capabilityRegistrationInventory = {
       contract: trackerGraphContract,
       family: "task-tracker-graph-read",
       production: implementation(
-        "githubTrackerGraphReaderNodeLayer",
+        "githubTrackerGraphReaderLayer",
         "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts",
-        "githubTrackerGraphReaderNodeLayer",
-        supplied("packages/dalph/src/application/dry-run.ts", "githubTrackerGraphReaderNodeLayer")
+        "githubTrackerGraphReaderLayer",
+        composed(
+          "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts",
+          "githubTrackerGraphReaderLayer"
+        )
       )
     },
     {
@@ -749,10 +760,10 @@ export const capabilityRegistrationInventory = {
       contract: executorContract,
       family: "planned-attempt-executor",
       production: implementation(
-        "nodeCodexPlannedAttemptExecutorLayer",
+        "codexPlannedAttemptExecutorLayer",
         "packages/dalph/src/application/codex-planned-attempt-executor.ts",
-        "nodeCodexPlannedAttemptExecutorLayer",
-        composed("packages/dalph/bin/codex-qualification-host.ts", "nodeCodexPlannedAttemptExecutorLayer")
+        "codexPlannedAttemptExecutorLayer",
+        composed("packages/dalph/src/application/codex-planned-attempt-executor.ts", "codexPlannedAttemptExecutorLayer")
       )
     },
     {
@@ -807,6 +818,8 @@ export const capabilityRegistrationInventory = {
       contract: cleanupContract(
         "PlannedWorktreeCleanup",
         "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts",
+        "worktreeCleanupTestLayer",
+        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.ts",
         "worktreeAuthorization"
       ),
       family: "planned-worktree-cleanup",
@@ -831,6 +844,8 @@ export const capabilityRegistrationInventory = {
       contract: cleanupContract(
         "PlannedBranchCleanup",
         "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts",
+        "branchCleanupTestLayer",
+        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.ts",
         "branchAuthorization"
       ),
       family: "planned-branch-cleanup",
@@ -855,6 +870,8 @@ export const capabilityRegistrationInventory = {
       contract: cleanupContract(
         "IntegratorPredecessorCandidateCleanup",
         "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts",
+        "integratorCandidateCleanupTestLayer",
+        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.ts",
         "candidateAuthorization"
       ),
       family: "integrator-predecessor-candidate-cleanup",
@@ -901,6 +918,16 @@ export const capabilityRegistrationInventory = {
     { role: "controlled", source: "packages/dalph/src/application/dry-run.ts" }
   ],
   compositionSupportBindings: [
+    support(
+      "githubTrackerGraphReaderNodeLayer",
+      "node GraphQL dependencies around the registered GitHub graph-reader implementation",
+      "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts"
+    ),
+    support(
+      "nodeCodexPlannedAttemptExecutorLayer",
+      "node activity-census dependencies around the registered Codex executor implementation",
+      "packages/dalph/src/application/codex-planned-attempt-executor.ts"
+    ),
     support(
       "attemptChoiceControlLayer",
       "operator-control protocol support",

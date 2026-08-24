@@ -152,27 +152,24 @@ const present = BranchCleanupObservation.cases.Present.make({
 
 it.effect("controlled branch cleanup satisfies the shared boundary contract", () =>
   Effect.gen(function* () {
-    const boundary = yield* BranchCleanupBoundary
+    const implementationLayer = branchCleanupTestLayer({
+      observations: [
+        present,
+        BranchCleanupObservation.cases.Absent.make({
+          branch: branchAuthorization.locator,
+          revision: BranchCleanupEvidenceRevision.make(2)
+        })
+      ],
+      mutations: [
+        BranchCleanupMutationResult.cases.Removed.make({
+          branch: branchAuthorization.locator,
+          revision: BranchCleanupEvidenceRevision.make(2)
+        })
+      ]
+    })
+    const boundary = yield* BranchCleanupBoundary.pipe(Effect.provide(implementationLayer))
     yield* dispositionCleanupContract({ authorization: branchAuthorization, boundary })
-  }).pipe(
-    Effect.provide(
-      branchCleanupTestLayer({
-        observations: [
-          present,
-          BranchCleanupObservation.cases.Absent.make({
-            branch: branchAuthorization.locator,
-            revision: BranchCleanupEvidenceRevision.make(2)
-          })
-        ],
-        mutations: [
-          BranchCleanupMutationResult.cases.Removed.make({
-            branch: branchAuthorization.locator,
-            revision: BranchCleanupEvidenceRevision.make(2)
-          })
-        ]
-      })
-    )
-  )
+  })
 )
 
 it.effect("table-reconciles changed branch owner, head, and revision without a branch mutation", () =>

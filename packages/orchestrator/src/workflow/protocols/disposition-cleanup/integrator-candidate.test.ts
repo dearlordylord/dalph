@@ -113,28 +113,25 @@ const present = IntegratorCandidateCleanupObservation.cases.Present.make({
 
 it.effect("controlled candidate cleanup satisfies the shared boundary contract", () =>
   Effect.gen(function* () {
-    const boundary = yield* IntegratorCandidateCleanupBoundary
+    const implementationLayer = integratorCandidateCleanupTestLayer({
+      observations: [
+        present,
+        IntegratorCandidateCleanupObservation.cases.Absent.make({
+          locator: authorization.locator,
+          revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
+        })
+      ],
+      mutations: [
+        IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+          locator: authorization.locator,
+          revision: IntegratorCandidateCleanupEvidenceRevision.make(2),
+          sessionId: authorization.owner.sessionId
+        })
+      ]
+    })
+    const boundary = yield* IntegratorCandidateCleanupBoundary.pipe(Effect.provide(implementationLayer))
     yield* dispositionCleanupContract({ authorization, boundary })
-  }).pipe(
-    Effect.provide(
-      integratorCandidateCleanupTestLayer({
-        observations: [
-          present,
-          IntegratorCandidateCleanupObservation.cases.Absent.make({
-            locator: authorization.locator,
-            revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
-          })
-        ],
-        mutations: [
-          IntegratorCandidateCleanupMutationResult.cases.Removed.make({
-            locator: authorization.locator,
-            revision: IntegratorCandidateCleanupEvidenceRevision.make(2),
-            sessionId: authorization.owner.sessionId
-          })
-        ]
-      })
-    )
-  )
+  })
 )
 
 it.effect("table-reconciles changed candidate owner, locator, and revision without a mutation", () =>

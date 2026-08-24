@@ -590,44 +590,48 @@ const defaultGitCommand: GitCommandService = {
   runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
 }
 
-const layerFor = (
-  harness: Harness,
-  gitCommand: GitCommandService = defaultGitCommand,
-  evidenceStore: Layer.Layer<EvidenceStore> | null = memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
-  authority?: Layer.Layer<CodexReplacementAuthority>,
-  store: CodexAttemptStoreService = harness.store,
-  crypto?: Crypto.Crypto
-) => {
-  const dependencies =
-    evidenceStore === null
-      ? Layer.mergeAll(
-          controlledCodexAppServerLayer(harness.app),
-          controlledCodexOwnedActivityCensusLayer({
-            observe: (thread, backgroundTerminals) =>
-              Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
-            terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
-          }),
-          Layer.succeed(CodexAttemptStore, store),
-          Layer.succeed(GitCommand, gitCommand)
-        )
-      : Layer.mergeAll(
-          controlledCodexAppServerLayer(harness.app),
-          controlledCodexOwnedActivityCensusLayer({
-            observe: (thread, backgroundTerminals) =>
-              Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
-            terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
-          }),
-          Layer.succeed(CodexAttemptStore, store),
-          Layer.succeed(GitCommand, gitCommand),
-          evidenceStore
-        )
-  const executorWithDependencies = codexPlannedAttemptExecutorLayer.pipe(Layer.provide(dependencies))
-  const executorLayer =
-    crypto === undefined
-      ? executorWithDependencies.pipe(Layer.provide(NodeServices.layer))
-      : executorWithDependencies.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto)))
-  return authority === undefined ? executorLayer : executorLayer.pipe(Layer.provide(authority))
-}
+const layerForImplementation =
+  (implementationLayer: typeof codexPlannedAttemptExecutorLayer) =>
+  (
+    harness: Harness,
+    gitCommand: GitCommandService = defaultGitCommand,
+    evidenceStore: Layer.Layer<EvidenceStore> | null = memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+    authority?: Layer.Layer<CodexReplacementAuthority>,
+    store: CodexAttemptStoreService = harness.store,
+    crypto?: Crypto.Crypto
+  ) => {
+    const dependencies =
+      evidenceStore === null
+        ? Layer.mergeAll(
+            controlledCodexAppServerLayer(harness.app),
+            controlledCodexOwnedActivityCensusLayer({
+              observe: (thread, backgroundTerminals) =>
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+              terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+            }),
+            Layer.succeed(CodexAttemptStore, store),
+            Layer.succeed(GitCommand, gitCommand)
+          )
+        : Layer.mergeAll(
+            controlledCodexAppServerLayer(harness.app),
+            controlledCodexOwnedActivityCensusLayer({
+              observe: (thread, backgroundTerminals) =>
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+              terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+            }),
+            Layer.succeed(CodexAttemptStore, store),
+            Layer.succeed(GitCommand, gitCommand),
+            evidenceStore
+          )
+    const executorWithDependencies = implementationLayer.pipe(Layer.provide(dependencies))
+    const executorLayer =
+      crypto === undefined
+        ? executorWithDependencies.pipe(Layer.provide(NodeServices.layer))
+        : executorWithDependencies.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto)))
+    return authority === undefined ? executorLayer : executorLayer.pipe(Layer.provide(authority))
+  }
+
+const layerFor = layerForImplementation(codexPlannedAttemptExecutorLayer)
 
 const mutatedEvidenceStoreLayer = (mode: "manifest" | "reference" | "malformed"): Layer.Layer<EvidenceStore> =>
   Layer.effect(
@@ -789,7 +793,10 @@ const codexConformanceImplementation = {
 }
 
 definePlannedAttemptExecutorConformanceSuite(codexConformanceImplementation)
-plannedAttemptExecutorContract({ layer: layerFor(makeHarness()), name: "Codex app-server" })
+plannedAttemptExecutorContract({
+  layer: layerForImplementation(codexPlannedAttemptExecutorLayer)(makeHarness()),
+  name: "Codex app-server"
+})
 
 it.effect("persists the exact association before the first turn and seals Accepted from reread evidence", () => {
   const harness = makeHarness()

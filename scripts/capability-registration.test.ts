@@ -145,13 +145,10 @@ describe("capability registration gate", () => {
       file.path === "packages/orchestrator/src/workflow-journal/store.test.ts"
         ? {
             ...file,
-            source: file.source
-              .replace("  journalAppendContract(name, makeLayer)\n", "")
-              .replace('journalAppendContract(\n  "sqlite",\n', 'removedJournalAppendContract(\n  "sqlite",\n')
-              .replace(
-                'journalAppendContract("sqlite", () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))\n',
-                ""
-              )
+            source: file.source.replace(
+              'journalAppendContract("sqlite", () =>',
+              'removedJournalAppendContract("sqlite", () =>'
+            )
           }
         : file
     )
@@ -225,6 +222,99 @@ describe("capability registration gate", () => {
     expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
       "journal production contract implementation binding is stale: productionJournalStoreLayer"
     )
+  })
+
+  it("rejects a GitHub graph contract that substitutes a different Layer", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "layer: githubTrackerGraphReaderLayer.pipe(Layer.provide(clientLayer)),",
+              "layer: Layer.empty,"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "task-tracker-graph-read production contract implementation binding is stale: githubTrackerGraphReaderLayer"
+    )
+  })
+
+  it("rejects a Codex executor contract that substitutes a different Layer", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/dalph/src/application/codex-planned-attempt-executor.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "layer: layerForImplementation(codexPlannedAttemptExecutorLayer)(makeHarness()),",
+              "layer: Layer.empty,"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "planned-attempt-executor production contract implementation binding is stale: codexPlannedAttemptExecutorLayer"
+    )
+  })
+
+  it("rejects an EvidenceStore contract that substitutes a different Layer factory", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "(root) => nodeEvidenceStoreLayer(EvidenceStoreLocator.make(root)).pipe(Layer.provide(NodeServices.layer)),",
+              "() => memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "immutable-evidence production contract implementation binding is stale: nodeEvidenceStoreLayer"
+    )
+  })
+
+  it("rejects cleanup contracts that stop exercising their registered implementations", () => {
+    const substituted = sourceFiles.map((file) => {
+      const controlledIdentity =
+        file.path === "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts"
+          ? "worktreeCleanupTestLayer"
+          : file.path === "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts"
+            ? "branchCleanupTestLayer"
+            : file.path ===
+                "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts"
+              ? "integratorCandidateCleanupTestLayer"
+              : undefined
+      if (controlledIdentity !== undefined) {
+        return {
+          ...file,
+          source: file.source.replace(
+            `const implementationLayer = ${controlledIdentity}(`,
+            "const implementationLayer = Layer.effectDiscard("
+          )
+        }
+      }
+      if (file.path === "packages/orchestrator/src/workflow/protocols/disposition-cleanup/production.test.ts") {
+        return { ...file, source: file.source.replaceAll("gitDispositionCleanupBoundaryLayer", "removedCleanupLayer") }
+      }
+      return file
+    })
+
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)
+    for (const [family, controlledIdentity] of [
+      ["planned-worktree-cleanup", "worktreeCleanupTestLayer"],
+      ["planned-branch-cleanup", "branchCleanupTestLayer"],
+      ["integrator-predecessor-candidate-cleanup", "integratorCandidateCleanupTestLayer"]
+    ] as const) {
+      expect(issues).toContain(`${family} controlled contract implementation binding is stale: ${controlledIdentity}`)
+      expect(issues).toContain(
+        `${family} production contract implementation binding is stale: gitDispositionCleanupBoundaryLayer`
+      )
+    }
   })
 
   it("rejects a coordinator contract call that shadows the extracted public helper", () => {

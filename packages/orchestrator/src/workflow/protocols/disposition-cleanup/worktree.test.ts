@@ -135,28 +135,25 @@ const present = WorktreeCleanupObservation.cases.Present.make({
 
 it.effect("controlled worktree cleanup satisfies the shared boundary contract", () =>
   Effect.gen(function* () {
-    const boundary = yield* WorktreeCleanupBoundary
+    const implementationLayer = worktreeCleanupTestLayer({
+      observations: [
+        present,
+        WorktreeCleanupObservation.cases.Absent.make({
+          locator: authorization.locator,
+          revision: WorktreeCleanupEvidenceRevision.make(2)
+        })
+      ],
+      mutations: [
+        WorktreeCleanupMutationResult.cases.Removed.make({
+          branch: authorization.owner.branch,
+          locator: authorization.locator,
+          revision: WorktreeCleanupEvidenceRevision.make(2)
+        })
+      ]
+    })
+    const boundary = yield* WorktreeCleanupBoundary.pipe(Effect.provide(implementationLayer))
     yield* dispositionCleanupContract({ authorization, boundary })
-  }).pipe(
-    Effect.provide(
-      worktreeCleanupTestLayer({
-        observations: [
-          present,
-          WorktreeCleanupObservation.cases.Absent.make({
-            locator: authorization.locator,
-            revision: WorktreeCleanupEvidenceRevision.make(2)
-          })
-        ],
-        mutations: [
-          WorktreeCleanupMutationResult.cases.Removed.make({
-            branch: authorization.owner.branch,
-            locator: authorization.locator,
-            revision: WorktreeCleanupEvidenceRevision.make(2)
-          })
-        ]
-      })
-    )
-  )
+  })
 )
 
 const secondAttempt = PlannedTaskAttempt.make({
