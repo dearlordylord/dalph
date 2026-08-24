@@ -144,8 +144,11 @@ requires a setting that cannot correctly be shared.
 - `pnpm check:quint` runs deterministic, sampled, and exhaustive formal model
   checks and prints per-command plus typecheck/test/sampled-run/verify phase
   timings. The gate has a provisional 600-second internal regression budget;
-  the larger bound leaves two minutes inside the 12-minute hosted job timeout
-  after a shared-host profile crossed the earlier 420-second bound.
+  repeated Node 22/24 measurements and their install overhead are recorded in
+  [the hosted-equivalent profile](../research/quint-hosted-equivalent-profile.md).
+  Direct GitHub setup timings are only available after a push, so the profile
+  identifies its Linux arm64 limitation and the hosted job reserves an
+  explicit 300-second setup/network margin.
   Run it once after the final relevant changes and before integration; during
   development, use it when changing a Quint model, its conformance adapter, or
   behavior governed by that model.
@@ -155,7 +158,9 @@ requires a setting that cannot correctly be shared.
 - `pnpm check:ci:formal` runs the hosted formal subgate (`pnpm check:quint`).
 - `pnpm check:ci` runs both hosted subgates in order; CI runs those subgates as
   separate jobs on every supported Node version, and the formal job has a
-  12-minute job timeout.
+  16-minute job timeout. The job timeout covers the 600-second decreasing
+  `check:quint` deadline, measured frozen-install overhead, and the explicit
+  hosted setup/network margin.
 - `pnpm check:all` runs the bounded local implementation gate, including
   Quint-connected MBT and the Reducer Lab maintained evaluation, but not
   exhaustive formal model checking.

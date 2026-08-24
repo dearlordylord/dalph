@@ -127,7 +127,10 @@ jobs:
     needs: change-plan
     if: needs.change-plan.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    # The gate's inner deadline is 600s. The 16-minute job bound reserves the
+    # measured frozen-install time plus a 300s checkout/action/network margin
+    # and still leaves a small final-reporting margin.
+    timeout-minutes: 16
     env:
       NODE_OPTIONS: --max-old-space-size=8192
 

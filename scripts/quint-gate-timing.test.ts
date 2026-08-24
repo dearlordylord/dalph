@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-// @ts-expect-error The production formal-gate helper is an executable JavaScript module.
-import { createQuintGateTiming, quintCommandKindForArgs } from "./quint-gate-timing.mjs"
+import {
+  createQuintGateTiming,
+  formatQuintGateTimingReport,
+  quintCommandKindForArgs,
+  runWithQuintGateTiming
+} from "./quint-gate-timing.mjs"
 
 describe("Quint gate timing", () => {
   it("classifies the four commands used by the formal gate", () => {
@@ -56,5 +60,32 @@ describe("Quint gate timing", () => {
 
     expect(timing.records()).toEqual([{ kind: "verify", name: "failed verify", durationMilliseconds: 23 }])
     expect(timing.aggregates().verify).toEqual({ count: 1, durationMilliseconds: 23 })
+  })
+
+  it("reports accumulated timings in finally while preserving the command failure", async () => {
+    let now = 0
+    const timing = createQuintGateTiming({ now: () => now })
+    const reports: Array<string> = []
+
+    await expect(
+      runWithQuintGateTiming({
+        timing,
+        run: () =>
+          timing.measure({
+            kind: "test",
+            name: "selected governed test",
+            run: async () => {
+              now = 41
+              throw new Error("original governed test failure")
+            }
+          }),
+        write: (report) => reports.push(report)
+      })
+    ).rejects.toThrow("original governed test failure")
+
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toBe(formatQuintGateTimingReport(timing))
+    expect(reports[0]).toContain("Quint command timing: test selected governed test 0.04s")
+    expect(reports[0]).toContain("Quint phase timing: test 1 command(s), 0.04s")
   })
 })

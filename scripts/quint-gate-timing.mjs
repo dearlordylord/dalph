@@ -11,6 +11,24 @@ export const quintCommandKindForArgs = (args) => {
   throw new Error(`Unknown Quint command: ${command ?? "missing"}`)
 }
 
+export const formatQuintGateTimingReport = (timing) => {
+  const lines = []
+  for (const record of timing.records()) {
+    lines.push(
+      `Quint command timing: ${record.kind} ${record.name} ${(record.durationMilliseconds / 1000).toFixed(2)}s`
+    )
+  }
+  for (const kind of quintCommandKinds) {
+    const aggregate = timing.aggregates()[kind]
+    lines.push(
+      `Quint phase timing: ${kind} ${aggregate.count} command(s), ${(aggregate.durationMilliseconds / 1000).toFixed(
+        2
+      )}s`
+    )
+  }
+  return `${lines.join("\n")}\n`
+}
+
 /**
  * Keep the formal gate's measured command phases independent from its process
  * runner. Tests can provide a monotonic fake clock and runner while the
@@ -46,4 +64,26 @@ export const createQuintGateTiming = ({ now = () => performance.now() } = {}) =>
     )
 
   return { aggregates, measure, records: copyRecords }
+}
+
+export const runWithQuintGateTiming = async ({ timing, run, write = (report) => process.stdout.write(report) }) => {
+  let result
+  let runSucceeded = false
+  let runFailure
+  let reportFailure
+  try {
+    result = await run()
+    runSucceeded = true
+  } catch (error) {
+    runFailure = error
+  } finally {
+    try {
+      write(formatQuintGateTimingReport(timing))
+    } catch (error) {
+      reportFailure = error
+    }
+  }
+  if (!runSucceeded) throw runFailure
+  if (reportFailure !== undefined) throw reportFailure
+  return result
 }

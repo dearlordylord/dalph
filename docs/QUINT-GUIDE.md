@@ -19,11 +19,13 @@ governed subject:
 
 The runner records each command's elapsed time and the aggregate duration of
 the four command families. Its provisional internal regression budget is 600
-seconds: a quiet earlier profile was roughly 340 seconds, while a fresh shared
-host profile crossed the earlier 420-second bound before finality completed.
-The ten-minute bound leaves two minutes inside the 12-minute hosted job
-timeout. Hosted CI runs the same `pnpm check:quint` command in a separate
-formal-model job for each supported Node version.
+seconds. Repeated Node 22/24 runs, phase totals, and frozen-install overhead
+are recorded in the [hosted-equivalent profile](../research/quint-hosted-equivalent-profile.md).
+Those runs are local Linux arm64 evidence, not direct GitHub-hosted evidence;
+the hosted job reserves an explicit 300-second checkout/action/network margin
+and uses a 16-minute total job timeout. Hosted CI runs the same
+`pnpm check:quint` command in a separate formal-model job for each supported
+Node version.
 `pnpm check:all` remains the bounded local implementation gate: it runs
 Quint-connected MBT but does not repeat this exhaustive gate.
 

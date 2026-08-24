@@ -90,10 +90,14 @@ they are not production package APIs, workflow stages, or states.
 
 `pnpm check:quint` runs the exhaustive checks and reports per-command and
 phase timing against its provisional 600-second internal regression budget.
-The complete hosted contract is `pnpm check:ci`, which composes the independent
+Repeated Node 22/24 phase and frozen-install measurements are recorded in
+[`../../research/quint-hosted-equivalent-profile.md`](../../research/quint-hosted-equivalent-profile.md);
+they are local Linux arm64 evidence and explicitly reserve 300 seconds for
+hosted checkout/action/network setup until a pushed workflow supplies direct
+hosted timing. The complete hosted contract is `pnpm check:ci`, which composes the independent
 `check:ci:quality` and `check:ci:formal` subgates. The GitHub workflow runs the
 quality and formal subgates as separate jobs on every supported Node version;
-the formal job invokes `pnpm check:quint` with a 12-minute job timeout. The
+the formal job invokes `pnpm check:quint` with a 16-minute job timeout. The
 local `pnpm check:all` gate remains non-exhaustive and therefore does not
 duplicate formal model checking. A change to a model or to behavior a model
 governs must run `pnpm check:quint` before integration.
