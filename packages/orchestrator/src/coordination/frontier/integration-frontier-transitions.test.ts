@@ -1314,7 +1314,10 @@ it("blocks a Retry when its durable result detail no longer matches the quaranti
           ...candidate,
           event: IntegratorRunResultRecordedEvent.make({
             ...candidate.event,
-            result: IntegratorResult.cases.NotPrepared.make({ correlation: candidate.event.run, detail: mismatchedDetail })
+            result: IntegratorResult.cases.NotPrepared.make({
+              correlation: candidate.event.run,
+              detail: mismatchedDetail
+            })
           })
         }
       : candidate

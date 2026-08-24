@@ -1863,7 +1863,7 @@ describe("delivery proposal route matrix", () => {
             Integrator,
             Integrator.of({
               prepare: (request) =>
-                Ref.update(deliveredSessions, (sessions) => [...sessions, request.correlation.sessionId]).pipe(
+                Ref.update(deliveredSessions, (sessions) => [...sessions, request.correlation.session.sessionId]).pipe(
                   Effect.as(
                     IntegratorResult.cases.NotPrepared.make({
                       correlation: request.correlation,
@@ -2002,7 +2002,7 @@ describe("delivery proposal route matrix", () => {
           Integrator,
           Integrator.of({
             prepare: (request) =>
-              Ref.update(deliveredSessions, (sessions) => [...sessions, request.correlation.sessionId]).pipe(
+              Ref.update(deliveredSessions, (sessions) => [...sessions, request.correlation.session.sessionId]).pipe(
                 Effect.as(
                   IntegratorResult.cases.NotPrepared.make({
                     correlation: request.correlation,

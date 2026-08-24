@@ -1198,29 +1198,43 @@ const isCodexThreadStatus = (value: unknown): value is CodexThreadSnapshot["stat
 
 const threadStatusValue = (value: unknown): unknown => (isJsonObject(value) ? value["type"] : value)
 
+const normalizedThreadIdentity = (
+  value: JsonObject,
+  operation: CodexAppServerOperation
+):
+  | {
+      readonly source: JsonObject
+      readonly id: string
+      readonly cwd: string
+      readonly status: CodexThreadSnapshot["status"]
+    }
+  | CodexAppServerFailure => {
+  const id = stringValue(value["id"])
+  const cwd = stringValue(value["cwd"])
+  const rawStatus = threadStatusValue(value["status"])
+  // `thread/list` summaries may omit a live status while still carrying the
+  // durable id and cwd needed to resume and complete the identity read.
+  const status = rawStatus === undefined && operation === "thread/list" ? "idle" : rawStatus
+  return id === undefined || cwd === undefined || !isCodexThreadStatus(status)
+    ? operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
+    : { source: value, id, cwd, status }
+}
+
 const normalizeThread = (
   value: unknown,
   operation: CodexAppServerOperation
 ): CodexThreadSnapshot | CodexAppServerFailure => {
   if (!isJsonObject(value)) return operationFailure(operation, "Malformed", "missing thread object")
-  const source = value
-  const id = stringValue(source["id"])
-  const cwd = stringValue(source["cwd"])
-  const rawStatus = threadStatusValue(source["status"])
-  // `thread/list` summaries may omit a live status while still carrying the
-  // durable id and cwd needed to resume and complete the identity read.
-  const status = rawStatus === undefined && operation === "thread/list" ? "idle" : rawStatus
-  if (id === undefined || cwd === undefined || !isCodexThreadStatus(status)) {
-    return operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
-  }
-  const normalizedTurns = normalizeThreadTurns(source["turns"], operation)
+  const identity = normalizedThreadIdentity(value, operation)
+  if (identity instanceof CodexAppServerFailure) return identity
+  const normalizedTurns = normalizeThreadTurns(identity.source["turns"], operation)
   if (normalizedTurns instanceof CodexAppServerFailure) return normalizedTurns
-  const correlation = normalizeCorrelation(source["correlation"], operation, "thread")
+  const correlation = normalizeCorrelation(identity.source["correlation"], operation, "thread")
   if (correlation instanceof CodexAppServerFailure) return correlation
   return {
-    id: CodexThreadId.make(id),
-    cwd,
-    status,
+    id: CodexThreadId.make(identity.id),
+    cwd: identity.cwd,
+    status: identity.status,
     turns: normalizedTurns,
     ...(correlation === undefined ? {} : { correlation })
   }

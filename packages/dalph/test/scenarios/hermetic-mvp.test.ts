@@ -325,7 +325,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         prepare: (request) =>
           Effect.gen(function* () {
             yield* Ref.update(integratorCalls, (calls) => calls + 1)
-            const acceptedCommit = request.correlation.acceptedResult.commit
+            const acceptedCommit = request.correlation.session.acceptedResult.commit
             const tree = yield* runInGitDirectory(
               git,
               bareRemote,
@@ -340,7 +340,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
                   "commit-tree",
                   tree,
                   "-p",
-                  request.correlation.expectedTargetHead,
+                  request.correlation.session.expectedTargetHead,
                   "-p",
                   acceptedCommit,
                   "-m",

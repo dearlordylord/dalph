@@ -663,8 +663,10 @@ describe("outer Integrator protocol", () => {
       expect(initialRunState(recordsAfterFailure, compatibleInput())._tag).toBe("RunUnfinished")
       expect(second._tag).toBe("PreparedCandidate")
       expect(requests).toHaveLength(2)
-      expect(requests[0]?.correlation.sessionId).toBe(requests[1]?.correlation.sessionId)
-      expect(requests[0]?.correlation.candidateResource).toBe(requests[1]?.correlation.candidateResource)
+      expect(requests[0]?.correlation.session.sessionId).toBe(requests[1]?.correlation.session.sessionId)
+      expect(requests[0]?.correlation.session.candidateResource).toBe(
+        requests[1]?.correlation.session.candidateResource
+      )
       expect(records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
     })
   )
@@ -1269,7 +1271,10 @@ describe("outer Integrator protocol", () => {
         ...session.event.correlation,
         candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-correlation")
       }
-      const foreignRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: foreignCorrelation })
+      const foreignRun = IntegratorRunCorrelation.make({
+        ordinal: IntegratorRunOrdinal.make(1),
+        session: foreignCorrelation
+      })
       const replaceEvent = (
         records: ReadonlyArray<JournalRecord>,
         key: JournalRecordKey,

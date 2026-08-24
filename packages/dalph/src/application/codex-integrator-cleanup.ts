@@ -1,0 +1,290 @@
+import { Effect, Option } from "effect"
+import type { FileSystem } from "effect"
+import type {
+  CodexAppServer,
+  CodexOwnedActivityCensus,
+  CodexOwnedActivityCensusProjection
+} from "./codex-app-server.js"
+import {
+  bump,
+  candidateWorktreePathFor,
+  type CodexIntegratorConfiguration,
+  type CodexIntegratorPrivateRecord,
+  type CodexIntegratorPrivateStoreService,
+  type IntegratorCandidateWorktreePath,
+  sameSession
+} from "./codex-integrator-private-store.js"
+import { boundary, errorDetail, observedThread } from "./codex-integrator-runtime.js"
+import { type GitWorktreeRecord, readWorktrees } from "./codex-integrator-worktree.js"
+import {
+  IntegratorCandidateCleanupMutationResult,
+  type IntegratorCandidateCleanupAuthorization,
+  IntegratorCandidateCleanupObservation,
+  IntegratorCandidateProviderAuthority,
+  type CoordinatorOwnership,
+  type IntegratorSessionCorrelation,
+  type GitCommandService
+} from "@dalph/orchestrator"
+
+type CleanupForeignReason = "OtherSession" | "Transferred" | "LiveWriter"
+
+const cleanupForeign = (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  observedSessionId: IntegratorSessionCorrelation["sessionId"],
+  reason: CleanupForeignReason
+): IntegratorCandidateCleanupObservation =>
+  IntegratorCandidateCleanupObservation.cases.Foreign.make({
+    locator: authorization.locator,
+    observedSessionId,
+    reason,
+    revision: authorization.evidenceRevision
+  })
+
+const cleanupAbsent = (authorization: IntegratorCandidateCleanupAuthorization): IntegratorCandidateCleanupObservation =>
+  IntegratorCandidateCleanupObservation.cases.Absent.make({
+    locator: authorization.locator,
+    revision: authorization.evidenceRevision
+  })
+
+const cleanupUnreadable = (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  detail: string
+): IntegratorCandidateCleanupObservation =>
+  IntegratorCandidateCleanupObservation.cases.Unreadable.make({ detail, locator: authorization.locator })
+
+const cleanupMissingPrivateRecord = Effect.fn("CodexIntegrator.cleanupMissingPrivateRecord")(function* (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  candidatePath: IntegratorCandidateWorktreePath,
+  store: CodexIntegratorPrivateStoreService
+) {
+  const occupied = yield* boundary(store.findByCandidatePath(candidatePath))
+  return Option.isSome(occupied)
+    ? cleanupForeign(authorization, occupied.value.correlation.sessionId, "OtherSession")
+    : cleanupUnreadable(authorization, "private predecessor record is absent; absence cannot be inferred")
+})
+
+const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegistration")(function* (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  predecessor: IntegratorSessionCorrelation,
+  record: CodexIntegratorPrivateRecord,
+  pathExists: boolean,
+  store: CodexIntegratorPrivateStoreService
+) {
+  if (pathExists) return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
+  if (record.removed === true || record.threadId === null) return cleanupAbsent(authorization)
+  if (record.removalIntent === true) {
+    yield* boundary(store.write(bump(record, { removalIntent: false, removed: true })))
+    return cleanupAbsent(authorization)
+  }
+  return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
+})
+
+const cleanupProjection = (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  predecessor: IntegratorSessionCorrelation,
+  projection: CodexOwnedActivityCensusProjection
+): IntegratorCandidateCleanupObservation => {
+  if (projection._tag === "ExactLive") return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter")
+  if (projection._tag === "Unreadable" || projection._tag === "Contradictory") {
+    return cleanupUnreadable(authorization, projection.detail)
+  }
+  return IntegratorCandidateCleanupObservation.cases.Present.make({
+    locator: authorization.locator,
+    revision: authorization.evidenceRevision,
+    sessionId: predecessor.sessionId,
+    writerQuiescent: true
+  })
+}
+
+const registrationIsForeign = (registration: GitWorktreeRecord, predecessor: IntegratorSessionCorrelation): boolean =>
+  registration.head !== predecessor.expectedTargetHead ||
+  registration.branch !== undefined ||
+  !registration.detached ||
+  registration.prunable
+
+const cleanupRegistered = Effect.fn("CodexIntegrator.cleanupRegistered")(function* (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  predecessor: IntegratorSessionCorrelation,
+  record: CodexIntegratorPrivateRecord,
+  registration: GitWorktreeRecord,
+  candidatePath: IntegratorCandidateWorktreePath,
+  pathExists: boolean,
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"]
+) {
+  if (record.removed === true || record.removalIntent === true) {
+    return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
+  }
+  if (registrationIsForeign(registration, predecessor)) {
+    return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
+  }
+  if (!pathExists)
+    return cleanupUnreadable(authorization, "candidate is registered by Git but its filesystem path is absent")
+  if (record.threadId === null) return cleanupUnreadable(authorization, "candidate has no durable provider thread")
+  const thread = yield* observedThread(app, record.threadId, candidatePath)
+  const terminals = yield* boundary(app.listBackgroundTerminals(thread.id))
+  const projection = yield* boundary(census.observe(thread, terminals))
+  return cleanupProjection(authorization, predecessor, projection)
+})
+
+const cleanupObservationFor = Effect.fn("CodexIntegrator.cleanupObservationFor")(function* (
+  config: CodexIntegratorConfiguration,
+  authorization: IntegratorCandidateCleanupAuthorization,
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"],
+  commands: GitCommandService,
+  fileSystem: FileSystem.FileSystem,
+  store: CodexIntegratorPrivateStoreService
+) {
+  const predecessor = authorization.disposition.predecessor
+  const candidatePath = candidateWorktreePathFor(config, predecessor.candidateResource)
+  if (candidatePath === "" || authorization.locator !== predecessor.candidateResource) {
+    return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
+  }
+  const found = yield* boundary(store.read(predecessor.sessionId))
+  if (Option.isNone(found)) return yield* cleanupMissingPrivateRecord(authorization, candidatePath, store)
+  const record = found.value
+  if (!sameSession(record.correlation, predecessor) || record.candidatePath !== candidatePath) {
+    return cleanupForeign(authorization, record.correlation.sessionId, "OtherSession")
+  }
+  const records = yield* readWorktrees(commands, config)
+  const registration = records.find((item) => item.worktree === candidatePath)
+  const pathExists = yield* boundary(fileSystem.exists(candidatePath))
+  if (registration === undefined) {
+    return yield* cleanupWithoutRegistration(authorization, predecessor, record, pathExists, store)
+  }
+  return yield* cleanupRegistered(
+    authorization,
+    predecessor,
+    record,
+    registration,
+    candidatePath,
+    pathExists,
+    app,
+    census
+  )
+})
+
+const removalNotPermitted = (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  observation: IntegratorCandidateCleanupObservation
+): IntegratorCandidateCleanupMutationResult =>
+  observation._tag === "Absent"
+    ? IntegratorCandidateCleanupMutationResult.cases.AlreadyAbsent.make({
+        locator: authorization.locator,
+        revision: authorization.evidenceRevision,
+        sessionId: authorization.owner.sessionId
+      })
+    : IntegratorCandidateCleanupMutationResult.cases.DefinitelyNotApplied.make({
+        detail: "fresh provider ownership observation did not permit removal",
+        locator: authorization.locator,
+        sessionId: authorization.owner.sessionId
+      })
+
+const reconcileFailedRemoval = (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  result: { readonly exitCode: number; readonly stderr: string },
+  observation: IntegratorCandidateCleanupObservation
+): IntegratorCandidateCleanupMutationResult =>
+  observation._tag === "Absent"
+    ? IntegratorCandidateCleanupMutationResult.cases.AlreadyAbsent.make({
+        locator: authorization.locator,
+        revision: authorization.evidenceRevision,
+        sessionId: authorization.owner.sessionId
+      })
+    : IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+        detail: result.stderr.trim() || `git exited ${result.exitCode}`,
+        locator: authorization.locator,
+        sessionId: authorization.owner.sessionId
+      })
+
+const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(function* (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  config: CodexIntegratorConfiguration,
+  observe: (
+    authorization: IntegratorCandidateCleanupAuthorization
+  ) => Effect.Effect<IntegratorCandidateCleanupObservation>,
+  commands: GitCommandService,
+  store: CodexIntegratorPrivateStoreService,
+  ownership: CoordinatorOwnership["Service"]
+) {
+  const found = yield* boundary(store.read(authorization.owner.sessionId))
+  if (Option.isNone(found)) {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "private predecessor record disappeared before removal intent",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
+  yield* boundary(store.write(bump(found.value, { removalIntent: true, removed: false })))
+  const mutation = boundary(
+    commands.run(config.commonDirectory, [
+      "worktree",
+      "remove",
+      "--force",
+      "--",
+      candidateWorktreePathFor(config, authorization.locator)
+    ])
+  )
+  const result = yield* ownership.runMutation(mutation)
+  if (result.exitCode !== 0) return reconcileFailedRemoval(authorization, result, yield* observe(authorization))
+  const settled = yield* observe(authorization)
+  if (settled._tag !== "Absent") {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "Git remove returned but exact candidate remains registered",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
+  const foundAfter = yield* boundary(store.read(authorization.owner.sessionId))
+  if (Option.isSome(foundAfter)) {
+    yield* boundary(store.write(bump(foundAfter.value, { removalIntent: false, removed: true })))
+  }
+  return IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+    locator: authorization.locator,
+    revision: authorization.evidenceRevision,
+    sessionId: authorization.owner.sessionId
+  })
+})
+
+export const providerAuthorityFor = (
+  config: CodexIntegratorConfiguration,
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"],
+  commands: GitCommandService,
+  fileSystem: FileSystem.FileSystem,
+  store: CodexIntegratorPrivateStoreService,
+  ownership: CoordinatorOwnership["Service"]
+) => {
+  const observe = (authorization: IntegratorCandidateCleanupAuthorization) =>
+    cleanupObservationFor(config, authorization, app, census, commands, fileSystem, store).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          IntegratorCandidateCleanupObservation.cases.Unreadable.make({
+            detail: errorDetail(error),
+            locator: authorization.locator
+          })
+        )
+      )
+    )
+  const remove = (
+    authorization: IntegratorCandidateCleanupAuthorization,
+    _attempt: Parameters<IntegratorCandidateProviderAuthority["Service"]["remove"]>[1]
+  ) =>
+    Effect.gen(function* () {
+      const initial = yield* observe(authorization)
+      if (initial._tag !== "Present") return removalNotPermitted(authorization, initial)
+      return yield* removeOwnedCandidate(authorization, config, observe, commands, store, ownership)
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+            detail: errorDetail(error),
+            locator: authorization.locator,
+            sessionId: authorization.owner.sessionId
+          })
+        )
+      )
+    )
+  return IntegratorCandidateProviderAuthority.of({ observe, remove })
+}

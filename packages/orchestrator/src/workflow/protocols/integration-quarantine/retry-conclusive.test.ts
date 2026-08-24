@@ -669,7 +669,7 @@ it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", ()
               event: IntegratorRunResultRecordedEvent.make({
                 ...record.event,
                 result: IntegratorResult.cases.NotPrepared.make({
-                  correlation: runResult.event.run,
+                  correlation: history.run,
                   detail: IntegratorNotPreparedDetail.make("a different durable result")
                 })
               })

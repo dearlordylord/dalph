@@ -334,7 +334,10 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
     const integrator = yield* Integrator
     const freshResult = yield* integrator.prepare(IntegratorRequest.make({ correlation: run }))
     if (!integratorRunCorrelationsEqual(freshResult.correlation, run)) {
-      return yield* new IntegratorJournalContradiction({ detail: "Integrator returned a foreign run correlation", runId })
+      return yield* new IntegratorJournalContradiction({
+        detail: "Integrator returned a foreign run correlation",
+        runId
+      })
     }
     const appended = yield* journal.append(
       runId,

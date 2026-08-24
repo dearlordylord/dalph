@@ -389,7 +389,7 @@ it.effect("rejects legacy, foreign-key, and malformed modern run evidence", () =
               ...record,
               event: IntegratorRunResultRecordedEvent.make({
                 ...record.event,
-                result: IntegratorResult.cases.PreparedCandidate.make({ correlation: runResult.event.run, candidateText })
+                result: IntegratorResult.cases.PreparedCandidate.make({ correlation: history.run, candidateText })
               })
             }
           : record
@@ -508,7 +508,7 @@ it.effect("rejects a NotPrepared result with candidate evidence and candidate re
                       event: IntegratorRunResultRecordedEvent.make({
                         ...record.event,
                         result: IntegratorResult.cases.PreparedCandidate.make({
-                          correlation: notPreparedResult.event.run,
+                          correlation: notPreparedHistory.run,
                           candidateText
                         })
                       })
@@ -591,7 +591,7 @@ it.effect("rejects CandidateRejected results with foreign candidate names or key
                       event: IntegratorRunResultRecordedEvent.make({
                         ...record.event,
                         result: IntegratorResult.cases.NotPrepared.make({
-                          correlation: candidateResult.event.run,
+                          correlation: history.run,
                           detail: notPreparedDetail
                         })
                       })

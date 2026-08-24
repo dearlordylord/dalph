@@ -3,12 +3,15 @@ import { NodeFileSystem } from "@effect/platform-node"
 import nodePath from "node:path"
 import {
   AcceptedResult,
+  AttemptId,
   EvidenceReference,
+  EvidenceDigest,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedTaskAttempt,
+  RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
@@ -38,6 +41,8 @@ import {
   CleanupMutationOrdinal,
   CoordinatorOwnership,
   GitCommand,
+  GitCommandInvocationFailure,
+  GitCommonDirectoryLocator,
   Integrator,
   IntegratorCandidateProviderAuthority,
   IntegratorCandidateCleanupAuthorization,
@@ -59,7 +64,7 @@ import {
 const root = IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-property")
 const config = CodexIntegratorConfiguration.make({
   candidateWorktreeRoot: root,
-  commonDirectory: "/repositories/property.git",
+  commonDirectory: GitCommonDirectoryLocator.make("/repositories/property.git"),
   privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-property/store.json"),
   repository: GitRepositoryLocator.make("/repositories/property.git")
 })
@@ -67,7 +72,7 @@ const config = CodexIntegratorConfiguration.make({
 const baseSession = IntegratorSessionCorrelation.make({
   acceptedResult: AcceptedResult.make({
     commit: GitCommitSha.make("b".repeat(40)),
-    evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: "0".repeat(64) })
+    evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("0".repeat(64)) })
   }),
   candidateResource: IntegratorCandidateResourceLocator.make("candidate:property"),
   expectedTargetHead: GitCommitSha.make("a".repeat(40)),
@@ -76,11 +81,11 @@ const baseSession = IntegratorSessionCorrelation.make({
     ref: IntegrationTargetRef.make("refs/heads/main")
   }),
   plannedAttempt: PlannedTaskAttempt.make({
-    attemptId: "attempt:property",
+    attemptId: AttemptId.make("attempt:property"),
     baseSha: GitCommitSha.make("a".repeat(40)),
     branch: TaskBranchRef.make("refs/heads/property"),
     executor: TaskExecutorLocator.make("executor:property"),
-    runId: "run:property",
+    runId: RunId.make("run:property"),
     taskId: TaskId.make("task:property"),
     taskRevision: TaskRevision.make("revision:property"),
     worktree: WorktreeLocator.make("/planned/property")
@@ -218,12 +223,20 @@ const authorityFixtureLayer = (
             }
             if (args[0] === "worktree" && args[1] === "add") {
               yield* Ref.set(registered, true)
-              yield* fileSystem.makeDirectory(options.candidatePath, { recursive: true })
+              yield* fileSystem
+                .makeDirectory(options.candidatePath, { recursive: true })
+                .pipe(Effect.mapError((error) => new GitCommandInvocationFailure({ detail: String(error) })))
             }
             if (args[0] === "worktree" && args[1] === "remove") {
               yield* Ref.set(registered, false)
-              if (yield* fileSystem.exists(options.candidatePath)) {
-                yield* fileSystem.remove(options.candidatePath, { recursive: true })
+              if (
+                yield* fileSystem
+                  .exists(options.candidatePath)
+                  .pipe(Effect.mapError((error) => new GitCommandInvocationFailure({ detail: String(error) })))
+              ) {
+                yield* fileSystem
+                  .remove(options.candidatePath, { recursive: true })
+                  .pipe(Effect.mapError((error) => new GitCommandInvocationFailure({ detail: String(error) })))
               }
             }
             return { exitCode: 0, stderr: "", stdout: "" }

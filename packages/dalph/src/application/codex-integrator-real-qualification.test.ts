@@ -14,12 +14,15 @@ import { Effect, Exit, Layer } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   AcceptedResult,
+  AttemptId,
   EvidenceReference,
+  EvidenceDigest,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedTaskAttempt,
+  RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
@@ -28,6 +31,7 @@ import {
 } from "@dalph/contracts"
 import {
   GitCommonDirectoryTarget,
+  GitCommonDirectoryLocator,
   Integrator,
   IntegratorRequest,
   IntegratorCandidateResourceLocator,
@@ -191,14 +195,14 @@ describe("#258 disposable real-process Codex Integrator qualification", () => {
         )
         const config = CodexIntegratorConfiguration.make({
           candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make(candidateRoot),
-          commonDirectory,
+          commonDirectory: GitCommonDirectoryLocator.make(commonDirectory),
           privateStoreLocator: IntegratorPrivateStoreLocator.make(privateStore),
           repository: GitRepositoryLocator.make(repository)
         })
         const session = IntegratorSessionCorrelation.make({
           acceptedResult: AcceptedResult.make({
             commit: head,
-            evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: "0".repeat(64) })
+            evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("0".repeat(64)) })
           }),
           candidateResource: IntegratorCandidateResourceLocator.make("qualification-candidate"),
           expectedTargetHead: head,
@@ -207,11 +211,11 @@ describe("#258 disposable real-process Codex Integrator qualification", () => {
             ref: IntegrationTargetRef.make("refs/heads/master")
           }),
           plannedAttempt: PlannedTaskAttempt.make({
-            attemptId: "qualification-attempt",
+            attemptId: AttemptId.make("qualification-attempt"),
             baseSha: head,
             branch: TaskBranchRef.make("refs/heads/qualification"),
             executor: TaskExecutorLocator.make("qualification-executor"),
-            runId: "qualification-run",
+            runId: RunId.make("qualification-run"),
             taskId: TaskId.make("qualification-task"),
             taskRevision: TaskRevision.make("qualification-revision"),
             worktree: WorktreeLocator.make(nodePath.join(root, "planned-worktree"))

@@ -468,7 +468,7 @@ const directionProjectionFixture = (direction: "Retry" | "FullRerun", graphAfter
     ...coverageRecord(
       16,
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation, detail: resultDetail }),
+        result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail: resultDetail }),
         run,
         version: workflowJournalEventVersion
       })

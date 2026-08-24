@@ -1,13 +1,16 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import {
   AcceptedResult,
+  AttemptId,
   EvidenceReference,
+  EvidenceDigest,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutorCorrelation,
   PlannedTaskAttempt,
+  RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
@@ -15,7 +18,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { Context, Effect, FileSystem, Layer, Option, Ref } from "effect"
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import {
   CodexIntegratorConfiguration,
   CodexIntegratorPrivateStore,
@@ -38,6 +41,8 @@ import {
   CleanupMutationOrdinal,
   CoordinatorOwnership,
   GitCommand,
+  GitCommandInvocationFailure,
+  GitCommonDirectoryLocator,
   Integrator,
   IntegratorCandidateCleanupAuthorization,
   IntegratorCandidateCleanupDisposition,
@@ -57,6 +62,7 @@ import {
 
 const sha = (letter: string): GitCommitSha => GitCommitSha.make(letter.repeat(40))
 const repository = GitRepositoryLocator.make("/repositories/integrator-test.git")
+const commonDirectory = GitCommonDirectoryLocator.make("/repositories/integrator-test.git")
 const targetHead = sha("a")
 const acceptedCommit = sha("b")
 const resource = IntegratorCandidateResourceLocator.make("candidate:test")
@@ -64,7 +70,7 @@ const target = IntegrationTarget.make({ repository, ref: IntegrationTargetRef.ma
 const candidatePath = candidateWorktreePathFor(
   CodexIntegratorConfiguration.make({
     candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-    commonDirectory: "/repositories/integrator-test.git",
+    commonDirectory,
     privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/store.json"),
     repository
   }),
@@ -73,23 +79,23 @@ const candidatePath = candidateWorktreePathFor(
 const session = IntegratorSessionCorrelation.make({
   acceptedResult: AcceptedResult.make({
     commit: acceptedCommit,
-    evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: "0".repeat(64) })
+    evidenceManifest: EvidenceReference.make({ byteLength: 0, digest: EvidenceDigest.make("0".repeat(64)) })
   }),
   candidateResource: resource,
   expectedTargetHead: targetHead,
   integrationTarget: target,
   plannedAttempt: PlannedTaskAttempt.make({
-    attemptId: "attempt",
+    attemptId: AttemptId.make("attempt"),
     baseSha: targetHead,
     branch: TaskBranchRef.make("refs/heads/task"),
     executor: TaskExecutorLocator.make("executor"),
-    runId: "run",
+    runId: RunId.make("run"),
     taskId: TaskId.make("task"),
     taskRevision: TaskRevision.make("revision"),
     worktree: WorktreeLocator.make("/planned/worktree")
   }),
   queuedAt: JournalPosition.make(1),
-  sessionId: "session",
+  sessionId: IntegratorSessionId.make("session"),
   startedAt: JournalPosition.make(2),
   targetLineageObservedAt: JournalPosition.make(3)
 })
@@ -160,17 +166,18 @@ type FixtureOptions = {
   readonly turnStarts?: { value: number }
   readonly worktreeAdds?: { value: number }
   readonly ownershipCalls?: Array<"enter" | "exit">
-  readonly includeOwnership?: boolean
 }
 
-const fixtureLayer = (options: FixtureOptions = {}) =>
+const fixtureLayer = (
+  options: FixtureOptions = {}
+): Layer.Layer<CodexAppServer | GitCommand | CoordinatorOwnership, never, FileSystem.FileSystem> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const registered = yield* Ref.make(options.foreignWorktree === true || options.preRegisteredWorktree === true)
       const fileSystem = yield* FileSystem.FileSystem
       const fixtureWorktreePath = options.worktreePath ?? candidatePath
       if (options.preRegisteredWorktreePathExists === true) {
-        yield* fileSystem.makeDirectory(fixtureWorktreePath, { recursive: true })
+        yield* fileSystem.makeDirectory(fixtureWorktreePath, { recursive: true }).pipe(Effect.orDie)
       }
       const persistentThreads = yield* Ref.make<ReadonlyArray<CodexThreadId>>(
         options.preexistingThread === true ? [CodexThreadId.make("fixture-thread")] : []
@@ -183,6 +190,17 @@ const fixtureLayer = (options: FixtureOptions = {}) =>
           readonly ownedTurnToken: CodexOwnedTurnToken
         }>
       >([])
+      const listThreads = () =>
+        Ref.get(persistentThreads).pipe(
+          Effect.map((threads) =>
+            (options.duplicateThreads === true ? [...threads, ...threads] : threads).map((id) => ({
+              id,
+              cwd: fixtureWorktreePath,
+              status: "idle" as const,
+              turns: []
+            }))
+          )
+        )
       const app: CodexAppServerService = {
         incarnation: CodexServerIncarnation.make("fixture-incarnation"),
         startThread: (cwd) =>
@@ -196,8 +214,8 @@ const fixtureLayer = (options: FixtureOptions = {}) =>
               ...(options.foreignThread === true
                 ? {
                     correlation: PlannedAttemptExecutorCorrelation.make({
-                      attemptId: "foreign-attempt",
-                      runId: "foreign-run"
+                      attemptId: AttemptId.make("foreign-attempt"),
+                      runId: RunId.make("foreign-run")
                     })
                   }
                 : {})
@@ -214,20 +232,7 @@ const fixtureLayer = (options: FixtureOptions = {}) =>
             }
             return thread
           }),
-        listThreads:
-          options.enableThreadListing === true
-            ? () =>
-                Ref.get(persistentThreads).pipe(
-                  Effect.map((threads) =>
-                    (options.duplicateThreads === true ? [...threads, ...threads] : threads).map((id) => ({
-                      id,
-                      cwd: fixtureWorktreePath,
-                      status: "idle" as const,
-                      turns: []
-                    }))
-                  )
-                )
-            : undefined,
+        ...(options.enableThreadListing === true ? { listThreads } : {}),
         readThread: () =>
           Effect.gen(function* () {
             const current = yield* Ref.get(turns)
@@ -243,7 +248,7 @@ const fixtureLayer = (options: FixtureOptions = {}) =>
             const current = yield* Ref.get(turns)
             return { id: CodexThreadId.make("fixture-thread"), cwd, status: "idle" as const, turns: current }
           }),
-        startTurn: (_threadId, cwd, _prompt, token) =>
+        startTurn: (_threadId, _cwd, _prompt, token) =>
           Effect.gen(function* () {
             if (token === undefined) return yield* Effect.die("missing provider token")
             if (options.turnStarts !== undefined) options.turnStarts.value += 1
@@ -334,7 +339,9 @@ const fixtureLayer = (options: FixtureOptions = {}) =>
             if (args[0] === "worktree" && args[1] === "add") {
               if (options.worktreeAdds !== undefined) options.worktreeAdds.value += 1
               yield* Ref.set(registered, true)
-              yield* fileSystem.makeDirectory(fixtureWorktreePath, { recursive: true })
+              yield* fileSystem
+                .makeDirectory(fixtureWorktreePath, { recursive: true })
+                .pipe(Effect.mapError((error) => new GitCommandInvocationFailure({ detail: String(error) })))
               if (options.loseFirstWorktreeAddResponse === true && options.worktreeAdds?.value === 1) {
                 return {
                   exitCode: 1,
@@ -345,7 +352,9 @@ const fixtureLayer = (options: FixtureOptions = {}) =>
             }
             if (args[0] === "worktree" && args[1] === "remove") {
               yield* Ref.set(registered, false)
-              yield* fileSystem.remove(fixtureWorktreePath, { recursive: true })
+              yield* fileSystem
+                .remove(fixtureWorktreePath, { recursive: true })
+                .pipe(Effect.mapError((error) => new GitCommandInvocationFailure({ detail: String(error) })))
               if (options.loseFirstWorktreeRemoveResponse === true) {
                 return {
                   exitCode: 1,
@@ -367,7 +376,15 @@ const fixtureLayer = (options: FixtureOptions = {}) =>
         }).pipe(Effect.orDie)
       )
       const context = Context.empty().pipe(Context.add(CodexAppServer, app), Context.add(GitCommand, git))
-      return options.includeOwnership === false ? context : Context.add(context, CoordinatorOwnership, ownership)
+      return Context.add(context, CoordinatorOwnership, ownership)
+    })
+  )
+
+const fixtureLayerWithoutOwnership = (): Layer.Layer<CodexAppServer | GitCommand, never, FileSystem.FileSystem> =>
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(fixtureLayer())
+      return Context.omit(CoordinatorOwnership)(context)
     })
   )
 
@@ -406,7 +423,7 @@ describe("Codex Integrator", () => {
   it("creates one candidate and returns the exact prepared envelope", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/store.json"),
       repository
     })
@@ -424,7 +441,7 @@ describe("Codex Integrator", () => {
   it("keeps thread, turn, prompt, and private phases out of the public result", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/public-result-store.json"),
       repository
     })
@@ -444,7 +461,7 @@ describe("Codex Integrator", () => {
   it("reads only the final agent message after commentary and tool output", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/final-envelope-store.json"),
       repository
     })
@@ -470,7 +487,7 @@ describe("Codex Integrator", () => {
   it("does not search an earlier agent message when the final envelope is malformed", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/earlier-envelope-store.json"),
       repository
     })
@@ -496,7 +513,7 @@ describe("Codex Integrator", () => {
   it("replays a sealed NotPrepared result without starting another turn", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make(
         "/tmp/dalph-integrator-test/sealed-not-prepared-store.json"
       ),
@@ -532,7 +549,7 @@ describe("Codex Integrator", () => {
     ] as const) {
       const config = CodexIntegratorConfiguration.make({
         candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-        commonDirectory: "/repositories/integrator-test.git",
+        commonDirectory,
         privateStoreLocator: IntegratorPrivateStoreLocator.make(
           `/tmp/dalph-integrator-test/${name}-worktree-store.json`
         ),
@@ -553,7 +570,7 @@ describe("Codex Integrator", () => {
   it("rereads an exact registration after a lost candidate-worktree response", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/lost-worktree-store.json"),
       repository
     })
@@ -571,7 +588,7 @@ describe("Codex Integrator", () => {
   it("crosses candidate Git mutations only inside coordinator ownership", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/ownership-store.json"),
       repository
     })
@@ -594,7 +611,7 @@ describe("Codex Integrator", () => {
   it("cannot construct the provider service when coordinator ownership is absent", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make(
         "/tmp/dalph-integrator-test/missing-ownership-store.json"
       ),
@@ -603,27 +620,22 @@ describe("Codex Integrator", () => {
     const dependencies = Layer.mergeAll(
       NodeFileSystem.layer,
       memoryCodexIntegratorPrivateStoreLayer(),
-      fixtureLayer({ includeOwnership: false }).pipe(Layer.provide(NodeFileSystem.layer)),
+      fixtureLayerWithoutOwnership().pipe(Layer.provide(NodeFileSystem.layer)),
       controlledCodexOwnedActivityCensusLayer({
         observe: () => Effect.succeed({ _tag: "Absent" as const }),
         terminateDescendants: () => Effect.void
       })
     )
     const missingOwnership = codexIntegratorLayer(config).pipe(Layer.provideMerge(dependencies))
-    const exit = await Effect.runPromise(
-      Effect.exit(
-        Effect.gen(function* () {
-          yield* Integrator
-        }).pipe(Effect.provide(missingOwnership as never))
-      )
-    )
-    expect(exit._tag).toBe("Failure")
+    expectTypeOf(missingOwnership).toMatchTypeOf<
+      Layer.Layer<Integrator | IntegratorCandidateProviderAuthority, never, CoordinatorOwnership>
+    >()
   })
 
   it("keeps run two distinct from the sealed run-one result", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/retry-store.json"),
       repository
     })
@@ -654,7 +666,7 @@ describe("Codex Integrator", () => {
   it("restarts an unfinished run two with its same durable token", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/retry-recovery-store.json"),
       repository
     })
@@ -686,7 +698,7 @@ describe("Codex Integrator", () => {
   it("materializes a FullRerun successor beneath a distinct candidate path", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/successor-store.json"),
       repository
     })
@@ -711,7 +723,7 @@ describe("Codex Integrator", () => {
   it("rejects a foreign Git registration before starting a provider turn", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/foreign-git-store.json"),
       repository
     })
@@ -730,7 +742,7 @@ describe("Codex Integrator", () => {
   it("rejects a second session that tries to adopt the predecessor candidate path", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/foreign-session-store.json"),
       repository
     })
@@ -750,7 +762,7 @@ describe("Codex Integrator", () => {
   it("rejects a foreign persistent thread before starting a provider turn", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/foreign-thread-store.json"),
       repository
     })
@@ -769,7 +781,7 @@ describe("Codex Integrator", () => {
   it("rejects a pre-existing sole candidate thread without a durable start intent", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make(
         "/tmp/dalph-integrator-test/preexisting-thread-store.json"
       ),
@@ -796,7 +808,7 @@ describe("Codex Integrator", () => {
   it("sanitizes malformed output only after the writer census is absent", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/malformed-store.json"),
       repository
     })
@@ -820,7 +832,7 @@ describe("Codex Integrator", () => {
   it("recovers a lost turn response without allocating a second token", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/lost-response-store.json"),
       repository
     })
@@ -842,7 +854,7 @@ describe("Codex Integrator", () => {
   it("reconciles a lost thread-start response through the complete thread list", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/lost-thread-store.json"),
       repository
     })
@@ -867,7 +879,7 @@ describe("Codex Integrator", () => {
   it("reissues the same turn token after a proved complete absence", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/lost-turn-store.json"),
       repository
     })
@@ -889,7 +901,7 @@ describe("Codex Integrator", () => {
   it("fails closed on duplicate persistent threads", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/duplicate-thread-store.json"),
       repository
     })
@@ -913,7 +925,7 @@ describe("Codex Integrator", () => {
   it("fails closed on duplicate exact turn tokens", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/duplicate-turn-store.json"),
       repository
     })
@@ -933,7 +945,7 @@ describe("Codex Integrator", () => {
   it("fails closed while an owned writer remains live", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/live-store.json"),
       repository
     })
@@ -957,7 +969,7 @@ describe("Codex Integrator", () => {
   it("observes and removes only the authorized predecessor resource", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/cleanup-store.json"),
       repository
     })
@@ -983,7 +995,7 @@ describe("Codex Integrator", () => {
   it("returns foreign live-writer evidence and performs zero removal requests", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/cleanup-live-store.json"),
       repository
     })
@@ -1017,7 +1029,7 @@ describe("Codex Integrator", () => {
   it("returns foreign other-session evidence and performs zero removal requests", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make(
         "/tmp/dalph-integrator-test/cleanup-other-session-store.json"
       ),
@@ -1043,7 +1055,7 @@ describe("Codex Integrator", () => {
   it("returns transferred-registration evidence and performs zero removal requests", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make(
         "/tmp/dalph-integrator-test/cleanup-transferred-store.json"
       ),
@@ -1071,7 +1083,7 @@ describe("Codex Integrator", () => {
   it("returns unreadable activity evidence and performs zero removal requests", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make(
         "/tmp/dalph-integrator-test/cleanup-unreadable-store.json"
       ),
@@ -1107,7 +1119,7 @@ describe("Codex Integrator", () => {
   it("rereads exact absence after a lost candidate-removal response", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
-      commonDirectory: "/repositories/integrator-test.git",
+      commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/lost-removal-store.json"),
       repository
     })

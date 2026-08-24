@@ -91,7 +91,6 @@ import {
   IntegratorRunOrdinal,
   integratorRunCorrelationsEqual
 } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
-import { integratorCorrelationsEqual } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
 
 type Constraint =
   | "NoGitConstraint"
@@ -480,7 +479,7 @@ const makeProductionReconciliationTrace = () => {
       resultRecord.event._tag !== "IntegratorRunResultRecorded" ||
       resultRecord.event.result._tag !== "PreparedCandidate" ||
       resultRecord.event.result.candidateText !== state.candidateText ||
-      !integratorCorrelationsEqual(resultRecord.event.result.correlation, state.run.session) ||
+      !integratorRunCorrelationsEqual(resultRecord.event.result.correlation, state.run) ||
       resultRecord.position >= state.qualifiedAt
     ) {
       return Effect.runSync(Effect.die("production MBT qualified candidate lacks its exact Integrator result"))
