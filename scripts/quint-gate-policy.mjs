@@ -1,11 +1,10 @@
 const second = 1000
 
-export const quintGateSafetyTimeoutMilliseconds = 480 * second
-// Eight canonical models plus the task-fact, executor, and application Exit
-// proof projections include Run activation, promotion, exact-choice,
-// command/reconciliation, cutoff, and lifecycle negative profiles. The prior
-// seven-model gate measured 281.63 seconds on 2026-08-09 (Quint 0.32.0,
-// linux-aarch64); the application Exit checks add about 30 seconds locally.
-// Keep the regression budget distinct from the safety timeout used to stop a
-// wedged process on supported ARM/x86 images.
-export const quintGateRegressionBudgetMilliseconds = 360 * second
+// The previous complete recovery profile measured about 340 seconds locally
+// on 2026-08-09 (Quint 0.32.0, linux-aarch64). A fresh 2026-08-24 run on the
+// shared ARM host reached integration finality after the 420-second deadline
+// while other repository lanes were active, so retain a measured larger bound
+// until a quiet hosted profile can replace it. Ten minutes leaves two minutes
+// inside the 12-minute hosted job timeout while the decreasing deadline still
+// prevents a wedged process from consuming time beyond the gate budget.
+export const quintGateRegressionBudgetMilliseconds = 600 * second

@@ -142,23 +142,32 @@ requires a setting that cannot correctly be shared.
   package step needs root or passwordless sudo, so provision it while building
   a container rather than during an unprivileged CI job.
 - `pnpm check:quint` runs deterministic, sampled, and exhaustive formal model
-  checks. Run it once after the final relevant changes and before integration;
-  during development, use it when changing a Quint model, its conformance
-  adapter, or behavior governed by that model.
+  checks and prints per-command plus typecheck/test/sampled-run/verify phase
+  timings. The gate has a provisional 600-second internal regression budget;
+  the larger bound leaves two minutes inside the 12-minute hosted job timeout
+  after a shared-host profile crossed the earlier 420-second bound.
+  Run it once after the final relevant changes and before integration; during
+  development, use it when changing a Quint model, its conformance adapter, or
+  behavior governed by that model.
 - `pnpm check:secrets` scans Git history with gitleaks.
-- `pnpm check:ci` runs the hosted CI gate. During the single-executor v1
-  proof-of-concept phase it excludes Quint-connected MBT.
+- `pnpm check:ci:quality` runs the hosted quality subgate without
+  Quint-connected MBT or exhaustive formal checking.
+- `pnpm check:ci:formal` runs the hosted formal subgate (`pnpm check:quint`).
+- `pnpm check:ci` runs both hosted subgates in order; CI runs those subgates as
+  separate jobs on every supported Node version, and the formal job has a
+  12-minute job timeout.
 - `pnpm check:all` runs the bounded local implementation gate, including
   Quint-connected MBT and the Reducer Lab maintained evaluation, but not
   exhaustive formal model checking.
 
 The quality gate runs the non-browser Reducer Lab check with a bounded timeout in both
-`check:all` and `check:ci`; `check:ci` still omits only the Quint-connected MBT
-stage. The Lab package's `check` script intentionally orders its existing
-typecheck, maintained-cassette smoke, and build. The browser smoke remains a
-separate explicit check because it requires Chromium system libraries and runs
-every maintained cassette in a real browser. Its runner owns the temporary HTTP
-host; callers do not need to start Vite or set `REDUCER_LAB_URL`.
+`check:all` and `check:ci:quality`; the complete `check:ci` contract adds the
+formal model subgate without duplicating it inside `check:all`. The Lab
+package's `check` script intentionally orders its existing typecheck,
+maintained-cassette smoke, and build. The browser smoke remains a separate
+explicit check because it requires Chromium system libraries and runs every
+maintained cassette in a real browser. Its runner owns the temporary HTTP host;
+callers do not need to start Vite or set `REDUCER_LAB_URL`.
 
 Maintained cassettes and the shared integration-finality fixture are evaluation
 evidence, not production implementation. Keep their maintained evaluation at

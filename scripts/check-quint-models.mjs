@@ -17,6 +17,7 @@ import {
   assertViolatedTemporalVerdict,
   runPreparedTemporalCheck
 } from "./quint-temporal-gate.mjs"
+import { createQuintGateTiming, quintCommandKindForArgs, quintCommandKinds } from "./quint-gate-timing.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const pnpmEntryPoint = process.env.npm_execpath
@@ -26,18 +27,24 @@ if (pnpmEntryPoint === undefined) {
 }
 
 const startedAt = performance.now()
+const timing = createQuintGateTiming()
 
 const remainingBudgetMilliseconds = () =>
   Math.max(1, quintGateRegressionBudgetMilliseconds - (performance.now() - startedAt))
 
 const run = async (name, args, options = {}) => {
   process.stdout.write(`\n== ${name} ==\n`)
-  return runBoundedCommand({
-    args: [pnpmEntryPoint, "quint", ...args],
-    executable: process.execPath,
+  return timing.measure({
+    kind: quintCommandKindForArgs(args),
     name,
-    timeoutMilliseconds: remainingBudgetMilliseconds(),
-    ...options
+    run: () =>
+      runBoundedCommand({
+        args: [pnpmEntryPoint, "quint", ...args],
+        executable: process.execPath,
+        name,
+        timeoutMilliseconds: remainingBudgetMilliseconds(),
+        ...options
+      })
   })
 }
 
@@ -958,6 +965,19 @@ await run("integration finality exhaustive model", [
 ])
 
 const elapsedMilliseconds = performance.now() - startedAt
+for (const record of timing.records()) {
+  process.stdout.write(
+    `Quint command timing: ${record.kind} ${record.name} ${(record.durationMilliseconds / 1000).toFixed(2)}s\n`
+  )
+}
+for (const kind of quintCommandKinds) {
+  const aggregate = timing.aggregates()[kind]
+  process.stdout.write(
+    `Quint phase timing: ${kind} ${aggregate.count} command(s), ${(aggregate.durationMilliseconds / 1000).toFixed(
+      2
+    )}s\n`
+  )
+}
 process.stdout.write(
   `\nComplete Quint model gate: ${(elapsedMilliseconds / 1000).toFixed(
     2

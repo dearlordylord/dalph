@@ -38,7 +38,9 @@
     "test:coverage": "vitest run --mode coverage --reporter=dot --coverage --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=json && node scripts/verify-coverage-summary.mjs && node scripts/verify-changed-coverage.mjs",
     "test:mbt": "vitest run --mode mbt",
     "test:watch": "vitest",
-    "check:ci": "node scripts/run-quality-gate.mjs --without-quint",
+    "check:ci:quality": "node scripts/run-quality-gate.mjs --without-quint",
+    "check:ci:formal": "pnpm check:quint",
+    "check:ci": "pnpm check:ci:quality && pnpm check:ci:formal",
     "check:all": "node scripts/run-quality-gate.mjs"
   },
   "lint-staged": {

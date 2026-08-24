@@ -17,6 +17,16 @@ governed subject:
 - `quint run` sampling, with invariants and witnesses named explicitly
 - `quint verify` exhaustively through Apalache or TLC
 
+The runner records each command's elapsed time and the aggregate duration of
+the four command families. Its provisional internal regression budget is 600
+seconds: a quiet earlier profile was roughly 340 seconds, while a fresh shared
+host profile crossed the earlier 420-second bound before finality completed.
+The ten-minute bound leaves two minutes inside the 12-minute hosted job
+timeout. Hosted CI runs the same `pnpm check:quint` command in a separate
+formal-model job for each supported Node version.
+`pnpm check:all` remains the bounded local implementation gate: it runs
+Quint-connected MBT but does not repeat this exhaustive gate.
+
 Usually all four commands run against the canonical model. ADR 0010 permits a
 smaller proof projection to own the exhaustive leg when the canonical subject
 state cannot finish inside the gate. The canonical model still owns its

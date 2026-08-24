@@ -88,9 +88,15 @@ adapter, and the invariants in `../DELIVERY-INVARIANTS.md` that the model
 projects, together. The adapter, projections, and controls remain test support;
 they are not production package APIs, workflow stages, or states.
 
-`pnpm check:quint` runs the exhaustive checks. It is not part of `pnpm check:ci`,
-so a change to a model or to behavior a model governs must run it before
-integration.
+`pnpm check:quint` runs the exhaustive checks and reports per-command and
+phase timing against its provisional 600-second internal regression budget.
+The complete hosted contract is `pnpm check:ci`, which composes the independent
+`check:ci:quality` and `check:ci:formal` subgates. The GitHub workflow runs the
+quality and formal subgates as separate jobs on every supported Node version;
+the formal job invokes `pnpm check:quint` with a 12-minute job timeout. The
+local `pnpm check:all` gate remains non-exhaustive and therefore does not
+duplicate formal model checking. A change to a model or to behavior a model
+governs must run `pnpm check:quint` before integration.
 
 `../DELIVERY-INVARIANTS.md` is the specification these models project from, and
 `research/verification-bakeoff/INVARIANTS.md` is a separate benchmark for
