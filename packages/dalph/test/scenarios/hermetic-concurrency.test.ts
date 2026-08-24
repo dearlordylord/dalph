@@ -796,6 +796,7 @@ it.effect(
         const completionRecords = recordsOfTag(records, "CompletionTaskAcknowledged")
         const graphRecords = recordsOfTag(records, "TaskTrackerFactsObserved")
         const lineageRecords = recordsOfTag(records, "TargetLineageObserved")
+        const executorReportRecords = recordsOfTag(records, "PlannedAttemptExecutorWorkReported")
         const terminationRecords = recordsOfTag(records, "WorkflowRunTerminated")
 
         for (const task of taskKeys) yield* Deferred.await(taskValue(childWorkFinished, task))
@@ -822,6 +823,42 @@ it.effect(
         expect(responsibilityRecords.map(({ event }) => event.plannedAttempt.taskId)).not.toEqual(
           [...taskKeys].map(taskIdOf).sort((left, right) => left.localeCompare(right))
         )
+        const acceptedExecutorReportFor = (task: TaskKey) =>
+          executorReportRecords.find(
+            ({ event }) =>
+              event.report._tag === "Terminal" &&
+              event.report.result._tag === "Accepted" &&
+              event.report.correlation.attemptId === taskValue(plannedAttempts, task).attemptId
+          )
+        const acceptedAReport = acceptedExecutorReportFor("A")
+        const acceptedBReport = acceptedExecutorReportFor("B")
+        expect(acceptedAReport).toBeDefined()
+        expect(acceptedBReport).toBeDefined()
+        if (acceptedAReport === undefined || acceptedBReport === undefined) {
+          return yield* Effect.die("integration started without both accepted executor reports")
+        }
+        const aIntegrationResponsibility = responsibilityRecords.find(
+          ({ event }) => event.plannedAttempt.taskId === taskIdOf("A")
+        )
+        const bIntegrationResponsibility = responsibilityRecords.find(
+          ({ event }) => event.plannedAttempt.taskId === taskIdOf("B")
+        )
+        const firstIntegratorRun = integratorRunRecords[0]
+        expect(aIntegrationResponsibility).toBeDefined()
+        expect(bIntegrationResponsibility).toBeDefined()
+        expect(firstIntegratorRun).toBeDefined()
+        if (
+          aIntegrationResponsibility === undefined ||
+          bIntegrationResponsibility === undefined ||
+          firstIntegratorRun === undefined
+        ) {
+          return yield* Effect.die("accepted executor reports had no following integration")
+        }
+        expect(acceptedAReport.position).toBeLessThan(aIntegrationResponsibility.position)
+        expect(acceptedBReport.position).toBeLessThan(bIntegrationResponsibility.position)
+        expect(aIntegrationResponsibility.position).toBeLessThan(bIntegrationResponsibility.position)
+        expect(acceptedAReport.position).toBeLessThan(firstIntegratorRun.position)
+        expect(acceptedBReport.position).toBeLessThan(firstIntegratorRun.position)
         expect(integratorRunRecords.map(({ event }) => event.run.session.plannedAttempt.taskId)).toEqual([
           taskIdOf("A"),
           taskIdOf("B"),
@@ -907,7 +944,8 @@ it.effect(
           expect(request.correlation.queuedAt).toBe(responsibility.position)
           expect(request.correlation.startedAt).toBe(integrationStarted.position)
           expect(integrationStarted.event.responsibilityBeganAt).toBe(responsibility.position)
-          expect(request.correlation.targetLineageObservedAt).toBeLessThan(integrationStarted.position)
+          expect(request.correlation.targetLineageObservedAt).toBeGreaterThan(integrationStarted.position)
+          expect(request.correlation.targetLineageObservedAt).toBeLessThan(started.position)
           expect(started.position).toBeGreaterThan(integrationStarted.position)
           expect(started.event.run.session).toEqual(request.correlation)
           expect(qualification.event.run).toEqual(started.event.run)

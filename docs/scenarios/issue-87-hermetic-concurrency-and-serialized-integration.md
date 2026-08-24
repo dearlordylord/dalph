@@ -41,12 +41,17 @@ because both prerequisites are unfinished.
    and remains held at a deterministic barrier until the other child has also
    reached the barrier. The test observes both children alive at the same time,
    then releases them. Each accepted terminal result stores immutable evidence
-   and is recorded in SQLite. The accepted-result responsibility for A is
-   recorded before B's, so the journal position—not task name, completion time,
-   or enumeration order—is the same-target integration order.
-3. Dalph reads current tracker facts after the accepted results and queues both
-   integration responsibilities without using another queue store. It admits
-   A first, acquires the one target resource, and invokes the opaque outer
+   and is recorded in SQLite before its exact accepted-result responsibility.
+   A's result and responsibility are recorded before B's result and
+   responsibility even though B's child finishes first and B's persisted task
+   identity sorts first. The responsibility journal position—not task name,
+   completion time, or enumeration order—is the same-target integration order.
+   This preserves issue #56's accepted per-result chronology; it does not invent
+   a batch-drain barrier across otherwise independent executor reports.
+3. After both accepted reports and responsibilities are durable, Dalph reads
+   current tracker facts. It uses the responsibilities themselves as the queue,
+   without another queue store. It admits A first, acquires the one target
+   resource, and invokes the opaque outer
    Integrator once for A. While A's Integrator call is held at a barrier, B
    remains queued and no second same-target Integrator call is active. After A
    returns its candidate, Dalph records the exact session and candidate facts,
