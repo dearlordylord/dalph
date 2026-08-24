@@ -913,14 +913,24 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
 
 const durableJournalStoreContract = (
   name: string,
-  makeLayer: () => Layer.Layer<JournalStore, unknown>,
+  _makeLayer: () => Layer.Layer<JournalStore, unknown>,
   registerLifecycleAndFailureCases: () => void
 ) => {
-  journalAppendContract(name, makeLayer)
   describe(`${name} durable JournalStore contract`, registerLifecycleAndFailureCases)
 }
 
 journalAppendContract("memory", () => memoryJournalTestLayer)
+journalAppendContract("sqlite", () =>
+  productionJournalStoreLayer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        CoordinatorOwnership,
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+      )
+    ),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: ":memory:" })))
+  )
+)
 durableJournalStoreContract(
   "sqlite",
   () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }),

@@ -44,6 +44,7 @@ import {
 } from "./disposition.js"
 import {
   runWorktreeCleanup,
+  WorktreeCleanupBoundary,
   TestWorktreeCleanupBoundary,
   worktreeCleanupTestLayer,
   WorktreeCleanupMutationResult,
@@ -65,6 +66,7 @@ import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal
 } from "../planned-attempt-executor-work/events.js"
+import { dispositionCleanupContract } from "../../../../test/contracts/disposition-cleanup-contract.js"
 
 const runId = RunId.make("issue-69-worktree-run")
 const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
@@ -130,6 +132,29 @@ const present = WorktreeCleanupObservation.cases.Present.make({
   revision: WorktreeCleanupEvidenceRevision.make(1),
   writerQuiescent: true
 })
+
+it.effect("controlled worktree cleanup satisfies the shared boundary contract", () =>
+  Effect.gen(function* () {
+    const implementationLayer = worktreeCleanupTestLayer({
+      observations: [
+        present,
+        WorktreeCleanupObservation.cases.Absent.make({
+          locator: authorization.locator,
+          revision: WorktreeCleanupEvidenceRevision.make(2)
+        })
+      ],
+      mutations: [
+        WorktreeCleanupMutationResult.cases.Removed.make({
+          branch: authorization.owner.branch,
+          locator: authorization.locator,
+          revision: WorktreeCleanupEvidenceRevision.make(2)
+        })
+      ]
+    })
+    const boundary = yield* WorktreeCleanupBoundary.pipe(Effect.provide(implementationLayer))
+    yield* dispositionCleanupContract({ authorization, boundary })
+  })
+)
 
 const secondAttempt = PlannedTaskAttempt.make({
   ...attempt,

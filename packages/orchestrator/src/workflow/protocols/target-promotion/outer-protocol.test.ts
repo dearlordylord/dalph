@@ -47,6 +47,7 @@ import {
   TargetPromotionCorrelationContradiction,
   TargetPromotionResultContradiction
 } from "./protocol.js"
+import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
 
 const runId = RunId.make("outer-promotion-test-run")
 const target = IntegrationTarget.make({
@@ -108,6 +109,19 @@ const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
 
 const gitLayer = (compareAndSet: TargetPromotionGitService["compareAndSet"], read: TargetPromotionGitService["read"]) =>
   Layer.succeed(TargetPromotionGit, TargetPromotionGit.of({ compareAndSet, read }))
+
+targetPromotionContract({
+  expected: TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead }),
+  layer: gitLayer(
+    () => Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })),
+    () =>
+      Effect.succeed(
+        TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+      )
+  ),
+  name: "controlled",
+  request: targetPromotionGitRequestFor(request)
+})
 
 const run = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
   runFor(qualifiedCandidate, service, records)

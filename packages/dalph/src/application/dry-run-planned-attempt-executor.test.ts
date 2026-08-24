@@ -18,6 +18,9 @@ import {
 import { Effect } from "effect"
 import { expect } from "vitest"
 import { dryRunPlannedAttemptExecutorLayer } from "./dry-run-planned-attempt-executor.js"
+import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
+
+plannedAttemptExecutorContract({ layer: dryRunPlannedAttemptExecutorLayer, name: "controlled" })
 
 const specification = makeTaskWorkSpecification({
   body: "Dry-run body",

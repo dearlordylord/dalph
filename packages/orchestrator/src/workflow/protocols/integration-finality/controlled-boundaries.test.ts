@@ -6,6 +6,7 @@ import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.
 import { ActiveTaskClaim, UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../identity.js"
+import { completionBoundaryContract } from "../../../../test/contracts/completion-boundary-contract.js"
 import {
   controlledCompletionClaimBoundaryLayerFrom,
   controlledCompletionTaskBoundaryLayerFrom
@@ -30,6 +31,14 @@ const openFacts = FocusedTaskCompletionFacts.make({
   ...fixture.focusedSuccessFactsEvent.observation.facts,
   lifecycle: "Open",
   operationId: OperationId.make("controlled-completion-initial-facts")
+})
+
+completionBoundaryContract({
+  expectedOpenFacts: openFacts,
+  layer: controlledCompletionTaskBoundaryLayerFrom([openFacts]),
+  name: "controlled",
+  request: fixture.completionRequest,
+  target: fixture.target
 })
 
 const rejectAndReadCurrentFacts = (currentFacts: FocusedTaskCompletionFacts) =>

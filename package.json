@@ -26,6 +26,7 @@
     "check:complexity": "node scripts/check-oxlint-complexity.mjs",
     "check:complexity:prune": "node scripts/check-oxlint-complexity.mjs --prune",
     "check:duplicates": "jscpd .",
+    "test:capability-registration": "vitest run scripts/capability-registration.test.ts",
     "check:lab": "pnpm --filter @dalph/reducer-lab-prototype check",
     "check:lab:browser": "pnpm --filter @dalph/reducer-lab-prototype check:browser",
     "check:package-boundary": "node scripts/check-package-boundaries.mjs",

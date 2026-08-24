@@ -11,8 +11,15 @@ import {
   memoryEvidenceStoreLayer,
   nodeEvidenceStoreLayer
 } from "./evidence-store.js"
+import { evidenceStoreContract } from "../../../test/contracts/evidence-store-contract.js"
 
 const bytes = (value: string): Uint8Array => new TextEncoder().encode(value)
+
+evidenceStoreContract(() => memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)), "controlled")
+evidenceStoreContract(
+  (root) => nodeEvidenceStoreLayer(EvidenceStoreLocator.make(root)).pipe(Layer.provide(NodeServices.layer)),
+  "filesystem"
+)
 
 it.effect("stores immutable bytes idempotently and publishes concurrent same-content writes once", () =>
   Effect.gen(function* () {
