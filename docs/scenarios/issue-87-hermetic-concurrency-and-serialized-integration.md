@@ -112,4 +112,3 @@ lock, or delete a resource outside the owned temporary root.
   suites remain the protocol-level evidence for the exact candidate and
   completion boundaries; this scenario adds their real production-shaped
   composition rather than changing their Quint model.
-

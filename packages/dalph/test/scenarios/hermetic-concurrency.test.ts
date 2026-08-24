@@ -2,12 +2,14 @@
 import {
   AcceptedResultEvidenceManifest,
   AttemptId,
+  evidenceReferenceEquals,
   type EvidenceReference,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
   makeTaskWorkSpecification,
+  plannedTaskAttemptEquivalence,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
@@ -53,6 +55,7 @@ import {
   runWorkflow,
   sqliteJournalTestLayer,
   TargetPromotionGit,
+  type TargetPromotionGitRequest,
   TaskClaimAcquisitionPlanner,
   TaskWorkCapacity,
   TrackerGraphReader,
@@ -65,6 +68,7 @@ import {
   type completionTaskRequestFor,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService,
+  type IntegratorRequestType,
   type IntegratorService
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -84,7 +88,15 @@ const taskValue = <A>(values: ReadonlyMap<TaskKey, A>, task: TaskKey): A => {
   return Option.getOrThrow(Option.fromUndefinedOr(values.get(task)))
 }
 
-const taskIdOf = (key: TaskKey): TaskId => TaskId.make(key)
+// Keep semantic fixture labels A/B/D while making their persisted identities
+// deliberately non-lexical. Responsibility order must be supplied by the
+// accepted-result barrier, never inferred by sorting task IDs.
+const taskIdentityByKey: Readonly<Record<TaskKey, string>> = { A: "task-zeta", B: "task-alpha", D: "task-delta" }
+
+const taskIdOf = (key: TaskKey): TaskId => TaskId.make(taskIdentityByKey[key])
+
+const integrationTargetEquals = (left: IntegrationTarget, right: IntegrationTarget): boolean =>
+  left.repository === right.repository && left.ref === right.ref
 
 type JournalEvent = JournalRecord["event"]
 type JournalEventTag = JournalEvent["_tag"]
@@ -103,13 +115,14 @@ const barrierChildScript = [
   "const task=process.argv[1];",
   "process.stdout.write('READY:'+task+'\\n');",
   "process.stdin.resume();",
-  "process.stdin.once('data',()=>{fs.writeFileSync('RESULT-'+task+'.md','implemented '+task+'\\n');process.exit(0);});"
+  "process.stdin.once('data',()=>{fs.writeFileSync('RESULT-'+task+'.md','implemented '+task+'\\n');process.stdout.write('WORK_FINISHED:'+task+'\\n');process.exit(0);});"
 ].join("")
 
 const immediateChildScript = [
   "const fs=require('node:fs');",
   "const task=process.argv[1];",
-  "fs.writeFileSync('RESULT-'+task+'.md','implemented '+task+'\\n');"
+  "fs.writeFileSync('RESULT-'+task+'.md','implemented '+task+'\\n');",
+  "process.stdout.write('WORK_FINISHED:'+task+'\\n');"
 ].join("")
 
 const sendChildRelease = (handle: ChildProcessSpawner.ChildProcessHandle) =>
@@ -199,24 +212,27 @@ it.effect(
         const executorReports = yield* Ref.make(new Map<TaskKey, PlannedAttemptExecutorReport>())
         const childHandles = yield* Ref.make(new Map<TaskKey, ChildProcessSpawner.ChildProcessHandle>())
         const operationCounter = yield* Ref.make(0)
-        const targetPromotionCompareAndSetRequests = yield* Ref.make<
-          ReadonlyArray<{
-            readonly candidateCommit: GitCommitSha
-            readonly expectedTargetHead: GitCommitSha
-            readonly integrationTarget: IntegrationTarget
-          }>
-        >([])
+        const targetPromotionCompareAndSetRequests = yield* Ref.make<ReadonlyArray<TargetPromotionGitRequest>>([])
+        const integratorRequests = yield* Ref.make<ReadonlyArray<IntegratorRequestType>>([])
         const promotionCandidates = yield* Ref.make(new Map<TaskKey, GitCommitSha>())
         const integratorCalls = yield* Ref.make<ReadonlyArray<TaskKey>>([])
         const integratorActive = yield* Ref.make(0)
         const integratorMaximumActive = yield* Ref.make(0)
         const graphSnapshots = yield* Ref.make<ReadonlyArray<ReadonlyMap<TaskKey, Lifecycle>>>([])
+        const childReleaseOrder = yield* Ref.make<ReadonlyArray<TaskKey>>([])
+        const childWorkFinishedOrder = yield* Ref.make<ReadonlyArray<TaskKey>>([])
+        const childTerminalOrder = yield* Ref.make<ReadonlyArray<TaskKey>>([])
         const childReady = new Map<TaskKey, Deferred.Deferred<void>>()
         for (const task of taskKeys) childReady.set(task, yield* Deferred.make<void>())
+        const childWorkFinished = new Map<TaskKey, Deferred.Deferred<void>>()
+        for (const task of taskKeys) childWorkFinished.set(task, yield* Deferred.make<void>())
+        const childTerminal = new Map<TaskKey, Deferred.Deferred<void>>()
+        for (const task of taskKeys) childTerminal.set(task, yield* Deferred.make<void>())
         const accepted = new Map<TaskKey, Deferred.Deferred<void>>()
         for (const task of taskKeys) accepted.set(task, yield* Deferred.make<void>())
         const integratorStarted = new Map<TaskKey, Deferred.Deferred<void>>()
         for (const task of taskKeys) integratorStarted.set(task, yield* Deferred.make<void>())
+        const allowBReport = yield* Deferred.make<void>()
         const releaseIntegratorA = yield* Deferred.make<void>()
         const releaseIntegratorB = yield* Deferred.make<void>()
         const graphACompletedWhileBOpen = yield* Deferred.make<void>()
@@ -235,7 +251,7 @@ it.effect(
         const trackerMutation = TrackerMutation.of({
           acquireTaskClaim: (acquisition) =>
             Ref.modify(claims, (current) => {
-              const task = taskKeys.find((candidate) => candidate === acquisition.taskId)
+              const task = taskKeys.find((candidate) => taskIdOf(candidate) === acquisition.taskId)
               if (task === undefined)
                 return [Effect.die("hermetic tracker received an unknown task claim"), current] as const
               const existing = current.get(task)
@@ -261,7 +277,7 @@ it.effect(
             ),
           releaseTaskClaim: (release) =>
             Ref.modify(claims, (current) => {
-              const task = taskKeys.find((candidate) => candidate === release.claim.taskId)
+              const task = taskKeys.find((candidate) => taskIdOf(candidate) === release.claim.taskId)
               const existing = task === undefined ? undefined : current.get(task)
               return task !== undefined &&
                 existing?._tag === "ActiveTaskClaim" &&
@@ -284,7 +300,7 @@ it.effect(
             ),
           replaceTaskClaim: (request) =>
             Ref.modify(claims, (current) => {
-              const task = taskKeys.find((candidate) => candidate === request.claim.plannedAttempt.taskId)
+              const task = taskKeys.find((candidate) => taskIdOf(candidate) === request.claim.plannedAttempt.taskId)
               const existing = task === undefined ? undefined : current.get(task)
               return task !== undefined &&
                 existing?._tag === "ActiveTaskClaim" &&
@@ -294,7 +310,7 @@ it.effect(
             }).pipe(Effect.flatten),
           deleteTaskClaim: (request) =>
             Ref.modify(claims, (current) => {
-              const task = taskKeys.find((candidate) => candidate === request.claim.plannedAttempt.taskId)
+              const task = taskKeys.find((candidate) => taskIdOf(candidate) === request.claim.plannedAttempt.taskId)
               const existing = task === undefined ? undefined : current.get(task)
               return task !== undefined &&
                 existing?._tag === "CompletionTaskClaim" &&
@@ -339,7 +355,7 @@ it.effect(
             }),
           completeTask: (request) =>
             Effect.gen(function* () {
-              const task = taskKeys.find((candidate) => candidate === request.taskId)
+              const task = taskKeys.find((candidate) => taskIdOf(candidate) === request.taskId)
               if (task === undefined) return yield* Effect.die(`unknown completion task ${request.taskId}`)
               const candidate = yield* Ref.get(promotionCandidates).pipe(Effect.map((current) => current.get(task)))
               if (candidate === undefined)
@@ -361,7 +377,7 @@ it.effect(
           readCompletionRequest: (request) =>
             Ref.get(completedRequests).pipe(
               Effect.map((current) => {
-                const task = taskKeys.find((candidate) => candidate === request.taskId)
+                const task = taskKeys.find((candidate) => taskIdOf(candidate) === request.taskId)
                 const stored = task === undefined ? undefined : current.get(task)
                 return stored !== undefined && stored.operationId === request.operationId
                   ? CompletionTaskRequestLookup.cases.Applied.make({ request })
@@ -461,14 +477,23 @@ it.effect(
                 const collector = yield* handle.stdout.pipe(
                   Stream.decodeText(),
                   Stream.splitLines,
-                  Stream.runForEach((line) =>
-                    line === `READY:${task}` ? Deferred.succeed(ready, undefined) : Effect.void
-                  ),
+                  Stream.runForEach((line) => {
+                    if (line === `READY:${task}`) return Deferred.succeed(ready, undefined)
+                    if (line === `WORK_FINISHED:${task}`) {
+                      return Ref.update(childWorkFinishedOrder, (current) => [...current, task]).pipe(
+                        Effect.andThen(Deferred.succeed(taskValue(childWorkFinished, task), undefined))
+                      )
+                    }
+                    return Effect.void
+                  }),
                   Effect.forkScoped
                 )
                 void collector
                 const exitCode = yield* handle.exitCode
                 if (exitCode !== 0) return yield* Effect.die(`hermetic child ${task} exited ${exitCode}`)
+                yield* Ref.update(childTerminalOrder, (current) => [...current, task])
+                yield* Deferred.succeed(taskValue(childTerminal, task), undefined)
+                if (task === "B") yield* Deferred.await(allowBReport)
                 yield* runInWorktree(
                   git,
                   request.plannedAttempt.worktree,
@@ -517,6 +542,38 @@ it.effect(
                 (candidate) => plannedAttempts.get(candidate)?.attemptId === correlation.plannedAttempt.attemptId
               )
               if (plannedTask === undefined) return yield* Effect.die("Integrator received unknown accepted result")
+              const expectedAttempt = taskValue(plannedAttempts, plannedTask)
+              const expectedReport = (yield* Ref.get(executorReports)).get(plannedTask)
+              if (expectedReport?._tag !== "Terminal" || expectedReport.result._tag !== "Accepted") {
+                return yield* Effect.die(`Integrator received a non-accepted report for ${plannedTask}`)
+              }
+              const expectedTargetHead =
+                plannedTask === "A"
+                  ? baseSha
+                  : taskValue(yield* Ref.get(promotionCandidates), plannedTask === "B" ? "A" : "B")
+              if (
+                !plannedTaskAttemptEquivalence(correlation.plannedAttempt, expectedAttempt) ||
+                correlation.acceptedResult.commit !== expectedReport.result.acceptedResult.commit ||
+                !evidenceReferenceEquals(
+                  correlation.acceptedResult.evidenceManifest,
+                  expectedReport.result.acceptedResult.evidenceManifest
+                ) ||
+                correlation.expectedTargetHead !== expectedTargetHead ||
+                !integrationTargetEquals(correlation.integrationTarget, integrationTarget)
+              ) {
+                return yield* Effect.die(`Integrator received a swapped correlation for ${plannedTask}`)
+              }
+              const previousRequests = yield* Ref.get(integratorRequests)
+              if (
+                previousRequests.some(
+                  ({ correlation: previous }) =>
+                    previous.sessionId === correlation.sessionId ||
+                    previous.candidateResource === correlation.candidateResource
+                )
+              ) {
+                return yield* Effect.die(`Integrator reused a session or candidate resource for ${plannedTask}`)
+              }
+              yield* Ref.update(integratorRequests, (current) => [...current, request])
               yield* Ref.update(integratorActive, (current) => current + 1)
               const active = yield* Ref.get(integratorActive)
               yield* Ref.update(integratorMaximumActive, (current) => Math.max(current, active))
@@ -661,15 +718,36 @@ it.effect(
         expect(yield* handleA.isRunning).toBe(true)
         expect(yield* handleB.isRunning).toBe(true)
 
-        yield* sendChildRelease(handleA)
+        const releaseChild = (task: TaskKey, handle: ChildProcessSpawner.ChildProcessHandle) =>
+          Ref.update(childReleaseOrder, (current) => [...current, task]).pipe(Effect.andThen(sendChildRelease(handle)))
+
+        // B writes and terminates first, but its accepted report is held at a
+        // test-only barrier. A's report can therefore become the first queue
+        // responsibility without changing the production executor boundary.
+        yield* releaseChild("B", handleB)
+        yield* Deferred.await(taskValue(childWorkFinished, "B"))
+        yield* Deferred.await(taskValue(childTerminal, "B"))
+        expect(yield* handleB.isRunning).toBe(false)
+        expect(yield* Ref.get(childWorkFinishedOrder)).toEqual(["B"])
+        expect(yield* Ref.get(childTerminalOrder)).toEqual(["B"])
+
+        yield* releaseChild("A", handleA)
+        yield* Deferred.await(taskValue(childWorkFinished, "A"))
+        yield* Deferred.await(taskValue(childTerminal, "A"))
         yield* Deferred.await(taskValue(accepted, "A"))
-        yield* sendChildRelease(handleB)
+        expect(yield* Ref.get(childWorkFinishedOrder)).toEqual(["B", "A"])
+        expect(yield* Ref.get(childTerminalOrder)).toEqual(["B", "A"])
+        expect((yield* Ref.get(executorReports)).has("B")).toBe(false)
+
+        // This is the explicit A report barrier: only now may B return its
+        // terminal executor report. Both accepted reports are therefore
+        // durable in A-before-B order before integration begins.
+        yield* Deferred.succeed(allowBReport, undefined)
         yield* Deferred.await(taskValue(accepted, "B"))
         yield* Deferred.await(taskValue(integratorStarted, "A"))
         const callsWhileAIntegratorHeld = yield* Ref.get(integratorCalls)
         expect(callsWhileAIntegratorHeld).toEqual(["A"])
         expect(yield* Ref.get(integratorMaximumActive)).toBe(1)
-
         expect(yield* Ref.get(integratorCalls)).toEqual(["A"])
         yield* Deferred.succeed(releaseIntegratorA, undefined)
         yield* Deferred.await(taskValue(integratorStarted, "B"))
@@ -710,13 +788,21 @@ it.effect(
         )
         const eventTags = records.map(({ event }) => event._tag)
         const responsibilityRecords = recordsOfTag(records, "IntegrationResponsibilityBegan")
+        const integrationStartedRecords = recordsOfTag(records, "IntegrationStarted")
         const integratorRunRecords = recordsOfTag(records, "IntegratorRunStarted")
         const qualificationRecords = recordsOfTag(records, "IntegratorRunCandidateGitObserved")
         const promotionRecords = recordsOfTag(records, "TargetPromotionObservedSuccess")
         const promotionAttemptRecords = recordsOfTag(records, "TargetPromotionAttemptIntended")
         const completionRecords = recordsOfTag(records, "CompletionTaskAcknowledged")
         const graphRecords = recordsOfTag(records, "TaskTrackerFactsObserved")
+        const lineageRecords = recordsOfTag(records, "TargetLineageObserved")
         const terminationRecords = recordsOfTag(records, "WorkflowRunTerminated")
+
+        for (const task of taskKeys) yield* Deferred.await(taskValue(childWorkFinished, task))
+        for (const task of taskKeys) yield* Deferred.await(taskValue(childTerminal, task))
+        expect(yield* Ref.get(childReleaseOrder)).toEqual(["B", "A"])
+        expect(yield* Ref.get(childWorkFinishedOrder)).toEqual(["B", "A", "D"])
+        expect(yield* Ref.get(childTerminalOrder)).toEqual(["B", "A", "D"])
 
         expect(promotedResults).toEqual(
           taskKeys.map((task) => [task, expect.objectContaining({ exitCode: 0, stdout: `implemented ${task}\n` })])
@@ -730,13 +816,20 @@ it.effect(
         expect(responsibilityRecords.map(({ position }) => position)).toEqual(
           [...responsibilityRecords].map(({ position }) => position).sort((left, right) => left - right)
         )
+        expect(responsibilityRecords.map(({ event }) => event.plannedAttempt.taskId)).not.toEqual(
+          (yield* Ref.get(childWorkFinishedOrder)).map(taskIdOf)
+        )
+        expect(responsibilityRecords.map(({ event }) => event.plannedAttempt.taskId)).not.toEqual(
+          [...taskKeys].map(taskIdOf).sort((left, right) => left.localeCompare(right))
+        )
         expect(integratorRunRecords.map(({ event }) => event.run.session.plannedAttempt.taskId)).toEqual([
           taskIdOf("A"),
           taskIdOf("B"),
           taskIdOf("D")
         ])
-        const qualificationFor = (task: TaskKey) =>
-          qualificationRecords.find(({ event }) => event.run.session.plannedAttempt.taskId === task)?.event
+        const qualificationRecordFor = (task: TaskKey) =>
+          qualificationRecords.find(({ event }) => event.run.session.plannedAttempt.taskId === taskIdOf(task))
+        const qualificationFor = (task: TaskKey) => qualificationRecordFor(task)?.event
         const aQualification = qualificationFor("A")
         const bQualification = qualificationFor("B")
         const dQualification = qualificationFor("D")
@@ -755,14 +848,72 @@ it.effect(
         expect((yield* Ref.get(promotionCandidates)).get("A")).toBe(aQualification.observation.commit)
         expect((yield* Ref.get(promotionCandidates)).get("B")).toBe(bQualification.observation.commit)
         expect((yield* Ref.get(promotionCandidates)).get("D")).toBe(dQualification.observation.commit)
+        const recordedIntegratorRequests = yield* Ref.get(integratorRequests)
+        const integratorRequestFor = (task: TaskKey) =>
+          recordedIntegratorRequests.find(({ correlation }) => correlation.plannedAttempt.taskId === taskIdOf(task))
+        const lineageRecordFor = (task: TaskKey) => {
+          const request = integratorRequestFor(task)
+          return request === undefined
+            ? undefined
+            : lineageRecords.find(({ position }) => position === request.correlation.targetLineageObservedAt)
+        }
+        const sessionIds = recordedIntegratorRequests.map(({ correlation }) => correlation.sessionId)
+        const candidateResources = recordedIntegratorRequests.map(({ correlation }) => correlation.candidateResource)
+        expect(recordedIntegratorRequests).toHaveLength(3)
+        expect(recordedIntegratorRequests.map(({ correlation }) => correlation.plannedAttempt.taskId)).toEqual([
+          taskIdOf("A"),
+          taskIdOf("B"),
+          taskIdOf("D")
+        ])
+        expect(new Set(sessionIds).size).toBe(3)
+        expect(new Set(candidateResources).size).toBe(3)
         for (const task of taskKeys) {
-          const responsibility = responsibilityRecords.find(({ event }) => event.plannedAttempt.taskId === task)
-          const started = integratorRunRecords.find(({ event }) => event.run.session.plannedAttempt.taskId === task)
-          expect(responsibility?.event.plannedAttempt).toEqual(plannedAttempts.get(task))
-          expect(responsibility?.event.acceptedResult.commit).toBe(acceptedCommitFor(task))
-          expect(started?.event.run.ordinal).toBe(1)
-          expect(started?.event.run.session.plannedAttempt).toEqual(plannedAttempts.get(task))
-          expect(started?.event.run.session.acceptedResult.commit).toBe(acceptedCommitFor(task))
+          const responsibility = responsibilityRecords.find(
+            ({ event }) => event.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const started = integratorRunRecords.find(
+            ({ event }) => event.run.session.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const integrationStarted = integrationStartedRecords.find(
+            ({ event }) => event.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const qualification = qualificationRecordFor(task)
+          const request = integratorRequestFor(task)
+          const lineage = lineageRecordFor(task)
+          expect(request).toBeDefined()
+          expect(responsibility).toBeDefined()
+          expect(integrationStarted).toBeDefined()
+          expect(started).toBeDefined()
+          expect(qualification).toBeDefined()
+          expect(lineage).toBeDefined()
+          if (
+            request === undefined ||
+            responsibility === undefined ||
+            integrationStarted === undefined ||
+            started === undefined ||
+            qualification === undefined ||
+            lineage === undefined
+          ) {
+            return yield* Effect.die(`missing full Integrator correlation for ${task}`)
+          }
+          expect(responsibility.event.plannedAttempt).toEqual(plannedAttempts.get(task))
+          expect(responsibility.event.acceptedResult.commit).toBe(acceptedCommitFor(task))
+          expect(started.event.run.ordinal).toBe(1)
+          expect(started.event.run.session.plannedAttempt).toEqual(plannedAttempts.get(task))
+          expect(started.event.run.session.acceptedResult.commit).toBe(acceptedCommitFor(task))
+          expect(request.correlation.plannedAttempt).toEqual(responsibility.event.plannedAttempt)
+          expect(request.correlation.acceptedResult).toEqual(responsibility.event.acceptedResult)
+          expect(request.correlation.integrationTarget).toEqual(responsibility.event.integrationTarget)
+          expect(request.correlation.queuedAt).toBe(responsibility.position)
+          expect(request.correlation.startedAt).toBe(integrationStarted.position)
+          expect(integrationStarted.event.responsibilityBeganAt).toBe(responsibility.position)
+          expect(request.correlation.targetLineageObservedAt).toBeLessThan(integrationStarted.position)
+          expect(started.position).toBeGreaterThan(integrationStarted.position)
+          expect(started.event.run.session).toEqual(request.correlation)
+          expect(qualification.event.run).toEqual(started.event.run)
+          expect(qualification.position).toBeGreaterThan(started.position)
+          expect(lineage.event.plannedAttempt).toEqual(request.correlation.plannedAttempt)
+          expect(lineage.event.observation.targetHeadSha).toBe(request.correlation.expectedTargetHead)
         }
         expect(qualificationRecords).toHaveLength(3)
         expect(promotionRecords).toHaveLength(3)
@@ -821,20 +972,46 @@ it.effect(
             lifecycles.some(({ lifecycle, taskId }) => taskId === taskIdOf("D") && lifecycle._tag === "Open")
           )
         })
+        const focusedCompletionRecordFor = (task: TaskKey) =>
+          graphRecords
+            .filter(
+              ({ event }) =>
+                event.observation._tag === "FocusedTaskCompletionFacts" &&
+                event.observation.facts.taskId === taskIdOf(task)
+            )
+            .at(-1)
+        const focusedACompletion = focusedCompletionRecordFor("A")
+        const focusedBCompletion = focusedCompletionRecordFor("B")
         const dResponsibility = responsibilityRecords.find(({ event }) => event.plannedAttempt.taskId === taskIdOf("D"))
         const dIntegratorStart = integratorRunRecords.find(
           ({ event }) => event.run.session.plannedAttempt.taskId === taskIdOf("D")
         )
         expect(completePrerequisitesGraph).toBeDefined()
+        expect(focusedACompletion).toBeDefined()
+        expect(focusedBCompletion).toBeDefined()
         expect(dResponsibility).toBeDefined()
         expect(dIntegratorStart).toBeDefined()
         if (
           completePrerequisitesGraph === undefined ||
+          focusedACompletion === undefined ||
+          focusedBCompletion === undefined ||
           dResponsibility === undefined ||
           dIntegratorStart === undefined
         ) {
           return yield* Effect.die("D started without the durable completed prerequisite graph")
         }
+        expect(focusedACompletion.event.observation._tag).toBe("FocusedTaskCompletionFacts")
+        expect(focusedBCompletion.event.observation._tag).toBe("FocusedTaskCompletionFacts")
+        if (
+          focusedACompletion.event.observation._tag !== "FocusedTaskCompletionFacts" ||
+          focusedBCompletion.event.observation._tag !== "FocusedTaskCompletionFacts"
+        ) {
+          return yield* Effect.die("focused completion observation was not task-local")
+        }
+        expect(focusedACompletion.event.observation.facts.taskId).toBe(taskIdOf("A"))
+        expect(focusedBCompletion.event.observation.facts.taskId).toBe(taskIdOf("B"))
+        expect(completePrerequisitesGraph.position).toBeGreaterThan(focusedACompletion.position)
+        expect(completePrerequisitesGraph.position).toBeGreaterThan(focusedBCompletion.position)
         expect(completePrerequisitesGraph.position).toBeLessThan(dResponsibility.position)
         expect(completePrerequisitesGraph.position).toBeLessThan(dIntegratorStart.position)
         for (const task of taskKeys) {
