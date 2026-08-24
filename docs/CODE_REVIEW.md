@@ -19,6 +19,10 @@ review failure for behavior-changing work. Read
   retry, recovery rule, concurrency rule, cleanup action, and visible outcome
   appears in at least one scenario;
 - each scenario maps to a named acceptance test or model check;
+- when a scenario refines or composes existing accepted behavior, its
+  `Governing behavior` pointer names the concrete decision, links the direct
+  owners, states whether it preserves, refines, or supersedes the linked
+  behavior, and bounds what the new scenario adds;
 - the code does not add behavior absent from the scenarios;
 - the handoff reports the result scenario by scenario rather than substituting
   aggregate gate totals; and

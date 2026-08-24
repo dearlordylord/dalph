@@ -11,6 +11,32 @@ result or recorded `TargetPromotionObservedSuccess`. It qualifies the existing
 promotion-reconciliation behavior without adding another retry policy or
 changing a Quint model.
 
+## Governing behavior
+
+Before changing what Dalph may do after a target-promotion response is lost,
+read these existing owners:
+
+- [issue #223's ambiguous-promotion chronology](issue-223-migrate-promotion-and-finality.md#an-ambiguous-or-stale-promotion-preserves-the-exact-work)
+  owns the fresh Git reread, bounded numbered attempts, exact-candidate
+  preservation, and prohibition on rerunning the Integrator;
+- [issue #225's process-loss chronology](issue-225-remove-legacy-split-integration.md#process-loss-resumes-the-same-outer-integrator-and-promotion-boundaries)
+  preserves the same outer Integrator session and promotion identities without
+  restoring a removed legacy stage;
+- [promotion invariants D27–D28](../DELIVERY-INVARIANTS.md#integration-and-promotion)
+  and [recovery invariants D30–D31](../DELIVERY-INVARIANTS.md#process-and-durability)
+  require a fresh Git observation and continuation of the same work; and
+- [`acceptedResultIntegration`](../../specs/acceptedResultIntegration.qnt) and
+  `exactCandidatePromotesWithDirectCompareAndSetTest` plus
+  `ambiguousPromotionRequiresFreshGitBeforeRetryTest` in its
+  [executable scenarios](../../specs/acceptedResultIntegration_test.qnt) own
+  the candidate-current success and fresh-read-before-retry branches that this
+  lost-response cut composes.
+
+This scenario preserves those laws and selects the concrete cut where the
+first compare-and-set applied and its response was lost, then qualifies their
+composition through real local Git and SQLite. It adds no retry policy,
+successor session, or new formal transition.
+
 ## A maintainer restarts after the first promotion response is lost
 
 ### Starting situation

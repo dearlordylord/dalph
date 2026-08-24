@@ -11,6 +11,28 @@ not expose an implementation, reviewer, or handback stage. The opaque
 Integrator call is the only integration boundary; its returned candidate is
 qualified by Git and then promoted by the target-ref compare-and-set protocol.
 
+## Governing behavior
+
+Before changing when an accepted executor report receives integration
+responsibility or when same-target integration may start, read these existing
+owners:
+
+- [issue #56's per-result chronology](issue-56-queue-accepted-integration.md#two-accepted-results-retain-journal-order-across-coordinator-restart)
+  permits A's accepted report and responsibility before B's accepted report;
+  its committed responsibility positions define FIFO without a batch-drain
+  barrier or second queue;
+- [serialized-integration invariants D41–D44](../DELIVERY-INVARIANTS.md#serialized-integration)
+  separate task-work capacity from one exact target resource and preserve the
+  accepted-result order; and
+- [`acceptedResultIntegration`](../../specs/acceptedResultIntegration.qnt) and
+  its [executable scenarios](../../specs/acceptedResultIntegration_test.qnt),
+  including `journalOrderSurvivesRestartTest` and `atMostOneTargetHolder`, own
+  the corresponding formal ordering and target-ownership laws.
+
+This scenario preserves those laws and adds concurrent executor evidence
+through the public production composition. It does not add an
+all-executor-reports-finished admission rule or change the governing models.
+
 ## A maintainer runs two ready tasks and observes a dependant wait for both
 
 ### Starting situation
@@ -46,8 +68,6 @@ because both prerequisites are unfinished.
    responsibility even though B's child finishes first and B's persisted task
    identity sorts first. The responsibility journal position—not task name,
    completion time, or enumeration order—is the same-target integration order.
-   This preserves issue #56's accepted per-result chronology; it does not invent
-   a batch-drain barrier across otherwise independent executor reports.
 3. After both accepted reports and responsibilities are durable, Dalph reads
    current tracker facts. It uses the responsibilities themselves as the queue,
    without another queue store. It admits A first, acquires the one target
@@ -113,7 +133,6 @@ lock, or delete a resource outside the owned temporary root.
   promotion, the focused-completion blocker, the later complete-graph release,
   final tracker/Git/journal/evidence/process/lock/root state, and the deliberate
   #89 cleanup deferral.
-- Existing `acceptedResultIntegration` and `integrationFinality` conformance
-  suites remain the protocol-level evidence for the exact candidate and
-  completion boundaries; this scenario adds their real production-shaped
-  composition rather than changing their Quint model.
+- Existing `integrationFinality` conformance remains the protocol-level
+  evidence for the exact completion boundary; this scenario adds its real
+  production-shaped composition rather than changing that Quint model.

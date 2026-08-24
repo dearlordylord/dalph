@@ -78,6 +78,28 @@ it does not apply instead of inventing an event.
 If an answer is unknown, write the competing real-world outcomes. Do not hide
 the decision behind alternatives such as “global versus scoped identity.”
 
+## Governing-behavior pointers
+
+When a scenario refines or composes an existing accepted protocol, put a
+compact `Governing behavior` section before its chronology. The section:
+
+- names the concrete decision that triggers reading the linked material;
+- links directly to the accepted scenario and invariant heading, then links the
+  governing formal source and names the exact model law or executable scenario
+  that constrains that decision;
+- states whether the new scenario preserves, refines, or supersedes the linked
+  behavior; and
+- bounds what the new scenario adds so its fixture or composition evidence is
+  not mistaken for a new global protocol rule.
+
+Prefer stable behavioral and formal sources over implementation paths. Point
+to the exact Markdown heading. When a source file has no stable headings, link
+its owning file and name the exact law or executable scenario instead of naming
+a broad document that does not answer the decision. Keep each rule in its
+owning source rather than copying its full explanation into the pointer. A
+standalone scenario with no prior protocol relationship needs no ritual
+`Governing behavior` section.
+
 ## Example form: GitHub applies a claim but Dalph loses the response
 
 This is an illustration of the required level of explanation, not a second
