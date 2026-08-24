@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Schema, Stream } from "effect"
+import { Context, Effect, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
-import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
+import { TaskClaimAcquisition, TrackerMutation } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
@@ -24,6 +24,7 @@ import {
   type DeliveryProposalDerivationIssue
 } from "./delivery-action-proposal.js"
 import {
+  DeliveryRuntimeObservationPublication,
   DeliveryRuntimeObservationState,
   type DeliveryRuntimeLiveOwnerSnapshot
 } from "./delivery-runtime-observation.js"
@@ -39,11 +40,35 @@ import {
 } from "./relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
-import { IntegrationFinalitySettledEvent } from "../../workflow/protocols/integration-finality/events.js"
+import {
+  CompletionTaskBoundary,
+  IntegrationFinalitySettledEvent
+} from "../../workflow/protocols/integration-finality/events.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { QueuedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  QueuedIntegrationResponsibility,
+  UnqueuedAcceptedResult
+} from "../../workflow/protocols/integration-admission/protocol.js"
+import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/responsibility.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
-import { JournalStore } from "../../workflow-journal/store.js"
+import { JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
+import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"
+import { GitCommand } from "../../authorities/git/command.js"
+import { GitTargetLineage } from "../../authorities/git/target-lineage.js"
+import { GitWorktree } from "../../authorities/git/worktree.js"
+import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
+import { DeliveryRuntimeResourceCapabilityPair, DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
+import { DeliveryActionExecutor } from "./delivery-action-executor.js"
+import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { Journal } from "./journal.js"
+import { ApplicationExitAdmission } from "../application-exit/lifecycle.js"
+import { Integrator, IntegratorGit } from "../../workflow/protocols/integrator/protocol.js"
+import { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
+import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
+import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
+import { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
+import { IntegrationQuarantineDirectionControl } from "../../workflow/protocols/integration-quarantine/control.js"
 import {
   boundedParallelTicketsOf,
   deliverySettlementsOf,
@@ -244,7 +269,10 @@ it.effect("explains eligible work waiting for exact capacity", () =>
 
 it.effect("explains dependency waits from the complete graph and does not call a tracker", () =>
   Effect.gen(function* () {
-    const state = evaluationOf({ tasks: [{ id: "A" }, { id: "B" }, { id: "D", prerequisiteIds: ["A", "B"] }] })
+    const state = evaluationOf({
+      tasks: [{ id: "A" }, { id: "B" }, { id: "D", prerequisiteIds: ["A", "B"] }],
+      evidence: [taskClaimEvidenceOf(TaskId.make("D"))]
+    })
     const signal = yield* deliveryStatusSignalOf(currentSignalOf(state), { _tag: "Run", runId })
     const status = yield* signal.get
     expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
@@ -278,12 +306,18 @@ it.effect("explains exact dependency and tracker-fact waits", () =>
         claimState: "Unobserved" as const,
         fact: "Unobserved" as const,
         wakeCondition: "TaskClaimFactsObserved" as const
+      },
+      {
+        claimState: "Foreign" as const,
+        fact: "Foreign" as const,
+        wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection" as const
       }
     ]
     for (const { claimState, fact, wakeCondition } of cases) {
       const state = evaluationOf({
         tasks: [{ id: "D", prerequisiteIds: ["A", "B"] }, { id: "A" }, { id: "B" }, { id: "E" }],
         evidence: [
+          taskClaimEvidenceOf(TaskId.make("D")),
           {
             ...claim,
             facts: {
@@ -342,6 +376,72 @@ it.effect("distinguishes proposed, live, and accepted publication-pending action
     }
   })
 )
+
+it("fails closed for every tracker-claim fact when its exact responsibility is absent", () => {
+  const taskId = TaskId.make("tracker-matrix")
+  const claim = taskClaimEvidenceOf(taskId)
+  if (claim._tag !== "ResponsibilityFacts") return expect.fail("tracker matrix fixture must retain facts")
+  if (claim.facts._tag !== "WorkflowOperationFreshFacts")
+    return expect.fail("tracker matrix fixture must use workflow facts")
+  const claimStates = ["Missing", "Unreadable", "Unobserved", "Foreign"] as const
+  for (const claimState of claimStates) {
+    const state = evaluationOf({
+      tasks: [{ id: String(taskId) }],
+      evidence: [
+        {
+          ...claim,
+          facts: {
+            ...claim.facts,
+            disposition: ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState })
+          }
+        }
+      ]
+    })
+    if (state._tag !== "Ready") return expect.fail("tracker matrix state must be ready")
+    const delivery = state.evaluation.current.ticketDeliveries.deliveries[0]
+    if (delivery === undefined) return expect.fail("tracker matrix delivery must exist")
+    const contradictory = DeliveryRuntimeObservationState.Ready({
+      evaluation: {
+        ...state.evaluation,
+        current: {
+          ...state.evaluation.current,
+          ticketDeliveries: {
+            ...state.evaluation.current.ticketDeliveries,
+            deliveries: [{ ...delivery, obligations: [] }]
+          }
+        }
+      },
+      liveOwners: state.liveOwners
+    })
+    expect(
+      deliveryStatusOf(Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }), contradictory)
+    ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  }
+})
+
+it("retains materialized operation identity through live and settled owner chronology", () => {
+  const proposal = taskProposalOf("materialized-status-proposal", TaskId.make("A"))
+  const operationId = OperationId.make("materialized-status-operation")
+  const materialized: DeliveryRuntimeLiveOwnerSnapshot = {
+    _tag: "MaterializedDeliveryAction",
+    intent: "IntentRecorded",
+    operationId,
+    proposal
+  }
+  const settled: DeliveryRuntimeLiveOwnerSnapshot = {
+    _tag: "SettledMaterializedDeliveryAction",
+    intent: "IntentRecorded",
+    operationId,
+    proposal
+  }
+  const live = statusFor(evaluationOf({ proposals: [proposal], liveOwners: [materialized] }), { _tag: "Run", runId })
+  const publicationPending = statusFor(evaluationOf({ proposals: [proposal], liveOwners: [settled] }), {
+    _tag: "Run",
+    runId
+  })
+  expect(live).toMatchObject({ entries: [{ _tag: "LiveDeliveryAction", operationId }] })
+  expect(publicationPending).toMatchObject({ entries: [{ _tag: "AcceptedFactPublicationWait", operationId }] })
+})
 
 it.effect("fails closed when proposal ownership is contradictory", () =>
   Effect.gen(function* () {
@@ -427,7 +527,8 @@ it.effect("localizes contradictory evidence without blocking an independent task
     expect(conflict).toMatchObject({
       _tag: "EvidenceConflict",
       subject: { _tag: "Task", runId, taskId: taskA },
-      evidenceIdentities: [expect.any(String)]
+      evidenceIdentities: [expect.any(String)],
+      responsibility: { _tag: "WorkflowResponsibility" }
     })
     expect(
       status.entries.some(
@@ -441,6 +542,37 @@ it.effect("localizes contradictory evidence without blocking an independent task
     )
   })
 )
+
+it("keeps distinct derivation operation and transition issues as separate evidence entries", () => {
+  const taskId = TaskId.make("derivation-issues")
+  const first: DeliveryProposalDerivationIssue = {
+    _tag: "AcceptedOperationEvidenceMissing",
+    operationId: OperationId.make("derivation-operation-one"),
+    taskId,
+    transition: "CommitFreshTaskClaimIntent"
+  }
+  const second: DeliveryProposalDerivationIssue = {
+    _tag: "AcceptedOperationEvidenceMissing",
+    operationId: OperationId.make("derivation-operation-two"),
+    taskId,
+    transition: "ContinueFreshWorkflowOperation"
+  }
+  const status = statusFor(evaluationOf({ isolatedIssues: [first, second] }), { _tag: "Run", runId })
+  expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (status._tag !== "DeliveryStatusAvailable") return
+  const issues = status.entries.filter(
+    (entry): entry is Extract<DeliveryStatusEntry, { readonly _tag: "EvidenceUnavailable" }> =>
+      entry._tag === "EvidenceUnavailable"
+  )
+  expect(issues).toHaveLength(2)
+  expect(
+    issues.map((entry) => {
+      if (entry.evidence._tag !== "ProposalDerivationIssue") return null
+      const issue = entry.evidence.issue
+      return issue._tag === "AcceptedOperationEvidenceMissing" ? issue.operationId : null
+    })
+  ).toEqual([first.operationId, second.operationId])
+})
 
 it.effect("explains the exact integration target wait without receiving resource authority", () =>
   Effect.gen(function* () {
@@ -502,6 +634,102 @@ it.effect("fails closed when an integration target wait has no exact queued resp
     expect(result).toBeInstanceOf(DeliveryStatusProjectionConflict)
   })
 )
+
+it("retains every integration wait family with its typed supporting responsibility", () => {
+  const fixture = integrationFinalityFixture
+  const started = StartedIntegrationResponsibility.make({
+    acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
+    integrationTarget: fixture.integrationTarget,
+    plannedAttempt: fixture.plannedAttempt,
+    queuedAt: JournalPosition.make(2),
+    startedAt: JournalPosition.make(3)
+  })
+  const accepted = UnqueuedAcceptedResult.make({
+    acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
+    plannedAttempt: fixture.plannedAttempt,
+    terminalAt: JournalPosition.make(2)
+  })
+  const cases = [
+    {
+      evidence: [
+        { _tag: "StartedIntegration" as const, responsibility: started },
+        {
+          _tag: "IntegrationWait" as const,
+          wait: {
+            _tag: "IntegrationDependencyWait" as const,
+            plannedAttempt: fixture.plannedAttempt,
+            prerequisiteTaskIds: [TaskId.make("prerequisite")]
+          }
+        }
+      ],
+      expected: "DependencyWait"
+    },
+    {
+      evidence: [
+        { _tag: "AcceptedAwaitingIntegration" as const, accepted },
+        {
+          _tag: "IntegrationWait" as const,
+          wait: { _tag: "IntegrationConfigurationWait" as const, plannedAttempt: fixture.plannedAttempt }
+        }
+      ],
+      expected: "EvidenceUnavailable"
+    },
+    {
+      evidence: [
+        { _tag: "StartedIntegration" as const, responsibility: started },
+        {
+          _tag: "IntegrationWait" as const,
+          wait: { _tag: "TargetPromotionConfigurationWait" as const, plannedAttempt: fixture.plannedAttempt }
+        }
+      ],
+      expected: "EvidenceUnavailable"
+    },
+    {
+      evidence: [
+        { _tag: "StartedIntegration" as const, responsibility: started },
+        {
+          _tag: "IntegrationWait" as const,
+          wait: {
+            _tag: "IntegrationTaskClaimConstraint" as const,
+            claimState: "Foreign" as const,
+            plannedAttempt: fixture.plannedAttempt
+          }
+        }
+      ],
+      expected: "TrackerFactWait"
+    }
+  ] as const
+  for (const testCase of cases) {
+    const status = statusFor(
+      evaluationOf({
+        runtimeRunId: fixture.runId,
+        tasks: [{ id: String(fixture.taskId) }],
+        evidence: testCase.evidence
+      }),
+      { _tag: "Task", runId: fixture.runId, taskId: fixture.taskId }
+    )
+    expect(status).toMatchObject({
+      _tag: "DeliveryStatusAvailable",
+      entries: [expect.objectContaining({ _tag: testCase.expected })]
+    })
+    if (status._tag !== "DeliveryStatusAvailable") continue
+    const entry = status.entries.find(({ _tag }) => _tag === testCase.expected)
+    expect(entry).toBeDefined()
+    if (testCase.expected === "DependencyWait") {
+      expect(entry).toMatchObject({
+        prerequisiteTaskIds: [TaskId.make("prerequisite")],
+        standing: { _tag: "IntegrationWait", wait: { _tag: "IntegrationDependencyWait" } }
+      })
+    } else if (testCase.expected === "EvidenceUnavailable") {
+      expect(entry).toMatchObject({ evidence: { _tag: expect.stringMatching(/ConfigurationWait/) } })
+    } else {
+      expect(entry).toMatchObject({
+        fact: { _tag: "Foreign", boundary: "TaskTracker" },
+        wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
+      })
+    }
+  }
+})
 
 it.effect("keeps settlement and relinquishment distinct with exact supporting facts", () =>
   Effect.gen(function* () {
@@ -585,6 +813,12 @@ it.effect("reconnects current-first and distinguishes not-ready, absent, wrong-R
       _tag: "DeliveryStatusClosed",
       final: { _tag: "DeliveryStatusAvailable" }
     })
+    const closedBeforeReady = DeliveryRuntimeObservationState.Closed({ final: null })
+    expect(statusFor(closedBeforeReady, { _tag: "Run", runId })).toEqual({
+      _tag: "DeliveryStatusClosed",
+      subject: { _tag: "Run", runId },
+      final: null
+    })
 
     const signal = yield* deliveryStatusSignalOf(currentSignalOf(ready), { _tag: "Run", runId })
     expect(yield* signal.get).toMatchObject({ _tag: "DeliveryStatusAvailable" })
@@ -641,6 +875,27 @@ it("uses accepted delivery order only for task grouping, while structural order 
   ])
 })
 
+it("orders numeric proposal ordinals numerically before proposal identity", () => {
+  const taskA = TaskId.make("A")
+  const ordinalTen = {
+    ...taskProposalOf("status-ordinal-ten", taskA),
+    order: { ...taskProposalOf("status-ordinal-ten", taskA).order, frontierOrdinal: DeliveryProposalOrdinal.make(10) }
+  }
+  const ordinalTwo = {
+    ...taskProposalOf("status-ordinal-two", taskA),
+    order: { ...taskProposalOf("status-ordinal-two", taskA).order, frontierOrdinal: DeliveryProposalOrdinal.make(2) }
+  }
+  const state = evaluationOf({ tasks: [{ id: "A" }], proposals: [ordinalTen, ordinalTwo] })
+  const status = statusFor(state, { _tag: "Run", runId })
+  expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (status._tag !== "DeliveryStatusAvailable") return
+  const proposals = status.entries.filter(
+    (entry): entry is Extract<DeliveryStatusEntry, { readonly _tag: "ProposedDeliveryAction" }> =>
+      entry._tag === "ProposedDeliveryAction"
+  )
+  expect(proposals.map(({ proposal }) => proposal.id)).toEqual([ordinalTwo.id, ordinalTen.id])
+})
+
 it.effect("reconnects to current status without a durable UI cursor", () =>
   Effect.gen(function* () {
     const before = evaluationOf({
@@ -683,6 +938,93 @@ it.effect("requires only a passive status signal and performs no journal or auth
     expect(source).not.toMatch(
       /\b(?:JournalStore|DeliveryRuntimeResourcesService|DeliveryRuntimeAdmissionController|TaskTrackerService|GitService|IntegratorService|ApplicationExitService)\b/
     )
+  })
+)
+
+it.effect("calls no instrumented authority or mutation boundary while status changes and reconnects", () =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const forbidden = <ServiceShape>(boundary: string): ServiceShape =>
+      new Proxy(
+        {},
+        {
+          get:
+            (_target, property) =>
+            (..._args: ReadonlyArray<unknown>) =>
+              Ref.update(calls, (current) => [...current, `${boundary}.${String(property)}`]).pipe(
+                Effect.flatMap(() => Effect.die(`forbidden status boundary called: ${boundary}.${String(property)}`))
+              )
+        }
+      ) as ServiceShape
+    const forbiddenContext = Context.empty()
+      .pipe(
+        Context.add(JournalStore, forbidden<typeof JournalStore.Service>("JournalStore")),
+        Context.add(RunLifecycleJournal, forbidden<typeof RunLifecycleJournal.Service>("RunLifecycleJournal")),
+        Context.add(TrackerGraphReader, forbidden<typeof TrackerGraphReader.Service>("TrackerGraphReader")),
+        Context.add(TrackerMutation, forbidden<typeof TrackerMutation.Service>("TrackerMutation")),
+        Context.add(GitCommand, forbidden<typeof GitCommand.Service>("GitCommand")),
+        Context.add(GitTargetLineage, forbidden<typeof GitTargetLineage.Service>("GitTargetLineage")),
+        Context.add(GitWorktree, forbidden<typeof GitWorktree.Service>("GitWorktree")),
+        Context.add(CoordinatorOwnership, forbidden<typeof CoordinatorOwnership.Service>("CoordinatorOwnership")),
+        Context.add(
+          DeliveryRuntimeResources,
+          forbidden<typeof DeliveryRuntimeResources.Service>("DeliveryRuntimeResources")
+        ),
+        Context.add(
+          DeliveryRuntimeResourceCapabilityPair,
+          forbidden<typeof DeliveryRuntimeResourceCapabilityPair.Service>("DeliveryRuntimeResourceCapabilityPair")
+        ),
+        Context.add(
+          DeliveryRuntimeObservationPublication,
+          forbidden<typeof DeliveryRuntimeObservationPublication.Service>("DeliveryRuntimeObservationPublication")
+        ),
+        Context.add(DeliveryActionExecutor, forbidden<typeof DeliveryActionExecutor.Service>("DeliveryActionExecutor")),
+        Context.add(
+          DeliveryAcceptedFactPublication,
+          forbidden<typeof DeliveryAcceptedFactPublication.Service>("DeliveryAcceptedFactPublication")
+        ),
+        Context.add(Journal, forbidden<typeof Journal.Service>("Journal")),
+        Context.add(
+          ApplicationExitAdmission,
+          forbidden<typeof ApplicationExitAdmission.Service>("ApplicationExitAdmission")
+        ),
+        Context.add(CompletionTaskBoundary, forbidden<typeof CompletionTaskBoundary.Service>("CompletionTaskBoundary")),
+        Context.add(Integrator, forbidden<typeof Integrator.Service>("Integrator")),
+        Context.add(IntegratorGit, forbidden<typeof IntegratorGit.Service>("IntegratorGit")),
+        Context.add(
+          PlannedAttemptProtocolController,
+          forbidden<typeof PlannedAttemptProtocolController.Service>("PlannedAttemptProtocolController")
+        ),
+        Context.add(
+          TaskWorkCapacityControl,
+          forbidden<typeof TaskWorkCapacityControl.Service>("TaskWorkCapacityControl")
+        )
+      )
+      .pipe(
+        Context.add(
+          ControlDirectionApplication,
+          forbidden<typeof ControlDirectionApplication.Service>("ControlDirectionApplication")
+        ),
+        Context.add(
+          TaskClaimReacquisitionControl,
+          forbidden<typeof TaskClaimReacquisitionControl.Service>("TaskClaimReacquisitionControl")
+        ),
+        Context.add(AttemptChoiceControl, forbidden<typeof AttemptChoiceControl.Service>("AttemptChoiceControl")),
+        Context.add(
+          IntegrationQuarantineDirectionControl,
+          forbidden<typeof IntegrationQuarantineDirectionControl.Service>("IntegrationQuarantineDirectionControl")
+        )
+      )
+    const before = evaluationOf({ tasks: [{ id: "A" }] })
+    const after = evaluationOf({
+      tasks: [{ id: "A" }],
+      proposals: [taskProposalOf("instrumented-after", TaskId.make("A"))]
+    })
+    const source = currentSignalFromCurrentFirstStream(Stream.fromIterable([before, after]))
+    const signal = yield* deliveryStatusSignalOf(source, { _tag: "Run", runId }).pipe(Effect.provide(forbiddenContext))
+    yield* signal.get
+    yield* signal.changes.pipe(Stream.take(2), Stream.runCollect)
+    expect(yield* Ref.get(calls)).toEqual([])
   })
 )
 

@@ -67,33 +67,26 @@ const deliveryEntriesFor = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
   runId: RunId,
-  entries: Array<OrderedStatusEntry>,
-  sourceOrder: number
-): number | DeliveryStatusProjectionConflict => {
-  let next = sourceOrder
+  entries: Array<OrderedStatusEntry>
+): DeliveryStatusProjectionConflict | null => {
   for (const [index, delivery] of evaluation.current.ticketDeliveries.deliveries.entries()) {
     if (!includeForSubject(subject, delivery.taskId)) continue
     const evidenceConflict = validateDeliveryEvidenceForStatus(subject, delivery)
     if (evidenceConflict !== null) return evidenceConflict
     const capacityEntry = capacityWaitFor(subject, evaluation, runId, delivery)
-    if (capacityEntry !== null) {
-      addEntry(entries, capacityEntry, index, next)
-      next += 1
-    }
-    next = trackerAndEvidenceEntriesFor(subject, delivery, index, entries, next)
+    if (capacityEntry !== null) addEntry(entries, capacityEntry, index)
+    trackerAndEvidenceEntriesFor(subject, delivery, index, entries)
   }
-  return next
+  return null
 }
 
 const issueEntriesFor = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
   taskOrders: ReadonlyMap<TaskId, number>,
-  entries: Array<OrderedStatusEntry>,
-  sourceOrder: number
-): number => {
-  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return sourceOrder
-  let next = sourceOrder
+  entries: Array<OrderedStatusEntry>
+): void => {
+  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return
   for (const issue of evaluation.proposedActions.isolatedIssues) {
     if (!includeForSubject(subject, issue.taskId)) continue
     addEntry(
@@ -105,22 +98,17 @@ const issueEntriesFor = (
         responsibility: null,
         evidence: { _tag: "ProposalDerivationIssue", issue }
       },
-      taskOrders.get(issue.taskId) ?? Number.MAX_SAFE_INTEGER,
-      next
+      taskOrders.get(issue.taskId) ?? Number.MAX_SAFE_INTEGER
     )
-    next += 1
   }
-  return next
 }
 
 const settlementEntriesFor = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
   taskOrders: ReadonlyMap<TaskId, number>,
-  entries: Array<OrderedStatusEntry>,
-  sourceOrder: number
-): number => {
-  let next = sourceOrder
+  entries: Array<OrderedStatusEntry>
+): void => {
   for (const settlement of evaluation.current.settlements.settlements) {
     if (!includeForSubject(subject, settlement.taskId)) continue
     addEntry(
@@ -133,12 +121,9 @@ const settlementEntriesFor = (
         attemptId: settlement.attemptId,
         settlement
       },
-      taskOrders.get(settlement.taskId) ?? Number.MAX_SAFE_INTEGER,
-      next
+      taskOrders.get(settlement.taskId) ?? Number.MAX_SAFE_INTEGER
     )
-    next += 1
   }
-  return next
 }
 
 const uniqueEntriesFor = (
@@ -178,15 +163,13 @@ export const statusEntriesFor = (
   if (ownershipConflict !== null) return ownershipConflict
   const entries: Array<OrderedStatusEntry> = []
   const taskOrders = deliveryTaskOrder(evaluation)
-  let sourceOrder = 0
-  for (const [index, placement] of evaluation.current.ticketDeliveries.source.placements.entries()) {
-    sourceOrder = dependencyEntriesFor(subject, placement.taskId, placement.placement, index, entries, sourceOrder)
+  for (const [index, delivery] of evaluation.current.ticketDeliveries.deliveries.entries()) {
+    dependencyEntriesFor(subject, delivery.taskId, delivery.placement, index, entries)
   }
-  const deliveryResult = deliveryEntriesFor(subject, evaluation, runId, entries, sourceOrder)
-  if (deliveryResult instanceof DeliveryStatusProjectionConflict) return deliveryResult
-  sourceOrder = deliveryResult
-  sourceOrder = actionEntriesFor(subject, evaluation, liveOwners, entries, taskOrders, sourceOrder)
-  sourceOrder = issueEntriesFor(subject, evaluation, taskOrders, entries, sourceOrder)
-  sourceOrder = settlementEntriesFor(subject, evaluation, taskOrders, entries, sourceOrder)
+  const deliveryConflict = deliveryEntriesFor(subject, evaluation, runId, entries)
+  if (deliveryConflict !== null) return deliveryConflict
+  actionEntriesFor(subject, evaluation, liveOwners, entries, taskOrders)
+  issueEntriesFor(subject, evaluation, taskOrders, entries)
+  settlementEntriesFor(subject, evaluation, taskOrders, entries)
   return uniqueEntriesFor(subject, entries)
 }

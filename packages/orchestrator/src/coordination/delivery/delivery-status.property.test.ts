@@ -5,7 +5,13 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { trackerGraphReadProposalOf, DeliveryProposalId, DeliveryProposalOrdinal } from "./delivery-action-proposal.js"
+import {
+  trackerGraphReadProposalOf,
+  DeliveryProposalId,
+  DeliveryProposalOrdinal,
+  type DeliveryProposalDerivationIssue
+} from "./delivery-action-proposal.js"
+import { OperationId } from "../../workflow/identity.js"
 import {
   DeliveryRuntimeObservationState,
   type DeliveryRuntimeLiveOwnerSnapshot
@@ -95,7 +101,8 @@ const stateOf = (
   proposalOrder: readonly ["A", "B"] | readonly ["B", "A"],
   ownerOrder: readonly ["A", "B"] | readonly ["B", "A"],
   reverseA: boolean,
-  reverseB: boolean
+  reverseB: boolean,
+  reverseIssues: boolean
 ): DeliveryRuntimeObservationState => {
   const proposalA = proposalOf("property-A", TaskId.make("A"), 0)
   const proposalB = proposalOf("property-B", TaskId.make("B"), 1)
@@ -105,6 +112,15 @@ const stateOf = (
       ? { _tag: "AdmittedDeliveryAction", proposal: proposalA }
       : { _tag: "AdmittedDeliveryAction", proposal: proposalB }
   const liveOwners = ownerOrder.map(ownerForTask)
+  const issues: ReadonlyArray<DeliveryProposalDerivationIssue> = [
+    {
+      _tag: "AcceptedOperationEvidenceMissing",
+      operationId: OperationId.make("property-issue-operation-A"),
+      taskId: TaskId.make("A"),
+      transition: "CommitFreshTaskClaimIntent"
+    },
+    { _tag: "FreshRouteProvenanceMissing", taskId: TaskId.make("B"), transition: "ContinueFreshWorkflowOperation" }
+  ]
   const ticketDeliveries = ticketDeliveriesOf(reverseA, reverseB)
   const settlements = makeDeliverySettlements(ticketDeliveries, [])
   const current = {
@@ -124,7 +140,11 @@ const stateOf = (
       _tag: "PauseCoverageGraphNotEstablished",
       applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
     },
-    proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals },
+    proposedActions: {
+      _tag: "DeliveryProposalsAvailable",
+      isolatedIssues: reverseIssues ? issues.toReversed() : issues,
+      proposals
+    },
     quiescence: { _tag: "TrackerReconfirmationAllowed" },
     taskWork: { capacity: policy.taskExecutionCapacity, held: [] },
     cancellationApplied: false
@@ -134,11 +154,12 @@ const stateOf = (
 
 const statusFor = (state: DeliveryRuntimeObservationState): CurrentDeliveryStatus => {
   const result = deliveryStatusOf(SchemaSubject, state)
-  if (result._tag === "DeliveryStatusRunMismatch" || result._tag === "DeliveryStatusRunIdentityUnavailable") {
-    return { _tag: "DeliveryStatusNotReady", subject: SchemaSubject }
-  }
-  if (result._tag === "DeliveryStatusProjectionConflict") {
-    return { _tag: "DeliveryStatusNotReady", subject: SchemaSubject }
+  if (
+    result._tag === "DeliveryStatusRunMismatch" ||
+    result._tag === "DeliveryStatusRunIdentityUnavailable" ||
+    result._tag === "DeliveryStatusProjectionConflict"
+  ) {
+    return expect.fail(`status projection failed in deterministic property: ${result.message}`)
   }
   return result
 }
@@ -146,17 +167,18 @@ const statusFor = (state: DeliveryRuntimeObservationState): CurrentDeliveryStatu
 const SchemaSubject = DeliveryStatusSubject.cases.Run.make({ runId })
 
 it("keeps simultaneous status entries deterministic when proposal, owner, and standing arrays are permuted", () => {
-  const canonical = statusFor(stateOf(["A", "B"], ["A", "B"], false, false))
+  const canonical = statusFor(stateOf(["A", "B"], ["A", "B"], false, false, false))
   fc.assert(
     fc.property(
       fc.boolean(),
       fc.boolean(),
       fc.boolean(),
       fc.boolean(),
-      (reverseProposals, reverseOwners, reverseA, reverseB) => {
+      fc.boolean(),
+      (reverseProposals, reverseOwners, reverseA, reverseB, reverseIssues) => {
         const proposalOrder = reverseProposals ? (["B", "A"] as const) : (["A", "B"] as const)
         const ownerOrder = reverseOwners ? (["B", "A"] as const) : (["A", "B"] as const)
-        expect(statusFor(stateOf(proposalOrder, ownerOrder, reverseA, reverseB))).toEqual(canonical)
+        expect(statusFor(stateOf(proposalOrder, ownerOrder, reverseA, reverseB, reverseIssues))).toEqual(canonical)
       }
     ),
     { numRuns: 50 }

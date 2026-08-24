@@ -26,10 +26,11 @@ export type DeliveryStatusSubject = typeof DeliveryStatusSubject.Type
 /** The exact observable classification of one current status entry. */
 export type DeliveryStatusClassification = "Waiting" | "Progressing" | "Blocked" | "Settled" | "Relinquished"
 
-/** A tracker fact that is not present, readable, or complete enough to advance one responsibility. */
+/** A tracker fact that is not present, readable, exact, or complete enough to advance one responsibility. */
 export type DeliveryStatusTrackerFact =
   | { readonly _tag: "Missing"; readonly boundary: "TaskTracker" }
   | { readonly _tag: "Unreadable"; readonly boundary: "TaskTracker" }
+  | { readonly _tag: "Foreign"; readonly boundary: "TaskTracker" }
   | { readonly _tag: "Unobserved"; readonly boundary: "TaskTracker" }
 
 /** Wake conditions already owned by frontier explanations; status does not invent scheduler vocabulary. */
@@ -37,6 +38,11 @@ export type DeliveryStatusWakeCondition = Extract<
   FrontierExplanation,
   { readonly wakeCondition: string }
 >["wakeCondition"]
+
+export type DeliveryStatusIntegrationStanding<WaitTag extends IntegrationDeliveryWait["_tag"]> = Extract<
+  TicketDeliveryStanding,
+  { readonly _tag: "IntegrationWait" }
+> & { readonly wait: Extract<IntegrationDeliveryWait, { readonly _tag: WaitTag }> }
 
 /** A tracker-fact wait either names its exact responsibility or explicitly names an unestablished graph. */
 export type DeliveryStatusTrackerFactWait =
@@ -47,7 +53,10 @@ export type DeliveryStatusTrackerFactWait =
       readonly responsibility: ExactWorkflowObligation
       readonly fact: DeliveryStatusTrackerFact
       readonly wakeCondition: DeliveryStatusWakeCondition
-      readonly standing: TicketDeliveryStanding
+      readonly standing:
+        | Extract<TicketDeliveryStanding, { readonly _tag: "ResponsibilitySituation" }>
+        | DeliveryStatusIntegrationStanding<"IntegrationTaskClaimConstraint" | "IntegrationTrackerFactsWait">
+        | { readonly _tag: "GraphNotEstablished" }
     }
   | {
       readonly _tag: "TrackerFactWait"
@@ -63,6 +72,16 @@ export type DeliveryStatusTrackerFactWait =
 export type DeliveryStatusUnavailableEvidence =
   | { readonly _tag: "ProposalDerivationIssue"; readonly issue: DeliveryProposalDerivationIssue }
   | { readonly _tag: "ResponsibilityFacts"; readonly facts: ResponsibilityFreshFacts }
+  | {
+      readonly _tag: "IntegrationConfigurationWait"
+      readonly wait: Extract<IntegrationDeliveryWait, { readonly _tag: "IntegrationConfigurationWait" }>
+      readonly standing: DeliveryStatusIntegrationStanding<"IntegrationConfigurationWait">
+    }
+  | {
+      readonly _tag: "TargetPromotionConfigurationWait"
+      readonly wait: Extract<IntegrationDeliveryWait, { readonly _tag: "TargetPromotionConfigurationWait" }>
+      readonly standing: DeliveryStatusIntegrationStanding<"TargetPromotionConfigurationWait">
+    }
 
 /** Unavailable evidence either names the blocked responsibility or explicitly has no responsibility yet. */
 export type DeliveryStatusEvidenceUnavailableEntry =
@@ -79,6 +98,23 @@ export type DeliveryStatusEvidenceUnavailableEntry =
       readonly subject: DeliveryStatusSubject
       readonly responsibility: ExactWorkflowObligation
       readonly evidence: Extract<DeliveryStatusUnavailableEvidence, { readonly _tag: "ResponsibilityFacts" }>
+    }
+  | {
+      readonly _tag: "EvidenceUnavailable"
+      readonly classification: "Blocked"
+      readonly subject: DeliveryStatusSubject
+      readonly responsibility: Extract<ExactWorkflowObligation, { readonly _tag: "AcceptedAwaitingIntegration" }>
+      readonly evidence: Extract<DeliveryStatusUnavailableEvidence, { readonly _tag: "IntegrationConfigurationWait" }>
+    }
+  | {
+      readonly _tag: "EvidenceUnavailable"
+      readonly classification: "Blocked"
+      readonly subject: DeliveryStatusSubject
+      readonly responsibility: Extract<ExactWorkflowObligation, { readonly _tag: "StartedIntegration" }>
+      readonly evidence: Extract<
+        DeliveryStatusUnavailableEvidence,
+        { readonly _tag: "TargetPromotionConfigurationWait" }
+      >
     }
 
 /** Evidence conflicts retain their exact identities and tie responsibility to the conflict-bearing delivery. */
@@ -118,7 +154,13 @@ export type DeliveryStatusEntry =
       readonly subject: DeliveryStatusSubject
       readonly taskId: TaskId
       readonly prerequisiteTaskIds: readonly [TaskId, ...ReadonlyArray<TaskId>]
-      readonly standing: Extract<TicketDeliveryPlacement, { readonly _tag: "GraphExcluded" }>
+      readonly standing:
+        | Extract<TicketDeliveryPlacement, { readonly _tag: "GraphExcluded" }>
+        | Extract<
+            TicketDeliveryStanding,
+            { readonly _tag: "ResponsibilitySituation" | "PromotedPrerequisiteReleasePending" }
+          >
+        | DeliveryStatusIntegrationStanding<"IntegrationDependencyWait">
     }
   | DeliveryStatusTrackerFactWait
   | {
@@ -167,11 +209,14 @@ export type DeliveryStatusEntry =
       readonly _tag: "IntegrationTargetWait"
       readonly classification: "Waiting"
       readonly subject: DeliveryStatusSubject
-      readonly plannedAttempt: IntegrationDeliveryWait["plannedAttempt"]
+      readonly plannedAttempt: Extract<
+        IntegrationDeliveryWait,
+        { readonly _tag: "IntegrationTargetWait" }
+      >["plannedAttempt"]
       readonly integrationTarget: IntegrationTarget
       readonly responsibility: Extract<ExactWorkflowObligation, { readonly _tag: "QueuedIntegration" }>
-      readonly wait: IntegrationDeliveryWait
-      readonly standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>
+      readonly wait: Extract<IntegrationDeliveryWait, { readonly _tag: "IntegrationTargetWait" }>
+      readonly standing: DeliveryStatusIntegrationStanding<"IntegrationTargetWait">
     }
   | DeliveryStatusEvidenceUnavailableEntry
   | DeliveryStatusEvidenceConflictEntry
