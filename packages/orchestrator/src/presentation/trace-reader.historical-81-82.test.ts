@@ -605,7 +605,7 @@ const integrationRecords = (): ReadonlyArray<JournalRecord> => {
     record(
       10,
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run.session }),
+        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run }),
         run,
         version: workflowJournalEventVersion
       }),
@@ -1876,7 +1876,7 @@ it.effect(
       }
       const notPrepared = IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.NotPrepared.make({
-          correlation: resultRecorded.run.session,
+          correlation: resultRecorded.run,
           detail: IntegratorNotPreparedDetail.make("provider did not prepare a candidate")
         }),
         run: resultRecorded.run,
@@ -2697,7 +2697,7 @@ it.effect("#81/#82 validate every remaining public facet relation against its ex
             occurrence: {
               ...occurrence,
               result: IntegratorResult.cases.NotPrepared.make({
-                correlation: occurrence.run.session,
+                correlation: occurrence.run,
                 detail: IntegratorNotPreparedDetail.make("prepared result was not retained")
               })
             }

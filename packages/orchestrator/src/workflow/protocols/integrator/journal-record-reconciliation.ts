@@ -15,7 +15,8 @@ import {
   IntegratorResult,
   IntegratorRunCandidateGitReadIntendedEvent,
   IntegratorRunCorrelation,
-  IntegratorRunOrdinal
+  IntegratorRunOrdinal,
+  integratorRunCorrelationsEqual
 } from "./events.js"
 import { IntegratorJournalContradiction } from "./errors.js"
 import { appendIntegratorRunStartedIfNeeded } from "./session.js"
@@ -35,7 +36,7 @@ export const runResultFromAppendedRecord = (
     record.event._tag !== "IntegratorRunResultRecorded" ||
     !integratorCorrelationsEqual(record.event.run.session, run.session) ||
     record.event.run.ordinal !== run.ordinal ||
-    !integratorCorrelationsEqual(record.event.result.correlation, run.session) ||
+    !integratorRunCorrelationsEqual(record.event.result.correlation, run) ||
     !integratorResultEquivalence(record.event.result, expectedResult)
   ) {
     return Effect.fail(
@@ -57,7 +58,7 @@ export const readRecordedRunResult = (
   if (
     existing.event._tag !== "IntegratorRunResultRecorded" ||
     !integratorRunMatches(existing.event.run, run) ||
-    !integratorCorrelationsEqual(existing.event.result.correlation, run.session)
+    !integratorRunCorrelationsEqual(existing.event.result.correlation, run)
   ) {
     return Effect.fail(
       new IntegratorJournalContradiction({

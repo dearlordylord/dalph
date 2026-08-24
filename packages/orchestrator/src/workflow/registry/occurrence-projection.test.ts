@@ -311,7 +311,7 @@ const historicalIntegrationPrefix = () => {
       historicalRecord(
         12,
         IntegratorRunResultRecordedEvent.make({
-          result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: session }),
+          result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: integratorRun }),
           run: integratorRun,
           version: workflowJournalEventVersion
         })
@@ -2418,7 +2418,7 @@ it.effect("rejects historical outcomes when exact earlier correlation or chronol
     const runResult = IntegratorRunResultRecordedEvent.make({
       result: IntegratorResult.cases.PreparedCandidate.make({
         candidateText: prefix.candidateText,
-        correlation: session
+        correlation: prefix.integratorRun
       }),
       run: prefix.integratorRun,
       version: workflowJournalEventVersion

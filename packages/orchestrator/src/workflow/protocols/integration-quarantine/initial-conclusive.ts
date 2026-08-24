@@ -61,7 +61,7 @@ const runResultMatches = (record: JournalRecord, run: IntegratorRunCorrelation):
   record.runId === runIdFor(run) &&
   record.key === integratorRunResultRecordedRecordKey(run) &&
   integratorRunCorrelationsEqual(record.event.run, run) &&
-  integratorCorrelationsEqual(record.event.result.correlation, run.session)
+  integratorRunCorrelationsEqual(record.event.result.correlation, run)
 
 const readIntentMatches = (
   record: JournalRecord,

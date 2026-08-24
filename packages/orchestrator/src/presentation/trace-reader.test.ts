@@ -639,7 +639,7 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
     record(
       10,
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: session }),
+        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run }),
         run,
         version: workflowJournalEventVersion
       })

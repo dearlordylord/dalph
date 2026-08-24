@@ -193,7 +193,7 @@ const invalidIntegratorRunResult = (
   const key = integratorRunKey(event.run)
   const existing = mapGet(indexes.integratorRunResults, key)
   const started = exactIntegratorRunStart(event.run, record, indexes)
-  const matchingSession = integratorCorrelationsEqual(event.result.correlation, event.run.session)
+  const matchingSession = integratorRunCorrelationsEqual(event.result.correlation, event.run)
   return {
     detail:
       existing !== undefined
@@ -221,7 +221,7 @@ const exactPreparedIntegratorRunResultFor = (
     result.position < record.position &&
     result.event.result._tag === "PreparedCandidate" &&
     integratorRunCorrelationsEqual(result.event.run, run) &&
-    integratorCorrelationsEqual(result.event.result.correlation, run.session) &&
+    integratorRunCorrelationsEqual(result.event.result.correlation, run) &&
     result.event.result.candidateText === candidateText
     ? result
     : undefined

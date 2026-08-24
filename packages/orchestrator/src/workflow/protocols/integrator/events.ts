@@ -71,8 +71,8 @@ export const IntegratorResponsibilityFacts = Schema.Struct({
 })
 export type IntegratorResponsibilityFacts = typeof IntegratorResponsibilityFacts.Type
 
-/** The only request crossing Dalph's generic boundary: exact responsibility facts plus one fixed session. */
-export const IntegratorRequest = Schema.Struct({ correlation: IntegratorSessionCorrelation })
+/** The only request crossing Dalph's generic boundary: one exact session run. */
+export const IntegratorRequest = Schema.Struct({ correlation: IntegratorRunCorrelation })
 export type IntegratorRequest = typeof IntegratorRequest.Type
 
 /** Git facts used for the final candidate qualification; no resource-head or process-success inference is allowed. */
@@ -88,8 +88,8 @@ type IntegratorExactCommitObservation = Extract<IntegratorGitObservation, { read
 
 /** The generic Integrator's public outer result; provider-private stages and retry history remain inside the service. */
 export const IntegratorResult = Schema.TaggedUnion({
-  NotPrepared: { correlation: IntegratorSessionCorrelation, detail: IntegratorNotPreparedDetail },
-  PreparedCandidate: { candidateText: IntegratorCandidateText, correlation: IntegratorSessionCorrelation }
+  NotPrepared: { correlation: IntegratorRunCorrelation, detail: IntegratorNotPreparedDetail },
+  PreparedCandidate: { candidateText: IntegratorCandidateText, correlation: IntegratorRunCorrelation }
 })
 export type IntegratorResult = typeof IntegratorResult.Type
 

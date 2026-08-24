@@ -183,7 +183,7 @@ const conclusiveResultIsFromRunOne = (
   return (
     record.runId === run.session.plannedAttempt.runId &&
     integratorRunCorrelationsEqual(record.event.run, run) &&
-    integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation) &&
+    integratorRunCorrelationsEqual(record.event.result.correlation, run) &&
     runStartFor(records, run, record.position) !== undefined
   )
 }

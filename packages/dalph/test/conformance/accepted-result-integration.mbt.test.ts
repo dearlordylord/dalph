@@ -2191,7 +2191,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       reconcilePromotionOne: () => Effect.sync(() => modelReconcilePromotion(1n)),
       resumeIntegratorOne: () =>
         Effect.gen(function* () {
-          const request = IntegratorRequest.make({ correlation: correlationFor(1n) })
+          const request = IntegratorRequest.make({ correlation: runFor(1n) })
           yield* runtime.integrator.prepare(request)
           modelResume(1n)
         }),

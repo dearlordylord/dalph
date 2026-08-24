@@ -185,7 +185,7 @@ const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
     journal,
     integratorRunResultRecordedRecordKey(runOne),
     IntegratorRunResultRecordedEvent.make({
-      result: IntegratorResult.cases.NotPrepared.make({ correlation: session, detail: notPreparedDetail }),
+      result: IntegratorResult.cases.NotPrepared.make({ correlation: runOne, detail: notPreparedDetail }),
       run: runOne,
       version: workflowJournalEventVersion
     })
@@ -255,8 +255,8 @@ const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
     IntegratorRunResultRecordedEvent.make({
       result:
         kind === "NotPrepared"
-          ? IntegratorResult.cases.NotPrepared.make({ correlation: session, detail: notPreparedDetail })
-          : IntegratorResult.cases.PreparedCandidate.make({ correlation: session, candidateText }),
+          ? IntegratorResult.cases.NotPrepared.make({ correlation: run, detail: notPreparedDetail })
+          : IntegratorResult.cases.PreparedCandidate.make({ correlation: run, candidateText }),
       run,
       version: workflowJournalEventVersion
     })
@@ -624,9 +624,12 @@ it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", ()
               event: IntegratorRunResultRecordedEvent.make({
                 ...record.event,
                 result: IntegratorResult.cases.NotPrepared.make({
-                  correlation: IntegratorSessionCorrelation.make({
-                    ...history.session,
-                    sessionId: IntegratorSessionId.make("retry-conclusive-foreign-result-session")
+                  correlation: IntegratorRunCorrelation.make({
+                    ordinal: record.event.run.ordinal,
+                    session: IntegratorSessionCorrelation.make({
+                      ...history.session,
+                      sessionId: IntegratorSessionId.make("retry-conclusive-foreign-result-session")
+                    })
                   }),
                   detail: notPreparedDetail
                 })
@@ -666,7 +669,7 @@ it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", ()
               event: IntegratorRunResultRecordedEvent.make({
                 ...record.event,
                 result: IntegratorResult.cases.NotPrepared.make({
-                  correlation: history.session,
+                  correlation: runResult.event.run,
                   detail: IntegratorNotPreparedDetail.make("a different durable result")
                 })
               })

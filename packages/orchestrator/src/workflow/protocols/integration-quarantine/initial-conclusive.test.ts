@@ -163,8 +163,8 @@ const appendExactHistory = Effect.fn("InitialConclusiveTest.appendExactHistory")
     IntegratorRunResultRecordedEvent.make({
       result:
         kind === "NotPrepared"
-          ? IntegratorResult.cases.NotPrepared.make({ correlation: session, detail: notPreparedDetail })
-          : IntegratorResult.cases.PreparedCandidate.make({ correlation: session, candidateText }),
+          ? IntegratorResult.cases.NotPrepared.make({ correlation: run, detail: notPreparedDetail })
+          : IntegratorResult.cases.PreparedCandidate.make({ correlation: run, candidateText }),
       run,
       version: workflowJournalEventVersion
     })
@@ -389,7 +389,7 @@ it.effect("rejects legacy, foreign-key, and malformed modern run evidence", () =
               ...record,
               event: IntegratorRunResultRecordedEvent.make({
                 ...record.event,
-                result: IntegratorResult.cases.PreparedCandidate.make({ correlation: history.session, candidateText })
+                result: IntegratorResult.cases.PreparedCandidate.make({ correlation: runResult.event.run, candidateText })
               })
             }
           : record
@@ -508,7 +508,7 @@ it.effect("rejects a NotPrepared result with candidate evidence and candidate re
                       event: IntegratorRunResultRecordedEvent.make({
                         ...record.event,
                         result: IntegratorResult.cases.PreparedCandidate.make({
-                          correlation: notPreparedHistory.session,
+                          correlation: notPreparedResult.event.run,
                           candidateText
                         })
                       })
@@ -591,7 +591,7 @@ it.effect("rejects CandidateRejected results with foreign candidate names or key
                       event: IntegratorRunResultRecordedEvent.make({
                         ...record.event,
                         result: IntegratorResult.cases.NotPrepared.make({
-                          correlation: history.session,
+                          correlation: candidateResult.event.run,
                           detail: notPreparedDetail
                         })
                       })
@@ -690,7 +690,7 @@ it.effect("accepts a modern run whose fixed predecessor is a FullRerun successor
           ...record,
           event: IntegratorRunResultRecordedEvent.make({
             ...record.event,
-            result: IntegratorResult.cases.NotPrepared.make({ correlation: successor, detail: notPreparedDetail }),
+            result: IntegratorResult.cases.NotPrepared.make({ correlation: successorRun, detail: notPreparedDetail }),
             run: successorRun
           }),
           key: integratorRunResultRecordedRecordKey(successorRun),

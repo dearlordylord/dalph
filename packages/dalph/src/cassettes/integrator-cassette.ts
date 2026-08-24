@@ -256,8 +256,8 @@ const terminalObservationFor = Effect.fn("IntegratorCassette.terminalObservation
   const records = yield* Ref.get(runtime.journal.records)
   const recorded = recordedIntegratorCassetteFor(runtime.cassette.name, records)
   const requests = yield* Ref.get(runtime.integratorCalls)
-  const sessionIds = requests.map(({ correlation }) => correlation.sessionId)
-  const candidateResources = requests.map(({ correlation }) => correlation.candidateResource)
+  const sessionIds = requests.map(({ correlation }) => correlation.session.sessionId)
+  const candidateResources = requests.map(({ correlation }) => correlation.session.candidateResource)
   const actual = IntegratorCassetteTerminalExpectation.make({
     candidateResourcePrefixes: candidateResources.map((resource) => resource.slice(0, "integrator-resource:".length)),
     gitCandidates: yield* Ref.get(runtime.gitCandidates),
@@ -309,7 +309,7 @@ export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.run
   const requests = yield* Ref.get(runtime.integratorCalls)
   return IntegratorCassetteRun.make({
     cassette,
-    candidateResources: requests.map(({ correlation }) => correlation.candidateResource),
+    candidateResources: requests.map(({ correlation }) => correlation.session.candidateResource),
     gitCandidates: yield* Ref.get(runtime.gitCandidates),
     gitCalls: yield* Ref.get(runtime.gitCalls),
     integratorCalls: requests.length,
@@ -317,7 +317,7 @@ export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.run
     outcomes: yield* Ref.get(outcomes),
     records,
     recorded,
-    sessionIds: requests.map(({ correlation }) => correlation.sessionId),
+    sessionIds: requests.map(({ correlation }) => correlation.session.sessionId),
     state: currentStateFor(records, integratorPreparationInputFor(cassette.startingFacts))
   })
 })

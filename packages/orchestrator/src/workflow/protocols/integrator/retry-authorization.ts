@@ -222,7 +222,7 @@ const runResultMatches = (
   record.position > start.position &&
   record.position < beforePosition &&
   integratorRunCorrelationsEqual(record.event.run, run) &&
-  integratorCorrelationsEqual(record.event.result.correlation, run.session)
+  integratorRunCorrelationsEqual(record.event.result.correlation, run)
 
 const exactCandidateObservation = (
   records: ReadonlyArray<JournalRecord>,

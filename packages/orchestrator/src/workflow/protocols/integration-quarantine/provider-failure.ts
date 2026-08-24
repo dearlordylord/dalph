@@ -609,8 +609,8 @@ export const reconcileProviderRunFailureQuarantine = Effect.fn(
 /** Provider-boundary entry point; ordinary IntegratorCallFailure never reaches this path. */
 export const appendProviderRunFailureQuarantine = Effect.fn("IntegrationQuarantine.appendProviderRunFailureQuarantine")(
   function* (input: { readonly run: IntegratorRunCorrelation; readonly failure: IntegratorProviderActivityAbsent }) {
-    if (!integratorCorrelationsEqual(input.failure.correlation, input.run.session)) {
-      return yield* reject(input.run, "provider-activity absence is bound to a foreign Integrator session")
+    if (!integratorRunCorrelationsEqual(input.failure.correlation, input.run)) {
+      return yield* reject(input.run, "provider-activity absence is bound to a foreign Integrator run")
     }
     return yield* reconcileProviderRunFailureQuarantine({
       detail: IntegrationQuarantineFailureDetail.make(input.failure.detail),
