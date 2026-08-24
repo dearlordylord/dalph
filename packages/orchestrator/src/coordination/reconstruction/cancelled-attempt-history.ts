@@ -257,6 +257,7 @@ const postCancellationForwardWorkTags = new Set<WorkflowJournalEvent["_tag"]>([
   "TaskClaimReacquisitionDirected",
   "TaskAttemptPlanned",
   "PlannedAttemptReplaced",
+  "PlannedAttemptExecutorWorkResponsibilityBegan",
   "IntegrationResponsibilityBegan",
   "AttemptChoiceApplied"
 ])

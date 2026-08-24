@@ -869,6 +869,21 @@ it("rejects a StartOrContinue command after cancellation", () => {
   )
 })
 
+it("rejects executor responsibility beginning after cancellation", () => {
+  const lateResponsibility: JournalRecord = {
+    event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+    position: JournalPosition.make(12),
+    runId
+  }
+  expect(invalidDetailsFor(lateResponsibility, [...baseRecords, lateResponsibility])).toContain(
+    "post-cancellation history cannot record forward-work event PlannedAttemptExecutorWorkResponsibilityBegan"
+  )
+})
+
 it("classifies post-cancellation claim rejection by its pre-cancellation intent", () => {
   const foreignClaim = ActiveTaskClaim.make({
     ...exactClaim,

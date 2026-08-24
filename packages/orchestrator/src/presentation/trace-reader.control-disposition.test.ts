@@ -632,6 +632,33 @@ it.effect("fails closed for forward executor work after Run cancellation", () =>
   })
 )
 
+it.effect("fails closed for executor responsibility beginning after Run cancellation", () =>
+  Effect.gen(function* () {
+    const records = cancellationSettlementRecords()
+    const last = records.at(-1)
+    if (last === undefined) return yield* Effect.die("cancellation settlement fixture is empty")
+    const forwardResponsibility = record(
+      Number(last.position) + 1,
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: controlAttempt,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    )
+    const malformed = [...records, forwardResponsibility]
+    const failure = yield* Effect.flip(
+      makeTraceReader({ read: () => Effect.succeed(malformed) }).readAt(
+        TraceCursor.make({ position: forwardResponsibility.position, runId })
+      )
+    )
+    expect(failure).toBeInstanceOf(TraceProjectionInvalid)
+    if (failure._tag !== "TraceProjectionInvalid") return
+    expect(failure.detail).toContain(
+      "post-cancellation history cannot record forward-work event PlannedAttemptExecutorWorkResponsibilityBegan"
+    )
+  })
+)
+
 it.effect(
   "fails a cancellation observation without its exact earlier Run cancellation and keeps another Run readable",
   () =>
