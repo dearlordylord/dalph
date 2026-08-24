@@ -335,10 +335,7 @@ const makePublicRunFixture = (
         trackerLayer,
         Layer.succeed(PlannedAttemptExecutor, executorForApplication(applicationOrdinal)),
         integratorCandidateProviderAuthority,
-        undefined,
-        undefined,
-        undefined,
-        acceptedResultEvidenceStore
+        acceptedResultEvidenceStore === undefined ? {} : { acceptedResultEvidenceStore }
       ).pipe(
         Layer.provide(
           Layer.succeed(

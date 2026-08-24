@@ -80,6 +80,15 @@ export interface ProductionRunReactivationOptions {
   readonly onFailure: (failure: unknown) => Effect.Effect<void>
 }
 
+/** Optional production boundaries that advance one accepted result through delivery and finality. */
+export interface ProductionWorkflowRuntimeBoundaries {
+  readonly targetPromotion?: TargetPromotionRuntimeInput
+  readonly integrationFinality?: CompletionClaimBoundaryService
+  readonly completionTask?: CompletionTaskBoundaryService
+  readonly acceptedResultEvidenceStore?: EvidenceStoreService
+  readonly integrator?: IntegratorService
+}
+
 const defaultProductionRunReactivationCooldownSeconds = 5
 const defaultProductionRunReactivationCooldown = ProductionRunReactivationInterval.make(
   Duration.seconds(defaultProductionRunReactivationCooldownSeconds)
@@ -155,12 +164,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
    * explicit unavailable adapter while candidate cleanup is unsupported).
    */
   integratorCandidateProviderAuthority: IntegratorCandidateProviderAuthorityService,
-  targetPromotion?: TargetPromotionRuntimeInput,
-  integrationFinality?: CompletionClaimBoundaryService,
-  completionTask?: CompletionTaskBoundaryService,
-  acceptedResultEvidenceStore?: EvidenceStoreService,
-  integrator?: IntegratorService
+  runtimeBoundaries: ProductionWorkflowRuntimeBoundaries = {}
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
+  const { acceptedResultEvidenceStore, completionTask, integrationFinality, integrator, targetPromotion } =
+    runtimeBoundaries
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
     Layer.provide(ownershipLayer)

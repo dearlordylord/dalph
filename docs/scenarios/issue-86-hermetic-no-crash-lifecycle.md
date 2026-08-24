@@ -39,10 +39,12 @@ running Dalph coordinator selects task A from the deterministic tracker.
    reports that candidate. Dalph asks real Git to prove those parents.
 5. Dalph asks real Git to replace the bare remote's `master` only if it still
    has the expected old commit. Git applies that compare-and-set once.
-6. Dalph asks the deterministic tracker to complete task A, reads the tracker
-   again, and sees A completed successfully. Dalph releases the exact claim.
-7. Dalph releases the completion claim and records the completed Run
-   termination in SQLite. A successful terminal attempt does not yet carry an
+6. After promotion, Dalph asks the deterministic tracker to replace A's exact
+   active claim with the exact completion claim bound to the promoted attempt.
+   It then asks the tracker to complete A, reads A again, sees it completed
+   successfully, and deletes that exact completion claim.
+7. Dalph records the completed Run termination in SQLite. A successful
+   terminal attempt does not yet carry an
    accepted workflow-disposition occurrence that authorizes Dalph to delete its
    worktree or branch; issue #89 owns that terminal cleanup behavior. Dalph
    therefore leaves those resources and the immutable evidence untouched.

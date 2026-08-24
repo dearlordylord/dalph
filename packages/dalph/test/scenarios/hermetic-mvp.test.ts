@@ -174,6 +174,8 @@ it.effect(
         const completedRequest = yield* Ref.make<Option.Option<ReturnType<typeof completionTaskRequestFor>>>(
           Option.none()
         )
+        const integratorCandidate = yield* Ref.make<Option.Option<GitCommitSha>>(Option.none())
+        const targetPromotionCompareAndSetCalls = yield* Ref.make(0)
         const executorReport = yield* Ref.make<Option.Option<PlannedAttemptExecutorReport>>(Option.none())
         const acceptedEvidence = yield* Ref.make<Option.Option<EvidenceReference>>(Option.none())
         const childHandle = yield* Ref.make<Option.Option<ChildProcessSpawner.ChildProcessHandle>>(Option.none())
@@ -251,10 +253,24 @@ it.effect(
               }
             }),
           completeTask: (request) =>
-            Ref.set(completedRequest, Option.some(request)).pipe(
-              Effect.andThen(Ref.set(lifecycle, "CompletedSuccessfully")),
-              Effect.as(CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId }))
-            ),
+            Effect.gen(function* () {
+              const candidate = yield* Ref.get(integratorCandidate)
+              if (Option.isNone(candidate)) return yield* Effect.die("tracker completion preceded Integrator output")
+              const currentTarget = GitCommitSha.make(
+                yield* runInGitDirectory(
+                  git,
+                  bareRemote,
+                  ["rev-parse", "refs/heads/master"],
+                  "prove promotion before tracker completion"
+                )
+              )
+              if (currentTarget !== candidate.value) {
+                return yield* Effect.die("tracker completion preceded exact candidate promotion")
+              }
+              yield* Ref.set(completedRequest, Option.some(request))
+              yield* Ref.set(lifecycle, "CompletedSuccessfully")
+              return CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId })
+            }).pipe(Effect.orDie),
           readCompletionRequest: (request) =>
             Ref.get(completedRequest).pipe(
               Effect.map((stored) =>
@@ -370,6 +386,7 @@ it.effect(
                   "create explicit integration candidate"
                 )
               )
+              yield* Ref.set(integratorCandidate, Option.some(candidate))
               yield* runInGitDirectory(
                 git,
                 bareRemote,
@@ -390,11 +407,21 @@ it.effect(
           Layer.succeed(TrackerMutation, trackerMutation),
           Layer.succeed(PlannedAttemptExecutor, executor),
           unavailableIntegratorCandidateProviderAuthority,
-          { git: targetPromotionGit },
-          completionClaim,
-          completionTask,
-          evidenceStore,
-          integrator
+          {
+            acceptedResultEvidenceStore: evidenceStore,
+            completionTask,
+            integrationFinality: completionClaim,
+            integrator,
+            targetPromotion: {
+              git: {
+                compareAndSet: (request) =>
+                  Ref.update(targetPromotionCompareAndSetCalls, (calls) => calls + 1).pipe(
+                    Effect.andThen(targetPromotionGit.compareAndSet(request))
+                  ),
+                read: targetPromotionGit.read
+              }
+            }
+          }
         ).pipe(
           Layer.provide(Layer.succeed(TrackerGraphReader, trackerGraphReader)),
           Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -471,13 +498,40 @@ it.effect(
         const decodedEvidence = yield* Schema.decodeUnknownEffect(AcceptedResultEvidenceManifest)(
           JSON.parse(new TextDecoder().decode(evidenceBytes))
         )
+        const eventTags = records.map(({ event }) => event._tag)
+        const qualificationAt = eventTags.indexOf("IntegratorRunCandidateGitObserved")
+        const promotionAttemptAt = eventTags.indexOf("TargetPromotionAttemptIntended")
+        const promotionSucceededAt = eventTags.indexOf("TargetPromotionObservedSuccess")
+        const completionAttemptAt = eventTags.indexOf("CompletionTaskAttemptIntended")
+        const qualificationRecords = records.filter(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
+        const promotionAttemptRecords = records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+        const promotionSuccessRecords = records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
+        const runBeginningRecords = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
+        const runTerminationRecords = records.filter(({ event }) => event._tag === "WorkflowRunTerminated")
 
         expect(targetParents).toEqual([baseSha, decodedEvidence.commit])
         expect(promotedResult).toMatchObject({ exitCode: 0, stdout: "implemented by hermetic child\n" })
         expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")
         expect(yield* Ref.get(trackerClaim)).toEqual(UnclaimedTask.make({ taskId }))
-        expect(records.at(-1)?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
-        expect(records.some(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toBe(true)
+        expect(qualificationRecords).toHaveLength(1)
+        expect(qualificationRecords[0]?.event).toMatchObject({
+          _tag: "IntegratorRunCandidateGitObserved",
+          observation: { _tag: "Commit", directParents: [baseSha, decodedEvidence.commit] }
+        })
+        expect(qualificationAt).toBeGreaterThanOrEqual(0)
+        expect(promotionAttemptAt).toBeGreaterThan(qualificationAt)
+        expect(promotionSucceededAt).toBeGreaterThan(promotionAttemptAt)
+        expect(completionAttemptAt).toBeGreaterThan(promotionSucceededAt)
+        expect(promotionAttemptRecords).toHaveLength(1)
+        expect(promotionSuccessRecords).toHaveLength(1)
+        expect(yield* Ref.get(targetPromotionCompareAndSetCalls)).toBe(1)
+        expect(runBeginningRecords).toHaveLength(1)
+        expect(runTerminationRecords).toHaveLength(1)
+        expect(runTerminationRecords[0]?.event).toMatchObject({
+          _tag: "WorkflowRunTerminated",
+          disposition: "Completed"
+        })
+        expect(records.at(-1)?.event).toEqual(runTerminationRecords[0]?.event)
         expect(records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(true)
         expect(records.some(({ event }) => event._tag === "WorktreeCleanupSettled")).toBe(false)
         expect(records.some(({ event }) => event._tag === "BranchCleanupSettled")).toBe(false)
