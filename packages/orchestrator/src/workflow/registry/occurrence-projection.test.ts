@@ -93,6 +93,7 @@ import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interprete
 import {
   AppliedControlDirection,
   decodeWorkflowOccurrence,
+  describeWorkflowOccurrence,
   originatingActionForPlannedAttemptWorktreeObservation,
   originatingActionForTargetLineageObservation,
   originatingActionForTrackerObservation,
@@ -1492,6 +1493,38 @@ it.effect("generic occurrence consumer renders every runtime classification with
       { classification: "NonActionOccurrence" },
       { actor: "Operator", classification: "InitiatedAction" }
     ])
+  })
+)
+
+it.effect("presents only the proven actor and keeps executor or Integrator details opaque", () =>
+  Effect.gen(function* () {
+    const projection = yield* projectWorkflowOccurrences([
+      record(1, taskTrackerReadIntent(operation)),
+      record(
+        2,
+        taskTrackerGraphFactsObserved(operation, {
+          revision: TrackerRevision.make("truthful-presentation-revision"),
+          taskIds: []
+        })
+      )
+    ])
+    const initiated = projection.occurrences[0]
+    const observed = projection.occurrences[1]
+    if (initiated === undefined || observed === undefined) return yield* Effect.die("presentation fixture is empty")
+
+    expect(describeWorkflowOccurrence(initiated)).toEqual({
+      actor: "DalphCoordinator",
+      actorLabel: "Dalph coordinator",
+      classification: "InitiatedAction",
+      text: "Dalph coordinator initiated tracker read"
+    })
+    expect(describeWorkflowOccurrence(observed)).toEqual({
+      actor: null,
+      actorLabel: "no actor is proven",
+      classification: "NonActionOccurrence",
+      text: "tracker facts observed; no actor is proven"
+    })
+    expect(describeWorkflowOccurrence(initiated).text).not.toMatch(/(?:session|turn|transcript)/iu)
   })
 )
 

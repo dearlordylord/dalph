@@ -343,6 +343,55 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
+/** One human-readable line derived only from an occurrence's proven classification. */
+export interface WorkflowOccurrenceDescription {
+  readonly actor: WorkflowActor["_tag"] | null
+  readonly actorLabel: "Dalph coordinator" | "Operator" | "no actor is proven"
+  readonly classification: WorkflowOccurrencePresentation["classification"]
+  readonly text: string
+}
+
+/**
+ * Keeps presentation useful without exposing executor or Integrator internals.
+ * The occurrence tag identifies the generic workflow boundary; its payload is
+ * intentionally left to the exact trace item rather than copied into prose.
+ */
+const workflowOccurrenceSubjectRules = [
+  [/^TaskTrackerReadInitiated$/u, "tracker read"],
+  [/^TaskTrackerFactsObserved$/u, "tracker facts observed"],
+  [/Executor/u, "executor activity"],
+  [/Integrator|Integration/u, "integration activity"],
+  [/TargetPromotion/u, "target promotion"],
+  [/TaskClaim/u, "task claim activity"],
+  [/Worktree|Lineage|GitRead/u, "Git activity"],
+  [/Control|AttemptChoice/u, "control direction"]
+] as const
+
+const workflowOccurrenceSubject = (tag: WorkflowOccurrence["_tag"]): string =>
+  workflowOccurrenceSubjectRules.find(([pattern]) => pattern.test(tag))?.[1] ??
+  tag.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase()
+
+/** Renders the actor attribution carried by one occurrence, never a related occurrence. */
+export const describeWorkflowOccurrence = (occurrence: WorkflowOccurrence): WorkflowOccurrenceDescription => {
+  const presentation = presentWorkflowOccurrence(occurrence)
+  const subject = workflowOccurrenceSubject(occurrence._tag)
+  if (presentation.classification === "NonActionOccurrence") {
+    return {
+      actor: null,
+      actorLabel: "no actor is proven",
+      classification: presentation.classification,
+      text: `${subject}; no actor is proven`
+    }
+  }
+  const actorLabel = presentation.actor === "DalphCoordinator" ? "Dalph coordinator" : "Operator"
+  return {
+    actor: presentation.actor,
+    actorLabel,
+    classification: presentation.classification,
+    text: `${actorLabel} initiated ${subject}`
+  }
+}
+
 export const workflowOccurrenceProjectionVersion = 9 as const // eslint-disable-line no-magic-numbers
 
 const relationshipKey = (runId: RunId, relatedId: string): string => JSON.stringify([runId, relatedId])

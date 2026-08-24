@@ -5,7 +5,11 @@ import type {
 import type { AttemptId } from "../../../packages/contracts/src/planned-attempt.ts"
 import { TaskId, type TaskId as TaskIdType } from "../../../packages/contracts/src/task-identity.ts"
 import type { RunId } from "../../../packages/contracts/src/workflow-identity.ts"
-import { deliveryProposalOrderTaskId, type TraceAtCursor } from "@dalph/orchestrator"
+import {
+  deliveryProposalOrderTaskId,
+  describeWorkflowOccurrence,
+  type TraceAtCursor
+} from "@dalph/orchestrator"
 import { Match } from "effect"
 import {
   deliveryGraphEncoding,
@@ -906,6 +910,20 @@ const renderProductionTraceHistory = (
     "Durable history, task graph, and workflow-causal relationships below are read from the schema-versioned production trace reader. Authored story and runtime-owner observations remain auxiliary chronology and never select or renumber a journal cursor.",
     "trace-history-explanation"
   )
+  const legend = document.createElement("ul")
+  legend.dataset.role = "trace-history-legend"
+  appendText(legend, "li", "initiated action · actor proven from the occurrence")
+  appendText(legend, "li", "non-action occurrence · no actor is proven")
+  appendText(legend, "li", "executor and Integrator internals remain opaque")
+  appendText(legend, "li", "no continuous transcript; this is a committed snapshot")
+  section.append(legend)
+  const currentStatus = appendText(
+    section,
+    "p",
+    "Passive current status is separate from the selected historical cursor and may be unavailable.",
+    "trace-current-status"
+  )
+  currentStatus.dataset.role = "trace-current-status"
 
   let model = makeTraceCursorSelectionModel(
     histories.map(({ cursor }) => cursor),
@@ -1085,14 +1103,19 @@ const renderProductionTraceHistory = (
     appendText(itemsHost, "h5", `Workflow history items · ${history.items.length}`)
     const itemList = document.createElement("ul")
     for (const item of history.items) {
+      const description = describeWorkflowOccurrence(item.occurrence)
       const historyItem = appendText(
         itemList,
         "li",
-        `Run ${item.identity.runId} · journal position ${item.identity.position} · ${item.occurrence._tag} · operations ${item.operationIds.length === 0 ? "none" : item.operationIds.join(", ")}`
+        `Run ${item.identity.runId} · journal position ${item.identity.position} · ${description.text} · operations ${item.operationIds.length === 0 ? "none" : item.operationIds.join(", ")}`
       )
+      historyItem.dataset.role = "trace-history-item"
       historyItem.dataset.runId = item.identity.runId
       historyItem.dataset.journalPosition = String(item.identity.position)
-      appendExactJson(historyItem, "Exact projected occurrence", item.occurrence, "trace-history-item-exact")
+      historyItem.dataset.identity = `${item.identity.runId}:${item.identity.position}`
+      historyItem.dataset.classification = description.classification
+      historyItem.dataset.actor = description.actor ?? "none"
+      appendExactJson(historyItem, "Exact projected occurrence (schema evidence)", item.occurrence, "trace-history-item-exact")
     }
     if (history.items.length === 0) appendText(itemList, "li", "No projected workflow occurrence is visible at this cursor.")
     itemsHost.append(itemList)

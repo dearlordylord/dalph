@@ -37,14 +37,14 @@ import {
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion
 } from "@dalph/orchestrator"
-import { Effect, Layer, Ref, Schema } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
 import {
-  encodeTraceAtCursor,
+  type encodeTraceAtCursor,
   encodeTraceControlDispositionFacet,
-  encodeTraceHistoryItem,
+  type encodeTraceHistoryItem,
   HistoricalTraceConsole,
   historicalTraceConsoleLayer,
   renderTraceAtCursor,
@@ -173,9 +173,11 @@ it("canonicalizes the production cursor view without changing its committed iden
   expect(canonical.items[0]?.identity).toEqual({ position: JournalPosition.make(2), runId })
   expect(JSON.parse(encodeTraceControlDispositionFacet(traceAtCursor))).toEqual(traceAtCursor.facets.controlDisposition)
   expect(renderTraceAtCursor(traceAtCursor)).toEqual([
-    encodeTraceHistoryItem(historyItem),
-    encodeTraceHistoryItem(laterHistoryItem),
-    encodeTraceHistoryItem(executorResponsibilityItem)
+    "Historical snapshot · Run console-production-trace-run · through journal position 4",
+    "Journal position 2 · Dalph coordinator initiated tracker read",
+    "Journal position 3 · Dalph coordinator initiated tracker read",
+    "Journal position 4 · Dalph coordinator initiated executor activity",
+    "Current status is separate and is not included in this historical snapshot."
   ])
 })
 
@@ -186,9 +188,19 @@ it.effect("writes one read-only production view through the existing stdout boun
 
     yield* writeTraceAtCursor(output, traceAtCursor)
 
-    expect(yield* Ref.get(lines)).toEqual([encodeTraceAtCursor(traceAtCursor)])
+    expect(yield* Ref.get(lines)).toEqual(renderTraceAtCursor(traceAtCursor))
   })
 )
+
+it("renders an exact historical cursor without a transcript or internal executor payload", () => {
+  const lines = renderTraceAtCursor(traceAtCursor)
+  expect(lines[0]).toContain("Historical snapshot")
+  expect(lines[0]).toContain("Run console-production-trace-run")
+  expect(lines[0]).toContain("journal position 4")
+  expect(lines.at(-1)).toBe("Current status is separate and is not included in this historical snapshot.")
+  expect(lines.join("\n")).not.toMatch(/(?:transcript|session|turn|expectedTargetHead|acceptedResult)/iu)
+  expect(lines.filter((line) => line.includes("Journal position 4"))).toHaveLength(1)
+})
 
 it.effect("reads one exact production cursor through TraceReader and writes its schema-versioned view", () =>
   Effect.gen(function* () {
@@ -201,30 +213,32 @@ it.effect("reads one exact production cursor through TraceReader and writes its 
     type PresentationLayerOutput = Assert<IsExactly<Layer.Success<typeof presentationLayer>, HistoricalTraceConsole>>
     const presentationLayerOutput: PresentationLayerOutput = true
     const consoleLayer = Layer.merge(presentationLayer, memoryJournalStoreLayer)
-    const { encoded, historyAfterPresentation, historyBeforePresentation, view } = yield* Effect.gen(function* () {
-      const journal = yield* JournalStore
-      yield* journal.beginRun(
-        runId,
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      )
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("console-e2e-operation"), target)
-      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-      const historyBeforePresentation = yield* journal.read(runId)
-      const console = yield* HistoricalTraceConsole
-      const view = yield* console.presentAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
-      const [line] = yield* Ref.get(lines)
-      expect(line).toBeDefined()
-      const historyAfterPresentation = yield* journal.read(runId)
-      const encoded = yield* Schema.decodeUnknownEffect(TraceAtCursor)(JSON.parse(line ?? ""))
-      return { encoded, historyAfterPresentation, historyBeforePresentation, view }
-    }).pipe(Effect.provide(consoleLayer))
+    const { historyAfterPresentation, historyBeforePresentation, renderedLines, view } = yield* Effect.gen(
+      function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(
+          runId,
+          target,
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        )
+        const operation = makeTrackerGraphObservationOperation(OperationId.make("console-e2e-operation"), target)
+        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        const historyBeforePresentation = yield* journal.read(runId)
+        const console = yield* HistoricalTraceConsole
+        const view = yield* console.presentAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
+        const renderedLines = yield* Ref.get(lines)
+        expect(renderedLines[0]).toBeDefined()
+        const historyAfterPresentation = yield* journal.read(runId)
+        return { historyAfterPresentation, historyBeforePresentation, renderedLines, view }
+      }
+    ).pipe(Effect.provide(consoleLayer))
 
     expect(view.cursor).toEqual({ position: JournalPosition.make(2), runId })
     expect(view.items[0]?.identity).toEqual({ position: JournalPosition.make(2), runId })
     expect(view.items[0]?.occurrence._tag).toBe("TaskTrackerReadInitiated")
-    expect(encoded).toEqual(view)
-    expect(encoded.facets).toEqual(view.facets)
+    expect(renderedLines).toEqual(renderTraceAtCursor(view))
+    expect(renderedLines[0]).toContain("Historical snapshot")
+    expect(renderedLines.join("\n")).toContain("Dalph coordinator initiated tracker read")
     expect(JSON.parse(encodeTraceControlDispositionFacet(view))).toEqual(view.facets.controlDisposition)
     expect(historyAfterPresentation).toEqual(historyBeforePresentation)
     expect(presentationLayerOutput).toBe(true)

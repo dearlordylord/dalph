@@ -920,6 +920,45 @@ await scenario("selects exact production cursors for Lab back/forward history wh
   assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex]?.cursor.position), "Forward must restore the exact later production cursor")
 })
 
+await scenario("renders truthful actors, opaque internals, and distinct repeated promotion identities", async () => {
+  const { document, root, settled } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) =>
+    catalogKey === "authored:targetPromotionAmbiguityExhaustion"
+  )
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+    throw new Error("The repeated-promotion trace fixture is missing")
+  }
+  const latest = result.traceHistories.at(-1)
+  if (latest === undefined) throw new Error("The repeated-promotion trace has no terminal cursor")
+  const attempts = latest.items.filter(({ occurrence }) => occurrence._tag === "TargetPromotionAttemptRequested")
+  assert(attempts.length === 3, "The terminal trace must retain all three promotion attempts")
+  assert(
+    new Set(attempts.map(({ identity }) => `${identity.runId}:${identity.position}`)).size === attempts.length,
+    "Repeated promotion attempts must retain distinct exact TraceItemIdentity values"
+  )
+
+  const done = settled(singleCassetteSettledEvent)
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+  await done
+  const panel = document.querySelector<HTMLElement>("[data-role='trace-history']")
+  if (panel === null) throw new Error("The production trace history panel is missing")
+  const legend = panel.querySelector<HTMLElement>("[data-role='trace-history-legend']")
+  const legendText = legend?.textContent ?? ""
+  assert(legendText.includes("initiated action · actor proven"), "The history legend must explain proven actors")
+  assert(legendText.includes("non-action occurrence · no actor is proven"), "The history legend must explain absent actors")
+  assert(legendText.includes("executor and Integrator internals remain opaque"), "The history legend must explain opaque internals")
+  assert(legendText.includes("no continuous transcript"), "The history legend must state that streaming is unavailable")
+  assert(panel.querySelector("[data-role='trace-current-status']") !== null, "Passive current status must have a separate region")
+  const exactItems = [...panel.querySelectorAll<HTMLElement>("[data-role='trace-history-item']")]
+  assert(exactItems.length >= attempts.length, "Each repeated promotion attempt must render one history item")
+  for (const attempt of attempts) {
+    const identity = `${attempt.identity.runId}:${attempt.identity.position}`
+    assert(exactItems.some((item) => item.dataset.identity === identity), `The Lab must render exact identity ${identity}`)
+  }
+})
+
 await scenario("renders exact trace facet payloads and source correlations in the Lab", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) =>

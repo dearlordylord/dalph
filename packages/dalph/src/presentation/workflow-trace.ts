@@ -5,7 +5,8 @@ import {
   TraceItem,
   TraceOutput,
   TraceReader,
-  WorkflowTrace
+  WorkflowTrace,
+  describeWorkflowOccurrence
 } from "@dalph/orchestrator"
 import type { JournalStoreError, TraceCursor, TraceOutputError, TraceReaderError } from "@dalph/orchestrator"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -38,15 +39,25 @@ export const encodeTraceControlDispositionFacet = (history: TraceAtCursor): stri
     Schema.encodeUnknownSync(TraceControlDispositionFacet)(semanticTraceAtCursor(history).facets.controlDisposition)
   )
 
-/** Renders recorded occurrences in their committed order; task ordering remains a separate derived view. */
-export const renderTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<string> =>
-  semanticTraceAtCursor(history).items.map(encodeTraceHistoryItem)
+/** Renders one immutable committed cursor with truthful actors and no internal transcript. */
+export const renderTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<string> => {
+  const canonical = semanticTraceAtCursor(history)
+  return [
+    `Historical snapshot · Run ${canonical.cursor.runId} · through journal position ${canonical.cursor.position}`,
+    ...canonical.items.map(
+      ({ identity, occurrence }) =>
+        `Journal position ${identity.position} · ${describeWorkflowOccurrence(occurrence).text}`
+    ),
+    "Current status is separate and is not included in this historical snapshot."
+  ]
+}
 
 /** Writes one read-only production historical view through the existing console output boundary. */
 export const writeTraceAtCursor = (
   output: Pick<TraceOutput["Service"], "writeLine">,
   history: TraceAtCursor
-): Effect.Effect<void, TraceOutputError> => output.writeLine(encodeTraceAtCursor(history))
+): Effect.Effect<void, TraceOutputError> =>
+  Effect.forEach(renderTraceAtCursor(history), output.writeLine, { discard: true })
 
 /** Read-only production console service: one exact cursor is read and its view is written once. */
 export interface HistoricalTraceConsoleService {
