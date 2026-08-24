@@ -2,6 +2,7 @@ import { Effect, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import {
   ActiveTaskClaim,
+  type ActiveTaskClaim as ActiveTaskClaimValue,
   isExactTaskClaim,
   TaskClaimAcquisition,
   TaskClaimConflict,
@@ -21,10 +22,19 @@ class RepeatTaskClaimObservation extends Schema.TaggedError<RepeatTaskClaimObser
   {}
 ) {}
 
-const taskClaimObservationBound = 3
-const taskClaimAcquisitionSchedule = Schedule.recurs(taskClaimObservationBound - 1).pipe(
+const maximumTaskClaimRequestCount = 3
+const taskClaimAcquisitionSchedule = Schedule.recurs(maximumTaskClaimRequestCount - 1).pipe(
   Schedule.while(({ input }) => input instanceof RepeatTaskClaimObservation)
 )
+
+const acceptObservedActiveClaim = (
+  observation: ActiveTaskClaimValue,
+  attemptedClaim: ActiveTaskClaimValue,
+  acquisition: TaskClaimAcquisition
+): Effect.Effect<ActiveTaskClaimValue, TaskClaimConflict> =>
+  isExactTaskClaim(observation, attemptedClaim)
+    ? Effect.succeed(observation)
+    : Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed: observation }))
 
 /**
  * Acquires one exact claim through fresh tracker observations. Every request,
@@ -39,9 +49,7 @@ export const runTaskClaimAcquisitionProtocol = Effect.fn("TrackerMutation.runTas
   const pass = Effect.gen(function* () {
     const observation = yield* tracker.readTaskClaim(acquisition.taskId)
     if (observation._tag === "ActiveTaskClaim") {
-      return isExactTaskClaim(observation, attemptedClaim)
-        ? observation
-        : yield* new TaskClaimConflict({ attempted: acquisition, observed: observation })
+      return yield* acceptObservedActiveClaim(observation, attemptedClaim, acquisition)
     }
 
     // A fresh unclaimed observation authorizes either the first request or a
@@ -77,11 +85,12 @@ export const runTaskClaimAcquisitionProtocol = Effect.fn("TrackerMutation.runTas
               // request, so reconcile it with one last authoritative read.
               const observation = yield* tracker.readTaskClaim(acquisition.taskId)
               if (observation._tag === "ActiveTaskClaim") {
-                return isExactTaskClaim(observation, attemptedClaim)
-                  ? observation
-                  : yield* new TaskClaimConflict({ attempted: acquisition, observed: observation })
+                return yield* acceptObservedActiveClaim(observation, attemptedClaim, acquisition)
               }
-              return yield* new TaskClaimAcquisitionDidNotConverge({ acquisition, attempts: taskClaimObservationBound })
+              return yield* new TaskClaimAcquisitionDidNotConverge({
+                acquisition,
+                attempts: maximumTaskClaimRequestCount
+              })
             })
           : Effect.fail(failure)
     )
