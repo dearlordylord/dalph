@@ -14,6 +14,16 @@ described in `ARCHITECTURE.md`. The native lock dependency must either ship a ma
 or the repository must explicitly accept and provide its source-build toolchain;
 an accidental local compilation is not upgrade evidence.
 
+For a pull request or push whose exact diff contains only allowlisted
+documentation paths, CI runs one Ubuntu documentation gate instead of the
+supported-Node comprehensive matrix. That gate checks the exact diff for
+whitespace errors, runs the change-classifier controls, and scans only the
+changed commits for secrets. Empty, unreadable, initial-push, manually
+dispatched, mixed, workflow, script, manifest, lockfile, source, fixture, and
+unknown-path changes fail closed to the comprehensive matrix. The allowlist and
+its positive and negative controls live in
+`scripts/classify-docs-only-change.mjs` and its focused test.
+
 ## Operational scenario gate
 
 Before planning or implementing a behavior change, read
@@ -119,6 +129,8 @@ requires a setting that cannot correctly be shared.
   boundaries use the evaluation bracket; application runtime and adapters stay
   in the production bracket.
 - `pnpm test:mbt` runs the Quint-connected executable conformance suites.
+- `pnpm test:ci-change-classification` proves the documentation-only CI
+  allowlist and its fail-closed event/Git-diff behavior.
 - `pnpm check:lab` runs the Reducer Lab maintained evaluation: the Lab package's
   typecheck, maintained-cassette smoke, and production build. It does not run
   `browser-smoke`, which needs a hosted Lab and Chromium.

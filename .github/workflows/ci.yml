@@ -15,14 +15,18 @@ permissions:
   contents: read
 
 jobs:
-  node-support:
-    name: Resolve supported Node versions
+  change-plan:
+    name: Classify change and resolve supported Node versions
     runs-on: ubuntu-latest
     outputs:
+      base-sha: ${{ steps.change.outputs.base-sha }}
+      docs-only: ${{ steps.change.outputs.docs-only }}
       versions: ${{ steps.versions.outputs.versions }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Read Node versions from package engines
         id: versions
@@ -36,9 +40,43 @@ jobs:
             require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `versions=${JSON.stringify(versions)}\n`)
           '
 
+      - name: Classify the exact changed paths
+        id: change
+        env:
+          DALPH_CI_EVENT_NAME: ${{ github.event_name }}
+          DALPH_CI_HEAD_SHA: ${{ github.sha }}
+          DALPH_CI_PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          DALPH_CI_PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
+        run: node scripts/classify-docs-only-change.mjs
+
+  docs-quality:
+    name: Documentation-only quality gate
+    needs: change-plan
+    if: needs.change-plan.outputs.docs-only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DALPH_DOCS_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: bash scripts/install-gitleaks.sh
+
+      - name: Check the documentation change
+        run: |
+          git diff --check "$DALPH_DOCS_BASE_SHA" "$GITHUB_SHA" --
+          node --test scripts/classify-docs-only-change.test.mjs
+          gitleaks git --redact --no-banner --log-opts="$DALPH_DOCS_BASE_SHA..$GITHUB_SHA"
+
   quality:
     name: Comprehensive quality gate (Node ${{ matrix.node-version }})
-    needs: node-support
+    needs: change-plan
+    if: needs.change-plan.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Pull requests compare with the target branch tip; pushes compare with
@@ -51,7 +89,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ${{ fromJSON(needs.node-support.outputs.versions) }}
+        node-version: ${{ fromJSON(needs.change-plan.outputs.versions) }}
 
     steps:
       - name: Checkout

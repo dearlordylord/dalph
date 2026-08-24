@@ -15,6 +15,7 @@
     "memory:update": "node scripts/update-project-memory-toolkit.mjs",
     "memory:wake": "node scripts/project-memory.mjs wake",
     "test:memory": "node --test scripts/project-memory.test.mjs",
+    "test:ci-change-classification": "node --test scripts/classify-docs-only-change.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:effect": "node scripts/run-effect-diagnostics.mjs",
     "lint": "pnpm lint:code && pnpm check:duplicates",
