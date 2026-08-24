@@ -69,6 +69,7 @@ on the issue while later dependent work proceeds.
 | `issue-77-production-cleanup-qualification.md` | 77 |
 | `issue-70-terminal-history-retirement.md` | 70 |
 | `issue-79-capability-registration.md` | 79 |
+| `issue-86-hermetic-no-crash-lifecycle.md` | 86 |
 
 **Accepted, not yet implemented** — the owning issue is open. These state
 required behavior and must not be read as a description of what Dalph does

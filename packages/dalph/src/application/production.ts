@@ -33,6 +33,8 @@ import {
   WorkflowInterpreter,
   WorkflowTrace,
   type EvidenceStoreService,
+  Integrator,
+  type IntegratorService,
   type TargetPromotionRuntimeInput,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService,
@@ -156,7 +158,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinality?: CompletionClaimBoundaryService,
   completionTask?: CompletionTaskBoundaryService,
-  acceptedResultEvidenceStore?: EvidenceStoreService
+  acceptedResultEvidenceStore?: EvidenceStoreService,
+  integrator?: IntegratorService
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
   const ownershipLayer = productionCoordinatorOwnershipLayer(target)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
@@ -199,6 +202,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     })
   )
   const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))
+  const integratorLayer = integrator === undefined ? Layer.empty : Layer.succeed(Integrator, Integrator.of(integrator))
   const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithApplicationExit)
 
   return Layer.unwrap(
@@ -228,6 +232,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           cleanupBoundaryLayer,
           acceptedResultEvidenceStore
         ).pipe(
+          Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
           Layer.provide(gitIntegratorCandidateLayer),
           Layer.provide(operatorControlLayer),
