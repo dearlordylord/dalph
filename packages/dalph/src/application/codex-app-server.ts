@@ -70,6 +70,7 @@ export interface CodexBackgroundTerminal {
 const CodexAppServerOperation = Schema.Literals([
   "initialize",
   "thread/start",
+  "thread/list",
   "thread/read",
   "thread/resume",
   "turn/start",
@@ -207,6 +208,8 @@ export interface CodexAppServerService {
   /** Exact process root used only by the Node execution-substrate activity census. */
   readonly serverPid?: number
   readonly startThread: (cwd: string) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
+  /** Complete persistent-thread identity read used to reconcile an ambiguous thread/start. */
+  readonly listThreads?: () => Effect.Effect<ReadonlyArray<CodexThreadSnapshot>, CodexAppServerFailure>
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
     threadId: CodexThreadId,
@@ -1203,7 +1206,10 @@ const normalizeThread = (
   const source = value
   const id = stringValue(source["id"])
   const cwd = stringValue(source["cwd"])
-  const status = threadStatusValue(source["status"])
+  const rawStatus = threadStatusValue(source["status"])
+  // `thread/list` summaries may omit a live status while still carrying the
+  // durable id and cwd needed to resume and complete the identity read.
+  const status = rawStatus === undefined && operation === "thread/list" ? "idle" : rawStatus
   if (id === undefined || cwd === undefined || !isCodexThreadStatus(status)) {
     return operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
   }
@@ -2472,6 +2478,25 @@ export const codexAppServerLayer = (
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
         return yield* normalizedThreadEffect(normalizeThread(response["thread"], "thread/start"))
       })
+      const listThreads = Effect.fn("CodexAppServer.listThreads")(function* () {
+        const response = responseObject(
+          yield* rpc.request("thread/list", "thread/list", { includeTurns: false }),
+          "thread/list"
+        )
+        if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
+        const rawThreads = response["data"] ?? response["threads"]
+        if (!Array.isArray(rawThreads)) {
+          return yield* Effect.fail(operationFailure("thread/list", "Malformed", "thread list is invalid"))
+        }
+        const normalizedThreads = rawThreads.map((thread) => normalizeThread(thread, "thread/list"))
+        const failure = normalizedThreads.find(
+          (thread): thread is CodexAppServerFailure => thread instanceof CodexAppServerFailure
+        )
+        if (failure !== undefined) return yield* Effect.fail(failure)
+        return normalizedThreads.filter(
+          (thread): thread is CodexThreadSnapshot => !(thread instanceof CodexAppServerFailure)
+        )
+      })
       const readThread = Effect.fn("CodexAppServer.readThread")(function* (threadId: CodexThreadId) {
         const response = responseObject(
           yield* rpc.request("thread/read", "thread/read", { threadId, includeTurns: true }),
@@ -2556,6 +2581,7 @@ export const codexAppServerLayer = (
         incarnation: liveIncarnation,
         serverPid: childPid,
         startThread,
+        listThreads,
         readThread,
         resumeThread,
         startTurn,

@@ -42,6 +42,12 @@ const responseFor = (method) => {
   if (mode === "response-not-object" && method === "thread/start") return "not-an-object"
   if (mode === "read-response-not-object" && method === "thread/read") return "not-an-object"
   if (mode === "resume-response-not-object" && method === "thread/resume") return "not-an-object"
+  if (mode === "thread-list-not-array" && method === "thread/list") return { data: {} }
+  if (mode === "thread-list-invalid-item" && method === "thread/list") return { data: [null] }
+  if (mode === "thread-list-invalid-fields" && method === "thread/list") {
+    return { data: [{ ...validThread, cwd: "", status: "unknown" }] }
+  }
+  if (mode === "thread-list-valid" && method === "thread/list") return { data: [validThread] }
   if (mode === "turn-response-not-object" && method === "turn/start") return "not-an-object"
   if (mode === "background-response-not-object" && method === "thread/backgroundTerminals/list") return "not-an-object"
   if (mode === "terminate-response-not-object" && method === "thread/backgroundTerminals/terminate") return "not-an-object"
@@ -175,11 +181,13 @@ const responseFor = (method) => {
       ? { thread: validThread }
       : method === "turn/start"
         ? { turn: validTurn }
-        : method === "thread/backgroundTerminals/list"
-          ? { data: [] }
-          : method === "thread/backgroundTerminals/terminate"
-            ? { terminated: true }
-            : {}
+            : method === "thread/backgroundTerminals/list"
+              ? { data: [] }
+              : method === "thread/list"
+                ? { data: [] }
+              : method === "thread/backgroundTerminals/terminate"
+                ? { terminated: true }
+                : {}
 }
 const onMessage = (message) => {
   if (message.method === "initialized") return
@@ -364,6 +372,24 @@ it.effect("reconciles valid turn markers, metadata, status, and correlation thro
       Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.id)
     )
     expect(ignoredInputShape).toBe("protocol-thread")
+  })
+)
+
+it.effect("reads a complete persistent thread list and preserves malformed-list failures", () =>
+  Effect.gen(function* () {
+    const listed = yield* withFixture("thread-list-valid", (app) => {
+      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
+    })
+    expect(listed).toEqual(["protocol-thread"])
+
+    for (const mode of ["thread-list-not-array", "thread-list-invalid-item", "thread-list-invalid-fields"] as const) {
+      const result = yield* withFixture(mode, (app) => {
+        if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+        return Effect.exit(app.listThreads())
+      })
+      expectAppFailure(result, "thread/list")
+    }
   })
 )
 

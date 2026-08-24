@@ -14,6 +14,25 @@ export {
 } from "./application/codex-attempt-store.js"
 export { codexAppServerNodeLayer, type CodexAppServerLayerConfig } from "./application/codex-app-server.js"
 export {
+  CodexIntegratorConfiguration,
+  CodexIntegratorPrivateRecord,
+  CodexIntegratorPrivateRevision,
+  CodexIntegratorPrivateRun,
+  CodexIntegratorPrivateStore,
+  CodexIntegratorStoreFailure,
+  IntegratorCandidateWorktreePath,
+  IntegratorCandidateWorktreeRoot,
+  IntegratorPrivateStoreLocator,
+  candidateWorktreePathFor,
+  codexIntegratorLayer,
+  codexIntegratorProviderLayer,
+  memoryCodexIntegratorPrivateStoreLayer,
+  nodeCodexIntegratorLayer,
+  nodeCodexIntegratorPrivateStoreLayer,
+  nodeCodexIntegratorProviderLayer
+} from "./application/codex-integrator.js"
+export type { CodexIntegratorPrivateStoreService } from "./application/codex-integrator.js"
+export {
   CodexReplacementAuthority,
   CodexReplacementAuthorityFailure,
   CodexReplacementAuthorityProof,
