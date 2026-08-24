@@ -84,13 +84,6 @@ today.
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-71-qualify-real-github-graph-membership-claims.md` | 71 |
 
-**Proposed for maintainer acceptance** — these files freshen an open issue but
-do not authorize implementation until their status changes to accepted.
-
-| File | Issue |
-|---|---|
-| `issue-64-revise-future-technical-attempt-ceiling.md` | 64 |
-
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
 which behavior is no longer accepted. They must not authorize implementation
@@ -98,6 +91,7 @@ until replacement operational scenarios exist.
 
 | File | Issue | Status |
 |---|---:|---|
+| `issue-64-revise-future-technical-attempt-ceiling.md` | 64 | Never accepted; issue closed as not planned and fixed protocol-specific limits retained |
 | `issue-60-promote-or-reconcile.md` | 60 | Promotion retained; #59 evidence premise obsolete |
 | `issue-61-complete-task-and-release-dependants.md` | 61 | Tracker behavior retained; evidence premise requires reconciliation |
 | `issue-76-production-evidence-store.md` | 76 | Storage retained; #59 chain element obsolete |
