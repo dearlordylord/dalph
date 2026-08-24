@@ -481,6 +481,7 @@ export {
   makeTraceReader,
   readTraceAt,
   readTracePresentation,
+  traceControlDispositionFacetVersion,
   traceReaderSchemaVersion,
   type TraceJournalReadSource,
   type TracePresentation,

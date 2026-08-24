@@ -78,7 +78,13 @@ interface CleanupHistoryDescriptorStrategies<Authorization> {
     | undefined
   readonly contradiction: (
     event: Event
-  ) => { readonly identityMatches: boolean; readonly recordKey: JournalRecord["key"] } | undefined
+  ) =>
+    | {
+        readonly identityMatches: boolean
+        readonly observationOperationId: string
+        readonly recordKey: JournalRecord["key"]
+      }
+    | undefined
   readonly settled: (
     event: Event,
     context: { readonly absence: JournalRecord; readonly mutationResult: JournalRecord | undefined }
@@ -301,8 +307,18 @@ export const validateCleanupHistory = <Authorization>(
 
     if (event._tag === data.contradictionTag) {
       const identity = strategies.contradiction(event)
-      if (identity === undefined || !exactRecord(record, data.runId, identity.recordKey) || !identity.identityMatches) {
-        return invalid("cleanup contradiction has a foreign key, authorization, or subject")
+      const latestObservation = latest(state.observations)
+      const latestObservationIdentity =
+        latestObservation === undefined ? undefined : strategies.observationResult(latestObservation.event)
+      if (
+        identity === undefined ||
+        latestObservation === undefined ||
+        latestObservation.event._tag !== data.observedTag ||
+        latestObservationIdentity?.operationId !== identity.observationOperationId ||
+        !exactRecord(record, data.runId, identity.recordKey) ||
+        !identity.identityMatches
+      ) {
+        return invalid("cleanup contradiction requires its exact preceding observation intent and result")
       }
       state = { ...state, contradictedPosition: record.position }
       continue

@@ -156,13 +156,14 @@ import {
 } from "../workflow/task-tracker-facts/observation.js"
 import {
   TraceAtCursor,
+  TraceBranchCleanupProgress,
   TraceBranchCleanupStep,
-  TraceCleanupProgress,
   TraceCleanupStatus,
   TraceControlDispositionFacet,
   TraceControlFact,
   TraceDispositionFact,
   TraceIntegratorCandidateCleanupStep,
+  TraceIntegratorCandidateCleanupProgress,
   TraceCursor,
   TraceHistoricalFacets,
   TraceItemIdentity,
@@ -173,6 +174,7 @@ import {
   TraceProjectionInvalid,
   TraceRetainedResponsibility,
   TraceWorktreeCleanupStep,
+  TraceWorktreeCleanupProgress,
   makeTraceReader
 } from "./trace-reader.js"
 import { traceHistoricalFacetsIssue, type HistoricalFacetFactories } from "./trace-reader-historical-facets.js"
@@ -226,7 +228,11 @@ const independentAttempt = PlannedTaskAttempt.make({
 
 const historicalFacetFactories = {
   branchCleanupStep: { make: (input: Omit<TraceBranchCleanupStep, "_tag">) => TraceBranchCleanupStep.make(input) },
-  cleanupProgress: TraceCleanupProgress.cases,
+  cleanupProgress: {
+    Branch: { make: (input) => TraceBranchCleanupProgress.make(input) },
+    IntegratorCandidate: { make: (input) => TraceIntegratorCandidateCleanupProgress.make(input) },
+    Worktree: { make: (input) => TraceWorktreeCleanupProgress.make(input) }
+  },
   cleanupStatus: TraceCleanupStatus.cases,
   controlDisposition: {
     make: (input: Omit<TraceControlDispositionFacet, "_tag">) => TraceControlDispositionFacet.make(input)

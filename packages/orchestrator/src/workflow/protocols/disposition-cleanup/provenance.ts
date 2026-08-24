@@ -1044,7 +1044,8 @@ const worktreeHistoryDescriptor = (
         Match.tags({
           WorktreeCleanupContradicted: (matched) => ({
             recordKey: worktreeCleanupContradictedRecordKey(authorization.operationId),
-            identityMatches: matched.observation.locator === authorization.locator
+            identityMatches: matched.observation.locator === authorization.locator,
+            observationOperationId: matched.operationId
           })
         }),
         Match.option,
@@ -1202,7 +1203,8 @@ const branchHistoryDescriptor = (
         Match.tags({
           BranchCleanupContradicted: (matched) => ({
             recordKey: branchCleanupContradictedRecordKey(authorization.operationId),
-            identityMatches: matched.observation.branch === authorization.locator
+            identityMatches: matched.observation.branch === authorization.locator,
+            observationOperationId: matched.operationId
           })
         }),
         Match.option,
@@ -1367,7 +1369,8 @@ const candidateHistoryDescriptor = (
         Match.tags({
           IntegratorCandidateCleanupContradicted: (matched) => ({
             recordKey: integratorCandidateCleanupContradictedRecordKey(authorization.operationId),
-            identityMatches: matched.observation.locator === authorization.locator
+            identityMatches: matched.observation.locator === authorization.locator,
+            observationOperationId: matched.operationId
           })
         }),
         Match.option,

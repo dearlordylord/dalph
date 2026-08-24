@@ -408,6 +408,7 @@ const descriptor: CleanupHistoryDescriptor<WorktreeCleanupAuthorization> = {
       event._tag === "WorktreeCleanupContradicted"
         ? {
             identityMatches: event.operationId === authorization.operationId,
+            observationOperationId: event.operationId,
             recordKey: worktreeCleanupContradictedRecordKey(event.authorization.operationId)
           }
         : undefined,
@@ -660,6 +661,10 @@ describe("cleanup history chronology", () => {
           ({ event }) => event._tag === "WorktreeCleanupSettled",
           contradiction(9, foreignOperationId)
         )
+    ],
+    [
+      "contradiction without an ordered observation",
+      (_records: ReadonlyArray<JournalRecord>) => [authorized(), contradiction(2)]
     ],
     [
       "event after terminal contradiction",

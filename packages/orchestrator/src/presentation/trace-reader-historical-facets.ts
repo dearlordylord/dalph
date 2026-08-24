@@ -38,6 +38,7 @@ import type {
   TracePreservationDisposition,
   TraceRetainedResponsibility
 } from "./trace-reader.js"
+import { traceControlDispositionFacetVersion } from "./trace-reader-version.js"
 import { sameJson } from "./trace-equality.js"
 import { reduceControlDispositionItem } from "./trace-reader-control-disposition.js"
 
@@ -920,14 +921,6 @@ export const traceHistoricalFacetsIssue = (
   },
   factories: HistoricalFacetFactories
 ): string | undefined => {
-  const controlDispositionSources = [
-    ...view.facets.controlDisposition.controls.map(({ source }) => source),
-    ...view.facets.controlDisposition.dispositions.map(({ source }) => source),
-    ...view.facets.controlDisposition.cleanup.flatMap((progress) => [
-      progress.status.source,
-      ...progress.steps.map(({ source }) => source)
-    ])
-  ]
   const identities: ReadonlyArray<TraceItemIdentity> = [
     ...view.facets.recovery.observationGaps.map(({ action }) => action),
     ...view.facets.recovery.preservationDispositions.map(({ source }) => source),
@@ -941,12 +934,9 @@ export const traceHistoricalFacetsIssue = (
         return [fact.source, fact.graphSource, fact.settlementSource]
       }
       return [fact.source]
-    }),
-    ...controlDispositionSources
+    })
   ]
-  const invalid = identities.find(
-    (identity) => identityOutsideCursor(identity, view.cursor) || historyItemAt(view.items, identity) === undefined
-  )
+  const invalid = invalidSourceIdentityFor(identities, view.cursor, view.items)
   if (invalid !== undefined) return "Every historical facet source must resolve to an item in the cursor prefix"
   const invalidGap = view.facets.recovery.observationGaps.find(
     (gap) => traceObservationGapIssue(gap, view.items) !== undefined
@@ -964,8 +954,10 @@ export const traceHistoricalFacetsIssue = (
     (fact) => traceHistoricalFactIssue(fact, view.items) !== undefined
   )
   if (invalidFact !== undefined) return traceHistoricalFactIssue(invalidFact, view.items)
-  const invalidControlDispositionSource = controlDispositionSources.find(
-    (identity) => identityOutsideCursor(identity, view.cursor) || historyItemAt(view.items, identity) === undefined
+  const invalidControlDispositionSource = invalidSourceIdentityFor(
+    controlDispositionSourcesFor(view.facets.controlDisposition),
+    view.cursor,
+    view.items
   )
   if (invalidControlDispositionSource !== undefined) {
     return "Every control, disposition, and cleanup source must resolve to an item in the cursor prefix"
@@ -988,6 +980,19 @@ const historyItemAt = (
   items.find(
     ({ identity: itemIdentity }) => itemIdentity.runId === identity.runId && itemIdentity.position === identity.position
   )
+
+const invalidSourceIdentityFor = (
+  identities: ReadonlyArray<TraceItemIdentity>,
+  cursor: TraceCursor,
+  items: ReadonlyArray<TraceHistoryItem>
+): TraceItemIdentity | undefined =>
+  identities.find((identity) => identityOutsideCursor(identity, cursor) || historyItemAt(items, identity) === undefined)
+
+const controlDispositionSourcesFor = (facet: TraceControlDispositionFacet): ReadonlyArray<TraceItemIdentity> => [
+  ...facet.controls.map(({ source }) => source),
+  ...facet.dispositions.map(({ source }) => source),
+  ...facet.cleanup.flatMap((progress) => [progress.status.source, ...progress.steps.map(({ source }) => source)])
+]
 
 /** The public facet invariant proves this lookup before any private facet validator runs. */
 const provenHistoryItemAt = (items: ReadonlyArray<TraceHistoryItem>, identity: TraceItemIdentity): TraceHistoryItem =>
@@ -1742,7 +1747,7 @@ export const traceHistoricalFacetsAt = (
       cleanup,
       controls: state.controls,
       dispositions: state.dispositions,
-      version: 1
+      version: traceControlDispositionFacetVersion
     }),
     integration: { facts: state.integrationFacts },
     recovery: {

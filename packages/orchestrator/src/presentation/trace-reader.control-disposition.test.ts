@@ -38,7 +38,8 @@ import {
 import {
   AttemptChoiceAppliedEvent,
   AttemptChoiceRequestId,
-  AttemptChoiceSubject
+  AttemptChoiceSubject,
+  StoppedAttemptClaimNoReleaseObservedEvent
 } from "../workflow/protocols/attempt-choice/events.js"
 import {
   CancelledAttemptClaimNoReleaseObservedEvent,
@@ -81,6 +82,7 @@ import { BranchCleanupAuthorizedEvent } from "../workflow/protocols/disposition-
 import {
   WorktreeCleanupMutationResult,
   WorktreeCleanupObservation,
+  WorktreeCleanupContradictedEvent,
   WorktreeCleanupAuthorizedEvent,
   runWorktreeCleanup,
   worktreeCleanupTestLayer
@@ -513,6 +515,160 @@ it.effect(
       expect(independent.cursor.runId).toBe(independentRunId)
       expect(independent.facets.controlDisposition.controls).toHaveLength(5)
     })
+)
+
+it.effect("fails closed for malformed Stop abandonment and stopped-claim prefixes", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-stop-validation-target"), initialPolicy)
+    yield* appendAbandonedProvenance(attempt)
+    const records = yield* journal.read(cleanupRunId)
+    const abandonment = records.find(({ event }) => event._tag === "AttemptImplementationAbandoned")
+    if (abandonment?.event._tag !== "AttemptImplementationAbandoned") {
+      return yield* Effect.die("Stop validation fixture did not record abandonment")
+    }
+    const lastRecord = records.at(-1)
+    if (lastRecord === undefined) return yield* Effect.die("Stop validation fixture is empty")
+    const reindex = (values: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalRecord> =>
+      values.map((item, index) => ({ ...item, position: JournalPosition.make(index + 1) }))
+    const malformed = [
+      {
+        detail: "requires its exact prior applied Stop choice",
+        records: reindex(records.filter(({ event }) => event._tag !== "AttemptChoiceApplied"))
+      },
+      {
+        detail: "requires its exact safe or terminal executor proof",
+        records: reindex(
+          records.map((item) =>
+            item.event._tag !== "AttemptImplementationAbandoned" || item.event.proof._tag !== "CommandResponse"
+              ? item
+              : {
+                  ...item,
+                  event: {
+                    ...item.event,
+                    proof: {
+                      _tag: "CommandResponse" as const,
+                      reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(
+                        Number(item.event.proof.reportOrdinal) + 1
+                      )
+                    }
+                  }
+                }
+          )
+        )
+      },
+      {
+        detail: "requires its exact authorized claim",
+        records: reindex(
+          records.map((item) =>
+            item.event._tag === "AttemptImplementationAbandoned"
+              ? {
+                  ...item,
+                  event: {
+                    ...item.event,
+                    expectedClaim: ActiveTaskClaim.make({
+                      ...item.event.expectedClaim,
+                      token: ClaimToken.make("issue-83-stop-validation-foreign-token")
+                    })
+                  }
+                }
+              : item
+          )
+        )
+      },
+      {
+        detail: "requires the latest exact post-baseline claim read",
+        records: reindex([
+          ...records,
+          record(
+            Number(lastRecord.position) + 1,
+            StoppedAttemptClaimNoReleaseObservedEvent.make({
+              expectedClaim: abandonment.event.expectedClaim,
+              observation: UnclaimedTask.make({ taskId: attempt.taskId }),
+              observationOperationId: OperationId.make("issue-83-stop-validation-missing-claim-read"),
+              occurrenceClassification: "NonActionOccurrence",
+              requestId: abandonment.event.requestId,
+              subject: abandonment.event.subject,
+              version: workflowJournalEventVersion
+            }),
+            cleanupRunId
+          )
+        ])
+      }
+    ]
+    for (const variant of malformed) {
+      const last = variant.records.at(-1)
+      if (last === undefined) return yield* Effect.die("malformed Stop fixture is empty")
+      const failure = yield* Effect.flip(
+        makeTraceReader({ read: () => Effect.succeed(variant.records) }).readAt(
+          TraceCursor.make({ position: last.position, runId: cleanupRunId })
+        )
+      )
+      expect(failure).toBeInstanceOf(TraceProjectionInvalid)
+      if (failure._tag !== "TraceProjectionInvalid") continue
+      expect(failure.detail).toContain(variant.detail)
+    }
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("fails closed for duplicate applied cancellation history", () =>
+  Effect.gen(function* () {
+    const applied = RunCancellationAppliedEvent.make({
+      initiatedBy: WorkflowActor.cases.Operator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    })
+    const records = [runBeginningFor(runId, target), record(2, applied, runId), record(3, applied, runId)]
+    const failure = yield* Effect.flip(
+      makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(3), runId })
+      )
+    )
+    expect(failure).toBeInstanceOf(TraceProjectionInvalid)
+    if (failure._tag !== "TraceProjectionInvalid") return
+    expect(failure.detail).toContain("RunCancellationApplied may occur only once")
+  })
+)
+
+it.effect("rejects cleanup contradiction without its ordered observation prefix", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-contradiction-prefix-target"), initialPolicy)
+    const authorization = yield* appendAbandonedProvenance(attempt)
+    const authorized = WorktreeCleanupAuthorizedEvent.make({
+      authorization,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    })
+    yield* journal.append(cleanupRunId, worktreeCleanupAuthorizedRecordKey(authorization.operationId), authorized)
+    const records = yield* journal.read(cleanupRunId)
+    const contradiction = WorktreeCleanupContradictedEvent.make({
+      authorization,
+      detail: "malformed contradiction without observation",
+      observation: WorktreeCleanupObservation.cases.Foreign.make({
+        locator: authorization.locator,
+        observedBranch: TaskBranchRef.make("refs/heads/foreign"),
+        observedHead: authorization.expectedHead,
+        reason: "OtherOwner",
+        revision: authorization.evidenceRevision
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: OperationId.make("issue-83-contradiction-missing-observation"),
+      version: workflowJournalEventVersion
+    })
+    const malformed = [...records, record(Number(records.at(-1)?.position ?? 0) + 1, contradiction, cleanupRunId)]
+    const last = malformed.at(-1)
+    if (last === undefined) return yield* Effect.die("contradiction fixture is empty")
+    const failure = yield* Effect.flip(
+      makeTraceReader({ read: () => Effect.succeed(malformed) }).readAt(
+        TraceCursor.make({ position: last.position, runId: cleanupRunId })
+      )
+    )
+    expect(failure).toBeInstanceOf(TraceProjectionInvalid)
+    if (failure._tag !== "TraceProjectionInvalid") return
+    expect(failure.detail).toContain("cleanup contradiction requires its exact preceding observation intent and result")
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("keeps abandonment and authorized worktree cleanup distinct with exact source identities", () =>

@@ -34,6 +34,7 @@ import {
   makeTrackerGraphObservationOperation,
   memoryJournalStoreLayer,
   taskTrackerReadIntent,
+  traceControlDispositionFacetVersion,
   traceReaderSchemaVersion
 } from "@dalph/orchestrator"
 import { Effect, Layer, Ref, Schema } from "effect"
@@ -129,7 +130,7 @@ const traceAtCursor = TraceAtCursor.make({
     workflowCausalEdges: []
   }),
   facets: TraceHistoricalFacets.make({
-    controlDisposition: { cleanup: [], controls: [], dispositions: [], version: 1 },
+    controlDisposition: { cleanup: [], controls: [], dispositions: [], version: traceControlDispositionFacetVersion },
     integration: { facts: [] },
     recovery: {
       observationGaps: [

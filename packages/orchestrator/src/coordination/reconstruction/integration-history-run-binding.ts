@@ -69,21 +69,107 @@ const invalidCompletionTaskRequestLookupRunBinding = (
     runId
   )
 
-const invalidCandidateCleanupRunBinding = (
-  authorization: {
-    readonly disposition: {
-      readonly predecessor: { readonly plannedAttempt: { readonly runId: RunId } }
-      readonly successor: { readonly plannedAttempt: { readonly runId: RunId } }
-    }
-  },
-  runId: RunId,
-  label: string
+type WorktreeCleanupBindingEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "WorktreeCleanupAuthorized"
+      | "WorktreeCleanupObservationIntended"
+      | "WorktreeCleanupObserved"
+      | "WorktreeCleanupAbsenceConfirmed"
+      | "WorktreeCleanupMutationIntended"
+      | "WorktreeCleanupMutationResultRecorded"
+      | "WorktreeCleanupContradicted"
+      | "WorktreeCleanupSettled"
+  }
+>
+
+const worktreeCleanupBindingLabels = {
+  WorktreeCleanupAuthorized: "worktree cleanup authorization",
+  WorktreeCleanupObservationIntended: "worktree cleanup observation",
+  WorktreeCleanupObserved: "worktree cleanup observation",
+  WorktreeCleanupAbsenceConfirmed: "worktree cleanup absence",
+  WorktreeCleanupMutationIntended: "worktree cleanup mutation",
+  WorktreeCleanupMutationResultRecorded: "worktree cleanup mutation result",
+  WorktreeCleanupContradicted: "worktree cleanup contradiction",
+  WorktreeCleanupSettled: "worktree cleanup settlement"
+} satisfies Record<WorktreeCleanupBindingEvent["_tag"], string>
+
+const invalidWorktreeCleanupRunBinding = (event: WorktreeCleanupBindingEvent, runId: RunId): string | undefined =>
+  invalidNestedRunBinding(
+    worktreeCleanupBindingLabels[event._tag],
+    [event.authorization.disposition.plannedAttempt.runId],
+    runId
+  )
+
+type BranchCleanupBindingEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "BranchCleanupAuthorized"
+      | "BranchCleanupObservationIntended"
+      | "BranchCleanupObserved"
+      | "BranchCleanupAbsenceConfirmed"
+      | "BranchCleanupMutationIntended"
+      | "BranchCleanupMutationResultRecorded"
+      | "BranchCleanupContradicted"
+      | "BranchCleanupSettled"
+  }
+>
+
+const branchCleanupBindingLabels = {
+  BranchCleanupAuthorized: "branch cleanup authorization",
+  BranchCleanupObservationIntended: "branch cleanup observation",
+  BranchCleanupObserved: "branch cleanup observation",
+  BranchCleanupAbsenceConfirmed: "branch cleanup absence",
+  BranchCleanupMutationIntended: "branch cleanup mutation",
+  BranchCleanupMutationResultRecorded: "branch cleanup mutation result",
+  BranchCleanupContradicted: "branch cleanup contradiction",
+  BranchCleanupSettled: "branch cleanup settlement"
+} satisfies Record<BranchCleanupBindingEvent["_tag"], string>
+
+const invalidBranchCleanupRunBinding = (event: BranchCleanupBindingEvent, runId: RunId): string | undefined =>
+  invalidNestedRunBinding(
+    branchCleanupBindingLabels[event._tag],
+    [event.authorization.disposition.plannedAttempt.runId],
+    runId
+  )
+
+type IntegratorCandidateCleanupBindingEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "IntegratorCandidateCleanupAuthorized"
+      | "IntegratorCandidateCleanupObservationIntended"
+      | "IntegratorCandidateCleanupObserved"
+      | "IntegratorCandidateCleanupAbsenceConfirmed"
+      | "IntegratorCandidateCleanupMutationIntended"
+      | "IntegratorCandidateCleanupMutationResultRecorded"
+      | "IntegratorCandidateCleanupContradicted"
+      | "IntegratorCandidateCleanupSettled"
+  }
+>
+
+const integratorCandidateCleanupBindingLabels = {
+  IntegratorCandidateCleanupAuthorized: "candidate cleanup authorization",
+  IntegratorCandidateCleanupObservationIntended: "candidate cleanup observation",
+  IntegratorCandidateCleanupObserved: "candidate cleanup observation",
+  IntegratorCandidateCleanupAbsenceConfirmed: "candidate cleanup absence",
+  IntegratorCandidateCleanupMutationIntended: "candidate cleanup mutation",
+  IntegratorCandidateCleanupMutationResultRecorded: "candidate cleanup mutation result",
+  IntegratorCandidateCleanupContradicted: "candidate cleanup contradiction",
+  IntegratorCandidateCleanupSettled: "candidate cleanup settlement"
+} satisfies Record<IntegratorCandidateCleanupBindingEvent["_tag"], string>
+
+const invalidIntegratorCandidateCleanupRunBinding = (
+  event: IntegratorCandidateCleanupBindingEvent,
+  runId: RunId
 ): string | undefined =>
   invalidNestedRunBinding(
-    label,
+    integratorCandidateCleanupBindingLabels[event._tag],
     [
-      authorization.disposition.predecessor.plannedAttempt.runId,
-      authorization.disposition.successor.plannedAttempt.runId
+      event.authorization.disposition.predecessor.plannedAttempt.runId,
+      event.authorization.disposition.successor.plannedAttempt.runId
     ],
     runId
   )
@@ -304,118 +390,36 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
       },
       IntegrationQuarantined: (candidate) =>
         invalidNestedRunBinding("integration quarantine", [candidate.correlation.plannedAttempt.runId], runId),
-      WorktreeCleanupAuthorized: (candidate) =>
-        invalidNestedRunBinding(
-          "worktree cleanup authorization",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      WorktreeCleanupObservationIntended: (candidate) =>
-        invalidNestedRunBinding(
-          "worktree cleanup observation",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      WorktreeCleanupObserved: (candidate) =>
-        invalidNestedRunBinding(
-          "worktree cleanup observation",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      WorktreeCleanupAbsenceConfirmed: (candidate) =>
-        invalidNestedRunBinding(
-          "worktree cleanup absence",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      WorktreeCleanupMutationIntended: (candidate) =>
-        invalidNestedRunBinding(
-          "worktree cleanup mutation",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      WorktreeCleanupMutationResultRecorded: (candidate) =>
-        invalidNestedRunBinding(
-          "worktree cleanup mutation result",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      WorktreeCleanupContradicted: (candidate) =>
-        invalidNestedRunBinding(
-          "worktree cleanup contradiction",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      WorktreeCleanupSettled: (candidate) =>
-        invalidNestedRunBinding(
-          "worktree cleanup settlement",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      BranchCleanupAuthorized: (candidate) =>
-        invalidNestedRunBinding(
-          "branch cleanup authorization",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      BranchCleanupObservationIntended: (candidate) =>
-        invalidNestedRunBinding(
-          "branch cleanup observation",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      BranchCleanupObserved: (candidate) =>
-        invalidNestedRunBinding(
-          "branch cleanup observation",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      BranchCleanupAbsenceConfirmed: (candidate) =>
-        invalidNestedRunBinding(
-          "branch cleanup absence",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      BranchCleanupMutationIntended: (candidate) =>
-        invalidNestedRunBinding(
-          "branch cleanup mutation",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      BranchCleanupMutationResultRecorded: (candidate) =>
-        invalidNestedRunBinding(
-          "branch cleanup mutation result",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      BranchCleanupContradicted: (candidate) =>
-        invalidNestedRunBinding(
-          "branch cleanup contradiction",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
-      BranchCleanupSettled: (candidate) =>
-        invalidNestedRunBinding(
-          "branch cleanup settlement",
-          [candidate.authorization.disposition.plannedAttempt.runId],
-          runId
-        ),
+      WorktreeCleanupAuthorized: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupObservationIntended: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupObserved: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupAbsenceConfirmed: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupMutationIntended: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupMutationResultRecorded: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupContradicted: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupSettled: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      BranchCleanupAuthorized: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupObservationIntended: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupObserved: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupAbsenceConfirmed: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupMutationIntended: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupMutationResultRecorded: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupContradicted: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupSettled: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
       IntegratorCandidateCleanupAuthorized: (candidate) =>
-        invalidCandidateCleanupRunBinding(candidate.authorization, runId, "candidate cleanup authorization"),
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
       IntegratorCandidateCleanupObservationIntended: (candidate) =>
-        invalidCandidateCleanupRunBinding(candidate.authorization, runId, "candidate cleanup observation"),
-      IntegratorCandidateCleanupObserved: (candidate) =>
-        invalidCandidateCleanupRunBinding(candidate.authorization, runId, "candidate cleanup observation"),
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupObserved: (candidate) => invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
       IntegratorCandidateCleanupAbsenceConfirmed: (candidate) =>
-        invalidCandidateCleanupRunBinding(candidate.authorization, runId, "candidate cleanup absence"),
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
       IntegratorCandidateCleanupMutationIntended: (candidate) =>
-        invalidCandidateCleanupRunBinding(candidate.authorization, runId, "candidate cleanup mutation"),
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
       IntegratorCandidateCleanupMutationResultRecorded: (candidate) =>
-        invalidCandidateCleanupRunBinding(candidate.authorization, runId, "candidate cleanup mutation result"),
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
       IntegratorCandidateCleanupContradicted: (candidate) =>
-        invalidCandidateCleanupRunBinding(candidate.authorization, runId, "candidate cleanup contradiction"),
-      IntegratorCandidateCleanupSettled: (candidate) =>
-        invalidCandidateCleanupRunBinding(candidate.authorization, runId, "candidate cleanup settlement")
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupSettled: (candidate) => invalidIntegratorCandidateCleanupRunBinding(candidate, runId)
     }),
     Match.orElse(() => undefined)
   )

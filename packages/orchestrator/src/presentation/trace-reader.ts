@@ -96,6 +96,14 @@ import {
 } from "../workflow/protocols/integration-finality/history.js"
 import { validateIntegrationHistoryRecord } from "../coordination/reconstruction/integration-history-validation.js"
 import { invalidWorkflowRunBinding } from "../coordination/reconstruction/integration-history-run-binding.js"
+import {
+  validateAttemptStopHistory,
+  validateCancellationMultiplicityHistory
+} from "../coordination/reconstruction/history.js"
+import {
+  workflowJournalHistoryIssueDetail,
+  type WorkflowJournalHistoryIssue
+} from "../coordination/reconstruction/history-result.js"
 import { makeIntegrationHistoryIndexes } from "../coordination/reconstruction/integration-history.js"
 import type { CurrentSignal } from "../coordination/delivery/relations.js"
 import {
@@ -125,6 +133,9 @@ import {
   validateWorktreeCleanupHistory,
   validateWorktreeCleanupProvenance
 } from "../workflow/protocols/disposition-cleanup/provenance.js"
+import { traceControlDispositionFacetVersion } from "./trace-reader-version.js"
+
+export { traceControlDispositionFacetVersion } from "./trace-reader-version.js"
 
 /** Version of the immutable production trace contract consumed by presentation. */
 export const traceReaderSchemaVersion = 4 as const // eslint-disable-line no-magic-numbers
@@ -526,23 +537,11 @@ export const TraceIntegratorCandidateCleanupProgress = Schema.TaggedStruct("Inte
 export type TraceIntegratorCandidateCleanupProgress = typeof TraceIntegratorCandidateCleanupProgress.Type
 
 /** The three exact disposition-authorized cleanup families at one committed cursor. */
-export const TraceCleanupProgress = Schema.TaggedUnion({
-  Branch: {
-    authorization: BranchCleanupAuthorization,
-    status: TraceCleanupStatus,
-    steps: Schema.Array(TraceBranchCleanupStep)
-  },
-  IntegratorCandidate: {
-    authorization: IntegratorCandidateCleanupAuthorization,
-    status: TraceCleanupStatus,
-    steps: Schema.Array(TraceIntegratorCandidateCleanupStep)
-  },
-  Worktree: {
-    authorization: WorktreeCleanupAuthorization,
-    status: TraceCleanupStatus,
-    steps: Schema.Array(TraceWorktreeCleanupStep)
-  }
-})
+export const TraceCleanupProgress = Schema.Union([
+  TraceBranchCleanupProgress,
+  TraceIntegratorCandidateCleanupProgress,
+  TraceWorktreeCleanupProgress
+])
 export type TraceCleanupProgress = typeof TraceCleanupProgress.Type
 
 /** Versioned read-only control, disposition, and cleanup facet for one exact cursor. */
@@ -550,7 +549,7 @@ export const TraceControlDispositionFacet = Schema.Struct({
   cleanup: Schema.Array(TraceCleanupProgress),
   controls: Schema.Array(TraceControlFact),
   dispositions: Schema.Array(TraceDispositionFact),
-  version: Schema.Literal(1)
+  version: Schema.Literal(traceControlDispositionFacetVersion)
 })
 export type TraceControlDispositionFacet = typeof TraceControlDispositionFacet.Type
 
@@ -564,7 +563,11 @@ export type TraceHistoricalFacets = typeof TraceHistoricalFacets.Type
 
 const historicalFacetFactories = {
   branchCleanupStep: { make: (input: Omit<TraceBranchCleanupStep, "_tag">) => TraceBranchCleanupStep.make(input) },
-  cleanupProgress: { ...TraceCleanupProgress.cases },
+  cleanupProgress: {
+    Branch: { make: (input) => TraceBranchCleanupProgress.make(input) },
+    IntegratorCandidate: { make: (input) => TraceIntegratorCandidateCleanupProgress.make(input) },
+    Worktree: { make: (input) => TraceWorktreeCleanupProgress.make(input) }
+  },
   cleanupStatus: { ...TraceCleanupStatus.cases },
   controlDisposition: {
     make: (input: Omit<TraceControlDispositionFacet, "_tag">) => TraceControlDispositionFacet.make(input)
@@ -1958,6 +1961,13 @@ const cleanupHistoryIssue = (records: ReadonlyArray<JournalRecord>): string | un
   return undefined
 }
 
+const canonicalHistoryIssue = (issues: ReadonlyArray<WorkflowJournalHistoryIssue>): string | undefined => {
+  const issue = issues[0]
+  if (issue === undefined) return undefined
+  const position = "position" in issue ? issue.position : issue.second.position
+  return `${workflowJournalHistoryIssueDetail(issue)} at journal position ${position}`
+}
+
 /** Cancellation dispositions must point to the exact earlier applied cancellation. */
 const cancellationHistoryIssue = (records: ReadonlyArray<JournalRecord>): string | undefined => {
   const applied = new Map<JournalPosition, JournalRecord>()
@@ -1989,6 +1999,8 @@ const fullHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): 
     if (bindingIssue !== undefined) return `${bindingIssue} at journal position ${record.position}`
   }
   return (
+    canonicalHistoryIssue(validateAttemptStopHistory(runId, records)) ??
+    canonicalHistoryIssue(validateCancellationMultiplicityHistory(runId, records)) ??
     cancellationHistoryIssue(records) ??
     cleanupHistoryIssue(records) ??
     integrationHistoryIssue(runId, records) ??
