@@ -1,4 +1,4 @@
-import { type RunId, type TaskId } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, type RunId, type TaskId } from "@dalph/contracts"
 import { Deferred, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -6,10 +6,20 @@ import { deriveIntegrationAdmission } from "../../workflow/protocols/integration
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
-import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../frontier/frontier.js"
+import {
+  runnableTransitionTaskId,
+  transitionTrackerGraphRequirement,
+  type RunnableFrontierTransition
+} from "../frontier/frontier.js"
 import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
+import {
+  executorProgressGraphReadInputOf,
+  executorProgressGraphReadRequirementOf,
+  executorProgressRequirementCovers,
+  type ExecutorProgressGraphReadRequirement
+} from "../executor-progress-graph-read.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
 import {
@@ -93,17 +103,75 @@ const exactDeliveryEvidenceOf = (
   ]
 }
 
+const executorContinuationCorrelationOf = (
+  transition: RunnableFrontierTransition
+): ReturnType<typeof plannedAttemptExecutorCorrelation> | undefined => {
+  if (
+    transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
+    transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
+  )
+    return undefined
+  return plannedAttemptExecutorCorrelation(transition.plannedAttempt)
+}
+
+const executorProgressBlocked = (
+  transition: RunnableFrontierTransition,
+  requirement: ExecutorProgressGraphReadRequirement | undefined
+): boolean => {
+  if (requirement !== undefined && transition._tag === "ObservePlannedAttemptContinuationGraph") return true
+  const correlation = executorContinuationCorrelationOf(transition)
+  return (
+    correlation !== undefined &&
+    requirement !== undefined &&
+    executorProgressRequirementCovers(requirement, correlation)
+  )
+}
+
+/** A graph intent without an outcome is the live overlap guard for any graph establishment read. */
+const latestUnresolvedGraphReadOperationIdOf = (
+  graphReads: ReturnType<typeof executorProgressGraphReadInputOf>["graphReads"]
+) =>
+  graphReads
+    .filter(({ observation }) => observation === null)
+    .toSorted((left, right) => Number(right.intentAt) - Number(left.intentAt))[0]?.operationId
+
 const trackerGraphProposalsOf = (
   journal: JournalProjection,
-  recoveredTransitionCount: number,
+  recoveredTransitions: ReadonlyArray<RunnableFrontierTransition>,
   runIsPaused: boolean,
   runId: RunId,
-  target: TrackerTarget
+  target: TrackerTarget,
+  progressRequirement: ExecutorProgressGraphReadRequirement | undefined,
+  unresolvedGraphReadOperationId: ReturnType<typeof latestUnresolvedGraphReadOperationIdOf>
 ): ReadonlyArray<TrackerGraphActionProposal> => {
   if (runIsPaused) return []
-  if (journal.graph._tag === "GraphNotEstablished" && recoveredTransitionCount === 0) {
+  const recoveredTransitionsNeedOnlyCurrentGraph =
+    recoveredTransitions.length > 0 &&
+    recoveredTransitions.every((transition) => transition._tag === "ObservePlannedAttemptContinuationGraph")
+  if (
+    journal.graph._tag === "GraphNotEstablished" &&
+    (progressRequirement !== undefined || recoveredTransitions.length === 0 || recoveredTransitionsNeedOnlyCurrentGraph)
+  ) {
     return [
-      trackerGraphReadProposalOf({ acceptedAt: journal.position, purpose: "EstablishCurrentGraph", runId, target })
+      trackerGraphReadProposalOf({
+        acceptedAt: journal.position,
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target,
+        waitsForLiveOperationId:
+          progressRequirement?.unresolvedReadOperationId ?? unresolvedGraphReadOperationId ?? null
+      })
+    ]
+  }
+  if (journal.graph._tag === "GraphEstablished" && progressRequirement !== undefined) {
+    return [
+      trackerGraphReadProposalOf({
+        acceptedAt: journal.position,
+        purpose: "CheckExecutorProgress",
+        requirement: progressRequirement,
+        runId,
+        target
+      })
     ]
   }
   return []
@@ -145,11 +213,25 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const frame =
       journal.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(journal) : undefined
-    const fresh = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
-    const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
-    const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds)
-    const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]
     const records = journal.records
+    const progressInput = executorProgressGraphReadInputOf(records, runId, target)
+    const progressRequirement = executorProgressGraphReadRequirementOf(progressInput)
+    const unresolvedGraphReadOperationId = latestUnresolvedGraphReadOperationIdOf(progressInput.graphReads)
+    const freshCandidates = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
+    const freshTaskIds = new Set(freshCandidates.map(({ transition }) => runnableTransitionTaskId(transition)))
+    const fresh = freshCandidates.filter(({ transition }) => !executorProgressBlocked(transition, progressRequirement))
+    const recoveredCandidates = eligibleRecoveredTransitions(journal, projection, freshTaskIds)
+    const establishCurrentGraph =
+      journal.graph._tag === "GraphNotEstablished" &&
+      (progressRequirement !== undefined ||
+        recoveredCandidates.length === 0 ||
+        recoveredCandidates.every((transition) => transition._tag === "ObservePlannedAttemptContinuationGraph"))
+    const recovered = recoveredCandidates.filter(
+      (transition) =>
+        !executorProgressBlocked(transition, progressRequirement) &&
+        !(establishCurrentGraph && transition._tag === "ObservePlannedAttemptContinuationGraph")
+    )
+    const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
     const proposalContributions = deliveryProposalsOf({
       acceptedAt: journal.position,
@@ -162,7 +244,15 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
     const runIsPaused = journal.reconstructed.pause.run._tag === "RunPaused"
-    const trackerGraphProposals = trackerGraphProposalsOf(journal, recovered.length, runIsPaused, runId, target)
+    const trackerGraphProposals = trackerGraphProposalsOf(
+      journal,
+      establishCurrentGraph ? recoveredCandidates : recovered,
+      runIsPaused,
+      runId,
+      target,
+      progressRequirement,
+      unresolvedGraphReadOperationId
+    )
     return {
       actionInputs: {
         proposalContributions,

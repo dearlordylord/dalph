@@ -58,7 +58,12 @@ const frontierKey = (frontier: DeliveryProposalFrontier): string => JSON.stringi
 const trackerGraphRequirementsFor = (
   graph: TrackerGraphState,
   proposals: ReadonlyArray<TrackerGraphActionProposal>
-): ReadonlyArray<TrackerGraphActionProposal> => (graph._tag === "GraphNotEstablished" ? proposals : [])
+): ReadonlyArray<TrackerGraphActionProposal> =>
+  proposals.filter(({ route }) =>
+    graph._tag === "GraphNotEstablished"
+      ? route.purpose === "EstablishCurrentGraph"
+      : route.purpose === "CheckExecutorProgress"
+  )
 
 const frontierOf = (delivery: DeliveryConsequences, input: DeliveryActionPlanningInput): DeliveryProposalFrontier =>
   deliveryProposalFrontierOf(
