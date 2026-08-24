@@ -772,6 +772,94 @@ it.effect("retries reconstruction when a journal append lands during recovery pr
   )
 )
 
+it.effect("coalesces an accepted Running report behind one later complete graph read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("progress-initial-graph"), target)
+      const projected = projectTrackerSnapshot({ revision: "progress-initial-revision", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die(projected)
+      yield* journal.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(graphOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          graphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(graphOperation, projected.snapshot)
+        )
+      )
+      yield* appendExecutorResponsibility(journal)
+      yield* appendStartOrContinue(journal, 1)
+      yield* appendDirectExecutorReport(
+        journal,
+        PlannedAttemptExecutorReport.cases.Running.make({
+          correlation: plannedAttemptExecutorCorrelation(recoveredAttempt)
+        }),
+        1
+      )
+      const continueTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+        plannedAttempt: recoveredAttempt
+      })
+      const recovery = {
+        readDeliveryProjection: journal.state.get.pipe(
+          Effect.map((journalState) => ({
+            evidence: {
+              _tag: "AvailableDeliveryProjectionEvidence" as const,
+              acceptedAt: journalState.position,
+              facts: [],
+              integrationWaits: []
+            },
+            frontier: { explanations: [], transitions: [continueTransition] }
+          }))
+        ),
+        reconstructedPlannedAttemptPositions: []
+      }
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const beforeRead = yield* relation.get
+      expect(beforeRead.proposedActions).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "CheckExecutorProgress" } }]
+      })
+      expect(beforeRead.proposedActions).not.toMatchObject({
+        proposals: [{ route: { transition: { _tag: "ContinuePlannedAttemptExecutorWork" } } }]
+      })
+
+      const progressRead = makeTrackerGraphObservationOperation(OperationId.make("progress-complete-graph"), target, [
+        graphOperation.operationId
+      ])
+      yield* journal.append(runId, intentRecordKey(progressRead.operationId), taskTrackerReadIntent(progressRead))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(progressRead.operationId),
+        makeTaskTrackerFactsObservedFromRead(yield* journal.read(runId), progressRead, projected.snapshot)
+      )
+      const afterRead = Option.getOrThrow(
+        yield* relation.changes.pipe(
+          Stream.filter(
+            ({ proposedActions }) =>
+              proposedActions._tag === "DeliveryProposalsAvailable" &&
+              proposedActions.proposals.some(
+                ({ route }) =>
+                  route._tag === "IdentityFreeWorkflowRoute" &&
+                  route.transition._tag === "ContinuePlannedAttemptExecutorWork"
+              )
+          ),
+          Stream.runHead
+        )
+      )
+      expect(afterRead.proposedActions).toMatchObject({
+        _tag: "DeliveryProposalsAvailable",
+        proposals: [{ route: { _tag: "IdentityFreeWorkflowRoute", transition: continueTransition } }]
+      })
+      expect(afterRead.proposedActions).not.toMatchObject({
+        proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "CheckExecutorProgress" } }]
+      })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
 it.effect("does not propose the initial graph read while recovered boundary work remains", () =>
   Effect.scoped(
     Effect.gen(function* () {

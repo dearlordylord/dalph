@@ -3,6 +3,7 @@ import type { AttemptId, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
 import type { Task } from "../../authorities/task-tracker/task.js"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
@@ -16,6 +17,7 @@ import {
   plannedAttemptExecutorTaskWorkSpecifications
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { journalPrefixPredecessorOf } from "../../workflow-journal/prefix-lineage.js"
+import { specificationReadRequiredAfterProgressGraph } from "./fresh-workflow-progress.js"
 
 const postClaimGraphRank = 0
 const claimRank = 1
@@ -98,11 +100,13 @@ const journaledStepFor = (
     executorResponsibility?._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
     !recoveredAttemptIds.has(executorResponsibility.plannedAttempt.attemptId)
   ) {
-    const report = records.findLast(
+    const reportRecord = records.findLast(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report.correlation.runId === executorResponsibility.plannedAttempt.runId &&
         event.report.correlation.attemptId === executorResponsibility.plannedAttempt.attemptId
-    )?.event
+    )
+    const report = reportRecord?.event
     const specification = plannedSpecificationFor(records, executorResponsibility.plannedAttempt)
     /* v8 ignore start -- A fresh non-running report already transfers the task to terminal or integration responsibility. */
     if (
@@ -110,6 +114,14 @@ const journaledStepFor = (
       report.report._tag === "Running" &&
       specification !== undefined
     ) {
+      const progressGraphOperationId = specificationReadRequiredAfterProgressGraph(
+        records,
+        executorResponsibility.plannedAttempt,
+        reportRecord?.position ?? JournalPosition.make(0)
+      )
+      if (progressGraphOperationId !== undefined) {
+        return FreshWorkflowStep.ReadTaskWorkSpecification({ predecessorOperationId: progressGraphOperationId, task })
+      }
       return FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
         acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: report.ordinal },
         plannedAttempt: executorResponsibility.plannedAttempt,
@@ -249,6 +261,31 @@ const executorResponsibilityStillOwnsTask = (
     (exactEvidence === undefined || projectionIssue.observedAt > exactEvidence.observedAt)
   ) {
     return true
+  }
+  if (
+    latestReport?.event._tag === "PlannedAttemptExecutorWorkReported" &&
+    latestReport.event.report._tag === "Running"
+  ) {
+    const latestSpecification = records.findLast(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+        event.observation.factFamily.taskId === responsibility.plannedAttempt.taskId
+    )
+    if (
+      latestSpecification?.event._tag === "TaskTrackerFactsObserved" &&
+      latestSpecification.event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+    ) {
+      if (latestSpecification.event.observation.factFamily.fingerprint !== responsibility.plannedAttempt.taskRevision) {
+        return true
+      }
+    }
+    if (
+      specificationReadRequiredAfterProgressGraph(records, responsibility.plannedAttempt, latestReport.position) !==
+      undefined
+    ) {
+      return true
+    }
   }
   return (
     latestReport !== undefined &&

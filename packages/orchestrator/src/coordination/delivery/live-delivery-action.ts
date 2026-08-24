@@ -129,6 +129,11 @@ export const liveActionKeyOf = (proposal: DeliveryActionProposal): LiveDeliveryA
       proposal.route.step.plannedAttempt.attemptId
     ])
   }
+  if (proposal.route._tag === "FreshWorkflowRoute") {
+    // A journaled predecessor may change while this ordinary read is live;
+    // the exact task and protocol step remain the process-local subject.
+    return liveActionKey(["FreshWorkflow", proposal.route.step._tag, proposal.route.step.task.id])
+  }
   const subject = recoveredReadSubject(proposal)
   return subject === undefined
     ? liveActionKey(["DeliveryProposal", proposal.id])
