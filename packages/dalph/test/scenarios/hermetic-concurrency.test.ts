@@ -953,7 +953,7 @@ it.effect(
           expect(request.correlation.session.targetLineageObservedAt).toBeGreaterThan(integrationStarted.position)
           expect(request.correlation.session.targetLineageObservedAt).toBeLessThan(started.position)
           expect(started.position).toBeGreaterThan(integrationStarted.position)
-          expect(started.event.run.session).toEqual(request.correlation)
+          expect(started.event.run).toEqual(request.correlation)
           expect(qualification.event.run).toEqual(started.event.run)
           expect(qualification.position).toBeGreaterThan(started.position)
           expect(lineage.event.plannedAttempt).toEqual(request.correlation.session.plannedAttempt)

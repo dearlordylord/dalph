@@ -6,14 +6,21 @@ import {
 const processErrorCode = (error: unknown): string =>
   typeof error === "object" && error !== null && "code" in error ? String(error.code) : ""
 
+export const processEntryReadIsUnavailable = (error: unknown): boolean => {
+  const code = processErrorCode(error)
+  return code === "EACCES" || code === "ENOENT" || code === "ESRCH"
+}
+
 const processEntryIsReadable = async (entry: string): Promise<boolean> => {
   if (!/^[0-9]+$/.test(entry)) return true
   try {
     await nodeCodexProcessNativeService.readFile(`/proc/${entry}/environ`)
     return true
   } catch (error) {
-    const code = processErrorCode(error)
-    if (code === "EACCES" || code === "ENOENT") return false
+    // A process can disappear after `/proc` enumeration but before this
+    // readability probe. ESRCH is a proven absence at this exact PID; it is
+    // not an unreadable/live/changed process and must not abort the census.
+    if (processEntryReadIsUnavailable(error)) return false
     return Promise.reject(error)
   }
 }
