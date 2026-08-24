@@ -9,6 +9,7 @@ import {
   nodeGitTargetLineageLayer,
   TestGitTargetLineage
 } from "./target-lineage.js"
+import { controlledTargetLineageLayer } from "../../workflow/interpretation/layers.js"
 import { gitTargetLineageContract } from "../../../test/contracts/git-target-lineage-contract.js"
 
 const base = GitCommitSha.make("1".repeat(40))
@@ -62,12 +63,8 @@ const nodeContractLayer = nodeGitTargetLineageLayer.pipe(
 
 gitTargetLineageContract({
   base,
-  expected: { plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: base, targetHeadSha: head },
-  layer: gitTargetLineageTestLayer({
-    plannedBaseIsAncestorOfTargetHead: true,
-    plannedBaseSha: base,
-    targetHeadSha: head
-  }),
+  expected: { plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: base, targetHeadSha: base },
+  layer: controlledTargetLineageLayer,
   name: "controlled",
   target
 })

@@ -50,7 +50,7 @@ export const workflowInterpreterLayer = Layer.effect(
   })
 )
 
-const controlledTargetLineageLayer = Layer.succeed(
+export const controlledTargetLineageLayer = Layer.succeed(
   GitTargetLineage,
   GitTargetLineage.of({
     read: (plannedBaseSha) =>

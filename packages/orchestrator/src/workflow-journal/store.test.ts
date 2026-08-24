@@ -920,7 +920,17 @@ const durableJournalStoreContract = (
 }
 
 journalAppendContract("memory", () => memoryJournalTestLayer)
-journalAppendContract("sqlite", () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))
+journalAppendContract("sqlite", () =>
+  productionJournalStoreLayer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        CoordinatorOwnership,
+        CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+      )
+    ),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: ":memory:" })))
+  )
+)
 durableJournalStoreContract(
   "sqlite",
   () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }),

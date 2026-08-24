@@ -147,6 +147,7 @@ describe("capability registration gate", () => {
             ...file,
             source: file.source
               .replace("  journalAppendContract(name, makeLayer)\n", "")
+              .replace('journalAppendContract(\n  "sqlite",\n', 'removedJournalAppendContract(\n  "sqlite",\n')
               .replace(
                 'journalAppendContract("sqlite", () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))\n',
                 ""
@@ -157,6 +158,90 @@ describe("capability registration gate", () => {
 
     expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, removedJournalEdge)).toContain(
       "journal production contract invocation marker is stale: journalAppendContract("
+    )
+  })
+
+  it("rejects a controlled lineage contract that substitutes another compatible Layer", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/authorities/git/target-lineage.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "layer: controlledTargetLineageLayer,",
+              "layer: gitTargetLineageTestLayer({ plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: base, targetHeadSha: base }),"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "git-lineage controlled contract implementation binding is stale: controlledTargetLineageLayer"
+    )
+  })
+
+  it("rejects a controlled IntegratorGit contract that substitutes another compatible Layer", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts"
+        ? { ...file, source: file.source.replace("layer: controlledContractLayer,", "layer: nodeContractLayer,") }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "git-integrator-candidate controlled contract implementation binding is stale: controlledContractLayer"
+    )
+  })
+
+  it("rejects an outer Integrator contract that substitutes another compatible service", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "layer: Layer.succeed(Integrator, controlledIntegratorContractService),",
+              "layer: Layer.succeed(Integrator, Integrator.of({ prepare: (request) => Effect.succeed(prepared(request)) })),"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "outer-integrator controlled contract implementation binding is stale: controlledIntegratorContractService"
+    )
+  })
+
+  it("rejects a production journal contract that substitutes the test-only SQLite Layer", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/workflow-journal/store.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "productionJournalStoreLayer.pipe(",
+              'sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }).pipe('
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "journal production contract implementation binding is stale: productionJournalStoreLayer"
+    )
+  })
+
+  it("rejects a coordinator contract call that shadows the extracted public helper", () => {
+    const substituted = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              'import { coordinatorLockContract } from "../../../test/contracts/coordinator-lock-contract.js"',
+              "const coordinatorLockContract = () => undefined"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substituted)).toContain(
+      "coordinator-ownership contract invocation marker is stale: coordinatorLockContract("
     )
   })
 

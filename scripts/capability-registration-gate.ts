@@ -4,6 +4,7 @@ import ts from "typescript"
 import {
   capabilityRegistrationInventory,
   capabilityRegistrationIssues,
+  type ContractImplementationBinding,
   type CapabilityRegistrationInventory,
   type RegisteredImplementation
 } from "./capability-registration.js"
@@ -288,14 +289,7 @@ const hasCallExpression = (
   originName: string,
   indexed: CapabilitySourceProgram
 ): boolean => {
-  const expected = normalizedMarker(marker)
-  return sourceNodes(parsedSource(file, indexed)).some(
-    (node) =>
-      ts.isCallExpression(node) &&
-      propertyAccessText(node.expression) === expected &&
-      (selector === undefined || callMatchesSelector(node, selector)) &&
-      callResolvesToContractOrigin(node, origin, originName, indexed)
-  )
+  return callExpressions(file, marker, selector, origin, originName, indexed).length > 0
 }
 
 const callResolvesToContractOrigin = (
@@ -310,6 +304,104 @@ const callResolvesToContractOrigin = (
   const originSymbol = declarationSymbolFor(originFile, originName, indexed)
   const invocationSymbol = indexed.checker.getSymbolAtLocation(call.expression)
   return symbolsMatch(invocationSymbol, originSymbol, indexed.checker)
+}
+
+/* eslint-disable functional/immutable-data -- symbol traversal uses local visited state and result collection. */
+const expressionReferencesSymbol = (
+  root: ts.Node,
+  expected: ts.Symbol,
+  indexed: CapabilitySourceProgram,
+  seen: ReadonlySet<ts.Symbol> = new Set()
+): boolean => {
+  let found = false
+  const visited = new Set(seen)
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node)) {
+      const symbol = indexed.checker.getSymbolAtLocation(node)
+      if (symbolsMatch(symbol, expected, indexed.checker)) {
+        found = true
+        return
+      }
+      const resolved = resolveSymbol(symbol, indexed.checker)
+      if (resolved !== undefined && !visited.has(resolved)) {
+        visited.add(resolved)
+        for (const declaration of resolved.declarations ?? []) {
+          if (ts.isVariableDeclaration(declaration) && declaration.initializer !== undefined) {
+            visit(declaration.initializer)
+          } else if (ts.isFunctionDeclaration(declaration) && declaration.body !== undefined) {
+            visit(declaration.body)
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(root)
+  return found
+}
+
+const propertyExpressions = (root: ts.Node, propertyName: string): ReadonlyArray<ts.Expression> => {
+  const expressions: Array<ts.Expression> = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node)) {
+      for (const property of node.properties) {
+        if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) continue
+        if (propertyNameText(property.name) !== propertyName) continue
+        expressions.push(ts.isPropertyAssignment(property) ? property.initializer : property.name)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(root)
+  return expressions
+}
+/* eslint-enable functional/immutable-data */
+
+const functionLikeBody = (call: ts.CallExpression): ts.Node => {
+  let current: ts.Node = call.parent
+  while (!ts.isSourceFile(current)) {
+    if (ts.isFunctionLike(current)) {
+      const body = "body" in current ? current.body : undefined
+      return body ?? current
+    }
+    current = current.parent
+  }
+  return call.getSourceFile()
+}
+
+const bindingExpressions = (
+  call: ts.CallExpression,
+  selector: ContractImplementationBinding["selector"]
+): ReadonlyArray<ts.Node> => {
+  if (selector._tag === "Argument") {
+    const argument = call.arguments[selector.index]
+    return argument === undefined ? [] : [argument]
+  }
+  if (selector._tag === "ObjectProperty") return propertyExpressions(call.arguments[0] ?? call, selector.property)
+  return [functionLikeBody(call)]
+}
+
+const callExpressions = (
+  file: CapabilitySourceFile,
+  marker: string,
+  selector: InvocationSelector | undefined,
+  origin: string,
+  originName: string,
+  indexed: CapabilitySourceProgram
+): ReadonlyArray<ts.CallExpression> => {
+  const expected = normalizedMarker(marker)
+  return sourceNodes(parsedSource(file, indexed)).flatMap((node) => {
+    if (
+      !ts.isCallExpression(node) ||
+      propertyAccessText(node.expression) !== expected ||
+      (selector !== undefined && !callMatchesSelector(node, selector)) ||
+      !callResolvesToContractOrigin(node, origin, originName, indexed)
+    ) {
+      return []
+    }
+    return [node]
+  })
 }
 
 const layerTypeText = (text: string): boolean => /\bLayer(?:\s*\.\s*Layer)?(?:\s*<|\b)/u.test(text)
@@ -443,6 +535,51 @@ const valueReferenceMatchesSymbol = (
   )
 }
 
+type ContractExecutionEvidence =
+  CapabilityRegistrationInventory["capabilities"][number]["contract"]["executions"][number]
+
+const contractImplementationIssues = (
+  capability: CapabilityRegistrationInventory["capabilities"][number],
+  execution: ContractExecutionEvidence,
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>,
+  indexed: CapabilitySourceProgram
+): ReadonlyArray<string> => {
+  const binding = execution.implementation
+  if (binding === undefined) return []
+  const implementation = capability[execution.role]
+  if (implementation._tag === "NotApplicable") return []
+  const issue = `${capability.family} ${execution.role} contract implementation binding is stale: ${binding.identity}`
+  if (
+    binding.identity !== implementation.identity ||
+    binding.source !== implementation.source ||
+    binding.marker !== implementation.marker
+  ) {
+    return [issue]
+  }
+  const bindingSource = sourceAt(sourceFiles, binding.source)
+  const expectedSymbol =
+    bindingSource === undefined ? undefined : declarationSymbolFor(bindingSource, binding.marker, indexed)
+  if (expectedSymbol === undefined || execution.invocation === undefined) return [issue]
+  const invocationSource = sourceAt(sourceFiles, execution.invocation.source)
+  if (invocationSource === undefined) return [issue]
+  const calls = callExpressions(
+    invocationSource,
+    execution.invocation.marker,
+    execution.invocation.selector,
+    execution.source,
+    execution.marker,
+    indexed
+  )
+  const bound = calls.some((call) => {
+    const expressions = bindingExpressions(call, binding.selector)
+    return (
+      expressions.length > 0 &&
+      expressions.every((expression) => expressionReferencesSymbol(expression, expectedSymbol, indexed))
+    )
+  })
+  return bound ? [] : [issue]
+}
+
 const implementationSourceIssues = (
   inventory: CapabilityRegistrationInventory,
   sourceFiles: ReadonlyArray<CapabilitySourceFile>
@@ -509,6 +646,7 @@ const implementationSourceIssues = (
           issues.push(`${executionLabel} contract invocation marker is stale: ${execution.invocation.marker}`)
         }
       }
+      issues.push(...contractImplementationIssues(capability, execution, sourceFiles, indexed))
     }
   }
   /* eslint-enable functional/immutable-data */

@@ -30,6 +30,18 @@ interface ContractExecution {
   readonly marker: string
   /** Optional source call-site proof when the suite is imported from another test. */
   readonly invocation?: ContractInvocation
+  /** Source-backed proof of which registered implementation the call exercises. */
+  readonly implementation?: ContractImplementationBinding
+}
+
+export interface ContractImplementationBinding {
+  readonly identity: string
+  readonly source: string
+  readonly marker: string
+  readonly selector:
+    | { readonly _tag: "Argument"; readonly index: number }
+    | { readonly _tag: "ObjectProperty"; readonly property: string }
+    | { readonly _tag: "InvocationScope" }
 }
 
 interface ContractEvidence {
@@ -138,6 +150,13 @@ const notApplicable = (reason: NotApplicableReason, detail: string): NotApplicab
 
 const contract = (id: string, executions: ReadonlyArray<ContractExecution>): ContractEvidence => ({ executions, id })
 
+const implementationBinding = (
+  identity: string,
+  source: string,
+  marker: string,
+  selector: ContractImplementationBinding["selector"]
+): ContractImplementationBinding => ({ identity, marker, selector, source })
+
 const composed = (source: string, marker: string): CompositionReference => ({ _tag: "Assembled", marker, source })
 
 const supplied = (source: string, marker: string): CompositionReference => ({
@@ -186,7 +205,13 @@ const journalContract = contract("JournalStore", [
     },
     marker: "journalAppendContract",
     role: "controlled",
-    source: "packages/orchestrator/src/workflow-journal/store.test.ts"
+    source: "packages/orchestrator/src/workflow-journal/store.test.ts",
+    implementation: implementationBinding(
+      "memoryJournalTestLayer",
+      "packages/orchestrator/src/workflow-journal/adapters/memory-store.ts",
+      "memoryJournalTestLayer",
+      { _tag: "Argument", index: 1 }
+    )
   },
   {
     invocation: {
@@ -196,7 +221,13 @@ const journalContract = contract("JournalStore", [
     },
     marker: "journalAppendContract",
     role: "production",
-    source: "packages/orchestrator/src/workflow-journal/store.test.ts"
+    source: "packages/orchestrator/src/workflow-journal/store.test.ts",
+    implementation: implementationBinding(
+      "productionJournalStoreLayer",
+      "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
+      "productionJournalStoreLayer",
+      { _tag: "Argument", index: 1 }
+    )
   }
 ])
 
@@ -205,6 +236,12 @@ const trackerGraphContract = contract("TrackerGraphReader", [
     marker: "trackerGraphReaderContract",
     role: "controlled",
     source: "packages/orchestrator/test/contracts/tracker-graph-reader-contract.ts",
+    implementation: implementationBinding(
+      "trackerGraphReaderLayer",
+      "packages/orchestrator/src/authorities/task-tracker/graph-reader.ts",
+      "trackerGraphReaderLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    ),
     invocation: {
       marker: "trackerGraphReaderContract(",
       source: "packages/orchestrator/src/authorities/task-tracker/graph-reader.contract.test.ts"
@@ -214,6 +251,12 @@ const trackerGraphContract = contract("TrackerGraphReader", [
     marker: "trackerGraphReaderContract",
     role: "production",
     source: "packages/orchestrator/test/contracts/tracker-graph-reader-contract.ts",
+    implementation: implementationBinding(
+      "githubTrackerGraphReaderNodeLayer",
+      "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts",
+      "githubTrackerGraphReaderNodeLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    ),
     invocation: {
       marker: "trackerGraphReaderContract(",
       source: "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.test.ts"
@@ -229,7 +272,13 @@ const trackerClaimContract = contract("TrackerMutation", [
     },
     marker: "trackerMutationContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/tracker-mutation-contract.ts"
+    source: "packages/orchestrator/test/contracts/tracker-mutation-contract.ts",
+    implementation: implementationBinding(
+      "controlledTrackerMutationLayer",
+      "packages/orchestrator/src/authorities/task-tracker/claim-mutation.ts",
+      "controlledTrackerMutationLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   },
   {
     invocation: {
@@ -250,7 +299,13 @@ const completionContract = contract("CompletionBoundary", [
     },
     marker: "completionBoundaryContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/completion-boundary-contract.ts"
+    source: "packages/orchestrator/test/contracts/completion-boundary-contract.ts",
+    implementation: implementationBinding(
+      "controlledCompletionTaskBoundaryLayerFrom",
+      "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts",
+      "controlledCompletionTaskBoundaryLayerFrom",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -262,7 +317,13 @@ const worktreeContract = contract("GitWorktree", [
     },
     marker: "gitWorktreeContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/git-worktree-contract.ts"
+    source: "packages/orchestrator/test/contracts/git-worktree-contract.ts",
+    implementation: implementationBinding(
+      "gitWorktreeTestLayer",
+      "packages/orchestrator/src/authorities/git/worktree.ts",
+      "gitWorktreeTestLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   },
   {
     invocation: {
@@ -271,7 +332,13 @@ const worktreeContract = contract("GitWorktree", [
     },
     marker: "gitWorktreeContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/git-worktree-contract.ts"
+    source: "packages/orchestrator/test/contracts/git-worktree-contract.ts",
+    implementation: implementationBinding(
+      "nodeGitWorktreeLayer",
+      "packages/orchestrator/src/authorities/git/node-worktree.ts",
+      "nodeGitWorktreeLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -284,7 +351,13 @@ const lineageContract = contract("GitTargetLineage", [
     },
     marker: "gitTargetLineageContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/git-target-lineage-contract.ts"
+    source: "packages/orchestrator/test/contracts/git-target-lineage-contract.ts",
+    implementation: implementationBinding(
+      "controlledTargetLineageLayer",
+      "packages/orchestrator/src/workflow/interpretation/layers.ts",
+      "controlledTargetLineageLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   },
   {
     invocation: {
@@ -294,7 +367,13 @@ const lineageContract = contract("GitTargetLineage", [
     },
     marker: "gitTargetLineageContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/git-target-lineage-contract.ts"
+    source: "packages/orchestrator/test/contracts/git-target-lineage-contract.ts",
+    implementation: implementationBinding(
+      "nodeGitTargetLineageLayer",
+      "packages/orchestrator/src/authorities/git/target-lineage.ts",
+      "nodeGitTargetLineageLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -307,7 +386,13 @@ const integratorCandidateContract = contract("IntegratorGit", [
     },
     marker: "integratorCandidateContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/integrator-candidate-contract.ts"
+    source: "packages/orchestrator/test/contracts/integrator-candidate-contract.ts",
+    implementation: implementationBinding(
+      "controlledContractLayer",
+      "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts",
+      "controlledContractLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   },
   {
     invocation: {
@@ -317,7 +402,13 @@ const integratorCandidateContract = contract("IntegratorGit", [
     },
     marker: "integratorCandidateContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/integrator-candidate-contract.ts"
+    source: "packages/orchestrator/test/contracts/integrator-candidate-contract.ts",
+    implementation: implementationBinding(
+      "nodeGitIntegratorCandidateLayer",
+      "packages/orchestrator/src/authorities/git/integrator-candidate.ts",
+      "nodeGitIntegratorCandidateLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -329,7 +420,13 @@ const targetPromotionContract = contract("TargetPromotionGit", [
     },
     marker: "targetPromotionContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/target-promotion-contract.ts"
+    source: "packages/orchestrator/test/contracts/target-promotion-contract.ts",
+    implementation: implementationBinding(
+      "gitLayer",
+      "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts",
+      "gitLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   },
   {
     invocation: {
@@ -350,7 +447,13 @@ const executorContract = contract("PlannedAttemptExecutor", [
     },
     marker: "plannedAttemptExecutorContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/planned-attempt-executor-contract.ts"
+    source: "packages/orchestrator/test/contracts/planned-attempt-executor-contract.ts",
+    implementation: implementationBinding(
+      "dryRunPlannedAttemptExecutorLayer",
+      "packages/dalph/src/application/dry-run-planned-attempt-executor.ts",
+      "dryRunPlannedAttemptExecutorLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   },
   {
     invocation: {
@@ -359,7 +462,13 @@ const executorContract = contract("PlannedAttemptExecutor", [
     },
     marker: "plannedAttemptExecutorContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/planned-attempt-executor-contract.ts"
+    source: "packages/orchestrator/test/contracts/planned-attempt-executor-contract.ts",
+    implementation: implementationBinding(
+      "nodeCodexPlannedAttemptExecutorLayer",
+      "packages/dalph/src/application/codex-planned-attempt-executor.ts",
+      "nodeCodexPlannedAttemptExecutorLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -371,7 +480,13 @@ const integratorContract = contract("Integrator", [
     },
     marker: "integratorContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/integrator-contract.ts"
+    source: "packages/orchestrator/test/contracts/integrator-contract.ts",
+    implementation: implementationBinding(
+      "controlledIntegratorContractService",
+      "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
+      "controlledIntegratorContractService",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -384,7 +499,13 @@ const evidenceContract = contract("EvidenceStore", [
     },
     marker: "evidenceStoreContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/evidence-store-contract.ts"
+    source: "packages/orchestrator/test/contracts/evidence-store-contract.ts",
+    implementation: implementationBinding(
+      "memoryEvidenceStoreLayer",
+      "packages/orchestrator/src/workflow/protocols/evidence-store.ts",
+      "memoryEvidenceStoreLayer",
+      { _tag: "Argument", index: 0 }
+    )
   },
   {
     invocation: {
@@ -394,7 +515,13 @@ const evidenceContract = contract("EvidenceStore", [
     },
     marker: "evidenceStoreContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/evidence-store-contract.ts"
+    source: "packages/orchestrator/src/workflow/protocols/evidence-store.ts",
+    implementation: implementationBinding(
+      "nodeEvidenceStoreLayer",
+      "packages/orchestrator/src/workflow/protocols/evidence-store.ts",
+      "nodeEvidenceStoreLayer",
+      { _tag: "Argument", index: 0 }
+    )
   }
 ])
 
@@ -431,7 +558,13 @@ const coordinatorContract = contract("CoordinatorLock", [
     },
     marker: "coordinatorLockContract",
     role: "controlled",
-    source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts"
+    source: "packages/orchestrator/test/contracts/coordinator-lock-contract.ts",
+    implementation: implementationBinding(
+      "controlledCoordinatorLockLayer",
+      "packages/orchestrator/src/authorities/coordinator-ownership/ownership.ts",
+      "controlledCoordinatorLockLayer",
+      { _tag: "Argument", index: 1 }
+    )
   },
   {
     invocation: {
@@ -441,7 +574,13 @@ const coordinatorContract = contract("CoordinatorLock", [
     },
     marker: "coordinatorLockContract",
     role: "production",
-    source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts"
+    source: "packages/orchestrator/test/contracts/coordinator-lock-contract.ts",
+    implementation: implementationBinding(
+      "nodeCoordinatorLockLayer",
+      "packages/orchestrator/src/authorities/coordinator-ownership/node-lock.ts",
+      "nodeCoordinatorLockLayer",
+      { _tag: "Argument", index: 1 }
+    )
   }
 ])
 
@@ -564,12 +703,12 @@ export const capabilityRegistrationInventory = {
     {
       boundary: "Git Integrator-candidate qualification",
       controlled: implementation(
-        "controlledIntegratorGit",
-        "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
-        "controlledIntegratorGit",
+        "controlledContractLayer",
+        "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts",
+        "controlledContractLayer",
         controlledComposition(
-          "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
-          "controlledIntegratorGit"
+          "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts",
+          "controlledContractLayer"
         )
       ),
       contract: integratorCandidateContract,
@@ -619,12 +758,12 @@ export const capabilityRegistrationInventory = {
     {
       boundary: "outer Integrator",
       controlled: implementation(
-        "controlledIntegrator",
+        "controlledIntegratorContractService",
         "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
-        "controlledIntegrator",
+        "controlledIntegratorContractService",
         controlledComposition(
           "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
-          "controlledIntegrator"
+          "controlledIntegratorContractService"
         )
       ),
       contract: integratorContract,
