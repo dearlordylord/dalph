@@ -71,20 +71,23 @@ import {
   TargetPromotionTerminalBasis
 } from "../workflow/protocols/target-promotion/events.js"
 import { AttemptRestartAuthorityReadFailure } from "../workflow/protocols/attempt-choice/replacement-events.js"
-import { AttemptChoiceSubject } from "../workflow/protocols/attempt-choice/events.js"
-import { ActiveTaskClaim } from "../authorities/task-tracker/claim-mutation.js"
+import {
+  AttemptChoice,
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject,
+  AttemptQuiescenceProof
+} from "../workflow/protocols/attempt-choice/events.js"
+import { ActiveTaskClaim, TaskClaimObservation } from "../authorities/task-tracker/claim-mutation.js"
 import {
   PlannedAttemptWorktreeObservation,
   PlannedWorktreeReady
 } from "../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
-import type {
-  CompleteTaskTrackerFactsObserved,
-  TaskTrackerFactsObservation,
-  UnchangedTaskTrackerFactsReconfirmed
-} from "../workflow/task-tracker-facts/observation.js"
 import {
   CompleteTaskTrackerFactsObserved as CompleteTaskTrackerFactsObservedSchema,
-  UnchangedTaskTrackerFactsReconfirmed as UnchangedTaskTrackerFactsReconfirmedSchema
+  UnchangedTaskTrackerFactsReconfirmed as UnchangedTaskTrackerFactsReconfirmedSchema,
+  type CompleteTaskTrackerFactsObserved,
+  type TaskTrackerFactsObservation,
+  type UnchangedTaskTrackerFactsReconfirmed
 } from "../workflow/task-tracker-facts/observation.js"
 import { reconstructedTaskGraphFor } from "../coordination/reconstruction/graph-knowledge.js"
 import {
@@ -93,6 +96,15 @@ import {
 } from "../workflow/protocols/integration-finality/history.js"
 import { validateIntegrationHistoryRecord } from "../coordination/reconstruction/integration-history-validation.js"
 import { invalidWorkflowRunBinding } from "../coordination/reconstruction/integration-history-run-binding.js"
+import {
+  validateAttemptStopHistory,
+  validateCancellationMultiplicityHistory
+} from "../coordination/reconstruction/history.js"
+import { validateCancelledAttemptHistoryPrefix } from "../coordination/reconstruction/cancelled-attempt-history.js"
+import {
+  workflowJournalHistoryIssueDetail,
+  type WorkflowJournalHistoryIssue
+} from "../coordination/reconstruction/history-result.js"
 import { makeIntegrationHistoryIndexes } from "../coordination/reconstruction/integration-history.js"
 import type { CurrentSignal } from "../coordination/delivery/relations.js"
 import {
@@ -101,9 +113,33 @@ import {
   type HistoricalFacetFactories
 } from "./trace-reader-historical-facets.js"
 import { sameJson } from "./trace-equality.js"
+import {
+  ControlDirectionSubject,
+  ControlDirectionApplicationOrdinal
+} from "../workflow/protocols/control-direction-application/events.js"
+import { WorkflowActor } from "../workflow/registry/actor.js"
+import {
+  BranchCleanupAuthorization,
+  IntegratorCandidateCleanupAuthorization,
+  WorktreeCleanupAuthorization
+} from "../workflow/protocols/disposition-cleanup/disposition.js"
+import { BranchCleanupJournalEvent } from "../workflow/protocols/disposition-cleanup/branch.js"
+import { IntegratorCandidateCleanupJournalEvent } from "../workflow/protocols/disposition-cleanup/integrator-candidate.js"
+import { WorktreeCleanupJournalEvent } from "../workflow/protocols/disposition-cleanup/worktree.js"
+import {
+  validateBranchCleanupHistory,
+  validateIntegratorCandidateCleanupHistory,
+  validateIntegratorCandidateCleanupProvenance,
+  validateSettledWorktreeForBranch,
+  validateWorktreeCleanupHistory,
+  validateWorktreeCleanupProvenance
+} from "../workflow/protocols/disposition-cleanup/provenance.js"
+import { traceControlDispositionFacetVersion } from "./trace-reader-version.js"
+
+export { traceControlDispositionFacetVersion } from "./trace-reader-version.js"
 
 /** Version of the immutable production trace contract consumed by presentation. */
-export const traceReaderSchemaVersion = 3 as const // eslint-disable-line no-magic-numbers
+export const traceReaderSchemaVersion = 4 as const // eslint-disable-line no-magic-numbers
 
 /**
  * Identifies one exact committed journal position in one Run. Cursors and
@@ -363,18 +399,192 @@ export const TraceIntegrationFact = Schema.TaggedUnion({
 })
 export type TraceIntegrationFact = typeof TraceIntegrationFact.Type
 
+/** One Operator direction or choice proved by an applied occurrence. */
+export const TraceControlFact = Schema.TaggedUnion({
+  AttemptChoice: {
+    choice: AttemptChoice,
+    initiatedBy: WorkflowActor.cases.Operator,
+    requestId: AttemptChoiceRequestId,
+    source: TraceItemIdentity,
+    subject: AttemptChoiceSubject
+  },
+  Direction: {
+    direction: Schema.Literals(["Pause", "Unpause"]),
+    initiatedBy: WorkflowActor.cases.Operator,
+    ordinal: ControlDirectionApplicationOrdinal,
+    source: TraceItemIdentity,
+    subject: ControlDirectionSubject
+  }
+})
+export type TraceControlFact = typeof TraceControlFact.Type
+
+/** One durable Run or attempt disposition with its exact source occurrence. */
+export const TraceDispositionFact = Schema.TaggedUnion({
+  AttemptAbandoned: {
+    expectedClaim: ActiveTaskClaim,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    proof: AttemptQuiescenceProof,
+    requestId: AttemptChoiceRequestId,
+    source: TraceItemIdentity,
+    subject: AttemptChoiceSubject
+  },
+  CancelledAttemptClaimPreserved: {
+    cancellationAppliedAt: JournalPosition,
+    expectedClaim: ActiveTaskClaim,
+    observation: TaskClaimObservation,
+    observationOperationId: OperationId,
+    plannedAttempt: PlannedTaskAttempt,
+    source: TraceItemIdentity
+  },
+  CancelledAttemptResponsibilityRelinquished: {
+    authorizedClaim: ActiveTaskClaim,
+    cancellationAppliedAt: JournalPosition,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    plannedAttempt: PlannedTaskAttempt,
+    proof: AttemptQuiescenceProof,
+    source: TraceItemIdentity
+  },
+  AttemptClaimPreserved: {
+    expectedClaim: ActiveTaskClaim,
+    observation: TaskClaimObservation,
+    observationOperationId: OperationId,
+    requestId: AttemptChoiceRequestId,
+    source: TraceItemIdentity,
+    subject: AttemptChoiceSubject
+  },
+  IntegrationQuarantine: {
+    basis: IntegrationQuarantineBasis,
+    correlation: IntegratorSessionCorrelation,
+    source: TraceItemIdentity
+  },
+  IntegratorCandidatePreserved: {
+    predecessor: IntegratorSessionCorrelation,
+    source: TraceItemIdentity,
+    successor: IntegratorSessionCorrelation
+  },
+  NonConvergentPromotion: {
+    correlation: TargetPromotionCorrelation,
+    lastObservation: TargetPromotionNonConvergenceObservation,
+    source: TraceItemIdentity
+  },
+  ReplacementPending: { choice: AttemptChoiceSubject, source: TraceItemIdentity },
+  RunCancellationApplied: { initiatedBy: WorkflowActor.cases.Operator, source: TraceItemIdentity },
+  TaskAuthorityConflict: {
+    failure: AttemptRestartAuthorityReadFailure,
+    source: TraceItemIdentity,
+    subject: AttemptChoiceSubject
+  },
+  WorktreeLost: {
+    observation: PlannedAttemptWorktreeObservation,
+    plannedAttempt: PlannedTaskAttempt,
+    source: TraceItemIdentity
+  }
+})
+export type TraceDispositionFact = typeof TraceDispositionFact.Type
+
+/** One cleanup step retains the exact family-specific event and source cursor. */
+export const TraceWorktreeCleanupStep = Schema.Struct({ event: WorktreeCleanupJournalEvent, source: TraceItemIdentity })
+export type TraceWorktreeCleanupStep = typeof TraceWorktreeCleanupStep.Type
+
+/** One branch cleanup step retains the exact family-specific event and source cursor. */
+export const TraceBranchCleanupStep = Schema.Struct({ event: BranchCleanupJournalEvent, source: TraceItemIdentity })
+export type TraceBranchCleanupStep = typeof TraceBranchCleanupStep.Type
+
+/** One Integrator predecessor cleanup step retains its exact event and source cursor. */
+export const TraceIntegratorCandidateCleanupStep = Schema.Struct({
+  event: IntegratorCandidateCleanupJournalEvent,
+  source: TraceItemIdentity
+})
+export type TraceIntegratorCandidateCleanupStep = typeof TraceIntegratorCandidateCleanupStep.Type
+
+/** Last committed state of one exact cleanup authorization. */
+export const TraceCleanupStatus = Schema.TaggedUnion({
+  Absent: { source: TraceItemIdentity },
+  Authorized: { source: TraceItemIdentity },
+  Contradicted: { detail: Schema.String, source: TraceItemIdentity },
+  MutationPending: { source: TraceItemIdentity },
+  MutationResultRecorded: {
+    result: Schema.Literals(["AlreadyAbsent", "DefinitelyNotApplied", "Removed", "Unknown"]),
+    source: TraceItemIdentity
+  },
+  ObservationPending: { source: TraceItemIdentity },
+  Present: { source: TraceItemIdentity },
+  Settled: { result: Schema.Literals(["AlreadyAbsent", "Removed"]), source: TraceItemIdentity }
+})
+export type TraceCleanupStatus = typeof TraceCleanupStatus.Type
+
+/** Worktree cleanup progress; the authorization and every step name one source identity. */
+export const TraceWorktreeCleanupProgress = Schema.TaggedStruct("Worktree", {
+  authorization: WorktreeCleanupAuthorization,
+  status: TraceCleanupStatus,
+  steps: Schema.Array(TraceWorktreeCleanupStep)
+})
+export type TraceWorktreeCleanupProgress = typeof TraceWorktreeCleanupProgress.Type
+
+/** Branch cleanup progress; branch deletion remains distinct from worktree deletion. */
+export const TraceBranchCleanupProgress = Schema.TaggedStruct("Branch", {
+  authorization: BranchCleanupAuthorization,
+  status: TraceCleanupStatus,
+  steps: Schema.Array(TraceBranchCleanupStep)
+})
+export type TraceBranchCleanupProgress = typeof TraceBranchCleanupProgress.Type
+
+/** Integrator predecessor-candidate cleanup progress remains provider-owned and distinct. */
+export const TraceIntegratorCandidateCleanupProgress = Schema.TaggedStruct("IntegratorCandidate", {
+  authorization: IntegratorCandidateCleanupAuthorization,
+  status: TraceCleanupStatus,
+  steps: Schema.Array(TraceIntegratorCandidateCleanupStep)
+})
+export type TraceIntegratorCandidateCleanupProgress = typeof TraceIntegratorCandidateCleanupProgress.Type
+
+/** The three exact disposition-authorized cleanup families at one committed cursor. */
+export const TraceCleanupProgress = Schema.Union([
+  TraceBranchCleanupProgress,
+  TraceIntegratorCandidateCleanupProgress,
+  TraceWorktreeCleanupProgress
+])
+export type TraceCleanupProgress = typeof TraceCleanupProgress.Type
+
+/** Versioned read-only control, disposition, and cleanup facet for one exact cursor. */
+export const TraceControlDispositionFacet = Schema.Struct({
+  cleanup: Schema.Array(TraceCleanupProgress),
+  controls: Schema.Array(TraceControlFact),
+  dispositions: Schema.Array(TraceDispositionFact),
+  version: Schema.Literal(traceControlDispositionFacetVersion)
+})
+export type TraceControlDispositionFacet = typeof TraceControlDispositionFacet.Type
+
 /** One shared versioned envelope consumed by console and Reducer Lab. */
 export const TraceHistoricalFacets = Schema.Struct({
+  controlDisposition: TraceControlDispositionFacet,
   integration: Schema.Struct({ facts: Schema.Array(TraceIntegrationFact) }),
   recovery: TraceRecoveryFacet
 })
 export type TraceHistoricalFacets = typeof TraceHistoricalFacets.Type
 
 const historicalFacetFactories = {
+  branchCleanupStep: { make: (input: Omit<TraceBranchCleanupStep, "_tag">) => TraceBranchCleanupStep.make(input) },
+  cleanupProgress: {
+    Branch: { make: (input) => TraceBranchCleanupProgress.make(input) },
+    IntegratorCandidate: { make: (input) => TraceIntegratorCandidateCleanupProgress.make(input) },
+    Worktree: { make: (input) => TraceWorktreeCleanupProgress.make(input) }
+  },
+  cleanupStatus: { ...TraceCleanupStatus.cases },
+  controlDisposition: {
+    make: (input: Omit<TraceControlDispositionFacet, "_tag">) => TraceControlDispositionFacet.make(input)
+  },
+  controlFact: { ...TraceControlFact.cases },
+  dispositionFact: { ...TraceDispositionFact.cases },
+  integratorCandidateCleanupStep: {
+    make: (input: Omit<TraceIntegratorCandidateCleanupStep, "_tag">) => TraceIntegratorCandidateCleanupStep.make(input)
+  },
   observationGap: TraceObservationGap.cases,
   preservationDisposition: TracePreservationDisposition.cases,
   retainedResponsibility: TraceRetainedResponsibility.cases,
   integrationFact: TraceIntegrationFact.cases,
+  worktreeCleanupStep: {
+    make: (input: Omit<TraceWorktreeCleanupStep, "_tag">) => TraceWorktreeCleanupStep.make(input)
+  },
   facets: TraceHistoricalFacets
 } satisfies HistoricalFacetFactories
 
@@ -1198,12 +1408,38 @@ const operationIdsOfFinalityOccurrence = (
 ): ReadonlyArray<OperationId> | undefined =>
   isFinalityOccurrence(occurrence) ? operationIdsOfFinalityEvent(occurrence.event) : undefined
 
+const cleanupOccurrenceKinds = {
+  BranchCleanupOccurred: true,
+  IntegratorCandidateCleanupOccurred: true,
+  WorktreeCleanupOccurred: true
+} as const
+
+type CleanupOccurrence = Extract<WorkflowOccurrenceValue, { readonly _tag: keyof typeof cleanupOccurrenceKinds }>
+
+const isCleanupOccurrence = (occurrence: WorkflowOccurrenceValue): occurrence is CleanupOccurrence =>
+  Object.hasOwn(cleanupOccurrenceKinds, occurrence._tag)
+
+const operationIdsOfCleanupOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined => {
+  if (!isCleanupOccurrence(occurrence)) return undefined
+  const event = occurrence.event
+  return "operationId" in event ? [event.operationId] : [event.authorization.operationId]
+}
+
+const operationIdsOfCancellationOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<OperationId> | undefined =>
+  occurrence._tag === "CancelledAttemptClaimNoReleaseObserved" ? [occurrence.observationOperationId] : undefined
+
 const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<OperationId> =>
   operationIdsOfOperationOccurrence(occurrence) ??
   operationIdsOfObservedOccurrence(occurrence) ??
   operationIdsOfReplacementOccurrence(occurrence) ??
   operationIdsOfHistoricalAttemptOccurrence(occurrence) ??
   operationIdsOfFinalityOccurrence(occurrence) ??
+  operationIdsOfCleanupOccurrence(occurrence) ??
+  operationIdsOfCancellationOccurrence(occurrence) ??
   []
 
 const taskIdsOfObservation = (observation: TaskTrackerFactsObservation): ReadonlyArray<TaskId> => {
@@ -1389,6 +1625,24 @@ const taskIdsOfHistoricalFinality = (occurrence: WorkflowOccurrenceValue): Reado
   return []
 }
 
+const taskIdsOfControlDispositionOccurrence = (
+  occurrence: WorkflowOccurrenceValue
+): ReadonlyArray<TaskId> | undefined => {
+  if (
+    occurrence._tag === "CancelledAttemptImplementationResponsibilityRelinquished" ||
+    occurrence._tag === "CancelledAttemptClaimNoReleaseObserved"
+  ) {
+    return [occurrence.plannedAttempt.taskId]
+  }
+  if (occurrence._tag === "WorktreeCleanupOccurred" || occurrence._tag === "BranchCleanupOccurred") {
+    return [occurrence.event.authorization.disposition.plannedAttempt.taskId]
+  }
+  if (occurrence._tag === "IntegratorCandidateCleanupOccurred") {
+    return [occurrence.event.authorization.disposition.predecessor.plannedAttempt.taskId]
+  }
+  return undefined
+}
+
 const taskIdsOfHistoricalOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<TaskId> | undefined =>
   [
     taskIdsOfHistoricalTaskClaim(occurrence),
@@ -1396,7 +1650,8 @@ const taskIdsOfHistoricalOccurrence = (occurrence: WorkflowOccurrenceValue): Rea
     taskIdsOfHistoricalIntegrator(occurrence),
     taskIdsOfHistoricalPromotion(occurrence),
     taskIdsOfHistoricalPreservation(occurrence),
-    taskIdsOfHistoricalFinality(occurrence)
+    taskIdsOfHistoricalFinality(occurrence),
+    taskIdsOfControlDispositionOccurrence(occurrence)
   ].find((taskIds): taskIds is ReadonlyArray<TaskId> => taskIds !== undefined)
 
 const itemFromOccurrence = (runId: RunId, occurrence: WorkflowOccurrenceValue): TraceHistoryItem =>
@@ -1657,13 +1912,82 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
   return undefined
 }
 
+type CleanupEventWithFamily =
+  | { readonly family: "Worktree"; readonly event: WorktreeCleanupJournalEvent }
+  | { readonly family: "Branch"; readonly event: BranchCleanupJournalEvent }
+  | { readonly family: "IntegratorCandidate"; readonly event: IntegratorCandidateCleanupJournalEvent }
+
+const cleanupEventWithFamily = (event: WorkflowJournalEvent): CleanupEventWithFamily | undefined => {
+  if (Schema.is(WorktreeCleanupJournalEvent)(event)) return { event, family: "Worktree" }
+  if (Schema.is(BranchCleanupJournalEvent)(event)) return { event, family: "Branch" }
+  if (Schema.is(IntegratorCandidateCleanupJournalEvent)(event)) return { event, family: "IntegratorCandidate" }
+  return undefined
+}
+
+/** Cleanup history is checked against the same committed prefix as occurrence projection. */
+const cleanupFamilyValidationIssue = (
+  records: ReadonlyArray<JournalRecord>,
+  cleanup: CleanupEventWithFamily
+): string | undefined => {
+  const { event, family } = cleanup
+  const provenance =
+    family === "IntegratorCandidate"
+      ? validateIntegratorCandidateCleanupProvenance(records, event.authorization)
+      : validateWorktreeCleanupProvenance(records, event.authorization)
+  if (provenance._tag === "Invalid") return `${family} cleanup provenance: ${provenance.detail}`
+  const history =
+    family === "Worktree"
+      ? validateWorktreeCleanupHistory(records, event.authorization)
+      : family === "Branch"
+        ? validateBranchCleanupHistory(records, event.authorization)
+        : validateIntegratorCandidateCleanupHistory(records, event.authorization)
+  if (history._tag === "Invalid") return `${family} cleanup history: ${history.detail}`
+  if (family !== "Branch") return undefined
+  const settledWorktree = validateSettledWorktreeForBranch(records, event.authorization)
+  return settledWorktree._tag === "Invalid" ? `${family} cleanup provenance: ${settledWorktree.detail}` : undefined
+}
+
+const cleanupHistoryIssue = (records: ReadonlyArray<JournalRecord>): string | undefined => {
+  const latestByAuthorization = new Map<string, CleanupEventWithFamily>()
+  for (const record of records) {
+    const cleanup = cleanupEventWithFamily(record.event)
+    if (cleanup !== undefined) {
+      latestByAuthorization.set(`${cleanup.family}:${cleanup.event.authorization.operationId}`, cleanup)
+    }
+  }
+  for (const cleanup of latestByAuthorization.values()) {
+    const issue = cleanupFamilyValidationIssue(records, cleanup)
+    if (issue !== undefined) return issue
+  }
+  return undefined
+}
+
+const canonicalHistoryIssue = (issues: ReadonlyArray<WorkflowJournalHistoryIssue>): string | undefined => {
+  const issue = issues[0]
+  if (issue === undefined) return undefined
+  const position = "position" in issue ? issue.position : issue.second.position
+  return `${workflowJournalHistoryIssueDetail(issue)} at journal position ${position}`
+}
+
+const cancelledAttemptHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+  const issue = validateCancelledAttemptHistoryPrefix(runId, records)
+  return issue === undefined ? undefined : `${issue.detail} at journal position ${issue.position}`
+}
+
 /** Validates all nested Run identities before any complete or cursor trace is presented. */
 const fullHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
   for (const record of records) {
     const bindingIssue = invalidWorkflowRunBinding(record.event, runId)
     if (bindingIssue !== undefined) return `${bindingIssue} at journal position ${record.position}`
   }
-  return integrationHistoryIssue(runId, records) ?? finalityHistoryIssue(runId, records)
+  return (
+    canonicalHistoryIssue(validateAttemptStopHistory(runId, records)) ??
+    canonicalHistoryIssue(validateCancellationMultiplicityHistory(runId, records)) ??
+    cancelledAttemptHistoryIssue(runId, records) ??
+    cleanupHistoryIssue(records) ??
+    integrationHistoryIssue(runId, records) ??
+    finalityHistoryIssue(runId, records)
+  )
 }
 
 type CompleteGraphObservation = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
@@ -1836,7 +2160,7 @@ const historyFromRecords = Effect.fn("TraceReader.historyFromRecords")(function*
     return yield* new TraceProjectionInvalid({ detail: historyIssue, runId })
   }
   yield* operationIndexOf(runId, records)
-  const projection = yield* projectWorkflowOccurrences(records).pipe(
+  const projection = yield* projectWorkflowOccurrences(records, { includeControlDisposition: true }).pipe(
     Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId }))
   )
   const items = projection.occurrences.map((occurrence) => itemFromOccurrence(runId, occurrence))
@@ -1876,7 +2200,7 @@ const completeTraceIndexFromRecords = (
       return yield* new TraceProjectionInvalid({ detail: historyIssue, runId })
     }
     const operationIndex = yield* operationIndexOf(runId, records)
-    const projection = yield* projectWorkflowOccurrences(records).pipe(
+    const projection = yield* projectWorkflowOccurrences(records, { includeControlDisposition: true }).pipe(
       Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId }))
     )
     const items = projection.occurrences.map((occurrence) => itemFromOccurrence(runId, occurrence))
@@ -2040,7 +2364,7 @@ const atCursorFromRecords = Effect.fn("TraceReader.atCursorFromRecords")(functio
     return yield* new TraceProjectionInvalid({ detail: historyIssue, runId: cursor.runId })
   }
   const operationIndex = yield* operationIndexOf(cursor.runId, prefix)
-  const projection = yield* projectWorkflowOccurrences(prefix).pipe(
+  const projection = yield* projectWorkflowOccurrences(prefix, { includeControlDisposition: true }).pipe(
     Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId: cursor.runId }))
   )
   const items = projection.occurrences.map((occurrence) => itemFromOccurrence(cursor.runId, occurrence))

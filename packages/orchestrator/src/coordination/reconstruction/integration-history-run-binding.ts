@@ -69,6 +69,111 @@ const invalidCompletionTaskRequestLookupRunBinding = (
     runId
   )
 
+type WorktreeCleanupBindingEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "WorktreeCleanupAuthorized"
+      | "WorktreeCleanupObservationIntended"
+      | "WorktreeCleanupObserved"
+      | "WorktreeCleanupAbsenceConfirmed"
+      | "WorktreeCleanupMutationIntended"
+      | "WorktreeCleanupMutationResultRecorded"
+      | "WorktreeCleanupContradicted"
+      | "WorktreeCleanupSettled"
+  }
+>
+
+const worktreeCleanupBindingLabels = {
+  WorktreeCleanupAuthorized: "worktree cleanup authorization",
+  WorktreeCleanupObservationIntended: "worktree cleanup observation",
+  WorktreeCleanupObserved: "worktree cleanup observation",
+  WorktreeCleanupAbsenceConfirmed: "worktree cleanup absence",
+  WorktreeCleanupMutationIntended: "worktree cleanup mutation",
+  WorktreeCleanupMutationResultRecorded: "worktree cleanup mutation result",
+  WorktreeCleanupContradicted: "worktree cleanup contradiction",
+  WorktreeCleanupSettled: "worktree cleanup settlement"
+} satisfies Record<WorktreeCleanupBindingEvent["_tag"], string>
+
+const invalidWorktreeCleanupRunBinding = (event: WorktreeCleanupBindingEvent, runId: RunId): string | undefined =>
+  invalidNestedRunBinding(
+    worktreeCleanupBindingLabels[event._tag],
+    [event.authorization.disposition.plannedAttempt.runId],
+    runId
+  )
+
+type BranchCleanupBindingEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "BranchCleanupAuthorized"
+      | "BranchCleanupObservationIntended"
+      | "BranchCleanupObserved"
+      | "BranchCleanupAbsenceConfirmed"
+      | "BranchCleanupMutationIntended"
+      | "BranchCleanupMutationResultRecorded"
+      | "BranchCleanupContradicted"
+      | "BranchCleanupSettled"
+  }
+>
+
+const branchCleanupBindingLabels = {
+  BranchCleanupAuthorized: "branch cleanup authorization",
+  BranchCleanupObservationIntended: "branch cleanup observation",
+  BranchCleanupObserved: "branch cleanup observation",
+  BranchCleanupAbsenceConfirmed: "branch cleanup absence",
+  BranchCleanupMutationIntended: "branch cleanup mutation",
+  BranchCleanupMutationResultRecorded: "branch cleanup mutation result",
+  BranchCleanupContradicted: "branch cleanup contradiction",
+  BranchCleanupSettled: "branch cleanup settlement"
+} satisfies Record<BranchCleanupBindingEvent["_tag"], string>
+
+const invalidBranchCleanupRunBinding = (event: BranchCleanupBindingEvent, runId: RunId): string | undefined =>
+  invalidNestedRunBinding(
+    branchCleanupBindingLabels[event._tag],
+    [event.authorization.disposition.plannedAttempt.runId],
+    runId
+  )
+
+type IntegratorCandidateCleanupBindingEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "IntegratorCandidateCleanupAuthorized"
+      | "IntegratorCandidateCleanupObservationIntended"
+      | "IntegratorCandidateCleanupObserved"
+      | "IntegratorCandidateCleanupAbsenceConfirmed"
+      | "IntegratorCandidateCleanupMutationIntended"
+      | "IntegratorCandidateCleanupMutationResultRecorded"
+      | "IntegratorCandidateCleanupContradicted"
+      | "IntegratorCandidateCleanupSettled"
+  }
+>
+
+const integratorCandidateCleanupBindingLabels = {
+  IntegratorCandidateCleanupAuthorized: "candidate cleanup authorization",
+  IntegratorCandidateCleanupObservationIntended: "candidate cleanup observation",
+  IntegratorCandidateCleanupObserved: "candidate cleanup observation",
+  IntegratorCandidateCleanupAbsenceConfirmed: "candidate cleanup absence",
+  IntegratorCandidateCleanupMutationIntended: "candidate cleanup mutation",
+  IntegratorCandidateCleanupMutationResultRecorded: "candidate cleanup mutation result",
+  IntegratorCandidateCleanupContradicted: "candidate cleanup contradiction",
+  IntegratorCandidateCleanupSettled: "candidate cleanup settlement"
+} satisfies Record<IntegratorCandidateCleanupBindingEvent["_tag"], string>
+
+const invalidIntegratorCandidateCleanupRunBinding = (
+  event: IntegratorCandidateCleanupBindingEvent,
+  runId: RunId
+): string | undefined =>
+  invalidNestedRunBinding(
+    integratorCandidateCleanupBindingLabels[event._tag],
+    [
+      event.authorization.disposition.predecessor.plannedAttempt.runId,
+      event.authorization.disposition.successor.plannedAttempt.runId
+    ],
+    runId
+  )
+
 const invalidTaskTrackerObservationRunBinding = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>,
   runId: RunId
@@ -90,6 +195,11 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
     Match.tags({
       ControlDirectionApplied: (candidate) =>
         invalidNestedRunBinding("control direction", [candidate.subject.runId], runId),
+      RunCancellationApplied: () => undefined,
+      CancelledAttemptImplementationResponsibilityRelinquished: (candidate) =>
+        invalidNestedRunBinding("cancelled-attempt responsibility", [candidate.plannedAttempt.runId], runId),
+      CancelledAttemptClaimNoReleaseObserved: (candidate) =>
+        invalidNestedRunBinding("cancelled-attempt claim observation", [candidate.plannedAttempt.runId], runId),
       AttemptChoiceApplied: (candidate) => invalidAttemptChoiceRunBinding(candidate, runId, "attempt choice"),
       AttemptImplementationAbandoned: (candidate) =>
         invalidAttemptChoiceRunBinding(candidate, runId, "attempt implementation abandonment"),
@@ -279,7 +389,37 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
           : `Integrator provider-activity absence binds run ${exactRunId}`
       },
       IntegrationQuarantined: (candidate) =>
-        invalidNestedRunBinding("integration quarantine", [candidate.correlation.plannedAttempt.runId], runId)
+        invalidNestedRunBinding("integration quarantine", [candidate.correlation.plannedAttempt.runId], runId),
+      WorktreeCleanupAuthorized: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupObservationIntended: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupObserved: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupAbsenceConfirmed: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupMutationIntended: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupMutationResultRecorded: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupContradicted: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      WorktreeCleanupSettled: (candidate) => invalidWorktreeCleanupRunBinding(candidate, runId),
+      BranchCleanupAuthorized: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupObservationIntended: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupObserved: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupAbsenceConfirmed: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupMutationIntended: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupMutationResultRecorded: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupContradicted: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      BranchCleanupSettled: (candidate) => invalidBranchCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupAuthorized: (candidate) =>
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupObservationIntended: (candidate) =>
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupObserved: (candidate) => invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupAbsenceConfirmed: (candidate) =>
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupMutationIntended: (candidate) =>
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupMutationResultRecorded: (candidate) =>
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupContradicted: (candidate) =>
+        invalidIntegratorCandidateCleanupRunBinding(candidate, runId),
+      IntegratorCandidateCleanupSettled: (candidate) => invalidIntegratorCandidateCleanupRunBinding(candidate, runId)
     }),
     Match.orElse(() => undefined)
   )

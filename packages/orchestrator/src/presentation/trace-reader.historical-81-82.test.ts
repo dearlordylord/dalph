@@ -156,6 +156,14 @@ import {
 } from "../workflow/task-tracker-facts/observation.js"
 import {
   TraceAtCursor,
+  TraceBranchCleanupProgress,
+  TraceBranchCleanupStep,
+  TraceCleanupStatus,
+  TraceControlDispositionFacet,
+  TraceControlFact,
+  TraceDispositionFact,
+  TraceIntegratorCandidateCleanupStep,
+  TraceIntegratorCandidateCleanupProgress,
   TraceCursor,
   TraceHistoricalFacets,
   TraceItemIdentity,
@@ -165,6 +173,8 @@ import {
   TraceJournalPrefixInvalid,
   TraceProjectionInvalid,
   TraceRetainedResponsibility,
+  TraceWorktreeCleanupStep,
+  TraceWorktreeCleanupProgress,
   makeTraceReader
 } from "./trace-reader.js"
 import { traceHistoricalFacetsIssue, type HistoricalFacetFactories } from "./trace-reader-historical-facets.js"
@@ -217,10 +227,28 @@ const independentAttempt = PlannedTaskAttempt.make({
 })
 
 const historicalFacetFactories = {
+  branchCleanupStep: { make: (input: Omit<TraceBranchCleanupStep, "_tag">) => TraceBranchCleanupStep.make(input) },
+  cleanupProgress: {
+    Branch: { make: (input) => TraceBranchCleanupProgress.make(input) },
+    IntegratorCandidate: { make: (input) => TraceIntegratorCandidateCleanupProgress.make(input) },
+    Worktree: { make: (input) => TraceWorktreeCleanupProgress.make(input) }
+  },
+  cleanupStatus: TraceCleanupStatus.cases,
+  controlDisposition: {
+    make: (input: Omit<TraceControlDispositionFacet, "_tag">) => TraceControlDispositionFacet.make(input)
+  },
+  controlFact: TraceControlFact.cases,
+  dispositionFact: TraceDispositionFact.cases,
+  integratorCandidateCleanupStep: {
+    make: (input: Omit<TraceIntegratorCandidateCleanupStep, "_tag">) => TraceIntegratorCandidateCleanupStep.make(input)
+  },
   observationGap: TraceObservationGap.cases,
   preservationDisposition: TracePreservationDisposition.cases,
   retainedResponsibility: TraceRetainedResponsibility.cases,
   integrationFact: TraceIntegrationFact.cases,
+  worktreeCleanupStep: {
+    make: (input: Omit<TraceWorktreeCleanupStep, "_tag">) => TraceWorktreeCleanupStep.make(input)
+  },
   facets: TraceHistoricalFacets
 } satisfies HistoricalFacetFactories
 

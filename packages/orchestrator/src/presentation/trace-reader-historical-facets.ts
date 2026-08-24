@@ -22,6 +22,14 @@ import type {
 } from "../workflow/task-tracker-facts/observation.js"
 import type {
   TraceHistoricalFacets,
+  TraceCleanupProgress,
+  TraceCleanupStatus,
+  TraceControlDispositionFacet,
+  TraceControlFact,
+  TraceDispositionFact,
+  TraceBranchCleanupStep,
+  TraceIntegratorCandidateCleanupStep,
+  TraceWorktreeCleanupStep,
   TraceCursor,
   TraceHistoryItem,
   TraceIntegrationFact,
@@ -30,7 +38,9 @@ import type {
   TracePreservationDisposition,
   TraceRetainedResponsibility
 } from "./trace-reader.js"
+import { traceControlDispositionFacetVersion } from "./trace-reader-version.js"
 import { sameJson } from "./trace-equality.js"
+import { reduceControlDispositionItem } from "./trace-reader-control-disposition.js"
 
 type HistoricalCaseFactories<Union extends { readonly _tag: string }> = {
   readonly [Tag in Union["_tag"]]: {
@@ -45,8 +55,23 @@ export type HistoricalFacetFactories = {
   readonly preservationDisposition: HistoricalCaseFactories<TracePreservationDisposition>
   readonly retainedResponsibility: HistoricalCaseFactories<TraceRetainedResponsibility>
   readonly integrationFact: HistoricalCaseFactories<TraceIntegrationFact>
+  readonly controlFact: HistoricalCaseFactories<TraceControlFact>
+  readonly dispositionFact: HistoricalCaseFactories<TraceDispositionFact>
+  readonly cleanupStatus: HistoricalCaseFactories<TraceCleanupStatus>
+  readonly cleanupProgress: HistoricalCaseFactories<TraceCleanupProgress>
+  readonly branchCleanupStep: { readonly make: (input: Omit<TraceBranchCleanupStep, "_tag">) => TraceBranchCleanupStep }
+  readonly integratorCandidateCleanupStep: {
+    readonly make: (input: Omit<TraceIntegratorCandidateCleanupStep, "_tag">) => TraceIntegratorCandidateCleanupStep
+  }
+  readonly worktreeCleanupStep: {
+    readonly make: (input: Omit<TraceWorktreeCleanupStep, "_tag">) => TraceWorktreeCleanupStep
+  }
+  readonly controlDisposition: {
+    readonly make: (input: Omit<TraceControlDispositionFacet, "_tag">) => TraceControlDispositionFacet
+  }
   readonly facets: {
     readonly make: (input: {
+      readonly controlDisposition: TraceControlDispositionFacet
       readonly integration: { readonly facts: ReadonlyArray<TraceIntegrationFact> }
       readonly recovery: {
         readonly observationGaps: ReadonlyArray<TraceObservationGap>
@@ -911,9 +936,7 @@ export const traceHistoricalFacetsIssue = (
       return [fact.source]
     })
   ]
-  const invalid = identities.find(
-    (identity) => identityOutsideCursor(identity, view.cursor) || historyItemAt(view.items, identity) === undefined
-  )
+  const invalid = invalidSourceIdentityFor(identities, view.cursor, view.items)
   if (invalid !== undefined) return "Every historical facet source must resolve to an item in the cursor prefix"
   const invalidGap = view.facets.recovery.observationGaps.find(
     (gap) => traceObservationGapIssue(gap, view.items) !== undefined
@@ -931,6 +954,14 @@ export const traceHistoricalFacetsIssue = (
     (fact) => traceHistoricalFactIssue(fact, view.items) !== undefined
   )
   if (invalidFact !== undefined) return traceHistoricalFactIssue(invalidFact, view.items)
+  const invalidControlDispositionSource = invalidSourceIdentityFor(
+    controlDispositionSourcesFor(view.facets.controlDisposition),
+    view.cursor,
+    view.items
+  )
+  if (invalidControlDispositionSource !== undefined) {
+    return "Every control, disposition, and cleanup source must resolve to an item in the cursor prefix"
+  }
   const expected = traceHistoricalFacetsAt(view.items, factories)
   return sameJson(expected, view.facets)
     ? undefined
@@ -949,6 +980,19 @@ const historyItemAt = (
   items.find(
     ({ identity: itemIdentity }) => itemIdentity.runId === identity.runId && itemIdentity.position === identity.position
   )
+
+const invalidSourceIdentityFor = (
+  identities: ReadonlyArray<TraceItemIdentity>,
+  cursor: TraceCursor,
+  items: ReadonlyArray<TraceHistoryItem>
+): TraceItemIdentity | undefined =>
+  identities.find((identity) => identityOutsideCursor(identity, cursor) || historyItemAt(items, identity) === undefined)
+
+const controlDispositionSourcesFor = (facet: TraceControlDispositionFacet): ReadonlyArray<TraceItemIdentity> => [
+  ...facet.controls.map(({ source }) => source),
+  ...facet.dispositions.map(({ source }) => source),
+  ...facet.cleanup.flatMap((progress) => [progress.status.source, ...progress.steps.map(({ source }) => source)])
+]
 
 /** The public facet invariant proves this lookup before any private facet validator runs. */
 const provenHistoryItemAt = (items: ReadonlyArray<TraceHistoryItem>, identity: TraceItemIdentity): TraceHistoryItem =>
@@ -1012,7 +1056,10 @@ type ExecutorReportOccurrence = Extract<
   { readonly _tag: "PlannedAttemptExecutorWorkReported" }
 >
 
-type HistoricalFacetReductionState = {
+export type HistoricalFacetReductionState = {
+  readonly cleanup: Array<TraceCleanupProgress>
+  readonly controls: Array<TraceControlFact>
+  readonly dispositions: Array<TraceDispositionFact>
   readonly factories: HistoricalFacetFactories
   readonly executorReports: Map<AttemptId, ExecutorReportOccurrence>
   readonly integrationFacts: Array<TraceIntegrationFact>
@@ -1029,6 +1076,9 @@ const makeHistoricalFacetReductionState = (
   items: ReadonlyArray<TraceHistoryItem>,
   factories: HistoricalFacetFactories
 ): HistoricalFacetReductionState => ({
+  cleanup: [],
+  controls: [],
+  dispositions: [],
   factories,
   executorReports: new Map(),
   integrationFacts: [],
@@ -1645,6 +1695,7 @@ const reduceSettledResponsibilities = (item: TraceHistoryItem, state: Historical
 }
 
 const reduceHistoricalFacetItem = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
+  reduceControlDispositionItem(item, state)
   reduceDependantReleaseFact(item, state)
   reduceObservationGaps(item, state)
   reduceExecutorResponsibilities(item, state)
@@ -1686,7 +1737,18 @@ export const traceHistoricalFacetsAt = (
     ...state.retainedClaims.values(),
     ...state.retainedWorktrees.values()
   ].sort((left, right) => Number(left.source.position) - Number(right.source.position))
+  const cleanup = [...state.cleanup].sort((left, right) => {
+    const leftSource = left.steps[0]?.source.position ?? 0
+    const rightSource = right.steps[0]?.source.position ?? 0
+    return Number(leftSource) - Number(rightSource)
+  })
   return state.factories.facets.make({
+    controlDisposition: state.factories.controlDisposition.make({
+      cleanup,
+      controls: state.controls,
+      dispositions: state.dispositions,
+      version: traceControlDispositionFacetVersion
+    }),
     integration: { facts: state.integrationFacts },
     recovery: {
       observationGaps: state.observationGaps,

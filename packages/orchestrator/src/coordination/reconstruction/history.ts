@@ -865,6 +865,24 @@ const validateAttemptStop = (
     : indexes
 }
 
+/**
+ * Reuses the canonical Stop/abandonment/claim-disposition validator for a
+ * presentation prefix without reconstructing the complete run state. The
+ * production reducer remains the owner of these chronology rules; trace
+ * readers only need its exact issues before projecting a facet.
+ */
+export const validateAttemptStopHistory = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<WorkflowJournalHistoryIssue> => {
+  const issues = new Array<WorkflowJournalHistoryIssue>()
+  let indexes = emptyIndexes()
+  for (const record of records) {
+    indexes = validateAttemptStop(record, runId, records, indexes, issues)
+  }
+  return issues
+}
+
 const validateOperationEvent = (
   record: JournalRecord,
   runId: RunId,
@@ -2284,6 +2302,20 @@ const validateCancellationMultiplicity = (
       semanticIssue(issues, runId, duplicate.position, "RunCancellationApplied may occur only once")
     }
   }
+}
+
+/** Reuses the canonical one-cancellation rule at a presentation boundary. */
+export const validateCancellationMultiplicityHistory = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<WorkflowJournalHistoryIssue> => {
+  const issues = new Array<WorkflowJournalHistoryIssue>()
+  validateCancellationMultiplicity(
+    runId,
+    records.filter(({ event }) => event._tag === "RunCancellationApplied"),
+    issues
+  )
+  return issues
 }
 
 const validateCancellationBeginning = (
