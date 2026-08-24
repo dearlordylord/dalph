@@ -1,15 +1,28 @@
 # Revise the attempt ceiling for future Run-owned boundary scopes
 
-Status: proposed for maintainer acceptance; this file does not authorize
-implementation until its owning issue is accepted again.
+Status: superseded without acceptance on 2026-08-23; issue #64 was closed as
+not planned. This file is historical and must not authorize implementation.
 
 Issue: [#64](https://github.com/dearlordylord/dalph/issues/64)
 
-This proposal freshens issue #64 against the current application Exit,
+This proposal freshened issue #64 against the current application Exit,
 planned-attempt executor, outer Integrator, and Run-policy boundaries. It
 deliberately narrows the older phrases “shutdown grace,” “technical retry,” and
 “integration-review limits” to one Run-owned policy value that generic Dalph
 can apply without reaching inside another component.
+
+## Retirement decision
+
+The maintainer does not currently need fixed technical limits to be adjustable
+while a Run is active. Issue #64 contained no separate correctness or
+reliability defect, so implementing this proposal would add policy, journal,
+control, recovery, model, and test surface without a present operational need.
+
+The existing protocol-specific limits remain unchanged and retain their own
+accepted scenarios and verification evidence. No Run technical-attempt ceiling
+became canonical domain language, no runtime behavior changed, and parent issue
+#31 no longer promises adjustable non-capacity policy. A future need must begin
+with new operational scenarios rather than reviving this file as authority.
 
 The proposed **Run technical-attempt ceiling** is a positive whole number from
 one through three. It is the maximum number of family-specific attempts one
