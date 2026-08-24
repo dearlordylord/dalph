@@ -70,6 +70,7 @@ on the issue while later dependent work proceeds.
 | `issue-70-terminal-history-retirement.md` | 70 |
 | `issue-79-capability-registration.md` | 79 |
 | `issue-86-hermetic-no-crash-lifecycle.md` | 86 |
+| `issue-84-truthful-actor-capability-presentation.md` | 84 |
 
 **Accepted, not yet implemented** — the owning issue is open. These state
 required behavior and must not be read as a description of what Dalph does
@@ -85,7 +86,6 @@ today.
 | `issue-66-clean-restart-changed-attempt.md` | 66 |
 | `issue-137-reconcile-task-claims.md` | 137 |
 | `issue-71-qualify-real-github-graph-membership-claims.md` | 71 |
-| `issue-84-truthful-actor-capability-presentation.md` | 84 |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state

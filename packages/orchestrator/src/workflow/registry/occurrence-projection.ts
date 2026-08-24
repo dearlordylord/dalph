@@ -325,7 +325,8 @@ export type WorkflowOccurrence = typeof WorkflowOccurrence.Type
 export const decodeWorkflowOccurrence = Schema.decodeUnknownEffect(WorkflowOccurrence, { onExcessProperty: "error" })
 
 export type WorkflowOccurrencePresentation =
-  | { readonly classification: "InitiatedAction"; readonly actor: WorkflowActor["_tag"] }
+  | { readonly classification: "InitiatedAction"; readonly actor: "DalphCoordinator" }
+  | { readonly classification: "InitiatedAction"; readonly actor: "Operator" }
   | { readonly classification: "NonActionOccurrence" }
 
 /**
@@ -343,18 +344,46 @@ export const presentWorkflowOccurrence = (occurrence: WorkflowOccurrence): Workf
         classification: "InitiatedAction"
       }
 
-/** One human-readable line derived only from an occurrence's proven classification. */
-export interface WorkflowOccurrenceDescription {
-  readonly actor: WorkflowActor["_tag"] | null
-  readonly actorLabel: "Dalph coordinator" | "Operator" | "no actor is proven"
-  readonly classification: WorkflowOccurrencePresentation["classification"]
+/** One human-readable line for an initiated action with its proven coordinator actor. */
+type DalphCoordinatorOccurrenceDescription = {
+  readonly actorLabel: "Dalph coordinator"
+  readonly presentation: Extract<
+    WorkflowOccurrencePresentation,
+    { readonly actor: "DalphCoordinator"; readonly classification: "InitiatedAction" }
+  >
   readonly text: string
 }
+
+/** One human-readable line for an initiated action with its proven human actor. */
+type OperatorOccurrenceDescription = {
+  readonly actorLabel: "Operator"
+  readonly presentation: Extract<
+    WorkflowOccurrencePresentation,
+    { readonly actor: "Operator"; readonly classification: "InitiatedAction" }
+  >
+  readonly text: string
+}
+
+/** One human-readable line for an observed outcome whose actor is not proven. */
+type NonActionOccurrenceDescription = {
+  readonly actorLabel: "no actor is proven"
+  readonly presentation: Extract<WorkflowOccurrencePresentation, { readonly classification: "NonActionOccurrence" }>
+  readonly text: string
+}
+
+/** Human-readable presentation keeps actor, label, and classification combinations valid by construction. */
+export type WorkflowOccurrenceDescription =
+  | DalphCoordinatorOccurrenceDescription
+  | NonActionOccurrenceDescription
+  | OperatorOccurrenceDescription
 
 /**
  * Keeps presentation useful without exposing executor or Integrator internals.
  * The occurrence tag identifies the generic workflow boundary; its payload is
  * intentionally left to the exact trace item rather than copied into prose.
+ * The final generic fallback is deliberately non-authoritative: a future
+ * occurrence remains readable without claiming a concrete domain subject until
+ * a specific rule is accepted here.
  */
 const workflowOccurrenceSubjectRules = [
   [/^TaskTrackerReadInitiated$/u, "tracker read"],
@@ -376,20 +405,21 @@ export const describeWorkflowOccurrence = (occurrence: WorkflowOccurrence): Work
   const presentation = presentWorkflowOccurrence(occurrence)
   const subject = workflowOccurrenceSubject(occurrence._tag)
   if (presentation.classification === "NonActionOccurrence") {
-    return {
-      actor: null,
-      actorLabel: "no actor is proven",
-      classification: presentation.classification,
-      text: `${subject}; no actor is proven`
-    }
+    return { actorLabel: "no actor is proven", presentation, text: `${subject}; no actor is proven` }
   }
-  const actorLabel = presentation.actor === "DalphCoordinator" ? "Dalph coordinator" : "Operator"
-  return {
-    actor: presentation.actor,
-    actorLabel,
-    classification: presentation.classification,
-    text: `${actorLabel} initiated ${subject}`
-  }
+  return Match.value(presentation.actor).pipe(
+    Match.when("DalphCoordinator", () => ({
+      actorLabel: "Dalph coordinator" as const,
+      presentation: { actor: "DalphCoordinator" as const, classification: "InitiatedAction" as const },
+      text: `Dalph coordinator initiated ${subject}`
+    })),
+    Match.when("Operator", () => ({
+      actorLabel: "Operator" as const,
+      presentation: { actor: "Operator" as const, classification: "InitiatedAction" as const },
+      text: `Operator initiated ${subject}`
+    })),
+    Match.exhaustive
+  )
 }
 
 export const workflowOccurrenceProjectionVersion = 9 as const // eslint-disable-line no-magic-numbers

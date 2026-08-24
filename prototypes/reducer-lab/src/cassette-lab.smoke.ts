@@ -42,7 +42,11 @@ import {
   runAllSummaryText
 } from "./cassette-lab-view.ts"
 import { deliverySourceExplanationAt } from "./delivery-source-explanation.ts"
-import { dominantTaskTone } from "./cassette-lab-workbench.ts"
+import {
+  dominantTaskTone,
+  makeDeliveryWorkbenchPlaybackRuntime,
+  renderCassetteDeliveryWorkbench
+} from "./cassette-lab-workbench.ts"
 import {
   TraceCursorSelected,
   auxiliaryTraceCorrelation,
@@ -957,6 +961,39 @@ await scenario("renders truthful actors, opaque internals, and distinct repeated
     const identity = `${attempt.identity.runId}:${attempt.identity.position}`
     assert(exactItems.some((item) => item.dataset.identity === identity), `The Lab must render exact identity ${identity}`)
   }
+})
+
+await scenario("updates only the passive status region when its source disconnects and reconnects", () => {
+  const { document } = installDom()
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:targetPromotionSuccess")
+  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+    throw new Error("The passive-status trace fixture is missing")
+  }
+  const host = document.createElement("div")
+  const controller = renderCassetteDeliveryWorkbench(
+    host,
+    row,
+    { _tag: "Settled", result },
+    makeDeliveryWorkbenchPlaybackRuntime()
+  )
+  const panel = host.querySelector<HTMLElement>("[data-role='trace-history']")
+  const historyItems = panel?.querySelector<HTMLElement>("[data-role='trace-history-items']")
+  const status = panel?.querySelector<HTMLElement>("[data-role='trace-current-status']")
+  if (panel === null || panel === undefined || historyItems === null || historyItems === undefined || status === null || status === undefined) {
+    throw new Error("The trace history and passive status regions are missing")
+  }
+  const initialHistoryMarkup = historyItems.innerHTML
+  controller.updateTraceStatus({ _tag: "Running", deliveryFrames: null, observationMoments: null })
+  assert(status.dataset.status === "Running", "A running passive source must render Running")
+  assert(historyItems.innerHTML === initialHistoryMarkup, "A status change must not rewrite historical items")
+  controller.updateTraceStatus({ _tag: "NotRun" })
+  assert(status.dataset.status === "Unavailable", "A disconnected passive source must render Unavailable")
+  assert(historyItems.innerHTML === initialHistoryMarkup, "Disconnect must retain exact historical item markup")
+  controller.updateTraceStatus({ _tag: "Settled", result })
+  assert(status.dataset.status === "Waiting", "A reconnected settled source must render Waiting")
+  assert(historyItems.innerHTML === initialHistoryMarkup, "Reconnect must retain exact historical item markup")
+  assert(status.textContent?.includes("Waiting") === true, "The passive status region must expose its current value")
 })
 
 await scenario("renders exact trace facet payloads and source correlations in the Lab", async () => {

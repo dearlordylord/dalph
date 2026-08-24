@@ -1513,16 +1513,27 @@ it.effect("presents only the proven actor and keeps executor or Integrator detai
     if (initiated === undefined || observed === undefined) return yield* Effect.die("presentation fixture is empty")
 
     expect(describeWorkflowOccurrence(initiated)).toEqual({
-      actor: "DalphCoordinator",
       actorLabel: "Dalph coordinator",
-      classification: "InitiatedAction",
+      presentation: { actor: "DalphCoordinator", classification: "InitiatedAction" },
       text: "Dalph coordinator initiated tracker read"
     })
     expect(describeWorkflowOccurrence(observed)).toEqual({
-      actor: null,
       actorLabel: "no actor is proven",
-      classification: "NonActionOccurrence",
+      presentation: { classification: "NonActionOccurrence" },
       text: "tracker facts observed; no actor is proven"
+    })
+    const operatorAction = AppliedControlDirection.make({
+      direction: "Unpause",
+      initiatedBy: WorkflowActor.cases.Operator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      recordedAt: JournalPosition.make(1),
+      subject: { _tag: "Run", runId }
+    })
+    expect(describeWorkflowOccurrence(operatorAction)).toEqual({
+      actorLabel: "Operator",
+      presentation: { actor: "Operator", classification: "InitiatedAction" },
+      text: "Operator initiated control direction"
     })
     expect(describeWorkflowOccurrence(initiated).text).not.toMatch(/(?:session|turn|transcript)/iu)
   })
