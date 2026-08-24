@@ -23,6 +23,24 @@ ordinary selected commands exited 0; the one expected temporal-mutant verify
 exited 1 and was accepted and checked by the gate, whose outer command exited
 0.
 
+The emitted command rows and reported phase totals are retained in
+[`quint-hosted-equivalent-profile.raw.json`](./quint-hosted-equivalent-profile.raw.json).
+That artifact was generated from the five retained run logs with this command
+(the profile arguments are `id|node|repeat|install-seconds|log-path`):
+
+```text
+node scripts/generate-quint-profile-evidence.mjs --output research/quint-hosted-equivalent-profile.raw.json \
+  --profile 'node22-repeat1|22.22.2|1|1.182|/tmp/dalph-issue-153-node22-profile1.log' \
+  --profile 'node22-repeat2|22.22.2|2|1.196|/tmp/dalph-issue-153-node22-profile2.log' \
+  --profile 'node24-repeat1|24.15.0|1|1.535|/tmp/dalph-issue-153-node24-profile1.log' \
+  --profile 'node24-repeat2|24.15.0|2|0.990|/tmp/dalph-issue-153-node24-profile2.log' \
+  --profile 'node24-final-post-change|24.15.0|final-post-change|-|/tmp/dalph-issue-153-final-check-quint.log'
+```
+
+The JSON records each source log's SHA-256, command rows, command counts, and
+the phase totals emitted by the gate. The source logs are not claimed to be
+portable files; the checked-in JSON is the retained measurement artifact.
+
 The machine is Linux arm64 rather than GitHub's hosted Ubuntu runner. Cold
 hosted action setup, cache-hit/miss behavior, and checkout/network timing were
 not measured and cannot be observed until the workflow is pushed, so this
@@ -61,6 +79,9 @@ row. This lets a later reviewer verify compile/typecheck, deterministic-plus-
 mutation, sampled, and exhaustive costs for every repeated profile rather than
 relying only on the four phase totals above. Values are seconds and are
 rounded to two decimals from the checked-in profile logs.
+The family-row sums use the emitted command values; they can differ from the
+reported phase totals by a few hundredths because each command line is rounded
+before it is emitted.
 
 | Profile | Model family | Commands | Typecheck | Tests | Sampled | Exhaustive verify |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
