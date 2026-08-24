@@ -29,7 +29,9 @@ import {
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
-  outcomeRecordKey
+  outcomeRecordKey,
+  targetPromotionAttemptIntentRecordKey,
+  targetPromotionIntentRecordKey
 } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../workflow/registry/event.js"
@@ -73,6 +75,17 @@ import {
   integratorRunCorrelationForSession,
   integratorSuccessorCorrelationFor
 } from "../../workflow/protocols/integrator/session.js"
+import {
+  deriveCurrentIntegratorState,
+  integratorRunQualifiedCandidateFromState
+} from "../../workflow/protocols/integrator/state.js"
+import {
+  TargetPromotionAttemptIntendedEvent,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionAttemptReason,
+  TargetPromotionIntendedEvent,
+  targetPromotionCorrelationFor
+} from "../../workflow/protocols/target-promotion/events.js"
 import { deriveIntegrationFrontier } from "./integration-frontier.js"
 import { deriveStartedIntegrationFrontier } from "./integration-frontier-transitions.js"
 import { RunnableFrontierTransition } from "./frontier.js"
@@ -668,6 +681,88 @@ it("promotes the Git-qualified candidate from the successful Retry run", () => {
       responsibility
     })
   ])
+})
+
+it("reconciles an unmatched initial promotion attempt before fresh lineage can reject its own candidate", () => {
+  const scenario = unfinishedFirstSessionHistory()
+  const result = IntegratorResult.cases.PreparedCandidate.make({
+    candidateText: preparedCandidateText,
+    correlation: scenario.session
+  })
+  const observation = IntegratorGitObservation.cases.Commit.make({
+    candidateText: preparedCandidateText,
+    commit: preparedCandidateCommit,
+    directParents: [fixedHead, acceptedCommit]
+  })
+  const qualifiedRecords = [
+    ...scenario.records,
+    record(
+      7,
+      IntegratorRunResultRecordedEvent.make({ result, run: scenario.run, version: workflowJournalEventVersion }),
+      integratorRunResultRecordedRecordKey(scenario.run)
+    ),
+    record(
+      8,
+      IntegratorRunCandidateGitReadIntendedEvent.make({
+        candidateText: preparedCandidateText,
+        run: scenario.run,
+        version: workflowJournalEventVersion
+      }),
+      integratorRunCandidateGitReadIntendedRecordKey(scenario.run, preparedCandidateText)
+    ),
+    record(
+      9,
+      IntegratorRunCandidateGitObservedEvent.make({
+        candidateText: preparedCandidateText,
+        observation,
+        run: scenario.run,
+        version: workflowJournalEventVersion
+      }),
+      integratorRunCandidateGitObservedRecordKey(scenario.run, preparedCandidateText)
+    )
+  ]
+  const integratorState = deriveCurrentIntegratorState(qualifiedRecords, responsibility)
+  expect(integratorState._tag).toBe("GitQualifiedPrepared")
+  if (integratorState._tag !== "GitQualifiedPrepared") return
+  const candidate = integratorRunQualifiedCandidateFromState(integratorState)
+  const correlation = targetPromotionCorrelationFor(candidate)
+  const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+  const records = [
+    ...qualifiedRecords,
+    record(
+      10,
+      TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion }),
+      targetPromotionIntentRecordKey(correlation.requestId).toString()
+    ),
+    record(
+      11,
+      TargetPromotionAttemptIntendedEvent.make({
+        attemptOrdinal,
+        correlation,
+        reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: fixedHead }),
+        version: workflowJournalEventVersion
+      }),
+      targetPromotionAttemptIntentRecordKey(correlation.requestId, attemptOrdinal).toString()
+    )
+  ]
+  const runState = { ...scenario.runState, appliedThrough: JournalPosition.make(11), workflowHistory: { records } }
+
+  expect(
+    deriveStartedIntegrationFrontier(
+      runState,
+      {
+        activeResponsibilityPositions: new Set(),
+        currentTrackerTaskIds: new Set([taskId]),
+        heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+        integrationTarget: Option.some(target),
+        targetLineageByAttemptId: new Map([[attemptId, lineage(preparedCandidateCommit)]]),
+        targetLineageRefreshRequiredAttemptIds: new Set([attemptId]),
+        targetPromotionConfigured: true,
+        taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+      },
+      [responsibility]
+    ).transitions()
+  ).toEqual([RunnableFrontierTransition.RunTargetPromotion({ candidate, responsibility })])
 })
 
 it("does not start Retry without a fresh target-lineage observation", () => {

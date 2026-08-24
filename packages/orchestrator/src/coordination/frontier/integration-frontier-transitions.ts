@@ -407,6 +407,10 @@ const fixedLineageRequiresRelease = (
   return lineage !== undefined && fixedIntegratorSessionLineageChanged(state, lineage, responsibility)
 }
 
+/** An unmatched compare-and-set must read the target it may already have moved before fresh lineage can reject it. */
+const promotionAttemptNeedsReconciliationRead = (promotion: PromotionState): boolean =>
+  promotion?._tag === "PromotionPending" && promotion.retry._tag === "NeedReconciliationRead"
+
 const settledIntegrationMustReleaseTarget = (
   waiting: boolean,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
@@ -417,7 +421,8 @@ const settledIntegrationMustReleaseTarget = (
   waiting ||
   integratorStateBlocksProgress(integratorState, promotion) ||
   targetPromotionConfigurationIsMissing(integratorState, runtimeFacts) ||
-  fixedLineageRequiresRelease(runtimeFacts, responsibility, integratorState)
+  (fixedLineageRequiresRelease(runtimeFacts, responsibility, integratorState) &&
+    !promotionAttemptNeedsReconciliationRead(promotion))
 
 // eslint-disable-next-line complexity -- Started integration admission is one ordered authority gate over tracker, claim, quarantine, and target ownership.
 const transitionsBeforeStartedIntegrationAdmission = (
@@ -519,9 +524,11 @@ const absentIntegratorProgressTransitionsFor = (
 const qualifiedIntegratorProgressTransitionsFor = (
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
-  state: Extract<CurrentIntegratorState, { readonly _tag: "GitQualifiedPrepared" }>
+  state: Extract<CurrentIntegratorState, { readonly _tag: "GitQualifiedPrepared" }>,
+  promotion: PromotionState
 ): ReadonlyArray<RunnableFrontierTransitionType> =>
-  runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true
+  runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true &&
+  !promotionAttemptNeedsReconciliationRead(promotion)
     ? []
     : [
         RunnableFrontierTransition.RunTargetPromotion({
@@ -569,6 +576,7 @@ const startedIntegrationProgressTransitionFor = (
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
   integratorState: CurrentIntegratorState,
+  promotion: PromotionState,
   held: boolean,
   retryProgress: RetryIntegratorProgress
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
@@ -579,7 +587,7 @@ const startedIntegrationProgressTransitionFor = (
   const retryTransitions = explicitRetryProgressTransitionsFor(responsibility, retryProgress)
   if (retryTransitions !== undefined) return retryTransitions
   if (integratorState._tag === "GitQualifiedPrepared") {
-    return qualifiedIntegratorProgressTransitionsFor(runtimeFacts, responsibility, integratorState)
+    return qualifiedIntegratorProgressTransitionsFor(runtimeFacts, responsibility, integratorState, promotion)
   }
   if (integratorState._tag === "Absent") {
     return absentIntegratorProgressTransitionsFor(runState, runtimeFacts, responsibility, held)
@@ -666,6 +674,7 @@ export const deriveStartedIntegrationFrontier = (
         runtimeFacts,
         responsibility,
         integratorState,
+        promotion,
         held,
         retryProgress
       )
