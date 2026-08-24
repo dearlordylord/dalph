@@ -45,6 +45,23 @@ test("captures output and an accepted nonzero exit for verdict inspection", asyn
   expect(result).toEqual({ exitCode: 7, output: "verdict", outputLineCount: 1 })
 })
 
+test("attaches captured output when a command exits outside the accepted set", async () => {
+  await expect(
+    runBoundedCommand({
+      args: ["-e", "process.stdout.write('failed verdict'); process.exit(7)"],
+      captureOutput: true,
+      executable: process.execPath,
+      forwardOutput: false,
+      name: "captured failed verdict fixture",
+      timeoutMilliseconds: 2000
+    })
+  ).rejects.toMatchObject({
+    message: "captured failed verdict fixture failed with exit 7",
+    output: "failed verdict",
+    outputLineCount: 1
+  })
+})
+
 test("passes a controlled environment to the bounded child", async () => {
   const result = await runBoundedCommand({
     args: ["-e", "process.stdout.write(process.env.DALPH_BOUNDED_COMMAND_FIXTURE ?? 'absent')"],

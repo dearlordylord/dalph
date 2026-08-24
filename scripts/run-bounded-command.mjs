@@ -95,7 +95,16 @@ export const runBoundedCommand = ({
       }
       clearTimeout(escalationTimer)
       if (!acceptedExitCodes.includes(code)) {
-        reject(new Error(`${name} failed with ${signal ?? `exit ${code}`}`))
+        const error = new Error(`${name} failed with ${signal ?? `exit ${code}`}`)
+        if (captureOutput) {
+          error.output = Buffer.concat(outputChunks).toString("utf8")
+          error.outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
+            (total, lineCounter) =>
+              total + lineCounter.lineBreaks + (lineCounter.wasWritten && !lineCounter.endsWithLineBreak ? 1 : 0),
+            0
+          )
+        }
+        reject(error)
       } else {
         const outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
           (total, lineCounter) =>
