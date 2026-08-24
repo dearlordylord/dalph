@@ -9,7 +9,8 @@ import {
   deliveryProposalOrderTaskId,
   describeWorkflowOccurrence,
   makeTracePresentation,
-  type TraceAtCursor
+  type TraceAtCursor,
+  type TraceItemIdentity
 } from "@dalph/orchestrator"
 import { Match } from "effect"
 import {
@@ -17,7 +18,8 @@ import {
   deliveryGraphInterpretationNotes,
   deliveryGraphTag,
   type DeliveryGraphElement,
-  type DeliveryGraphProjection
+  type DeliveryGraphProjection,
+  type DeliveryGraphViewport
 } from "./delivery-graph-element.ts"
 import {
   deliverySourceExplanationAt,
@@ -57,6 +59,7 @@ import {
   resolveTraceCausalPredecessor,
   updateTraceCursorSelection
 } from "./trace-cursor-selection.ts"
+import { foldRepeatedTraceItems } from "./trace-history-navigation.ts"
 
 type CassetteRow = (typeof maintainedCassetteRows)[number]
 type AuthoredRow = CassetteRow & {
@@ -291,6 +294,7 @@ const renderNotObserved = (parent: HTMLElement, row: AuthoredRow, state: Cassett
     "delivery-not-observed"
   )
   const graph = document.createElement(deliveryGraphTag) as DeliveryGraphElement
+  graph.dataset.role = "delivery-production-graph"
   graph.projection = declaredProjection(row)
   graph.selectedTaskId = null
   parent.append(graph)
@@ -914,7 +918,7 @@ interface TraceHistoryController {
   readonly updateStatus: (state: CassetteState) => void
 }
 
-const renderProductionTraceHistory = (
+export const renderProductionTraceHistory = (
   parent: HTMLElement,
   histories: ReadonlyArray<TraceAtCursor>,
   moments: ReadonlyArray<AuthoredObservationMoment>,
@@ -1021,8 +1025,36 @@ const renderProductionTraceHistory = (
   auxiliaryHost.append(auxiliaryList)
   section.append(graphHost, causalHost, itemsHost, facetsHost, auxiliaryHost)
   let causalNavigationError: string | null = null
+  let foldRepeated = false
+  let retainedGraphViewport: DeliveryGraphViewport | null = null
+  let selectedOccurrenceIdentity: TraceItemIdentity | null = null
+  let selectedTaskId: string | null = null
+
+  const exactIdentityKey = (item: TraceAtCursor["items"][number]): string =>
+    `${item.identity.runId}:${item.identity.position}`
+  const sameIdentity = (left: TraceItemIdentity, right: TraceItemIdentity): boolean =>
+    left.runId === right.runId && left.position === right.position
+  const isSelectedIdentity = (candidate: TraceItemIdentity): boolean =>
+    selectedOccurrenceIdentity !== null && sameIdentity(candidate, selectedOccurrenceIdentity)
+
+  const traceProjection = (history: TraceAtCursor): DeliveryGraphProjection | null =>
+    history.graph === null
+      ? null
+      : {
+        edges: history.graph.edges.map((edge) => edge._tag === "Prerequisite"
+          ? { from: edge.prerequisiteTaskId, kind: "Prerequisite", to: edge.dependantTaskId }
+          : { from: edge.parentTaskId, kind: "Grouping", to: edge.childTaskId }),
+        fingerprint: `trace:${history.cursor.runId}:${history.cursor.position}:${history.graph.snapshot.revision}`,
+        key: `trace:${history.cursor.runId}:${history.cursor.position}`,
+        status: `Production graph at journal position ${history.cursor.position}`,
+        tasks: history.graph.snapshot.tasks.map(({ id, lifecycle }) => ({ id, lifecycle: lifecycle._tag }))
+      }
 
   const renderSelected = (): void => {
+    const previousGraph = graphHost.querySelector<DeliveryGraphElement>(deliveryGraphTag)
+    if (typeof previousGraph?.captureViewport === "function") {
+      retainedGraphViewport = previousGraph.captureViewport()
+    }
     const projection = projectTraceCursorSelection(model)
     status.textContent = projection.status
     follow.setAttribute("aria-pressed", String(projection.followingLive))
@@ -1070,6 +1102,16 @@ const renderProductionTraceHistory = (
       return
     }
 
+    if (selectedOccurrenceIdentity !== null && !history.items.some((item) => isSelectedIdentity(item.identity))) {
+      selectedOccurrenceIdentity = null
+    }
+    if (selectedTaskId !== null && history.graph?.snapshot.tasks.some(({ id }) => id === selectedTaskId) !== true) {
+      selectedTaskId = null
+    }
+    const selectedOccurrence = selectedOccurrenceIdentity === null
+      ? undefined
+      : history.items.find((item) => isSelectedIdentity(item.identity))
+
     appendText(graphHost, "h5", "Task graph at exact journal cursor")
     if (history.graph === null) {
       appendText(graphHost, "p", "No complete tracker graph had been observed at this exact cursor.")
@@ -1079,26 +1121,61 @@ const renderProductionTraceHistory = (
         "p",
         `Production graph observation ${history.graph.observation.operationId} recorded at journal position ${history.graph.observation.recordedAt} · revision ${history.graph.snapshot.revision}`
       )
-      const graphList = document.createElement("ul")
-      for (const task of history.graph.snapshot.tasks) {
-        appendText(
-          graphList,
-          "li",
-          `${task.id} · ${task.lifecycle._tag} · prerequisites ${task.prerequisiteIds.length === 0 ? "none" : task.prerequisiteIds.join(", ")}${task.parentTaskId === null ? "" : ` · parent ${task.parentTaskId}`}`
-        )
+      const graphControls = document.createElement("div")
+      graphControls.className = "trace-graph-controls"
+      const fitGraph = appendText(graphControls, "button", "Fit whole graph")
+      fitGraph.type = "button"
+      fitGraph.dataset.role = "trace-fit-graph"
+      const focusTask = appendText(graphControls, "button", "Focus selected task")
+      focusTask.type = "button"
+      focusTask.dataset.role = "trace-focus-task"
+      focusTask.disabled = selectedTaskId === null
+      graphHost.append(graphControls)
+      const graph = document.createElement(deliveryGraphTag)
+      graph.dataset.palette = "trace-fill"
+      graph.dataset.role = "trace-production-graph"
+      graph.tabIndex = 0
+      graph.setAttribute("aria-label", "Interactive production trace task graph; drag to pan, scroll to zoom")
+      graph.projection = traceProjection(history)
+      graph.selectedTaskId = selectedTaskId
+      graph.highlightedTaskIds = selectedOccurrence?.taskIds ?? []
+      graph.addEventListener("task-selected", (event) => {
+        event.stopPropagation()
+        selectedTaskId = event.detail.taskId
+        renderSelected()
+      })
+      fitGraph.addEventListener("click", () => graph.resetView())
+      focusTask.addEventListener("click", () => {
+        if (selectedTaskId === null) return
+        if (typeof graph.focusTask === "function") graph.focusTask(selectedTaskId)
+        else {
+          // The non-canvas smoke DOM does not upgrade custom elements. Keep
+          // its observable selection contract aligned with the browser.
+          graph.selectedTaskId = selectedTaskId
+          graph.dataset.focusedTaskId = selectedTaskId
+        }
+      })
+      graphHost.append(graph)
+      if (retainedGraphViewport !== null && typeof graph.restoreViewport === "function") {
+        graph.restoreViewport(retainedGraphViewport)
       }
-      graphHost.append(graphList)
       appendText(graphHost, "p", `Graph edges: ${history.graph.edges.length}; derived task order: ${history.derivedTaskOrder.taskIds.join(", ") || "none"}.`)
       const edgeList = document.createElement("ul")
       edgeList.dataset.role = "trace-task-graph-edges"
       for (const edge of history.graph.edges) {
-        appendText(
+        const edgeItem = appendText(
           edgeList,
           "li",
           edge._tag === "Prerequisite"
             ? `${edge.prerequisiteTaskId} → ${edge.dependantTaskId} · prerequisite`
             : `${edge.parentTaskId} → ${edge.childTaskId} · grouping`
         )
+        const endpointTaskIds = edge._tag === "Prerequisite"
+          ? [edge.prerequisiteTaskId, edge.dependantTaskId]
+          : [edge.parentTaskId, edge.childTaskId]
+        if (selectedTaskId !== null && endpointTaskIds.includes(TaskId.make(selectedTaskId))) {
+          edgeItem.classList.add("trace-selection-related")
+        }
       }
       if (history.graph.edges.length > 0) graphHost.append(edgeList)
     }
@@ -1113,6 +1190,9 @@ const renderProductionTraceHistory = (
       const causalList = document.createElement("ul")
       for (const edge of history.relationships.workflowCausalEdges) {
         const causalItem = appendText(causalList, "li", `${edge.predecessorOperationId} → ${edge.successorOperationId} · `)
+        if (selectedOccurrence?.operationIds.some((operationId) =>
+          operationId === edge.predecessorOperationId || operationId === edge.successorOperationId
+        ) === true) causalItem.classList.add("trace-selection-related")
         const predecessor = appendText(causalItem, "button", `Go to predecessor ${edge.predecessorOperationId}`)
         predecessor.type = "button"
         predecessor.dataset.role = "trace-causal-predecessor"
@@ -1138,27 +1218,122 @@ const renderProductionTraceHistory = (
       causalHost.append(causalList)
     }
 
+    appendText(causalHost, "h5", "Outside-authority acknowledgements at exact cursor")
+    const acknowledgementList = document.createElement("ul")
+    acknowledgementList.dataset.role = "trace-authority-acknowledgements"
+    for (const acknowledgement of history.relationships.outsideAuthorityAcknowledgements) {
+      const item = appendText(
+        acknowledgementList,
+        "li",
+        `${acknowledgement.actionOperationId} · action ${acknowledgement.action.position} → observation ${acknowledgement.observation.position}`
+      )
+      if (
+        selectedOccurrenceIdentity !== null
+        && (sameIdentity(acknowledgement.action, selectedOccurrenceIdentity)
+          || sameIdentity(acknowledgement.observation, selectedOccurrenceIdentity))
+      ) item.classList.add("trace-selection-related")
+    }
+    if (acknowledgementList.childElementCount === 0) appendText(acknowledgementList, "li", "No outside-authority acknowledgement is proven at this cursor.")
+    causalHost.append(acknowledgementList)
+    appendText(causalHost, "h5", "Process-local resource serialization at exact cursor")
+    const serializationList = document.createElement("ul")
+    serializationList.dataset.role = "trace-resource-serializations"
+    for (const serialization of history.relationships.processLocalResourceSerializations) {
+      const item = appendText(
+        serializationList,
+        "li",
+        `${serialization.target.repository} ${serialization.target.ref} · earlier ${serialization.earlier.position} → later ${serialization.later.position}`
+      )
+      if (
+        selectedOccurrenceIdentity !== null
+        && (sameIdentity(serialization.earlier, selectedOccurrenceIdentity)
+          || sameIdentity(serialization.later, selectedOccurrenceIdentity))
+      ) item.classList.add("trace-selection-related")
+    }
+    if (serializationList.childElementCount === 0) appendText(serializationList, "li", "No process-local resource serialization is proven at this cursor.")
+    causalHost.append(serializationList)
+
     appendText(itemsHost, "h5", `Workflow history items · ${history.items.length}`)
+    const historyControls = document.createElement("div")
+    historyControls.className = "trace-history-item-controls"
+    const fold = appendText(historyControls, "button", foldRepeated ? "Show every occurrence" : "Fold repeated occurrences")
+    fold.type = "button"
+    fold.dataset.role = "trace-fold-repeated"
+    fold.setAttribute("aria-pressed", String(foldRepeated))
+    fold.addEventListener("click", () => {
+      foldRepeated = !foldRepeated
+      renderSelected()
+    })
+    itemsHost.append(historyControls)
     const itemList = document.createElement("ul")
-    for (const item of history.items) {
+    const appendHistoryItem = (parent: HTMLElement, item: TraceAtCursor["items"][number]): void => {
       const description = describeWorkflowOccurrence(item.occurrence)
       const historyItem = appendText(
-        itemList,
+        parent,
         "li",
         `Run ${item.identity.runId} · journal position ${item.identity.position} · ${description.text} · operations ${item.operationIds.length === 0 ? "none" : item.operationIds.join(", ")}`
       )
       historyItem.dataset.role = "trace-history-item"
       historyItem.dataset.runId = item.identity.runId
       historyItem.dataset.journalPosition = String(item.identity.position)
-      historyItem.dataset.identity = `${item.identity.runId}:${item.identity.position}`
+      historyItem.dataset.identity = exactIdentityKey(item)
       historyItem.dataset.classification = description.presentation.classification
       historyItem.dataset.actor = description.presentation.classification === "InitiatedAction"
         ? description.presentation.actor
         : "none"
+      historyItem.setAttribute(
+        "aria-current",
+        String(isSelectedIdentity(item.identity))
+      )
+      if (selectedTaskId !== null && item.taskIds.includes(TaskId.make(selectedTaskId))) {
+        historyItem.classList.add("trace-selected-task-occurrence")
+      }
+      const selectOccurrence = appendText(historyItem, "button", "Inspect this occurrence")
+      selectOccurrence.type = "button"
+      selectOccurrence.dataset.role = "trace-select-occurrence"
+      selectOccurrence.setAttribute(
+        "aria-label",
+        `Inspect occurrence at Run ${item.identity.runId}, journal position ${item.identity.position}`
+      )
+      selectOccurrence.addEventListener("click", () => {
+        selectedOccurrenceIdentity = item.identity
+        renderSelected()
+      })
       appendExactJson(historyItem, "Exact projected occurrence (schema evidence)", item.occurrence, "trace-history-item-exact")
+    }
+    for (const entry of foldRepeated ? foldRepeatedTraceItems(history.items) : history.items.map((item) => ({ _tag: "ExactTraceItem" as const, item }))) {
+      if (entry._tag === "ExactTraceItem") {
+        appendHistoryItem(itemList, entry.item)
+        continue
+      }
+      const folded = document.createElement("li")
+      folded.dataset.role = "trace-history-fold"
+      const details = document.createElement("details")
+      const summary = appendText(
+        details,
+        "summary",
+        `${entry.occurrenceTag} · ${entry.count} occurrences · journal positions ${entry.first.position}–${entry.last.position}`
+      )
+      summary.dataset.role = "trace-history-fold-summary"
+      const exactItems = document.createElement("ul")
+      for (const item of entry.items) appendHistoryItem(exactItems, item)
+      details.append(exactItems)
+      folded.append(details)
+      itemList.append(folded)
     }
     if (history.items.length === 0) appendText(itemList, "li", "No projected workflow occurrence is visible at this cursor.")
     itemsHost.append(itemList)
+
+    const inspector = document.createElement("section")
+    inspector.dataset.role = "trace-selection-inspector"
+    appendText(inspector, "h5", "Exact selection inspector")
+    appendText(
+      inspector,
+      "p",
+      `Task: ${selectedTaskId ?? "none"} · occurrence: ${selectedOccurrenceIdentity === null ? "none" : `${selectedOccurrenceIdentity.runId}:${selectedOccurrenceIdentity.position}`}`
+    )
+    if (selectedOccurrence !== undefined) appendExactJson(inspector, "Selected exact occurrence", selectedOccurrence.occurrence)
+    itemsHost.append(inspector)
 
     appendText(facetsHost, "h5", "Historical recovery and integration facets")
     appendText(
@@ -1344,6 +1519,7 @@ const renderTimeline = (
   const resetGraphView = appendText(graphViewControls, "button", "Reset graph view")
   resetGraphView.type = "button"
   const graph = document.createElement(deliveryGraphTag) as DeliveryGraphElement
+  graph.dataset.role = "delivery-production-graph"
   graph.tabIndex = 0
   graph.setAttribute("aria-label", "Interactive delivery graph; drag to pan, scroll to zoom")
   const change = appendText(frameHost, "p", "", "delivery-frame-change")

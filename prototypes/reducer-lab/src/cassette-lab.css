@@ -284,6 +284,45 @@ dd {
   white-space: normal;
 }
 
+.trace-graph-controls,
+.trace-history-item-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.65rem 0;
+}
+
+[data-role="trace-production-graph"] {
+  margin: 0.5rem 0 1rem;
+}
+
+[data-role="trace-history-item"][aria-current="true"] {
+  background: #e1f4f7;
+  box-shadow: inset 0.25rem 0 #00a7c4;
+}
+
+.trace-selected-task-occurrence {
+  outline: 1px solid #2b92ca;
+  outline-offset: 0.15rem;
+}
+
+.trace-selection-related {
+  background: #e1f4f7;
+  box-shadow: inset 0.2rem 0 #2b92ca;
+}
+
+[data-role="trace-history-fold"] {
+  background: #f5f0e5;
+  border-left: 0.25rem solid #8b6e35;
+  padding: 0.4rem 0.65rem;
+}
+
+[data-role="trace-selection-inspector"] {
+  border-top: 1px solid #bdb5a8;
+  margin-top: 0.85rem;
+  padding-top: 0.5rem;
+}
+
 .delivery-graph-view-controls {
   align-items: center;
   display: flex;

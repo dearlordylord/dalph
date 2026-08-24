@@ -8,6 +8,7 @@ import {
   type DeliveryGraphEdge,
   type DeliveryGraphProjection,
   type DeliveryGraphTask,
+  type DeliveryGraphViewport,
   deliveryGraphEncoding,
   deliveryGraphTag
 } from "./delivery-graph-element.ts"
@@ -440,10 +441,31 @@ class DalphDeliveryGraphElement extends HTMLElement {
     return this.#selectedTaskId
   }
 
+  captureViewport(): DeliveryGraphViewport | null {
+    if (this.#core === null) return null
+    const pan = this.#core.pan()
+    return { pan: { x: pan.x, y: pan.y }, zoom: this.#core.zoom() }
+  }
+
+  restoreViewport(viewport: DeliveryGraphViewport): void {
+    if (this.#core === null) return
+    this.#core.zoom(viewport.zoom)
+    this.#core.pan(viewport.pan)
+  }
+
   resetView(): void {
     if (this.#core === null) return
     this.#core.layout(deliveryGraphLayout()).run()
     this.#core.fit(this.#core.elements(), 28)
+  }
+
+  focusTask(taskId: string): void {
+    this.selectedTaskId = taskId
+    this.dataset.focusedTaskId = taskId
+    if (this.#core === null) return
+    const task = this.#core.getElementById(taskId)
+    if (task.empty()) return
+    this.#core.fit(task, 72)
   }
 
   connectedCallback(): void {

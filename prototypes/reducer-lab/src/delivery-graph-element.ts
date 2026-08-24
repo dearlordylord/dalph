@@ -66,12 +66,21 @@ export interface DeliveryGraphTaskSelectedDetail {
   readonly taskId: string
 }
 
+/** Presentation-only canvas position retained while the same trace is rerendered. */
+export interface DeliveryGraphViewport {
+  readonly pan: { readonly x: number; readonly y: number }
+  readonly zoom: number
+}
+
 export const deliveryGraphTag = "dalph-delivery-graph"
 
 export interface DeliveryGraphElement extends HTMLElement {
+  captureViewport: () => DeliveryGraphViewport | null
+  focusTask: (taskId: string) => void
   highlightedTaskIds: ReadonlyArray<string>
   projection: DeliveryGraphProjection | null
   resetView: () => void
+  restoreViewport: (viewport: DeliveryGraphViewport) => void
   selectedTaskId: string | null
 }
 

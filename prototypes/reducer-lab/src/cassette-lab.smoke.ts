@@ -7,6 +7,8 @@ import {
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import "./trace-cursor-selection.test.ts"
 import "./delivery-playback.test.ts"
+import "./trace-history-navigation.test.ts"
+import { foldRepeatedTraceItems } from "./trace-history-navigation.ts"
 import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
 import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette-domain.ts"
 import { maintainedApplicationExitProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette-domain.ts"
@@ -14,10 +16,54 @@ import { maintainedCodexPlannedAttemptExecutorCassetteCatalog } from "../../../p
 import { dispositionCleanupAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/disposition-cleanup-cassette.ts"
 import {
   deliveryProposalOrderTaskId,
+  describeJournalEvent,
+  FixtureTarget,
+  InitialControlPolicy,
+  JournalPosition,
+  JournalStore,
+  makeCompleteTaskTrackerFactsObserved,
+  makeTraceReader,
+  makeTrackerGraphObservationOperation,
+  memoryJournalStoreLayer,
+  OperationId,
+  projectTrackerSnapshot,
+  taskTrackerFactsObservedEvent,
+  taskTrackerReadIntent,
+  TaskWorkCapacity,
+  TraceCursor,
   traceControlDispositionFacetVersion,
-  traceReaderSchemaVersion
+  traceReaderSchemaVersion,
+  workflowJournalEventVersion
 } from "@dalph/orchestrator"
+import {
+  AcceptedResult,
+  AttemptId,
+  EvidenceDigest,
+  EvidenceReference,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
+import { Effect } from "effect"
 import { parseHTML } from "linkedom"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../../packages/orchestrator/src/workflow/protocols/integration-admission/events.ts"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../../packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.ts"
 import {
   cassetteSettledEvent,
   everyCassetteSettledEvent,
@@ -45,7 +91,8 @@ import { deliverySourceExplanationAt } from "./delivery-source-explanation.ts"
 import {
   dominantTaskTone,
   makeDeliveryWorkbenchPlaybackRuntime,
-  renderCassetteDeliveryWorkbench
+  renderCassetteDeliveryWorkbench,
+  renderProductionTraceHistory
 } from "./cassette-lab-workbench.ts"
 import {
   TraceCursorSelected,
@@ -76,6 +123,110 @@ const scenario = async (name: string, body: () => void | Promise<void>): Promise
   await body()
   console.log(`✓ ${name}`)
 }
+
+const makeLargeProductionTrace = () => Effect.runPromise(
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const runId = RunId.make("run:lab-large-navigation")
+    const target = FixtureTarget.make("fixture:lab-large-navigation")
+    const taskCount = 105
+    const tasks = Array.from({ length: taskCount }, (_, index) => ({
+      id: TaskId.make(`task-${String(index).padStart(3, "0")}`),
+      lifecycle: { _tag: "Open" as const },
+      parentTaskId: index <= 1 ? null : TaskId.make("task-000"),
+      prerequisiteIds: index === 0 ? [] : [TaskId.make(`task-${String(index - 1).padStart(3, "0")}`)]
+    }))
+    const projected = projectTrackerSnapshot({ revision: "large-navigation-r1", tasks })
+    if (projected._tag === "Invalid") return yield* Effect.die(projected.issues)
+    yield* journal.beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(4) })
+    )
+    let predecessorOperationIds: ReadonlyArray<OperationId> = []
+    for (let index = 0; index < 59; index += 1) {
+      const operationId = OperationId.make(`large-navigation-read-${index}`)
+      const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
+      const intent = taskTrackerReadIntent(operation)
+      const observation = taskTrackerFactsObservedEvent(
+        operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
+      )
+      yield* journal.append(runId, describeJournalEvent(intent).expectedKey, intent)
+      yield* journal.append(runId, describeJournalEvent(observation).expectedKey, observation)
+      predecessorOperationIds = [operationId]
+    }
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("attempt:lab-large-navigation"),
+      baseSha: GitCommitSha.make("1".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/lab-large-navigation"),
+      executor: TaskExecutorLocator.make("executor:lab-large-navigation"),
+      runId,
+      taskId: tasks[0]?.id ?? TaskId.make("task-000"),
+      taskRevision: TaskRevision.make("large-navigation-task-r1"),
+      worktree: WorktreeLocator.make("/tmp/dalph-lab-large-navigation")
+    })
+    const acceptedResult = AcceptedResult.make({
+      commit: GitCommitSha.make("2".repeat(40)),
+      evidenceManifest: EvidenceReference.make({
+        byteLength: 1,
+        digest: EvidenceDigest.make("e".repeat(64))
+      })
+    })
+    const integrationTarget = IntegrationTarget.make({
+      ref: IntegrationTargetRef.make("refs/heads/main"),
+      repository: GitRepositoryLocator.make("/tmp/dalph-lab-large-navigation.git")
+    })
+    const executorResponsibility = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+    const runningReport = (ordinal: number) => PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(ordinal),
+      report: PlannedAttemptExecutorReport.cases.Running.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId }
+      }),
+      version: workflowJournalEventVersion
+    })
+    const executorReport = PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
+      report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        result: { _tag: "Accepted", acceptedResult }
+      }),
+      version: workflowJournalEventVersion
+    })
+    const integrationResponsibility = IntegrationResponsibilityBeganEvent.make({
+      acceptedResult,
+      integrationTarget,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+    const integrationStarted = IntegrationStartedEvent.make({
+      acceptedResult,
+      integrationTarget,
+      plannedAttempt,
+      responsibilityBeganAt: JournalPosition.make(124),
+      version: workflowJournalEventVersion
+    })
+    for (const event of [
+      executorResponsibility,
+      runningReport(1),
+      runningReport(2),
+      executorReport,
+      integrationResponsibility,
+      integrationStarted
+    ]) {
+      yield* journal.append(runId, describeJournalEvent(event).expectedKey, event)
+    }
+    const reader = makeTraceReader({ read: journal.read })
+    return yield* Effect.all([
+      reader.readAt(TraceCursor.make({ runId, position: JournalPosition.make(1) })),
+      reader.readAt(TraceCursor.make({ runId, position: JournalPosition.make(119) })),
+      reader.readAt(TraceCursor.make({ runId, position: JournalPosition.make(125) }))
+    ])
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
 
 const expectedCatalogSize = Object.keys(maintainedAuthoredCassetteCatalog).length
   + Object.keys(maintainedTargetPromotionProtocolCassetteCatalog).length
@@ -611,6 +762,70 @@ const chooseCassette = (search: HTMLInputElement, value: string): void => {
   search.dispatchEvent(new Event("input"))
 }
 
+await scenario("renders and navigates a bounded 105-task 120-occurrence production trace", async () => {
+  const histories = await makeLargeProductionTrace()
+  const latest = histories.at(-1)
+  if (latest === undefined || latest.graph === null) throw new Error("The large production trace is unavailable")
+  assert(latest.graph.snapshot.tasks.length === 105, "The production reader must return all 105 tracker tasks")
+  assert(latest.items.length >= 120, "The production reader must return at least 120 exact workflow occurrences")
+  assert(latest.relationships.taskGraphEdges.length > 0, "The production trace must retain task-graph relationships")
+  assert(latest.relationships.workflowCausalEdges.length > 0, "The production trace must retain workflow-causal relationships")
+  assert(latest.relationships.outsideAuthorityAcknowledgements.length > 0, "The production trace must retain outside-authority acknowledgements")
+  assert(latest.relationships.processLocalResourceSerializations.length > 0, "The production trace must retain process-local serialization")
+
+  const { document } = installDom()
+  const host = document.createElement("div")
+  renderProductionTraceHistory(host, histories, [], { _tag: "NotRun" })
+  const panel = host.querySelector<HTMLElement>("[data-role='trace-history']")
+  const graph = panel?.querySelector<HTMLElement & {
+    readonly projection: { readonly tasks: ReadonlyArray<{ readonly id: string }> } | null
+  }>("[data-role='trace-production-graph']")
+  assert(graph?.projection?.tasks.length === 105, "The bounded graph canvas must receive all production tasks")
+  assert(panel?.querySelector("[data-role='trace-authority-acknowledgements']") !== null, "Outside-authority relationships need a distinct region")
+  assert(panel?.querySelector("[data-role='trace-resource-serializations']") !== null, "Process-local relationships need a distinct region")
+  assert((panel?.querySelectorAll("[data-role='trace-history-item']").length ?? 0) >= 120, "Every exact occurrence must remain available")
+
+  const exactIdentities = [...panel?.querySelectorAll<HTMLElement>("[data-role='trace-history-item']") ?? []]
+    .map(({ dataset }) => dataset.identity)
+  panel?.querySelector<HTMLButtonElement>("[data-role='trace-fold-repeated']")?.click()
+  const fold = panel?.querySelector<HTMLDetailsElement>("[data-role='trace-history-fold'] details")
+  assert(fold?.querySelector("[data-role='trace-history-fold-summary']")?.textContent?.includes("3 occurrences") === true, "A repeated observed report run must show its count and exact position range")
+  fold?.setAttribute("open", "")
+  assert(fold?.querySelectorAll("[data-role='trace-history-item']").length === 3, "Expanding a fold must retain every exact occurrence payload")
+  panel?.querySelector<HTMLButtonElement>("[data-role='trace-fold-repeated']")?.click()
+  assert(panel?.querySelector("[data-role='trace-history-fold']") === null, "The operator must be able to reverse the fold")
+  assert(
+    [...panel?.querySelectorAll<HTMLElement>("[data-role='trace-history-item']") ?? []]
+      .map(({ dataset }) => dataset.identity).join("|") === exactIdentities.join("|"),
+    "Disabling folding must restore the same exact identities in the same order"
+  )
+})
+
+await scenario("focuses and fits the selected task without moving the journal cursor", async () => {
+  const histories = await makeLargeProductionTrace()
+  const { document } = installDom()
+  const host = document.createElement("div")
+  renderProductionTraceHistory(host, histories, [], { _tag: "NotRun" })
+  const panel = host.querySelector<HTMLElement>("[data-role='trace-history']")
+  const graph = panel?.querySelector<HTMLElement>("[data-role='trace-production-graph']")
+
+  graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "task-052" } }))
+  const cursorBeforeFocus = panel?.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition
+  panel?.querySelector<HTMLButtonElement>("[data-role='trace-focus-task']")?.click()
+  const focusedGraph = panel?.querySelector<HTMLElement>("[data-role='trace-production-graph']")
+  assert(focusedGraph?.dataset.focusedTaskId === "task-052", "Focus must center the exact selected task")
+  assert(panel?.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === cursorBeforeFocus, "Task focus must not move the journal cursor")
+
+  const latestOccurrenceButton = [...panel?.querySelectorAll<HTMLButtonElement>("[data-role='trace-select-occurrence']") ?? []].at(-1)
+  latestOccurrenceButton?.click()
+  assert(panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("run:lab-large-navigation:125") === true, "The inspector must retain the selected exact occurrence identity")
+  panel?.querySelector<HTMLButtonElement>("[data-role='trace-previous-cursor']")?.click()
+  assert(panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("occurrence: none") === true, "Back must clear an occurrence absent from the earlier prefix")
+  assert(panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("Task: task-052") === true, "Back must retain a selected task still present in the graph")
+  panel?.querySelector<HTMLButtonElement>("[data-role='trace-previous-cursor']")?.click()
+  assert(panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("Task: none") === true, "A cursor without that graph must clear the selected task")
+})
+
 await scenario("shows only information that selects, explains, or diagnoses a maintained cassette", () => {
   const { document, root } = installDom()
   mountCassetteLab({ revision: "acceptance-revision+dirty", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
@@ -716,7 +931,7 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
     "Playback controls must precede the explanatory delivery manual"
   )
   assert(
-    descendants.indexOf(workbench.querySelector("dalph-delivery-graph")!) < descendants.indexOf(readingGuide!),
+    descendants.indexOf(workbench.querySelector("[data-role='delivery-production-graph']")!) < descendants.indexOf(readingGuide!),
     "The primary graph must precede the explanatory delivery manual"
   )
   assert(
@@ -730,7 +945,7 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
   assert(status?.textContent?.startsWith(`${total} / `) === true, "A completed followed timeline must remain on its newest production publication")
   previous?.click()
   assert(status?.textContent?.startsWith(`${total - 1} / `) === true, "Previous frame must rewind the visible timeline")
-  const graph = workbench.querySelector("dalph-delivery-graph")
+  const graph = workbench.querySelector("[data-role='delivery-production-graph']")
   graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
   assert(workbench.querySelector("[data-role='selected-task-facts']")?.textContent?.startsWith("Selected task A") === true, "The selected task must be retained with the frame playback state")
   next?.click()
@@ -816,7 +1031,7 @@ await scenario("shows an authored cassette declared graph only as input before p
   assert(closed.tagName === "SECTION", "The pre-run graph must already occupy the permanent workbench")
   const first = document.querySelector("[data-role='delivery-workbench']")
   assert(first?.textContent?.includes("not yet observed") === true, "Derived delivery facts must remain explicitly unobserved")
-  const graph = first?.querySelector("dalph-delivery-graph") as (HTMLElement & { projection?: { readonly key: string } }) | null
+  const graph = first?.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & { projection?: { readonly key: string } }) | null
   assert(graph?.projection?.key.startsWith("declared:") === true, "The pre-run graph must identify itself as controlled declared input")
 })
 
@@ -843,7 +1058,7 @@ await scenario("shows the production-observed graph frontier bounded tickets and
     else option.removeAttribute("selected")
   }
   timeline.dispatchEvent(new Event("change"))
-  const graph = workbench?.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const graph = workbench?.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     projection?: { readonly key: string; readonly tasks: ReadonlyArray<{ readonly id: string }> }
   }) | null
   assert(graph?.projection?.key.startsWith("observed:") === true, "The selected graph must come from a production delivery frame")
@@ -940,6 +1155,13 @@ await scenario("renders truthful actors, opaque internals, and distinct repeated
   assert(
     new Set(attempts.map(({ identity }) => `${identity.runId}:${identity.position}`)).size === attempts.length,
     "Repeated promotion attempts must retain distinct exact TraceItemIdentity values"
+  )
+  const foldedPromotionHistory = foldRepeatedTraceItems(latest.items)
+  assert(
+    !foldedPromotionHistory.some((entry) =>
+      entry._tag === "FoldedTraceItems" && entry.occurrenceTag === "TargetPromotionAttemptRequested"
+    ),
+    "Promotion attempts must remain exact while the protocol rereads Git between calls"
   )
 
   const done = settled(singleCassetteSettledEvent)
@@ -1242,7 +1464,7 @@ await scenario("shows an absent responsibility in the mismatch rail without inve
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
-  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     projection?: { readonly tasks: ReadonlyArray<{ readonly id: string }> }
   }) | null
   const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
@@ -1332,7 +1554,7 @@ await scenario("updates an observed runtime task tone without fabricating a deli
   const timeline = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
   if (timeline === null) throw new Error("The observed-moment selector is missing")
   chooseOption(timeline, String(match.index))
-  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     highlightedTaskIds: ReadonlyArray<string>
     selectedTaskId: string | null
     projection?: {
@@ -1447,7 +1669,7 @@ await scenario("keeps the graph primary and synchronizes story source data tasks
   const timeline = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
   if (timeline === null) throw new Error("The observed-moment selector is missing")
   chooseOption(timeline, String(match.index))
-  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     selectedTaskId: string | null
   }) | null
   const storyTask = document.querySelector<HTMLButtonElement>(
@@ -1641,7 +1863,7 @@ await scenario("keeps graph-not-established frames dimensionally stable and trut
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The recovery delivery timeline is missing")
   chooseOption(timeline, String(deliveryMomentIndex(result, emptyIndex)))
-  const emptyGraph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const emptyGraph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     projection?: { readonly tasks: ReadonlyArray<unknown> }
   }) | null
   assert(emptyGraph?.projection?.tasks.length === 0, "The recovery frame must retain the exact graph-not-established projection")
@@ -1662,7 +1884,7 @@ await scenario("keeps graph-not-established frames dimensionally stable and trut
     "The graph must visibly explain its pointer gestures"
   )
   chooseOption(timeline, String(deliveryMomentIndex(result, establishedIndex)))
-  const establishedGraph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const establishedGraph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     projection?: { readonly tasks: ReadonlyArray<unknown> }
   }) | null
   assert(establishedGraph === emptyGraph, "Graph authority changes must keep one dimensionally stable graph element")
@@ -1886,7 +2108,7 @@ await scenario("composes simultaneous graph ticket held and delivery encodings",
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The dependency delivery timeline is missing")
   chooseOption(timeline, String(deliveryMomentIndex(result, combinedIndex)))
-  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     projection?: { readonly tasks: ReadonlyArray<{ readonly display?: { readonly classes?: ReadonlyArray<string> } }> }
   }) | null
   assert(
@@ -1907,7 +2129,7 @@ await scenario("keeps selected-task feedback separate from delivery encodings", 
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
-  const graph = document.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     selectedTaskId?: string | null
   }) | null
   graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
@@ -1939,7 +2161,7 @@ await scenario("shows grouping relationships exact obligations and settlement st
     else option.removeAttribute("selected")
   }
   select.dispatchEvent(new Event("change"))
-  const graph = workbench?.querySelector("dalph-delivery-graph") as (HTMLElement & {
+  const graph = workbench?.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
     projection?: { readonly edges: ReadonlyArray<{ readonly kind: string }> }
   }) | null
   assert(graph?.projection?.edges.some(({ kind }) => kind === "Grouping") === true, "The production-observed parent relation must render as a grouping edge")

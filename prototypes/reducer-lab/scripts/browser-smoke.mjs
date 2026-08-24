@@ -217,6 +217,51 @@ try {
   const predecessorCursor = await traceIdentity()
   assert.equal(predecessorCursor.runId, successorCursor.runId)
   assert.ok(Number(predecessorCursor.journalPosition) < Number(successorCursor.journalPosition))
+  await tracePanel.getByRole("button", { name: "Follow live" }).click()
+  const traceGraph = tracePanel.locator('[data-role="trace-production-graph"]')
+  assert.equal(await traceGraph.count(), 1)
+  const traceCanvas = traceGraph.locator("#canvas")
+  const traceCanvasBounds = await traceCanvas.boundingBox()
+  assert.notEqual(traceCanvasBounds, null, "The production trace graph must expose its interactive canvas")
+  const viewportBeforeGesture = await traceGraph.evaluate((graph) => graph.captureViewport())
+  await page.mouse.move(
+    traceCanvasBounds.x + traceCanvasBounds.width / 2,
+    traceCanvasBounds.y + traceCanvasBounds.height / 2
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    traceCanvasBounds.x + traceCanvasBounds.width / 2 + 36,
+    traceCanvasBounds.y + traceCanvasBounds.height / 2 + 24
+  )
+  await page.mouse.up()
+  await page.mouse.wheel(0, -180)
+  const viewportAfterGesture = await traceGraph.evaluate((graph) => graph.captureViewport())
+  assert.notDeepEqual(viewportAfterGesture, viewportBeforeGesture, "A real pointer drag and wheel gesture must change the graph viewport")
+  const traceGraphTask = traceGraph.locator("button[data-task-id]").first()
+  const selectedTraceTaskId = await traceGraphTask.getAttribute("data-task-id")
+  assert.ok(selectedTraceTaskId)
+  await traceGraphTask.click()
+  assert.deepEqual(
+    await tracePanel.locator('[data-role="trace-production-graph"]').evaluate((graph) => graph.captureViewport()),
+    viewportAfterGesture,
+    "Task selection must retain the panned and zoomed viewport"
+  )
+  const cursorBeforeTaskFocus = await traceIdentity()
+  await tracePanel.getByRole("button", { name: "Focus selected task" }).click()
+  assert.equal(await traceGraph.getAttribute("data-focused-task-id"), selectedTraceTaskId)
+  assert.deepEqual(await traceIdentity(), cursorBeforeTaskFocus, "Task focus must not move the journal cursor")
+  await tracePanel.getByRole("button", { name: "Fit whole graph" }).click()
+  const foldRepeated = tracePanel.locator('[data-role="trace-fold-repeated"]')
+  await foldRepeated.click()
+  assert.equal(await foldRepeated.getAttribute("aria-pressed"), "true")
+  const foldedViewport = await tracePanel.locator('[data-role="trace-production-graph"]').evaluate((graph) => graph.captureViewport())
+  await foldRepeated.click()
+  assert.equal(await foldRepeated.getAttribute("aria-pressed"), "false")
+  assert.deepEqual(
+    await tracePanel.locator('[data-role="trace-production-graph"]').evaluate((graph) => graph.captureViewport()),
+    foldedViewport,
+    "Reversible history folding must retain the graph viewport"
+  )
   console.log("✓ navigates the Lab by exact production (RunId, JournalPosition) cursors")
   const primaryBeforeGuide = await workbench.evaluate((element) => {
     const controls = element.querySelector(".delivery-timeline-controls")
@@ -266,7 +311,7 @@ try {
   assert.equal(await frameSelector.inputValue(), String(frameCount - 1))
   await workbench.getByRole("button", { name: "Previous moment" }).click()
   assert.equal(await frameSelector.inputValue(), String(frameCount - 2))
-  const graphRendered = await page.locator("dalph-delivery-graph").evaluate((element) => {
+  const graphRendered = await page.locator('[data-role="delivery-production-graph"]').evaluate((element) => {
     const shadow = element.shadowRoot
     const taskIds = [...(shadow?.querySelectorAll("button[data-task-id]") ?? [])]
       .map((button) => button.getAttribute("data-task-id"))
@@ -278,7 +323,7 @@ try {
   })
   assert.ok(graphRendered.canvasChildren > 0)
   assert.deepEqual(graphRendered.taskIds, ["A", "B"])
-  const graphLocator = page.locator("dalph-delivery-graph")
+  const graphLocator = page.locator('[data-role="delivery-production-graph"]')
   const graphCanvas = graphLocator.locator("#canvas")
   const resetGraphView = workbench.getByRole("button", { name: "Reset graph view" })
   await resetGraphView.click()
