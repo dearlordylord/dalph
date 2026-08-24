@@ -23,8 +23,10 @@ each registered implementation and contract marker still exists at the named
 source location and that every implementation side has a named shared-contract
 call. It also checks that the declared implementation identity is the value
 consumed by its composition marker. TypeScript source parsing recognizes direct
-Layer values, typed Layer values, and relative re-exports without executing the
-source.
+Layer values, typed Layer values, local aliases, default/namespace exports, and
+relative re-exports without executing the source. A contract call is accepted
+only when its AST binding resolves to the named shared contract source and its
+stable selector (such as cleanup authorization or evidence label) matches.
 
 The check reports an exact missing registration or missing controlled-contract
 evidence and exits unsuccessfully. It does not import the adapter, contact a
@@ -36,7 +38,9 @@ remove the unsupported assembly before continuing.
 
 Acceptance test: `rejects an assembled production layer that is absent from the
 registry`, `audits exported Layer values without a Layer suffix and through
-re-exports`, plus `audits source text without loading or invoking a live provider`.
+re-exports`, `audits local aliases, default exports, and namespace/default
+re-exports`, plus `audits source text without loading or invoking a live
+provider`.
 
 ## A maintainer changes an existing registration
 
@@ -55,11 +59,14 @@ The gate first checks the fixed accepted family set, then checks duplicate
 families and duplicate identities within a family, controlled/production
 contract execution evidence, typed N/A details, source markers, composition
 uses, and unregistered exported Layers. It reads no provider and performs no
-runtime composition.
+runtime composition. Test-only GitHub claim and node target-promotion
+qualification does not count as a production consumer; those sides record the
+application-supplied N/A reason.
 
 For a deleted family, duplicate, stale marker, one-sided contract, comment or
-string-only contract residue, or unconsumed production registration, the gate
-reports the concrete family or identity and exits unsuccessfully. It must not silently infer parity from a
+string-only contract residue, wrong shared-contract binding or selector, or
+unconsumed production registration, the gate reports the concrete family or
+identity and exits unsuccessfully. It must not silently infer parity from a
 filename, restore a repository lock, register TraceReader or Lab layers, or
 allow one environment-specific workflow path. A process crash and retry do
 not apply because the check has no external mutation or durable write; rerun
@@ -72,8 +79,13 @@ implementation registrations`, `rejects stale implementation and composition
 evidence`, `rejects one-sided contract evidence`, `rejects a production
 contract test that stops invoking the shared helper`, `rejects comment and
 string residue when shared-contract execution is removed`, `rejects a
-registered implementation identity that is not consumed by its declared
-composition`, and `is part of check:all`.
+local same-name contract function that is not the imported public contract`,
+`rejects one cleanup family when its same-helper production call is removed`,
+`rejects only the removed evidence implementation call by its label argument`,
+`runtime value consumption excludes type-only references`,
+`rejects a registered implementation identity that is not consumed by its
+declared composition`, `keeps the required family denominator outside a
+mutated inventory`, and `is part of check:all`.
 
 ## Scenario-to-test handoff
 
@@ -81,10 +93,13 @@ composition`, and `is part of check:all`.
 | --- | --- | --- |
 | Production adapter added without controlled evidence | The source-backed composition comparison rejects the unregistered exported Layer without invoking a provider. | `rejects an assembled production layer that is absent from the registry`; `runCapabilityRegistrationGate` |
 | Production adapter added without controlled evidence | Multiline direct Layer values and aliased relative re-exports remain source-backed and closed. | `audits exported Layer values without a Layer suffix and through re-exports` |
+| Production adapter added without controlled evidence | Local aliases, default exports, and namespace/default re-exports remain source-backed and closed. | `audits local aliases, default exports, and namespace/default re-exports` |
 | Production adapter added without controlled evidence | Source auditing remains read-only and dependency-neutral. | `audits source text without loading or invoking a live provider` |
 | Existing registration changed | Every current implementation has a contract execution and current source/composition evidence. | `runs every registered controlled and production implementation through its named contract family` |
-| Existing registration changed | Missing, duplicate, stale, one-sided, and no-current-consumer mutations fail closed. | `rejects a missing family even when the inventory is otherwise unchanged`; `rejects duplicate family and implementation registrations`; `rejects stale implementation and composition evidence`; `rejects one-sided contract evidence` |
-| Existing registration changed | A provider-side contract test cannot silently stop invoking the shared contract helper. | `rejects a production contract test that stops invoking the shared helper` |
+| Existing registration changed | Missing, duplicate, stale, one-sided, fixed-denominator, and no-current-consumer mutations fail closed. | `rejects a missing family even when the inventory is otherwise unchanged`; `keeps the required family denominator outside a mutated inventory`; `rejects duplicate family and implementation registrations`; `rejects stale implementation and composition evidence`; `rejects one-sided contract evidence` |
+| Existing registration changed | A provider-side contract test cannot silently stop invoking the imported shared contract helper or substitute a local same-name function. | `rejects a production contract test that stops invoking the shared helper`; `rejects a local same-name contract function that is not the imported public contract` |
 | Existing registration changed | A comment or string containing a helper name cannot substitute for executing the helper call. | `rejects comment and string residue when shared-contract execution is removed` |
+| Existing registration changed | Removing one of several same-helper cleanup or evidence calls fails only that family/role through semantic AST arguments. | `rejects one cleanup family when its same-helper production call is removed`; `rejects only the removed evidence implementation call by its label argument` |
+| Existing registration changed | Type-only references do not count as runtime Layer consumption. | `runtime value consumption excludes type-only references` |
 | Existing registration changed | A valid implementation declaration paired with an unrelated existing composition marker fails closed. | `rejects a registered implementation identity that is not consumed by its declared composition` |
 | Existing registration changed | The focused gate cannot be omitted from the repository acceptance path. | `is part of check:all`; `pnpm check:all` |

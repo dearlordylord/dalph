@@ -60,6 +60,10 @@ export interface RegisteredImplementation {
 interface ContractInvocation {
   readonly source: string
   readonly marker: string
+  /** Stable semantic argument evidence disambiguates repeated helper calls in one source. */
+  readonly selector?:
+    | { readonly _tag: "ObjectProperty"; readonly property: string; readonly value: string }
+    | { readonly _tag: "StringArgument"; readonly index: number; readonly value: string }
 }
 
 interface CompositionReference {
@@ -144,7 +148,7 @@ const controlledComposition = composed
  * required set separate from the records makes deleting one record a real
  * negative case instead of allowing the inventory to redefine its own scope.
  */
-const requiredFamilies = [
+const requiredCapabilityFamilies = [
   "journal",
   "task-tracker-graph-read",
   "task-tracker-claim",
@@ -262,6 +266,7 @@ const lineageContract = contract("GitTargetLineage", [
   {
     invocation: {
       marker: "gitTargetLineageContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "controlled" },
       source: "packages/orchestrator/src/authorities/git/target-lineage.test.ts"
     },
     marker: "gitTargetLineageContract",
@@ -271,6 +276,7 @@ const lineageContract = contract("GitTargetLineage", [
   {
     invocation: {
       marker: "gitTargetLineageContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "command-backed" },
       source: "packages/orchestrator/src/authorities/git/target-lineage.test.ts"
     },
     marker: "gitTargetLineageContract",
@@ -283,6 +289,7 @@ const integratorCandidateContract = contract("IntegratorGit", [
   {
     invocation: {
       marker: "integratorCandidateContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "controlled" },
       source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts"
     },
     marker: "integratorCandidateContract",
@@ -292,6 +299,7 @@ const integratorCandidateContract = contract("IntegratorGit", [
   {
     invocation: {
       marker: "integratorCandidateContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "command-backed" },
       source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts"
     },
     marker: "integratorCandidateContract",
@@ -358,6 +366,7 @@ const evidenceContract = contract("EvidenceStore", [
   {
     invocation: {
       marker: "evidenceStoreContract(",
+      selector: { _tag: "StringArgument", index: 1, value: "controlled" },
       source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts"
     },
     marker: "evidenceStoreContract",
@@ -367,6 +376,7 @@ const evidenceContract = contract("EvidenceStore", [
   {
     invocation: {
       marker: "evidenceStoreContract(",
+      selector: { _tag: "StringArgument", index: 1, value: "filesystem" },
       source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts"
     },
     marker: "evidenceStoreContract",
@@ -375,7 +385,11 @@ const evidenceContract = contract("EvidenceStore", [
   }
 ])
 
-const cleanupContract = (familyMarker: string, controlledInvocationSource: string): ContractEvidence =>
+const cleanupContract = (
+  familyMarker: string,
+  controlledInvocationSource: string,
+  productionAuthorization: string
+): ContractEvidence =>
   contract(familyMarker, [
     {
       invocation: { marker: "dispositionCleanupContract({", source: controlledInvocationSource },
@@ -386,6 +400,7 @@ const cleanupContract = (familyMarker: string, controlledInvocationSource: strin
     {
       invocation: {
         marker: "dispositionCleanupContract({",
+        selector: { _tag: "ObjectProperty", property: "authorization", value: productionAuthorization },
         source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/production.test.ts"
       },
       marker: "dispositionCleanupContract",
@@ -398,6 +413,7 @@ const coordinatorContract = contract("CoordinatorLock", [
   {
     invocation: {
       marker: "coordinatorLockContract(",
+      selector: { _tag: "StringArgument", index: 0, value: "controlled" },
       source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts"
     },
     marker: "coordinatorLockContract",
@@ -407,6 +423,7 @@ const coordinatorContract = contract("CoordinatorLock", [
   {
     invocation: {
       marker: "coordinatorLockContract(",
+      selector: { _tag: "StringArgument", index: 0, value: "node" },
       source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts"
     },
     marker: "coordinatorLockContract",
@@ -422,7 +439,7 @@ const coordinatorContract = contract("CoordinatorLock", [
  * not claim that a remote provider was contacted by this audit.
  */
 export const capabilityRegistrationInventory = {
-  requiredFamilies,
+  requiredFamilies: [...requiredCapabilityFamilies],
   capabilities: [
     {
       boundary: "JournalStore read, append, lifecycle, and retirement",
@@ -471,14 +488,9 @@ export const capabilityRegistrationInventory = {
       ),
       contract: trackerClaimContract,
       family: "task-tracker-claim",
-      production: implementation(
-        "githubTrackerMutationLayer",
-        "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.ts",
-        "githubTrackerMutationLayer",
-        supplied(
-          "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts",
-          "githubTrackerMutationLayer"
-        )
+      production: notApplicable(
+        "application-supplied-boundary",
+        "production activation accepts TrackerMutation from its host; the GitHub adapter is qualification-tested but this repository does not assemble it in production"
       )
     },
     {
@@ -569,14 +581,9 @@ export const capabilityRegistrationInventory = {
       ),
       contract: targetPromotionContract,
       family: "git-target-promotion",
-      production: implementation(
-        "nodeGitTargetPromotionLayer",
-        "packages/orchestrator/src/authorities/git/target-promotion.ts",
-        "nodeGitTargetPromotionLayer",
-        composed(
-          "packages/orchestrator/src/authorities/git/real-git-qualification.test.ts",
-          "nodeGitTargetPromotionLayer"
-        )
+      production: notApplicable(
+        "application-supplied-boundary",
+        "production activation accepts TargetPromotionRuntimeInput from its host; the node adapter is qualification-tested but this repository does not assemble it in production"
       )
     },
     {
@@ -647,7 +654,8 @@ export const capabilityRegistrationInventory = {
       ),
       contract: cleanupContract(
         "PlannedWorktreeCleanup",
-        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts"
+        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts",
+        "worktreeAuthorization"
       ),
       family: "planned-worktree-cleanup",
       production: implementation(
@@ -670,7 +678,8 @@ export const capabilityRegistrationInventory = {
       ),
       contract: cleanupContract(
         "PlannedBranchCleanup",
-        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts"
+        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts",
+        "branchAuthorization"
       ),
       family: "planned-branch-cleanup",
       production: implementation(
@@ -693,7 +702,8 @@ export const capabilityRegistrationInventory = {
       ),
       contract: cleanupContract(
         "IntegratorPredecessorCandidateCleanup",
-        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts"
+        "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts",
+        "candidateAuthorization"
       ),
       family: "integrator-predecessor-candidate-cleanup",
       production: implementation(
@@ -809,7 +819,7 @@ export const capabilityRegistrationIssues = (
     "integrator-predecessor-candidate-cleanup"
   ])
 
-  for (const required of inventory.requiredFamilies) {
+  for (const required of requiredCapabilityFamilies) {
     if (!families.includes(required)) issues.push(`missing capability family ${required}`)
   }
   for (const family of families) {

@@ -34,19 +34,41 @@ describe("capability registration gate", () => {
     const completion = capabilityRegistrationInventory.capabilities.find(
       ({ family }) => family === "task-tracker-completion"
     )
+    const claim = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "task-tracker-claim")
     const integrator = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "outer-integrator")
+    const promotion = capabilityRegistrationInventory.capabilities.find(
+      ({ family }) => family === "git-target-promotion"
+    )
 
     expect(completion?.production).toEqual(
       expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
     )
+    expect(claim?.production).toEqual(
+      expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
+    )
     expect(integrator?.production).toEqual(
       expect.objectContaining({ _tag: "NotApplicable", reason: "no-repository-provider" })
+    )
+    expect(promotion?.production).toEqual(
+      expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
     )
   })
 
   it("rejects a missing family even when the inventory is otherwise unchanged", () => {
     const missingFamily = {
       ...capabilityRegistrationInventory,
+      capabilities: capabilityRegistrationInventory.capabilities.filter(({ family }) => family !== "outer-integrator")
+    }
+
+    expect(issuesFor(missingFamily)).toContain("missing capability family outer-integrator")
+  })
+
+  it("keeps the required family denominator outside a mutated inventory", () => {
+    const missingFamily = {
+      ...capabilityRegistrationInventory,
+      requiredFamilies: capabilityRegistrationInventory.requiredFamilies.filter(
+        (family) => family !== "outer-integrator"
+      ),
       capabilities: capabilityRegistrationInventory.capabilities.filter(({ family }) => family !== "outer-integrator")
     }
 
@@ -118,6 +140,24 @@ describe("capability registration gate", () => {
     )
   })
 
+  it("rejects a local same-name contract function that is not the imported public contract", () => {
+    const localContract = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              'import {\n  trackerMutationContract,\n  trackerMutationContractFixture\n} from "../../../../test/contracts/tracker-mutation-contract.js"',
+              'import { trackerMutationContractFixture } from "../../../../test/contracts/tracker-mutation-contract.js"\nconst trackerMutationContract = () => undefined'
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, localContract)).toContain(
+      "task-tracker-claim contract invocation marker is stale: trackerMutationContract("
+    )
+  })
+
   it("rejects comment and string residue when shared-contract execution is removed", () => {
     const residue = sourceFiles.map((file) => {
       if (file.path === "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts") {
@@ -135,6 +175,49 @@ describe("capability registration gate", () => {
     expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, residue)).toContain(
       "task-tracker-claim contract invocation marker is stale: trackerMutationContract("
     )
+  })
+
+  it("rejects one cleanup family when its same-helper production call is removed", () => {
+    const removedCandidateCall = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/workflow/protocols/disposition-cleanup/production.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "    yield* dispositionCleanupContract({ authorization: candidateAuthorization, boundary: candidate })\n",
+              ""
+            )
+          }
+        : file
+    )
+
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, removedCandidateCall)
+    expect(issues).toContain(
+      "integrator-predecessor-candidate-cleanup contract invocation marker is stale: dispositionCleanupContract({"
+    )
+    expect(issues).not.toContain(
+      "planned-worktree-cleanup contract invocation marker is stale: dispositionCleanupContract({"
+    )
+    expect(issues).not.toContain(
+      "planned-branch-cleanup contract invocation marker is stale: dispositionCleanupContract({"
+    )
+  })
+
+  it("rejects only the removed evidence implementation call by its label argument", () => {
+    const removedFilesystemCall = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              'evidenceStoreContract(\n  (root) => nodeEvidenceStoreLayer(EvidenceStoreLocator.make(root)).pipe(Layer.provide(NodeServices.layer)),\n  "filesystem"\n)\n',
+              ""
+            )
+          }
+        : file
+    )
+
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, removedFilesystemCall)
+    expect(issues).toContain("immutable-evidence contract invocation marker is stale: evidenceStoreContract(")
+    expect(issues).not.toContain("immutable-evidence controlled contract invocation marker is stale")
   })
 
   it("rejects a registered implementation identity that is not consumed by its declared composition", () => {
@@ -213,6 +296,76 @@ describe("capability registration gate", () => {
     expect(
       runCapabilityRegistrationGate(inventory, [...sourceFiles, layerSource, reexportSource, composition])
     ).toEqual(expect.arrayContaining(["production uses unregistered exported Layer provider"]))
+  })
+
+  it("audits local aliases, default exports, and namespace/default re-exports", () => {
+    const layerSource: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-layer-export-forms.ts",
+      source: ["const hidden = Layer.succeed(UnknownService, {})", "export { hidden }", "export default hidden"].join(
+        "\n"
+      )
+    }
+    const reexportSource: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-layer-export-forms-reexport.ts",
+      source: [
+        'export { hidden } from "./issue-79-layer-export-forms.js"',
+        'export { default } from "./issue-79-layer-export-forms.js"',
+        'export * as namespace from "./issue-79-layer-export-forms.js"'
+      ].join("\n")
+    }
+    const composition: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-layer-export-forms-composition.ts",
+      source: [
+        'import defaultProvider, { hidden } from "./issue-79-layer-export-forms-reexport.js"',
+        'import { namespace } from "./issue-79-layer-export-forms-reexport.js"',
+        "export const assembledLocal = hidden",
+        "export const assembledDefault = defaultProvider",
+        "export const assembledNamespace = namespace.hidden"
+      ].join("\n")
+    }
+    const inventory = {
+      ...capabilityRegistrationInventory,
+      compositionSources: [
+        ...capabilityRegistrationInventory.compositionSources,
+        { role: "production" as const, source: composition.path }
+      ]
+    }
+
+    expect(
+      runCapabilityRegistrationGate(inventory, [...sourceFiles, layerSource, reexportSource, composition])
+    ).toEqual(
+      expect.arrayContaining([
+        "production uses unregistered exported Layer hidden",
+        "production uses unregistered exported Layer defaultProvider",
+        "production uses unregistered exported Layer namespace.hidden"
+      ])
+    )
+  })
+
+  it("runtime value consumption excludes type-only references", () => {
+    const layerSource: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-type-only-layer.ts",
+      source: "export const typeOnlyProvider = Layer.succeed(UnknownService, {})"
+    }
+    const composition: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-type-only-composition.ts",
+      source: [
+        'import { typeOnlyProvider } from "./issue-79-type-only-layer.js"',
+        "type ProviderShape = typeof typeOnlyProvider",
+        "export const assembled = undefined as unknown"
+      ].join("\n")
+    }
+    const inventory = {
+      ...capabilityRegistrationInventory,
+      compositionSources: [
+        ...capabilityRegistrationInventory.compositionSources,
+        { role: "production" as const, source: composition.path }
+      ]
+    }
+
+    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, layerSource, composition])).not.toContain(
+      "production uses unregistered exported Layer typeOnlyProvider"
+    )
   })
 
   it("audits source text without loading or invoking a live provider", () => {

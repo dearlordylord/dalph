@@ -110,20 +110,70 @@ const hasReference = (file: CapabilitySourceFile, marker: string): boolean => {
   })
 }
 
+const isTypePosition = (node: ts.Node): boolean => {
+  let current: ts.Node = node.parent
+  while (!ts.isSourceFile(current)) {
+    if (ts.isTypeNode(current)) return true
+    if (ts.isStatement(current) || ts.isBlock(current)) return false
+    current = current.parent
+  }
+  return false
+}
+
 const hasValueReference = (file: CapabilitySourceFile, marker: string): boolean => {
   const expected = normalizedMarker(marker)
   return sourceNodes(parsedSource(file)).some((node) => {
     if (!ts.isIdentifier(node) && !ts.isPropertyAccessExpression(node)) return false
     if (propertyAccessText(node) !== expected) return false
+    if (isTypePosition(node)) return false
     if (ts.isIdentifier(node) && (isDeclarationName(node) || isImportOrExportDeclaration(node))) return false
     return true
   })
 }
 
-const hasCallExpression = (file: CapabilitySourceFile, marker: string): boolean => {
+type InvocationSelector =
+  | { readonly _tag: "ObjectProperty"; readonly property: string; readonly value: string }
+  | { readonly _tag: "StringArgument"; readonly index: number; readonly value: string }
+
+const propertyNameText = (node: ts.PropertyName): string | undefined =>
+  ts.isIdentifier(node) || ts.isStringLiteral(node) ? node.text : undefined
+
+const expressionMatches = (node: ts.Expression, expected: string): boolean => {
+  if (propertyAccessText(node) === expected) return true
+  return ts.isStringLiteral(node) && node.text === expected
+}
+
+const callMatchesSelector = (call: ts.CallExpression, selector: InvocationSelector): boolean => {
+  if (selector._tag === "StringArgument") {
+    const argument = call.arguments[selector.index]
+    return argument !== undefined && ts.isStringLiteral(argument) && argument.text === selector.value
+  }
+  const firstArgument = call.arguments[0]
+  if (firstArgument === undefined || !ts.isObjectLiteralExpression(firstArgument)) return false
+  return firstArgument.properties.some((property) => {
+    if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return false
+    const name = propertyNameText(property.name)
+    if (name !== selector.property) return false
+    if (ts.isShorthandPropertyAssignment(property)) return property.name.text === selector.value
+    return expressionMatches(property.initializer, selector.value)
+  })
+}
+
+const hasCallExpression = (
+  file: CapabilitySourceFile,
+  marker: string,
+  selector: InvocationSelector | undefined,
+  origin: string,
+  originName: string,
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>
+): boolean => {
   const expected = normalizedMarker(marker)
   return sourceNodes(parsedSource(file)).some(
-    (node) => ts.isCallExpression(node) && propertyAccessText(node.expression) === expected
+    (node) =>
+      ts.isCallExpression(node) &&
+      propertyAccessText(node.expression) === expected &&
+      (selector === undefined || callMatchesSelector(node, selector)) &&
+      callResolvesToContractOrigin(node, expected, file, origin, originName, sourceFiles)
   )
 }
 
@@ -144,33 +194,172 @@ const sourcePathForSpecifier = (
   return undefined
 }
 
+const topLevelBinding = (tree: ParsedSource, name: string): boolean =>
+  tree.statements.some((statement) => {
+    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name) {
+      return true
+    }
+    return (
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name
+      )
+    )
+  })
+
+const directBindingsInBlock = (block: ts.Block, name: string): boolean =>
+  block.statements.some((statement) => {
+    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name) {
+      return true
+    }
+    return (
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name
+      )
+    )
+  })
+
+const hasEnclosingLocalBinding = (call: ts.CallExpression, name: string): boolean => {
+  let current: ts.Node = call.parent
+  while (!ts.isSourceFile(current)) {
+    if (ts.isBlock(current) && directBindingsInBlock(current, name)) return true
+    if (ts.isFunctionLike(current)) {
+      if (current.parameters.some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name)) {
+        return true
+      }
+      if (
+        "body" in current &&
+        current.body !== undefined &&
+        ts.isBlock(current.body) &&
+        directBindingsInBlock(current.body, name)
+      ) {
+        return true
+      }
+    }
+    current = current.parent
+  }
+  return false
+}
+
+const importedBinding = (
+  tree: ParsedSource,
+  localName: string,
+  sourcePath: string,
+  sourceByPath: ReadonlyMap<string, CapabilitySourceFile>
+): { readonly original: string; readonly targetPath: string } | undefined => {
+  for (const statement of tree.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
+    const targetPath = sourcePathForSpecifier(sourcePath, statement.moduleSpecifier.text, sourceByPath)
+    if (targetPath === undefined || statement.importClause === undefined) continue
+    if (statement.importClause.name?.text === localName) return { original: "default", targetPath }
+    const bindings = statement.importClause.namedBindings
+    if (bindings === undefined || !ts.isNamedImports(bindings)) continue
+    const binding = bindings.elements.find((element) => element.name.text === localName)
+    if (binding !== undefined) {
+      return { original: (binding.propertyName ?? binding.name).text, targetPath }
+    }
+  }
+  return undefined
+}
+
+const callResolvesToContractOrigin = (
+  call: ts.CallExpression,
+  localName: string,
+  invocationFile: CapabilitySourceFile,
+  origin: string,
+  originName: string,
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>
+): boolean => {
+  if (!ts.isIdentifier(call.expression) || hasEnclosingLocalBinding(call, localName)) return false
+  const sourceByPath = new Map(sourceFiles.map((file) => [file.path, file] as const))
+  const imported = importedBinding(parsedSource(invocationFile), localName, invocationFile.path, sourceByPath)
+  if (imported !== undefined) {
+    if (topLevelBinding(parsedSource(invocationFile), localName)) return false
+    if (imported.targetPath !== origin || imported.original !== originName) return false
+    const originFile = sourceByPath.get(origin)
+    return originFile !== undefined && hasReference(originFile, originName)
+  }
+  return invocationFile.path === origin && topLevelBinding(parsedSource(invocationFile), localName)
+}
+
 /* eslint-disable functional/immutable-data -- this local set is the AST's exported-value index. */
 const directExportedLayers = (file: CapabilitySourceFile): ReadonlySet<string> => {
-  const layers = new Set<string>()
   const tree = parsedSource(file)
+  const declarations = new Map<string, ts.VariableDeclaration>()
+  const layerCandidates = new Set<string>()
+  const layerType = (text: string): boolean => /\bLayer(?:\s*\.\s*Layer)?(?:\s*<|\b)/u.test(text)
+  const layerExpression = (expression: ts.Expression | undefined): boolean => {
+    if (expression === undefined) return false
+    if (ts.isParenthesizedExpression(expression) || ts.isNonNullExpression(expression)) {
+      return layerExpression(expression.expression)
+    }
+    if (ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression)) {
+      return layerType(expression.type.getText(tree)) || layerExpression(expression.expression)
+    }
+    if (ts.isTypeAssertionExpression(expression)) {
+      return layerType(expression.type.getText(tree)) || layerExpression(expression.expression)
+    }
+    if (ts.isIdentifier(expression)) return layerCandidates.has(expression.text)
+    if (ts.isPropertyAccessExpression(expression)) return propertyAccessText(expression)?.startsWith("Layer.") === true
+    if (!ts.isCallExpression(expression)) return false
+    const callee = expression.expression
+    if (propertyAccessText(callee)?.startsWith("Layer.") === true) return true
+    return ts.isPropertyAccessExpression(callee) && callee.name.text === "pipe"
+      ? layerExpression(callee.expression)
+      : false
+  }
   const visit = (node: ts.Node): void => {
-    if (ts.isVariableStatement(node) && node.modifiers?.some(({ kind }) => kind === ts.SyntaxKind.ExportKeyword)) {
+    if (ts.isVariableStatement(node)) {
       for (const declaration of node.declarationList.declarations) {
         if (!ts.isIdentifier(declaration.name)) continue
-        const identity = declaration.name.text
-        const typeText = declaration.type?.getText(tree) ?? ""
-        const hasLayerType = /\bLayer(?:\s*\.\s*Layer)?\s*</u.test(typeText)
-        const initializer = declaration.initializer
-        const initializerPath =
-          initializer === undefined
-            ? undefined
-            : propertyAccessText(ts.isCallExpression(initializer) ? initializer.expression : initializer)
-        const hasLayerInitializer = initializerPath?.startsWith("Layer.") === true
-        const hasLayerAssertion =
-          initializer !== undefined &&
-          (ts.isAsExpression(initializer) || ts.isSatisfiesExpression(initializer)) &&
-          /\bLayer(?:\s*\.\s*Layer)?\b/u.test(initializer.type.getText(tree))
-        if (identity.endsWith("Layer") || hasLayerType || hasLayerInitializer || hasLayerAssertion) layers.add(identity)
+        declarations.set(declaration.name.text, declaration)
+        if (
+          declaration.name.text.endsWith("Layer") ||
+          layerType(declaration.type?.getText(tree) ?? "") ||
+          layerExpression(declaration.initializer)
+        ) {
+          layerCandidates.add(declaration.name.text)
+        }
       }
     }
     ts.forEachChild(node, visit)
   }
   visit(tree)
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const [identity, declaration] of declarations) {
+      if (!layerCandidates.has(identity) && layerExpression(declaration.initializer)) {
+        layerCandidates.add(identity)
+        changed = true
+      }
+    }
+  }
+
+  const layers = new Set<string>()
+  for (const statement of tree.statements) {
+    if (
+      ts.isVariableStatement(statement) &&
+      statement.modifiers?.some(({ kind }) => kind === ts.SyntaxKind.ExportKeyword)
+    ) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && layerCandidates.has(declaration.name.text)) {
+          layers.add(declaration.name.text)
+        }
+      }
+    }
+    if (ts.isExportDeclaration(statement)) {
+      const clause = statement.exportClause
+      if (statement.moduleSpecifier === undefined && clause !== undefined && ts.isNamedExports(clause)) {
+        for (const element of clause.elements) {
+          const original = (element.propertyName ?? element.name).text
+          if (layerCandidates.has(original)) layers.add(element.name.text)
+        }
+      }
+    }
+    if (ts.isExportAssignment(statement) && layerExpression(statement.expression)) layers.add("default")
+  }
   return layers
 }
 /* eslint-enable functional/immutable-data */
@@ -180,6 +369,17 @@ const exportedLayerSymbols = (sourceFiles: ReadonlyArray<CapabilitySourceFile>):
   const sourceByPath = new Map(sourceFiles.map((file) => [file.path, file] as const))
   const memo = new Map<string, ReadonlySet<string>>()
   const visiting = new Set<string>()
+  const addImportedAlias = (
+    layers: Set<string>,
+    original: string,
+    local: string,
+    targetLayers: ReadonlySet<string>
+  ): void => {
+    if (targetLayers.has(original)) layers.add(local)
+    for (const identity of targetLayers) {
+      if (identity.startsWith(`${original}.`)) layers.add(`${local}${identity.slice(original.length)}`)
+    }
+  }
 
   const layersFor = (path: string): ReadonlySet<string> => {
     const cached = memo.get(path)
@@ -189,22 +389,24 @@ const exportedLayerSymbols = (sourceFiles: ReadonlyArray<CapabilitySourceFile>):
     if (file === undefined) return new Set<string>()
     visiting.add(path)
     const layers = new Set(directExportedLayers(file))
-    const importedLayers = new Set<string>()
     const tree = parsedSource(file)
     for (const statement of tree.statements) {
       if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
       const targetPath = sourcePathForSpecifier(path, statement.moduleSpecifier.text, sourceByPath)
       if (targetPath === undefined || statement.importClause === undefined) continue
       const targetLayers = layersFor(targetPath)
+      if (statement.importClause.name !== undefined && targetLayers.has("default")) {
+        layers.add(statement.importClause.name.text)
+      }
       const bindings = statement.importClause.namedBindings
       if (bindings !== undefined && ts.isNamedImports(bindings)) {
         for (const element of bindings.elements) {
-          const original = (element.propertyName ?? element.name).text
-          if (targetLayers.has(original)) importedLayers.add(element.name.text)
+          addImportedAlias(layers, (element.propertyName ?? element.name).text, element.name.text, targetLayers)
         }
+      } else if (bindings !== undefined && ts.isNamespaceImport(bindings)) {
+        for (const identity of targetLayers) layers.add(`${bindings.name.text}.${identity}`)
       }
     }
-    for (const identity of importedLayers) layers.add(identity)
 
     for (const statement of tree.statements) {
       if (
@@ -212,15 +414,15 @@ const exportedLayerSymbols = (sourceFiles: ReadonlyArray<CapabilitySourceFile>):
         statement.modifiers?.some(({ kind }) => kind === ts.SyntaxKind.ExportKeyword)
       ) {
         for (const declaration of statement.declarationList.declarations) {
-          if (
-            ts.isIdentifier(declaration.name) &&
-            declaration.initializer !== undefined &&
-            ts.isIdentifier(declaration.initializer) &&
-            importedLayers.has(declaration.initializer.text)
-          ) {
-            layers.add(declaration.name.text)
+          if (ts.isIdentifier(declaration.name) && declaration.initializer !== undefined) {
+            const initializer = propertyAccessText(declaration.initializer)
+            if (initializer !== undefined && layers.has(initializer)) layers.add(declaration.name.text)
           }
         }
+      }
+      if (ts.isExportAssignment(statement)) {
+        const expression = propertyAccessText(statement.expression)
+        if (expression !== undefined && layers.has(expression)) layers.add("default")
       }
       if (!ts.isExportDeclaration(statement)) continue
       const clause = statement.exportClause
@@ -232,14 +434,14 @@ const exportedLayerSymbols = (sourceFiles: ReadonlyArray<CapabilitySourceFile>):
           for (const identity of targetLayers) layers.add(identity)
         } else if (ts.isNamedExports(clause)) {
           for (const element of clause.elements) {
-            const original = (element.propertyName ?? element.name).text
-            if (targetLayers.has(original)) layers.add(element.name.text)
+            addImportedAlias(layers, (element.propertyName ?? element.name).text, element.name.text, targetLayers)
           }
+        } else if (ts.isNamespaceExport(clause)) {
+          for (const identity of targetLayers) layers.add(`${clause.name.text}.${identity}`)
         }
       } else if (clause !== undefined && ts.isNamedExports(clause)) {
         for (const element of clause.elements) {
-          const original = (element.propertyName ?? element.name).text
-          if (layers.has(original)) layers.add(element.name.text)
+          addImportedAlias(layers, (element.propertyName ?? element.name).text, element.name.text, layers)
         }
       }
     }
@@ -313,7 +515,16 @@ const implementationSourceIssues = (
         const invocation = sourceAt(sourceFiles, execution.invocation.source)
         if (invocation === undefined) {
           issues.push(`${capability.family} contract invocation source is missing: ${execution.invocation.source}`)
-        } else if (!hasCallExpression(invocation, execution.invocation.marker)) {
+        } else if (
+          !hasCallExpression(
+            invocation,
+            execution.invocation.marker,
+            execution.invocation.selector,
+            execution.source,
+            execution.marker,
+            sourceFiles
+          )
+        ) {
           issues.push(`${capability.family} contract invocation marker is stale: ${execution.invocation.marker}`)
         }
       }
