@@ -46,13 +46,6 @@ separately and are not current implementation authority.
 | `issue-142-qualify-recovery-prefix-harness.md` | 142 |
 | `issue-54-resize-task-admission.md` | 54 |
 | `issue-90-final-parent-acceptance.md` | 90 |
-
-**Describes implemented behavior with an intentionally open owning issue** —
-the implementation evidence and post-implementation choices audit are recorded
-on the issue while later dependent work proceeds.
-
-| File | Issue |
-|---|---|
 | `issue-72-qualify-github-completion.md` | 72 |
 | `issue-73-qualify-real-git-lineage-candidate-ref.md` | 73 |
 | `issue-74-qualify-real-worktree-lease.md` | 74 |
@@ -75,13 +68,6 @@ on the issue while later dependent work proceeds.
 | `issue-85-large-run-navigation.md` | 85 |
 | `issue-87-hermetic-concurrency-and-serialized-integration.md` | 87 |
 | `issue-89-tracker-release-and-resource-census.md` | 89 |
-
-**Accepted, not yet implemented** — the owning issue is open. These state
-required behavior and must not be read as a description of what Dalph does
-today.
-
-| File | Issue |
-|---|---|
 | `issue-102-terminate-settled-run.md` | 102 |
 | `issue-55-localize-task-conflicts.md` | 55 |
 | `issue-56-queue-accepted-integration.md` | 56 |
