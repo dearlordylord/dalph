@@ -35,9 +35,7 @@ export const makeSelectedTransitionIdentity = (
     runId,
     subjectTaskId: runnableTransitionTaskId(transition),
     transitionTag:
-      transition._tag === "StartPlannedAttemptExecutorWork" || transition._tag === "SuspendPlannedAttemptExecutorWork"
-        ? "ContinuePlannedAttemptExecutorWork"
-        : transition._tag
+      transition._tag === "StartPlannedAttemptExecutorWork" ? "ContinuePlannedAttemptExecutorWork" : transition._tag
   })
 
 export const selectedTransitionKey = (selected: SelectedTransitionIdentity): string => JSON.stringify(selected)

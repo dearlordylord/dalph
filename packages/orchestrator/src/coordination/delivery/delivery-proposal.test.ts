@@ -314,4 +314,34 @@ describe("deliveryProposalsOf", () => {
       ]
     })
   })
+
+  it("recovers Suspend when fresh Continue and runnable Suspend share one attempt", () => {
+    const acceptedProgress = { _tag: "ExecutorResponsibilityBegan" as const, acceptedAt: JournalPosition.make(2) }
+    const continueTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      acceptedProgress,
+      plannedAttempt
+    })
+    const suspendTransition = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+    const freshStep = FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
+      acceptedProgress,
+      plannedAttempt,
+      specification: makeTaskWorkSpecification({ body: "Implement A", taskId, title: "A" }),
+      task
+    })
+
+    const contributions = deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: [{ step: freshStep, transition: continueTransition }],
+      runId,
+      transitions: [suspendTransition]
+    })
+
+    expect(contributions.issues).toEqual([])
+    expect(contributions.ticketDelivery).toHaveLength(1)
+    expect(contributions.ticketDelivery[0]?.route).toEqual({
+      _tag: "IdentityFreeWorkflowRoute",
+      transition: suspendTransition
+    })
+    expect(contributions.ticketDelivery[0]?.route).not.toMatchObject({ _tag: "FreshExecutorWorkflowRoute" })
+  })
 })

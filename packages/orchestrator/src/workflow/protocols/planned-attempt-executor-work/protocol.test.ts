@@ -1292,7 +1292,7 @@ it("derives the continuation budget from exact reports when no durable command c
   })
 })
 
-it("coalesces start, continuation, and suspension ownership by the same pair", () => {
+it("coalesces start and continuation but keeps suspension as a distinct transition", () => {
   const start = RunnableFrontierTransition.StartPlannedAttemptExecutorWork({ plannedAttempt })
   const continuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
     acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
@@ -1303,8 +1303,11 @@ it("coalesces start, continuation, and suspension ownership by the same pair", (
   expect(makeSelectedTransitionIdentity(plannedAttempt.runId, start)).toEqual(
     makeSelectedTransitionIdentity(plannedAttempt.runId, continuation)
   )
-  expect(makeSelectedTransitionIdentity(plannedAttempt.runId, suspension)).toEqual(
+  expect(makeSelectedTransitionIdentity(plannedAttempt.runId, suspension)).not.toEqual(
     makeSelectedTransitionIdentity(plannedAttempt.runId, continuation)
+  )
+  expect(makeSelectedTransitionIdentity(plannedAttempt.runId, suspension).transitionTag).toBe(
+    "SuspendPlannedAttemptExecutorWork"
   )
 })
 
