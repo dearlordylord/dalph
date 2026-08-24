@@ -961,7 +961,9 @@ it.effect(
         expect(terminationRecords).toHaveLength(1)
         expect(terminationRecords[0]?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
         expect(records.at(-1)?.event).toEqual(terminationRecords[0]?.event)
+        expect(eventTags.some((tag) => tag === "WorktreeCleanupAuthorized")).toBe(false)
         expect(eventTags.some((tag) => tag === "WorktreeCleanupSettled")).toBe(false)
+        expect(eventTags.some((tag) => tag === "BranchCleanupAuthorized")).toBe(false)
         expect(eventTags.some((tag) => tag === "BranchCleanupSettled")).toBe(false)
         expect(graphRecords.length).toBeGreaterThanOrEqual(2)
         expect(
