@@ -63,7 +63,7 @@ describe("capability registration gate", () => {
 
     const issues = capabilityRegistrationIssues(duplicate)
     expect(issues).toContain("duplicate capability family journal")
-    expect(issues).toContain("duplicate implementation identity memoryJournalStoreLayer")
+    expect(issues).toContain("duplicate implementation identity memoryJournalTestLayer")
   })
 
   it("rejects stale implementation and composition evidence", () => {
@@ -118,6 +118,54 @@ describe("capability registration gate", () => {
     )
   })
 
+  it("rejects comment and string residue when shared-contract execution is removed", () => {
+    const residue = sourceFiles.map((file) => {
+      if (file.path === "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts") {
+        return {
+          ...file,
+          source: file.source.replace(
+            'trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })',
+            'const contractResidue = "trackerMutationContract("\nconst regexResidue = /trackerMutationContract\\(/'
+          )
+        }
+      }
+      return file
+    })
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, residue)).toContain(
+      "task-tracker-claim contract invocation marker is stale: trackerMutationContract("
+    )
+  })
+
+  it("rejects a registered implementation identity that is not consumed by its declared composition", () => {
+    const original = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "git-worktree")
+    if (original === undefined || original.production._tag !== "Implementation") {
+      throw new Error("Git worktree production registration fixture is missing")
+    }
+    const production = original.production
+    const unconsumed = {
+      ...capabilityRegistrationInventory,
+      capabilities: capabilityRegistrationInventory.capabilities.map((capability) =>
+        capability.family === "git-worktree"
+          ? {
+              ...capability,
+              production: {
+                ...production,
+                identity: "nodeGitTargetLineageLayer",
+                marker: "nodeGitTargetLineageLayer",
+                source: "packages/orchestrator/src/authorities/git/target-lineage.ts",
+                composition: { ...production.composition, identity: "nodeGitTargetLineageLayer" }
+              }
+            }
+          : capability
+      )
+    }
+
+    expect(issuesFor(unconsumed)).toContain(
+      "git-worktree production composition does not consume implementation identity nodeGitTargetLineageLayer"
+    )
+  })
+
   it("rejects an assembled production layer that is absent from the registry", () => {
     const unknownLayer: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-79-unknown-layer.ts",
@@ -139,6 +187,32 @@ describe("capability registration gate", () => {
     expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, unknownLayer, unknownComposition])).toContain(
       "production uses unregistered exported Layer unknownProductionCapabilityLayer"
     )
+  })
+
+  it("audits exported Layer values without a Layer suffix and through re-exports", () => {
+    const layerSource: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-layer-source.ts",
+      source: "export const hiddenProvider =\n  Layer.succeed(UnknownService, {})"
+    }
+    const reexportSource: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-layer-reexport.ts",
+      source: 'export {\n  hiddenProvider as provider\n} from "./issue-79-layer-source.js"'
+    }
+    const composition: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-layer-composition.ts",
+      source: 'import { provider } from "./issue-79-layer-reexport.js"\nexport const assembled = provider'
+    }
+    const inventory = {
+      ...capabilityRegistrationInventory,
+      compositionSources: [
+        ...capabilityRegistrationInventory.compositionSources,
+        { role: "production" as const, source: composition.path }
+      ]
+    }
+
+    expect(
+      runCapabilityRegistrationGate(inventory, [...sourceFiles, layerSource, reexportSource, composition])
+    ).toEqual(expect.arrayContaining(["production uses unregistered exported Layer provider"]))
   })
 
   it("audits source text without loading or invoking a live provider", () => {

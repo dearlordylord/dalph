@@ -1,6 +1,6 @@
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
-import { Effect, Ref, Schema } from "effect"
+import { Effect, Layer, Ref, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -55,8 +55,7 @@ import {
   IntegratorTargetLineageObservationChanged,
   IntegratorPreparationInput,
   deriveIntegratorRunState,
-  prepareIntegrationCandidateRun,
-  type IntegratorRequest
+  prepareIntegrationCandidateRun
 } from "./protocol.js"
 import {
   appendIntegratorSessionIfNeeded,
@@ -80,10 +79,12 @@ import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorNotPreparedDetail,
+  IntegratorRequest,
   IntegratorSessionCorrelation,
   type IntegratorRunProtocolResult,
   IntegratorResult
 } from "./events.js"
+import { integratorContract } from "../../../../test/contracts/integrator-contract.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 
@@ -155,6 +156,17 @@ const prepared = (request: IntegratorRequest): IntegratorResult =>
 
 const notPrepared = (request: IntegratorRequest): IntegratorResult =>
   IntegratorResult.cases.NotPrepared.make({ correlation: request.correlation, detail: notPreparedDetail })
+
+const controlledIntegratorContractService = Integrator.of({ prepare: (request) => Effect.succeed(prepared(request)) })
+const controlledIntegratorContractRequest = IntegratorRequest.make({
+  correlation: integratorCorrelationFor(compatibleInput())
+})
+integratorContract({
+  expected: prepared(controlledIntegratorContractRequest),
+  layer: Layer.succeed(Integrator, controlledIntegratorContractService),
+  name: "controlled",
+  request: controlledIntegratorContractRequest
+})
 
 const commitObservation = (parents: ReadonlyArray<GitCommitSha>): IntegratorGitObservation =>
   IntegratorGitObservation.cases.Commit.make({
@@ -250,11 +262,11 @@ const makeHarness = (
         Ref.get(records).pipe(Effect.map((current) => current.filter(({ runId: id }) => id === requestedRunId)))
     })
 
-    const integrator = Integrator.of({
+    const controlledIntegrator = Integrator.of({
       prepare: (request) =>
         Ref.update(integratorCalls, (calls) => [...calls, request]).pipe(Effect.andThen(integratorResult(request)))
     })
-    const git = IntegratorGit.of({
+    const controlledIntegratorGit = IntegratorGit.of({
       readCandidate: (requestedTarget, requestedCandidate) =>
         Ref.update(gitCalls, (count) => count + 1).pipe(
           Effect.andThen(Ref.update(gitCandidates, (candidates) => [...candidates, requestedCandidate])),
@@ -263,8 +275,8 @@ const makeHarness = (
     })
     const run = (input: IntegratorPreparationInput) =>
       prepareIntegrationCandidateRun({ preparation: input, run: integratorInitialRunCorrelationFor(input) }).pipe(
-        Effect.provideService(Integrator, integrator),
-        Effect.provideService(IntegratorGit, git),
+        Effect.provideService(Integrator, controlledIntegrator),
+        Effect.provideService(IntegratorGit, controlledIntegratorGit),
         Effect.provideService(InRunJournal, journal)
       )
     const runExact = (
@@ -276,8 +288,8 @@ const makeHarness = (
         preparation: input,
         run: integratorRunCorrelationForSession(session, ordinal)
       }).pipe(
-        Effect.provideService(Integrator, integrator),
-        Effect.provideService(IntegratorGit, git),
+        Effect.provideService(Integrator, controlledIntegrator),
+        Effect.provideService(IntegratorGit, controlledIntegratorGit),
         Effect.provideService(InRunJournal, journal)
       )
 

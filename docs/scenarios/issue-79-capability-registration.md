@@ -21,7 +21,10 @@ in the listed controlled and production composition sources with registered
 implementation identities and explicit support bindings. It also checks that
 each registered implementation and contract marker still exists at the named
 source location and that every implementation side has a named shared-contract
-execution.
+call. It also checks that the declared implementation identity is the value
+consumed by its composition marker. TypeScript source parsing recognizes direct
+Layer values, typed Layer values, and relative re-exports without executing the
+source.
 
 The check reports an exact missing registration or missing controlled-contract
 evidence and exits unsuccessfully. It does not import the adapter, contact a
@@ -32,7 +35,8 @@ The maintainer sees the failing identity and can register the real contract or
 remove the unsupported assembly before continuing.
 
 Acceptance test: `rejects an assembled production layer that is absent from the
-registry`, plus `audits source text without loading or invoking a live provider`.
+registry`, `audits exported Layer values without a Layer suffix and through
+re-exports`, plus `audits source text without loading or invoking a live provider`.
 
 ## A maintainer changes an existing registration
 
@@ -53,9 +57,9 @@ contract execution evidence, typed N/A details, source markers, composition
 uses, and unregistered exported Layers. It reads no provider and performs no
 runtime composition.
 
-For a deleted family, duplicate, stale marker, one-sided contract, or
-unconsumed production registration, the gate reports the concrete family or
-identity and exits unsuccessfully. It must not silently infer parity from a
+For a deleted family, duplicate, stale marker, one-sided contract, comment or
+string-only contract residue, or unconsumed production registration, the gate
+reports the concrete family or identity and exits unsuccessfully. It must not silently infer parity from a
 filename, restore a repository lock, register TraceReader or Lab layers, or
 allow one environment-specific workflow path. A process crash and retry do
 not apply because the check has no external mutation or durable write; rerun
@@ -66,16 +70,21 @@ implementation through its named contract family`, `rejects a missing family
 even when the inventory is otherwise unchanged`, `rejects duplicate family and
 implementation registrations`, `rejects stale implementation and composition
 evidence`, `rejects one-sided contract evidence`, `rejects a production
-contract test that stops invoking the shared helper`, and `is part of
-check:all`.
+contract test that stops invoking the shared helper`, `rejects comment and
+string residue when shared-contract execution is removed`, `rejects a
+registered implementation identity that is not consumed by its declared
+composition`, and `is part of check:all`.
 
 ## Scenario-to-test handoff
 
 | Scenario | Concrete outcome | Passing test or gate seam |
 | --- | --- | --- |
 | Production adapter added without controlled evidence | The source-backed composition comparison rejects the unregistered exported Layer without invoking a provider. | `rejects an assembled production layer that is absent from the registry`; `runCapabilityRegistrationGate` |
+| Production adapter added without controlled evidence | Multiline direct Layer values and aliased relative re-exports remain source-backed and closed. | `audits exported Layer values without a Layer suffix and through re-exports` |
 | Production adapter added without controlled evidence | Source auditing remains read-only and dependency-neutral. | `audits source text without loading or invoking a live provider` |
 | Existing registration changed | Every current implementation has a contract execution and current source/composition evidence. | `runs every registered controlled and production implementation through its named contract family` |
 | Existing registration changed | Missing, duplicate, stale, one-sided, and no-current-consumer mutations fail closed. | `rejects a missing family even when the inventory is otherwise unchanged`; `rejects duplicate family and implementation registrations`; `rejects stale implementation and composition evidence`; `rejects one-sided contract evidence` |
 | Existing registration changed | A provider-side contract test cannot silently stop invoking the shared contract helper. | `rejects a production contract test that stops invoking the shared helper` |
+| Existing registration changed | A comment or string containing a helper name cannot substitute for executing the helper call. | `rejects comment and string residue when shared-contract execution is removed` |
+| Existing registration changed | A valid implementation declaration paired with an unrelated existing composition marker fails closed. | `rejects a registered implementation identity that is not consumed by its declared composition` |
 | Existing registration changed | The focused gate cannot be omitted from the repository acceptance path. | `is part of check:all`; `pnpm check:all` |

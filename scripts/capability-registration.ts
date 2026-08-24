@@ -43,6 +43,8 @@ interface CompositionEvidence {
   readonly source: string
   /** The exact source identifier or parameter accepted by the composition. */
   readonly marker: string
+  /** The registered value whose identity must be consumed by this composition. */
+  readonly identity: string
 }
 
 export interface RegisteredImplementation {
@@ -57,6 +59,13 @@ export interface RegisteredImplementation {
 
 interface ContractInvocation {
   readonly source: string
+  readonly marker: string
+}
+
+interface CompositionReference {
+  readonly _tag: "Assembled" | "SuppliedAtBoundary"
+  readonly source: string
+  /** The exact source identifier or parameter accepted by the composition. */
   readonly marker: string
 }
 
@@ -103,8 +112,14 @@ const implementation = (
   identity: string,
   source: string,
   marker: string,
-  composition: CompositionEvidence
-): RegisteredImplementation => ({ _tag: "Implementation", composition, identity, marker, source })
+  composition: CompositionReference
+): RegisteredImplementation => ({
+  _tag: "Implementation",
+  composition: { ...composition, identity },
+  identity,
+  marker,
+  source
+})
 
 const notApplicable = (reason: NotApplicableReason, detail: string): NotApplicableImplementation => ({
   _tag: "NotApplicable",
@@ -114,9 +129,9 @@ const notApplicable = (reason: NotApplicableReason, detail: string): NotApplicab
 
 const contract = (id: string, executions: ReadonlyArray<ContractExecution>): ContractEvidence => ({ executions, id })
 
-const composed = (source: string, marker: string): CompositionEvidence => ({ _tag: "Assembled", marker, source })
+const composed = (source: string, marker: string): CompositionReference => ({ _tag: "Assembled", marker, source })
 
-const supplied = (source: string, marker: string): CompositionEvidence => ({
+const supplied = (source: string, marker: string): CompositionReference => ({
   _tag: "SuppliedAtBoundary",
   marker,
   source
@@ -212,9 +227,13 @@ const trackerClaimContract = contract("TrackerMutation", [
 
 const completionContract = contract("CompletionBoundary", [
   {
-    marker: "CompletionClaimBoundary",
+    invocation: {
+      marker: "completionBoundaryContract(",
+      source: "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
+    },
+    marker: "completionBoundaryContract",
     role: "controlled",
-    source: "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts"
+    source: "packages/orchestrator/test/contracts/completion-boundary-contract.ts"
   }
 ])
 
@@ -325,9 +344,13 @@ const executorContract = contract("PlannedAttemptExecutor", [
 
 const integratorContract = contract("Integrator", [
   {
-    marker: "Integrator.of",
+    invocation: {
+      marker: "integratorContract(",
+      source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts"
+    },
+    marker: "integratorContract",
     role: "controlled",
-    source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts"
+    source: "packages/orchestrator/test/contracts/integrator-contract.ts"
   }
 ])
 
@@ -404,17 +427,17 @@ export const capabilityRegistrationInventory = {
     {
       boundary: "JournalStore read, append, lifecycle, and retirement",
       controlled: implementation(
-        "memoryJournalStoreLayer",
+        "memoryJournalTestLayer",
         "packages/orchestrator/src/workflow-journal/adapters/memory-store.ts",
-        "memoryJournalStoreLayer",
+        "memoryJournalTestLayer",
         controlledComposition("packages/orchestrator/src/workflow-journal/store.test.ts", "memoryJournalTestLayer")
       ),
       contract: journalContract,
       family: "journal",
       production: implementation(
-        "sqliteJournalStoreLayer",
+        "productionJournalStoreLayer",
         "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
-        "sqliteJournalStoreLayer",
+        "productionJournalStoreLayer",
         composed("packages/dalph/src/application/production.ts", "productionJournalStoreLayer")
       )
     },
@@ -449,21 +472,24 @@ export const capabilityRegistrationInventory = {
       contract: trackerClaimContract,
       family: "task-tracker-claim",
       production: implementation(
-        "githubTrackerMutationNodeLayer",
+        "githubTrackerMutationLayer",
         "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.ts",
-        "githubTrackerMutationNodeLayer",
-        supplied("packages/dalph/src/application/production.ts", "trackerMutationAdapterLayer")
+        "githubTrackerMutationLayer",
+        supplied(
+          "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts",
+          "githubTrackerMutationLayer"
+        )
       )
     },
     {
       boundary: "task completion and focused tracker observations",
       controlled: implementation(
-        "controlledCompletionClaimBoundaryLayer",
+        "controlledCompletionTaskBoundaryLayerFrom",
         "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts",
-        "controlledCompletionClaimBoundaryLayer",
+        "controlledCompletionTaskBoundaryLayerFrom",
         controlledComposition(
           "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts",
-          "controlledCompletionClaimBoundaryLayerFrom"
+          "controlledCompletionTaskBoundaryLayerFrom"
         )
       ),
       contract: completionContract,
@@ -493,9 +519,9 @@ export const capabilityRegistrationInventory = {
     {
       boundary: "Git target lineage observation",
       controlled: implementation(
-        "gitTargetLineageTestLayer",
-        "packages/orchestrator/src/authorities/git/target-lineage.ts",
-        "gitTargetLineageTestLayer",
+        "controlledTargetLineageLayer",
+        "packages/orchestrator/src/workflow/interpretation/layers.ts",
+        "controlledTargetLineageLayer",
         controlledComposition(
           "packages/orchestrator/src/workflow/interpretation/layers.ts",
           "controlledTargetLineageLayer"
@@ -513,12 +539,12 @@ export const capabilityRegistrationInventory = {
     {
       boundary: "Git Integrator-candidate qualification",
       controlled: implementation(
-        "controlledIntegratorGitService",
+        "controlledIntegratorGit",
         "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
         "IntegratorGit.of",
         controlledComposition(
           "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
-          "IntegratorGit.of"
+          "controlledIntegratorGit"
         )
       ),
       contract: integratorCandidateContract,
@@ -533,9 +559,9 @@ export const capabilityRegistrationInventory = {
     {
       boundary: "Git exact-head target promotion",
       controlled: implementation(
-        "controlledTargetPromotionGitService",
+        "gitLayer",
         "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts",
-        "TargetPromotionGit.of",
+        "gitLayer",
         controlledComposition(
           "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts",
           "gitLayer"
@@ -547,7 +573,10 @@ export const capabilityRegistrationInventory = {
         "nodeGitTargetPromotionLayer",
         "packages/orchestrator/src/authorities/git/target-promotion.ts",
         "nodeGitTargetPromotionLayer",
-        supplied("packages/dalph/src/application/production.ts", "targetPromotion")
+        composed(
+          "packages/orchestrator/src/authorities/git/real-git-qualification.test.ts",
+          "nodeGitTargetPromotionLayer"
+        )
       )
     },
     {
@@ -570,12 +599,12 @@ export const capabilityRegistrationInventory = {
     {
       boundary: "outer Integrator",
       controlled: implementation(
-        "controlledIntegratorService",
+        "controlledIntegrator",
         "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
         "Integrator.of",
         controlledComposition(
           "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts",
-          "Integrator.of"
+          "controlledIntegrator"
         )
       ),
       contract: integratorContract,
@@ -741,10 +770,13 @@ export const capabilityRegistrationInventory = {
     { identity: "nodeCodexAttemptStoreLayer", reason: "implementation-private Codex executor storage" },
     { identity: "nodeCodexProcessNativeLayer", reason: "implementation-private Codex process support" },
     { identity: "nodeGitCommandLayer", reason: "shared Git command dependency of registered Git boundaries" },
+    {
+      identity: "sqliteJournalStoreLayer",
+      reason: "implementation-private storage beneath the registered journal boundary"
+    },
     { identity: "operatorControlLayer", reason: "operator-control protocol support" },
     { identity: "productionRunReactivationLayer", reason: "application lifecycle composition" },
     { identity: "productionCoordinatorOwnershipLayer", reason: "production coordinator ownership assembly" },
-    { identity: "productionJournalStoreLayer", reason: "production journal assembly" },
     { identity: "productionWorkflowInterpreterLayer", reason: "application composition entry" },
     { identity: "runReactivationOwnerLayer", reason: "application lifecycle composition" },
     { identity: "taskClaimReacquisitionControlLayer", reason: "claim-control protocol support" },
