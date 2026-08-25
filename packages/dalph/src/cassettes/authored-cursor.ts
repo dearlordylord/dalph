@@ -957,6 +957,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   )
   const consumeExecutorReportForLoop: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
     "AuthoredCassette.consumeExecutorReportFor"
+    // eslint-disable-next-line complexity -- The authored cursor inspects immediate and later owned reports before one fail-closed mismatch.
   )(function* (request, attemptId) {
     const claimed = yield* claimNext((item) => authoredExecutorReportMatches(item, request, attemptId))
     if (claimed._tag === "Claimed") {

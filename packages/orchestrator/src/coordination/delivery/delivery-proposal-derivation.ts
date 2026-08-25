@@ -59,6 +59,50 @@ const preStartClaimOperationIdFor = (
   return responsibility?._tag === "TaskClaimResponsibility" ? responsibility.acquisition.operationId : undefined
 }
 
+const freshReuseTaskWorkStepTags = new Set<FreshWorkflowStep["_tag"]>([
+  "ReadPostClaimGraph",
+  "RecordTaskAttemptPlan",
+  "ReconcileTaskWorktree"
+])
+
+type FreshTaskWorkMode = "AcquireFresh" | "ReuseExisting"
+
+const freshStepTaskWorkModeFor = (freshStep: FreshWorkflowStep): FreshTaskWorkMode | undefined => {
+  if (freshStep._tag === "AcquireTaskClaim") return "AcquireFresh"
+  if (freshStep._tag === "ReadTaskWorkSpecification") {
+    return freshStep.purpose === "PreStart" ? "ReuseExisting" : undefined
+  }
+  return freshReuseTaskWorkStepTags.has(freshStep._tag) ? "ReuseExisting" : undefined
+}
+
+const freshStepClaimOperationIdFor = (
+  freshStep: FreshWorkflowStep,
+  claimOperationId: OperationId | undefined
+): OperationId | undefined =>
+  freshStep._tag === "ReadPostClaimGraph" ? freshStep.claimOperation.acquisition.operationId : claimOperationId
+
+const freshStepTaskWorkPositionFor = (
+  freshStep: FreshWorkflowStep,
+  claimOperationId: OperationId | undefined
+): TaskWorkPositionRequirement | undefined => {
+  if (freshStep._tag === "StartPlannedAttemptExecutorWork") {
+    return { _tag: "TaskWorkPositionRequired", mode: "Existing", taskId: freshStep.task.id }
+  }
+  const mode = freshStepTaskWorkModeFor(freshStep)
+  if (mode === undefined) return undefined
+  if (mode === "ReuseExisting") {
+    const exactClaimOperationId = freshStepClaimOperationIdFor(freshStep, claimOperationId)
+    if (exactClaimOperationId === undefined) return undefined
+    return {
+      _tag: "PreStartTaskWorkPositionRequired",
+      claimOperationId: exactClaimOperationId,
+      mode,
+      taskId: freshStep.task.id
+    }
+  }
+  return { _tag: "PreStartTaskWorkPositionRequired", mode, taskId: freshStep.task.id }
+}
+
 const taskWorkPositionFor = (
   transition: RunnableFrontierTransition,
   freshStep: FreshWorkflowStep | undefined,
@@ -71,32 +115,8 @@ const taskWorkPositionFor = (
     return { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: transition.plannedAttempt.taskId }
   }
   if (freshStep !== undefined) {
-    if (freshStep._tag === "StartPlannedAttemptExecutorWork") {
-      return { _tag: "TaskWorkPositionRequired", mode: "Existing", taskId: freshStep.task.id }
-    }
-    const mode: "AcquireFresh" | "ReuseExisting" | null =
-      freshStep._tag === "AcquireTaskClaim"
-        ? "AcquireFresh"
-        : freshStep._tag === "ReadPostClaimGraph" ||
-            (freshStep._tag === "ReadTaskWorkSpecification" && freshStep.purpose === "PreStart") ||
-            freshStep._tag === "RecordTaskAttemptPlan" ||
-            freshStep._tag === "ReconcileTaskWorktree"
-          ? "ReuseExisting"
-          : null
-    if (mode !== null) {
-      if (mode === "ReuseExisting") {
-        const exactClaimOperationId =
-          freshStep._tag === "ReadPostClaimGraph" ? freshStep.claimOperation.acquisition.operationId : claimOperationId
-        if (exactClaimOperationId === undefined) return undefined
-        return {
-          _tag: "PreStartTaskWorkPositionRequired",
-          claimOperationId: exactClaimOperationId,
-          mode,
-          taskId: freshStep.task.id
-        }
-      }
-      return { _tag: "PreStartTaskWorkPositionRequired", mode, taskId: freshStep.task.id }
-    }
+    const freshPosition = freshStepTaskWorkPositionFor(freshStep, claimOperationId)
+    if (freshPosition !== undefined) return freshPosition
   }
   const mode = transitionTaskWorkPosition(transition)
   if (mode === null) return { _tag: "NoTaskWorkPosition" }

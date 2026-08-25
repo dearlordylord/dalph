@@ -219,6 +219,35 @@ const reserveExistingTaskPosition = (
   )
 }
 
+const reserveExistingReusableTaskPosition = (
+  requirement: ReservableTaskPositionRequirement,
+  existing: TaskWorkPosition,
+  retainAs: PlannedAttemptExecutorCorrelation | undefined,
+  current: AdmissionState
+): readonly [TaskPositionReservation, AdmissionState] => {
+  if (isPreStartRequirement(requirement)) {
+    if (requirement.mode === "AcquireFresh") return unchangedTaskReservation(false, current)
+    if (!sameOperationId(claimOperationIdOf(existing), requirement.claimOperationId)) {
+      return unchangedTaskReservation(false, current)
+    }
+  }
+  if (retainAs === undefined) return unchangedTaskReservation(true, current)
+  if (existing._tag !== "PendingRuntimePosition") {
+    return unchangedTaskReservation(sameCorrelation(positionCorrelationOf(existing), retainAs), current)
+  }
+  return [
+    { admitted: true, createdFor: null },
+    {
+      ...current,
+      positions: new Map(current.positions).set(requirement.taskId, {
+        _tag: "BoundRuntimePosition",
+        correlation: retainAs,
+        proposalId: existing.proposalId
+      })
+    }
+  ]
+}
+
 const reserveReusableTaskPosition = (
   proposal: DeliveryActionProposal,
   requirement: ReservableTaskPositionRequirement,
@@ -226,29 +255,7 @@ const reserveReusableTaskPosition = (
   current: AdmissionState
 ): readonly [TaskPositionReservation, AdmissionState] => {
   const existing = current.positions.get(requirement.taskId)
-  if (existing !== undefined) {
-    if (isPreStartRequirement(requirement)) {
-      if (requirement.mode === "AcquireFresh") return unchangedTaskReservation(false, current)
-      if (!sameOperationId(claimOperationIdOf(existing), requirement.claimOperationId)) {
-        return unchangedTaskReservation(false, current)
-      }
-    }
-    if (retainAs === undefined) return unchangedTaskReservation(true, current)
-    if (existing._tag !== "PendingRuntimePosition") {
-      return unchangedTaskReservation(sameCorrelation(positionCorrelationOf(existing), retainAs), current)
-    }
-    return [
-      { admitted: true, createdFor: null },
-      {
-        ...current,
-        positions: new Map(current.positions).set(requirement.taskId, {
-          _tag: "BoundRuntimePosition",
-          correlation: retainAs,
-          proposalId: existing.proposalId
-        })
-      }
-    ]
-  }
+  if (existing !== undefined) return reserveExistingReusableTaskPosition(requirement, existing, retainAs, current)
   if (isPreStartRequirement(requirement) && requirement.mode === "ReuseExisting") {
     return unchangedTaskReservation(false, current)
   }
