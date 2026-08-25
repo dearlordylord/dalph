@@ -155,7 +155,6 @@ type FixtureOptions = {
   readonly envelopes?: ReadonlyArray<string>
   readonly duplicateThreads?: boolean
   readonly duplicateTurnToken?: boolean
-  readonly enableThreadListing?: boolean
   readonly threadListingUnavailable?: boolean
   readonly listThreadsHidePersisted?: boolean
   readonly listedThreadTokenMode?: "exact" | "tokenless" | "foreign"
@@ -1058,11 +1057,7 @@ describe("Codex Integrator", () => {
       Effect.gen(function* () {
         const integrator = yield* Integrator
         return yield* Effect.flip(integrator.prepare(requestFor(1)))
-      }).pipe(
-        Effect.provide(
-          providerLayer(config, { enableThreadListing: true, preexistingThread: true, threadStarts, turnStarts })
-        )
-      )
+      }).pipe(Effect.provide(providerLayer(config, { preexistingThread: true, threadStarts, turnStarts })))
     )
     expect(failure._tag).toBe("IntegratorCallFailure")
     expect(failure.detail).toContain("unowned")
@@ -1185,11 +1180,7 @@ describe("Codex Integrator", () => {
         const first = yield* Effect.flip(integrator.prepare(requestFor(1)))
         const recovered = yield* integrator.prepare(requestFor(1))
         return { first, recovered }
-      }).pipe(
-        Effect.provide(
-          providerLayer(config, { enableThreadListing: true, loseFirstThreadResponse: true, threadStarts })
-        )
-      )
+      }).pipe(Effect.provide(providerLayer(config, { loseFirstThreadResponse: true, threadStarts })))
     )
     expect(result.first._tag).toBe("IntegratorCallFailure")
     expect(result.recovered._tag).toBe("PreparedCandidate")
@@ -1231,11 +1222,7 @@ describe("Codex Integrator", () => {
         const first = yield* Effect.flip(integrator.prepare(requestFor(1)))
         const second = yield* Effect.flip(integrator.prepare(requestFor(1)))
         return { first, second }
-      }).pipe(
-        Effect.provide(
-          providerLayer(config, { duplicateThreads: true, enableThreadListing: true, loseFirstThreadResponse: true })
-        )
-      )
+      }).pipe(Effect.provide(providerLayer(config, { duplicateThreads: true, loseFirstThreadResponse: true })))
     )
     expect(failure.first._tag).toBe("IntegratorCallFailure")
     expect(failure.second._tag).toBe("IntegratorCallFailure")
@@ -1570,7 +1557,6 @@ describe("Codex Integrator", () => {
       }).pipe(
         Effect.provide(
           providerLayer(listedConfig, {
-            enableThreadListing: true,
             loseFirstThreadResponse: true,
             listedThreadTokenMode: "foreign",
             resumeThreadTokenMode: "foreign"
@@ -1602,7 +1588,6 @@ describe("Codex Integrator", () => {
       }).pipe(
         Effect.provide(
           providerLayer(retryConfig, {
-            enableThreadListing: true,
             loseFirstThreadResponse: true,
             listThreadsHidePersisted: true,
             threadStarts: partialThreadStarts,
@@ -1637,7 +1622,6 @@ describe("Codex Integrator", () => {
           providerLayer(unresolvedConfig, {
             loseFirstThreadResponse: true,
             threadListingUnavailable: true,
-            enableThreadListing: false,
             threadStarts: unavailableThreadStarts,
             turnStarts: unavailableTurnStarts
           })

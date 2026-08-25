@@ -168,6 +168,8 @@ const authorityFixtureLayer = (
       const activityReads = yield* Ref.make(0)
       const app: CodexAppServerService = {
         incarnation: CodexServerIncarnation.make("property-incarnation"),
+        listThreads: () => Effect.succeed([]),
+        listThreadsComplete: true,
         startThread: (cwd, ownedThreadToken) =>
           Ref.set(threadToken, ownedThreadToken).pipe(
             Effect.as({
