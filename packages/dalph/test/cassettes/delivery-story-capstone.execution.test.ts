@@ -101,6 +101,7 @@ const extractDs16PromotionEvidence = (
 
 /** One Integrator boundary is proved by its journal run/result/candidate records and bounded raw captures. */
 interface IntegratorBoundaryEvidence {
+  readonly session: JournalRecordFor<"IntegratorSessionFixed">
   readonly run: JournalRecordFor<"IntegratorRunStarted">
   readonly result: JournalRecordFor<"IntegratorRunResultRecorded">
   readonly candidateGit: JournalRecordFor<"IntegratorRunCandidateGitObserved">
@@ -109,6 +110,7 @@ interface IntegratorBoundaryEvidence {
 }
 
 interface IntegratorBoundaryExpectation {
+  readonly runId: string
   readonly sessionId: string
   readonly acceptedCommit: string
   readonly expectedTargetHead: string
@@ -124,6 +126,13 @@ const integratorBoundaryEvidenceFor = (
   captures: ReadonlyArray<AuthoredObservationCapture>,
   expectation: IntegratorBoundaryExpectation
 ): IntegratorBoundaryEvidence | undefined => {
+  const authoredSessionId = expectation.sessionId.replaceAll(expectation.runId, "$authored-run")
+  const session = exactlyOne(
+    recordsFor(records, "IntegratorSessionFixed").filter(
+      ({ event }) => event.correlation.sessionId === expectation.sessionId
+    ),
+    `${expectation.sessionId} Integrator session`
+  )
   const run = exactlyOne(
     recordsFor(records, "IntegratorRunStarted").filter(
       ({ event }) => event.run.session.sessionId === expectation.sessionId
@@ -152,7 +161,7 @@ const integratorBoundaryEvidenceFor = (
     capturedOccurrencesFor(captures, "IntegratorRequestReceived").filter(
       ({ captureOrder, occurrence }) =>
         captureOrder > expectation.requestCaptureAfter &&
-        occurrence.correlation.sessionId === expectation.sessionId &&
+        occurrence.correlation.sessionId === authoredSessionId &&
         occurrence.correlation.expectedTargetHead === expectation.expectedTargetHead &&
         occurrence.correlation.acceptedResult.commit === expectation.acceptedCommit
     ),
@@ -171,10 +180,29 @@ const integratorBoundaryEvidenceFor = (
     ),
     `${expectation.sessionId} captured candidate Git observation`
   )
-  return { candidateCapture, candidateGit, request, result, run }
+  return { candidateCapture, candidateGit, request, result, run, session }
+}
+
+/** Mirrors the authored runner's run-id and acceptance-digest normalization while retaining every correlation field. */
+const normalizeCorrelationForCapture = <
+  A extends { readonly acceptedResult: { readonly evidenceManifest: { readonly digest: string } } }
+>(
+  correlation: A,
+  runId: string,
+  authoredDigest: string
+): A => {
+  const normalized = JSON.parse(JSON.stringify(correlation).replaceAll(runId, "$authored-run")) as A
+  return {
+    ...normalized,
+    acceptedResult: {
+      ...normalized.acceptedResult,
+      evidenceManifest: { ...normalized.acceptedResult.evidenceManifest, digest: authoredDigest }
+    }
+  }
 }
 
 const capstoneTimeout = 600_000
+const authoredAcceptanceManifestDigest = "1111111111111111111111111111111111111111111111111111111111111111"
 const cachedRun = Effect.runSync(
   Effect.cached(
     runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone).pipe(
@@ -274,15 +302,20 @@ it.effect(
         directParents: [initialHead, acceptedCommit],
         expectedTargetHead: initialHead,
         requestCaptureAfter: 0,
+        runId: String(run.runId),
         sessionId: predecessor.sessionId
       })
       expect(predecessorEvidence).toBeDefined()
       if (predecessorEvidence === undefined) return
       expect(predecessorEvidence.run.event.run.ordinal).toBe(1)
+      expect(initialLineage.position).toBeLessThan(predecessorEvidence.session.position)
+      expect(predecessorEvidence.session.position).toBeLessThan(predecessorEvidence.run.position)
       expect(predecessorEvidence.candidateGit.position).toBeGreaterThan(predecessor.targetLineageObservedAt)
       const predecessorRequest = predecessorEvidence.request
       const predecessorCandidateCapture = predecessorEvidence.candidateCapture
-      expect(predecessorRequest.occurrence.correlation).toEqual(predecessor)
+      expect(predecessorRequest.occurrence.correlation).toEqual(
+        normalizeCorrelationForCapture(predecessor, String(run.runId), authoredAcceptanceManifestDigest)
+      )
       expect(predecessorRequest.occurrence.correlation.queuedAt).toBe(predecessor.queuedAt)
       expect(predecessorRequest.occurrence.correlation.startedAt).toBe(predecessor.startedAt)
 
@@ -306,6 +339,9 @@ it.effect(
       expect(predecessorPromotionAttempt.event.attemptOrdinal).toBe(1)
       expect(predecessorPromotionAttempt.event.reason).toEqual({ _tag: "Initial", observedHeadSha: initialHead })
       expect(predecessorPromotionIntent.position).toBeLessThan(predecessorPromotionAttempt.position)
+      expect(predecessorEvidence.run.position).toBeLessThan(predecessorEvidence.result.position)
+      expect(predecessorEvidence.result.position).toBeLessThan(predecessorEvidence.candidateGit.position)
+      expect(predecessorEvidence.candidateGit.position).toBeLessThan(predecessorPromotionIntent.position)
 
       const ds16 = extractDs16PromotionEvidence(records, captures)
       expect(ds16).toBeDefined()
@@ -400,6 +436,7 @@ it.effect(
         directParents: [changedHead, acceptedCommit],
         expectedTargetHead: changedHead,
         requestCaptureAfter: directionCapture.captureOrder,
+        runId: String(run.runId),
         sessionId: successorCorrelation.sessionId
       })
       expect(successorEvidence).toBeDefined()
@@ -409,7 +446,9 @@ it.effect(
       expect(successorRequest.occurrence.correlation.plannedAttempt.attemptId).toBe(
         successorCorrelation.plannedAttempt.attemptId
       )
-      expect(successorRequest.occurrence.correlation).toEqual(successorCorrelation)
+      expect(successorRequest.occurrence.correlation).toEqual(
+        normalizeCorrelationForCapture(successorCorrelation, String(run.runId), authoredAcceptanceManifestDigest)
+      )
       expect(successorRequest.occurrence.correlation.queuedAt).toBe(predecessor.queuedAt)
       expect(successorRequest.occurrence.correlation.startedAt).toBe(predecessor.startedAt)
       expect(successorRequest.captureOrder).toBeGreaterThan(directionCapture.captureOrder)
@@ -452,6 +491,10 @@ it.effect(
       expect(freshLineageSelection.captureOrder).toBeLessThan(successorRequest.captureOrder)
       expect(direction.position).toBeLessThan(freshLineageIntent.position)
       expect(freshLineage.position).toBeLessThan(successor.position)
+      expect(freshLineage.position).toBeLessThan(successorEvidence.session.position)
+      expect(successorEvidence.session.position).toBeLessThan(successorEvidence.run.position)
+      expect(successorEvidence.run.position).toBeLessThan(successorEvidence.result.position)
+      expect(successorEvidence.result.position).toBeLessThan(successorEvidence.candidateGit.position)
 
       expect(successorEvidence.run.event.run.ordinal).toBe(1)
       expect(successorEvidence.candidateGit.position).toBeGreaterThan(successorCorrelation.targetLineageObservedAt)
@@ -474,6 +517,7 @@ it.effect(
         changedHead,
         acceptedCommit
       ])
+      expect(successorEvidence.candidateGit.position).toBeLessThan(successorPromotionIntent.position)
       expect(successorPromotionAttempt.event.attemptOrdinal).toBe(1)
       expect(successorPromotionAttempt.event.reason).toEqual({ _tag: "Initial", observedHeadSha: changedHead })
       const successorPromotion = exactlyOne(
@@ -650,6 +694,7 @@ it.effect(
         "retained predecessor promotion attempt"
       )
       expect(retainedAttempt.position).toBeLessThan(stale.position)
+      expect(extractDs16PromotionEvidence(run.records, run.observationCaptures)).toBeDefined()
       const omittedRejectedCompareAndSetCaptures = run.observationCaptures.filter(
         (capture) =>
           !(
