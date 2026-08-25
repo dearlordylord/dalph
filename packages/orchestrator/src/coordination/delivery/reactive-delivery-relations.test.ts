@@ -861,6 +861,60 @@ it.effect("coalesces an accepted Running report behind one later complete graph 
   )
 )
 
+it.effect("does not continue or request a progress graph read after the durable limit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("limit-initial-graph"), target)
+      const projected = projectTrackerSnapshot({ revision: "limit-initial-revision", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die(projected)
+      yield* journal.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(graphOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          graphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(graphOperation, projected.snapshot)
+        )
+      )
+      yield* appendExecutorResponsibility(journal)
+      for (const ordinal of [1, 2, 3]) {
+        yield* appendStartOrContinue(journal, ordinal)
+        yield* appendDirectExecutorReport(
+          journal,
+          PlannedAttemptExecutorReport.cases.Running.make({
+            correlation: plannedAttemptExecutorCorrelation(recoveredAttempt)
+          }),
+          ordinal
+        )
+      }
+      const continueTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+        plannedAttempt: recoveredAttempt
+      })
+      const recovery = {
+        readDeliveryProjection: journal.state.get.pipe(
+          Effect.map((journalState) => ({
+            evidence: {
+              _tag: "AvailableDeliveryProjectionEvidence" as const,
+              acceptedAt: journalState.position,
+              facts: [],
+              integrationWaits: []
+            },
+            frontier: { explanations: [], transitions: [continueTransition] }
+          }))
+        ),
+        reconstructedPlannedAttemptPositions: []
+      }
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const current = yield* relation.get
+
+      expect(current.proposedActions).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
 it("does not let a fresh executor start overtake a retained continuation read", () => {
   const recoveredGraphRead = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
     operation: makeTrackerGraphObservationOperation(OperationId.make("retained-continuation-graph"), target),

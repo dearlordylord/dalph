@@ -23,12 +23,21 @@ export interface ExecutorProgressReport {
   readonly correlation: PlannedAttemptExecutorCorrelation
 }
 
-/** The outcome of one complete-graph read intent, including an unresolved call. */
+/** The outcome of one complete-graph read intent, with its position inseparable from the outcome. */
+export type ExecutorProgressGraphReadObservation =
+  | { readonly _tag: "Unresolved" }
+  | {
+      readonly _tag: "Observed"
+      readonly outcome: "Complete" | "Unchanged" | "Failed"
+      readonly observedAt: JournalPosition
+    }
+
+/** One complete-graph read intent and its run-scoped observation envelope. */
 export interface ExecutorProgressGraphRead {
   readonly intentAt: JournalPosition
-  readonly observation: "Complete" | "Unchanged" | "Failed" | null
-  readonly observedAt: JournalPosition | null
+  readonly observation: ExecutorProgressGraphReadObservation
   readonly operationId: OperationId
+  readonly runId: RunId
   readonly target: TrackerTarget
 }
 
@@ -115,11 +124,12 @@ const readCoversReport = (
   read: ExecutorProgressGraphRead,
   target: TrackerTarget
 ): boolean =>
+  read.runId === report.correlation.runId &&
   sameTarget(read.target, target) &&
   read.intentAt > report.acceptedAt &&
-  read.observedAt !== null &&
-  read.observedAt > read.intentAt &&
-  (read.observation === "Complete" || read.observation === "Unchanged")
+  read.observation._tag === "Observed" &&
+  read.observation.observedAt > read.intentAt &&
+  (read.observation.outcome === "Complete" || read.observation.outcome === "Unchanged")
 
 const unresolvedReadAfter = (
   report: ExecutorProgressReport,
@@ -129,9 +139,10 @@ const unresolvedReadAfter = (
   reads
     .filter(
       (read) =>
+        read.runId === report.correlation.runId &&
         sameTarget(read.target, target) &&
         read.intentAt > report.acceptedAt &&
-        read.observation === null &&
+        read.observation._tag === "Unresolved" &&
         !readCoversReport(report, read, target)
     )
     .toSorted((left, right) => positionOf(right.intentAt) - positionOf(left.intentAt))[0]
@@ -241,9 +252,9 @@ export const executorProgressGraphReadInputOf = (
         ? [
             {
               intentAt: position,
-              observation: null,
-              observedAt: null,
+              observation: { _tag: "Unresolved" },
               operationId: event.operation.operationId,
+              runId,
               target: event.operation.target
             }
           ]
@@ -251,7 +262,8 @@ export const executorProgressGraphReadInputOf = (
   )
   const graphReads = intents.map((intent) => {
     const observation = records.find(
-      ({ event, position }) =>
+      ({ event, position, runId: observationRunId }) =>
+        (observationRunId === undefined || observationRunId === runId) &&
         position > intent.intentAt &&
         event._tag === "TaskTrackerFactsObserved" &&
         event.operationId === intent.operationId &&
@@ -259,17 +271,16 @@ export const executorProgressGraphReadInputOf = (
           event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed" ||
           event.observation._tag === "TaskTrackerFactsReadFailed")
     )
-    const outcome: ExecutorProgressGraphRead["observation"] =
-      observation === undefined
-        ? null
-        : observation.event._tag === "TaskTrackerFactsObserved" &&
-            observation.event.observation._tag === "CompleteTaskTrackerFacts"
-          ? "Complete"
-          : observation.event._tag === "TaskTrackerFactsObserved" &&
-              observation.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
-            ? "Unchanged"
-            : "Failed"
-    return { ...intent, observation: outcome, observedAt: observation?.position ?? null }
+    if (observation === undefined || observation.event._tag !== "TaskTrackerFactsObserved") {
+      return { ...intent, observation: { _tag: "Unresolved" } as const }
+    }
+    const outcome: "Complete" | "Unchanged" | "Failed" =
+      observation.event.observation._tag === "CompleteTaskTrackerFacts"
+        ? "Complete"
+        : observation.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+          ? "Unchanged"
+          : "Failed"
+    return { ...intent, observation: { _tag: "Observed", outcome, observedAt: observation.position } as const }
   })
   return {
     commands: records.flatMap(({ event, position }) =>
