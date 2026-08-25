@@ -142,17 +142,16 @@ const ensureThread = Effect.fn("CodexIntegrator.ensureThread")(function* (
     }
     return { record, thread }
   }
-  const listed = app.listThreads === undefined ? undefined : yield* boundary(app.listThreads())
-  if (listed !== undefined) {
+  if (app.listThreads === undefined || app.listThreadsComplete !== true) {
+    return yield* Effect.fail(providerFailure("persistent thread list is unavailable or incomplete"))
+  }
+  const listed = yield* boundary(app.listThreads())
+  {
     const matches = listed.filter((thread) => thread.cwd === record.candidatePath)
     if (matches.length > 1)
       return yield* Effect.fail(providerFailure("persistent thread list has duplicate candidate cwd"))
     const matching = matches[0]
     if (matching !== undefined) return yield* adoptListedThread(app, record, store, matching)
-  } else if (record.threadStartIntent) {
-    return yield* Effect.fail(
-      providerFailure("thread/start response is unresolved and persistent thread read is unavailable")
-    )
   }
   return yield* startOwnedThread(app, record, store)
 })

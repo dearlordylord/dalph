@@ -216,6 +216,8 @@ export interface CodexAppServerService {
   ) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   /** Complete persistent-thread identity read used to reconcile an ambiguous thread/start. */
   readonly listThreads?: () => Effect.Effect<ReadonlyArray<CodexThreadSnapshot>, CodexAppServerFailure>
+  /** True only when the server completed the full persistent-thread listing. */
+  readonly listThreadsComplete?: boolean
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
     threadId: CodexThreadId,
@@ -2654,6 +2656,7 @@ export const codexAppServerLayer = (
         serverPid: childPid,
         startThread,
         listThreads,
+        listThreadsComplete: true,
         readThread,
         resumeThread,
         startTurn,

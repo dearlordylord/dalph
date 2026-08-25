@@ -156,6 +156,7 @@ type FixtureOptions = {
   readonly duplicateThreads?: boolean
   readonly duplicateTurnToken?: boolean
   readonly enableThreadListing?: boolean
+  readonly threadListingUnavailable?: boolean
   readonly listThreadsHidePersisted?: boolean
   readonly listedThreadTokenMode?: "exact" | "tokenless" | "foreign"
   readonly preexistingThread?: boolean
@@ -288,7 +289,9 @@ const fixtureLayer = (
             }
             return thread
           }),
-        ...(options.enableThreadListing === true ? { listThreads } : {}),
+        ...(options.threadListingUnavailable === true
+          ? {}
+          : { listThreads, listThreadsComplete: options.listThreadsHidePersisted !== true }),
         readThread: () =>
           Effect.gen(function* () {
             const current = yield* Ref.get(turns)
@@ -1588,24 +1591,31 @@ describe("Codex Integrator", () => {
       ),
       repository
     })
+    const partialThreadStarts = { value: 0 }
+    const partialTurnStarts = { value: 0 }
     const retry = await Effect.runPromise(
       Effect.gen(function* () {
         const integrator = yield* Integrator
         const first = yield* Effect.flip(integrator.prepare(requestFor(1)))
-        const second = yield* integrator.prepare(requestFor(1))
+        const second = yield* Effect.flip(integrator.prepare(requestFor(1)))
         return { first, second }
       }).pipe(
         Effect.provide(
           providerLayer(retryConfig, {
             enableThreadListing: true,
             loseFirstThreadResponse: true,
-            listThreadsHidePersisted: true
+            listThreadsHidePersisted: true,
+            threadStarts: partialThreadStarts,
+            turnStarts: partialTurnStarts
           })
         )
       )
     )
     expect(retry.first._tag).toBe("IntegratorCallFailure")
-    expect(retry.second._tag).toBe("PreparedCandidate")
+    expect(retry.second._tag).toBe("IntegratorCallFailure")
+    expect(retry.second.detail).toContain("incomplete")
+    expect(partialThreadStarts.value).toBe(0)
+    expect(partialTurnStarts.value).toBe(0)
 
     const unresolvedConfig = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
@@ -1615,17 +1625,29 @@ describe("Codex Integrator", () => {
       ),
       repository
     })
+    const unavailableThreadStarts = { value: 0 }
+    const unavailableTurnStarts = { value: 0 }
     const unresolved = await Effect.runPromise(
       Effect.gen(function* () {
         const integrator = yield* Integrator
         yield* Effect.flip(integrator.prepare(requestFor(1)))
         return yield* Effect.flip(integrator.prepare(requestFor(1)))
       }).pipe(
-        Effect.provide(providerLayer(unresolvedConfig, { loseFirstThreadResponse: true, enableThreadListing: false }))
+        Effect.provide(
+          providerLayer(unresolvedConfig, {
+            loseFirstThreadResponse: true,
+            threadListingUnavailable: true,
+            enableThreadListing: false,
+            threadStarts: unavailableThreadStarts,
+            turnStarts: unavailableTurnStarts
+          })
+        )
       )
     )
     expect(unresolved._tag).toBe("IntegratorCallFailure")
-    expect(unresolved.detail).toContain("unresolved")
+    expect(unresolved.detail).toContain("unavailable")
+    expect(unavailableThreadStarts.value).toBe(0)
+    expect(unavailableTurnStarts.value).toBe(0)
   })
 
   it("rejects retry ordinals without a sealed predecessor and above the retry limit", async () => {
