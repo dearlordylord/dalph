@@ -11,7 +11,7 @@ import {
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Ref } from "effect"
+import { Effect, Fiber, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
@@ -30,6 +30,7 @@ import {
   makeObservedDeliveryActionLease,
   type DeliveryRuntimeLiveOwnerSource
 } from "./delivery-runtime-observation.js"
+import { deliveryStatusSignalOf } from "./delivery-status.js"
 
 const runId = RunId.make("delivery-runtime-observation-test")
 const taskId = TaskId.make("owner-task")
@@ -176,10 +177,27 @@ it.effect("closes a not-ready observation once and preserves that final state wh
   Effect.gen(function* () {
     const controller = yield* makeDeliveryRuntimeObservationController()
     yield* controller.close
-    expect(yield* controller.signal.get).toMatchObject({ _tag: "Closed", final: null })
+    expect(yield* controller.signal.get).toMatchObject({ _tag: "Closed", final: { _tag: "NotReady" } })
 
     yield* controller.close
-    expect(yield* controller.signal.get).toMatchObject({ _tag: "Closed", final: null })
+    expect(yield* controller.signal.get).toMatchObject({ _tag: "Closed", final: { _tag: "NotReady" } })
+  })
+)
+
+it.effect("closes the status observer with the last published not-ready value", () =>
+  Effect.gen(function* () {
+    const controller = yield* makeDeliveryRuntimeObservationController()
+    const subject = { _tag: "Run" as const, runId }
+    const status = yield* deliveryStatusSignalOf(controller.signal, subject)
+    const observed = yield* status.changes.pipe(Stream.take(2), Stream.runCollect, Effect.forkChild)
+    yield* Effect.yieldNow
+
+    yield* controller.close
+
+    expect(Array.from(yield* Fiber.join(observed))).toEqual([
+      { _tag: "DeliveryStatusNotReady", subject },
+      { _tag: "DeliveryStatusClosed", subject, final: { _tag: "DeliveryStatusNotReady", subject } }
+    ])
   })
 )
 

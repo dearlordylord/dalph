@@ -659,6 +659,18 @@ controllers, or new workflow authority. The bootstrap process owns its signal
 across ordinary Run activations; process loss discards it.
 _Avoid_: Delivery relation authority, persisted runtime state, workflow history
 
+**Delivery status read**:
+The passive Run- or task-scoped description derived from one current delivery
+runtime observation. Its canonical entries distinguish dependency waits,
+tracker-fact waits, task-work capacity waits, proposed actions, live actions,
+accepted-fact publication waits, integration-target waits, unavailable or
+conflicting evidence, settlements, and relinquishments. It may report that the
+observation is not ready, that a task is absent from an established graph, or
+that the observation is closed; it never calls a tracker, Git, executor, or
+journal, mutates a controller, allocates a resource, or persists a status.
+_Avoid_: Workflow authority, action command, live owner, persisted status,
+history occurrence
+
 **Run quiescence**:
 The process-local condition for one Run in which no delivery action is currently
 executable and no admitted delivery action is still running. It does not prove

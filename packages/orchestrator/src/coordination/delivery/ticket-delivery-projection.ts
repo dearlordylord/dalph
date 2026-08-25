@@ -196,10 +196,12 @@ const evidenceIdentity = (evidence: TicketDeliveryEvidence): string =>
   })
 
 const endedDispositionTags: ReadonlySet<ResponsibilityFreshFacts["disposition"]["_tag"]> = new Set([
+  "CancelledAttemptSettled",
   "FinalOutcome",
   "PlannedAttemptExecutorWorkTerminal",
   "Relinquished",
   "Settled",
+  "StoppedAttemptSettled",
   "TaskExternalSuccessSettled"
 ])
 
@@ -209,7 +211,9 @@ const responsibilityEnded = (facts: ResponsibilityFreshFacts): boolean =>
 const responsibilityRetainsTerminalKnowledge = (facts: ResponsibilityFreshFacts): boolean =>
   facts.disposition._tag === "FinalOutcome" ||
   facts.disposition._tag === "PlannedAttemptExecutorWorkTerminal" ||
-  facts.disposition._tag === "Relinquished"
+  facts.disposition._tag === "Relinquished" ||
+  facts.disposition._tag === "CancelledAttemptSettled" ||
+  facts.disposition._tag === "StoppedAttemptSettled"
 
 const evidenceStillDescribesDelivery = (evidence: TicketDeliveryEvidence): boolean =>
   evidence._tag !== "ResponsibilityFacts" ||

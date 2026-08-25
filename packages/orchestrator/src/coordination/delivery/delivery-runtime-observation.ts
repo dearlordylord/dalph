@@ -198,6 +198,9 @@ export interface DeliveryRuntimeReadyObservation extends DeliveryRuntimeReadyFie
   readonly _tag: "Ready"
 }
 
+type DeliveryRuntimeNotReadyObservation = { readonly _tag: "NotReady" }
+type DeliveryRuntimeFinalObservation = DeliveryRuntimeReadyObservation | DeliveryRuntimeNotReadyObservation
+
 interface DeliveryRuntimeObservationObserverService {
   readonly observe: (observation: DeliveryRuntimeReadyObservation) => Effect.Effect<void>
 }
@@ -209,7 +212,7 @@ export const DeliveryRuntimeObservationObserver = Context.Reference<DeliveryRunt
 )
 
 export type DeliveryRuntimeObservationState = Data.TaggedEnum<{
-  Closed: { readonly final: DeliveryRuntimeReadyObservation | null }
+  Closed: { readonly final: DeliveryRuntimeFinalObservation | null }
   NotReady: Record<never, never>
   Ready: DeliveryRuntimeReadyFields
 }>
@@ -247,7 +250,7 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
         DeliveryRuntimeObservationState.Closed({
           final: Match.valueTags(current, {
             Closed: ({ final }) => final,
-            NotReady: () => null,
+            NotReady: () => DeliveryRuntimeObservationState.NotReady(),
             Ready: (ready) => ready
           })
         })

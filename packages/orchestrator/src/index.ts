@@ -741,8 +741,30 @@ export {
 export {
   DeliveryRuntimeObservationObserver,
   type DeliveryRuntimeLiveOwnerSnapshot,
-  type DeliveryRuntimeReadyObservation
+  type DeliveryRuntimeReadyObservation,
+  type DeliveryRuntimeObservationState
 } from "./coordination/delivery/delivery-runtime-observation.js"
+export {
+  DeliveryStatusSubject,
+  DeliveryStatusRunMismatch,
+  DeliveryStatusRunIdentityUnavailable,
+  DeliveryStatusProjectionConflict,
+  deliveryStatusOf,
+  deliveryStatusSignalOf,
+  observeDeliveryStatus,
+  type CurrentDeliveryStatus,
+  type DeliveryStatusClassification,
+  type DeliveryStatusEntry,
+  type DeliveryStatusEvidenceConflictEntry,
+  type DeliveryStatusEvidenceUnavailableEntry,
+  type DeliveryStatusGraphSource,
+  type DeliveryStatusProjectionError,
+  type DeliveryStatusSnapshot,
+  type DeliveryStatusTrackerFact,
+  type DeliveryStatusTrackerFactWait,
+  type DeliveryStatusUnavailableEvidence,
+  type DeliveryStatusWakeCondition
+} from "./coordination/delivery/delivery-status.js"
 export {
   DeliveryControlPolicyMissing,
   makeReactiveDeliveryRelationsLayer
