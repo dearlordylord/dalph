@@ -248,6 +248,7 @@ it.effect(
       const changedHead = "2222222222222222222222222222222222222222"
       const initialCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
       const successorCandidateCommit = "dddddddddddddddddddddddddddddddddddddddd"
+      const trackerTarget = "ds-probe-target"
       expect(recordsFor(records, "TargetPromotionAttemptIntended")).toHaveLength(2)
       expect(recordsFor(records, "TargetPromotionStale")).toHaveLength(1)
       expect(capturedOccurrencesFor(captures, "TargetPromotionCompareAndSetReturned")).toHaveLength(2)
@@ -614,7 +615,7 @@ it.effect(
       expect(focusedObservation.facts.targetMembership).toBe("Member")
       expect(focusedObservation.facts.taskId).toBe("A")
       expect(focusedObservation.facts.taskRevision).toBe(replacementIntent.event.claim.plannedAttempt.taskRevision)
-      expect(focusedObservation.facts.target).toEqual(successorCorrelation.integrationTarget)
+      expect(focusedObservation.facts.target).toBe(trackerTarget)
       expect(focusedObservation.facts.unfinishedPrerequisiteTaskIds).toEqual([])
       const deletionIntent = exactlyOne(
         recordsFor(records, "CompletionClaimDeletionIntended").filter(
