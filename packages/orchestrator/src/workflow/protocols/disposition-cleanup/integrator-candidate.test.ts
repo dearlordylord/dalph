@@ -24,10 +24,14 @@ import {
   IntegratorSessionId
 } from "../integrator/events.js"
 import {
+  BranchCleanupAuthorization,
+  BranchCleanupEvidenceRevision,
+  BranchCleanupOwner,
   IntegratorCandidateCleanupDisposition,
   IntegratorCandidateCleanupAuthorization,
   IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupOwner,
+  CleanupMutationOrdinal,
   CleanupObservationOrdinal
 } from "./disposition.js"
 import {
@@ -37,6 +41,7 @@ import {
   IntegratorCandidateCleanupContradictedEvent,
   IntegratorCandidateCleanupObservationIntendedEvent,
   IntegratorCandidateCleanupBoundary,
+  unavailableIntegratorCandidateProviderAuthority,
   integratorCandidateCleanupTestLayer,
   runIntegratorCandidateCleanup,
   TestIntegratorCandidateCleanupBoundary
@@ -47,6 +52,7 @@ import {
   attempt,
   authorization as worktreeAuthorization,
   baseSha,
+  disposition as plannedDisposition,
   runId,
   successor as replacementSuccessor
 } from "./fixtures.js"
@@ -56,6 +62,7 @@ import {
   activateDispositionCleanup,
   appendDerivedCleanupAuthorizations,
   makeDispositionCleanupActivation,
+  runDispositionCleanupLoop,
   selectCleanupResponsibilitySet
 } from "./loop.js"
 import { deriveCleanupAuthorizations } from "./activation.js"
@@ -110,6 +117,20 @@ const authorization = IntegratorCandidateCleanupAuthorization.make({
   writerQuiescent: true
 })
 
+const branchAuthorization = BranchCleanupAuthorization.make({
+  causalPredecessors: [worktreeAuthorization.operationId],
+  disposition: plannedDisposition,
+  evidenceRevision: BranchCleanupEvidenceRevision.make(1),
+  expectedHead: baseSha,
+  locator: attempt.branch,
+  observationAt: JournalPosition.make(17),
+  observationOperationId: OperationId.make("issue-69-branch-observation"),
+  operationId: OperationId.make("issue-69-branch-cleanup"),
+  owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
+  worktreeCleanupOperationId: worktreeAuthorization.operationId,
+  writerQuiescent: true
+})
+
 const present = IntegratorCandidateCleanupObservation.cases.Present.make({
   locator: predecessor.candidateResource,
   revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
@@ -150,6 +171,41 @@ it.effect("reports an unavailable private revision from the controlled boundary"
     expect(result._tag).toBe("Failure")
   }).pipe(
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("keeps provider-neutral candidate authority unavailable and scopes loop proposals", () =>
+  Effect.gen(function* () {
+    const authority = unavailableIntegratorCandidateProviderAuthority
+    const reader = authority.readEvidenceRevision
+    expect(reader).toBeDefined()
+    if (reader === undefined) return
+    const revisionRead = yield* Effect.exit(reader({ locator: authorization.locator, predecessor }))
+    expect(revisionRead._tag).toBe("Failure")
+
+    const observed = yield* authority.observe(authorization)
+    expect(observed._tag).toBe("Unreadable")
+    const removed = yield* authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    expect(removed._tag).toBe("Unknown")
+
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-unavailable-provider-authority"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const loop = yield* runDispositionCleanupLoop(runId, {
+      branch: [branchAuthorization],
+      candidate: [authorization],
+      worktree: []
+    })
+    expect(loop.branchOutcomes.map(({ _tag }) => _tag)).toEqual(["Preserved"])
+    expect(loop.candidateOutcomes.map(({ _tag }) => _tag)).toEqual(["Preserved"])
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [], mutations: [] })),
+    Effect.provide(branchCleanupTestLayer({ observations: [], mutations: [] })),
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
     Effect.provide(memoryJournalTestLayer)
   )
 )
