@@ -240,6 +240,7 @@ maintained DS-14–DS-17 cassette chronology.
 cassette|authored:deliveryInvariantStoryCapstone
 cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
 cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality
+cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#rejects DS16 evidence without the rejected CAS attempt or with a pre-request stale read
 DS-01|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
 DS-02|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
 DS-03|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
