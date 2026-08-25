@@ -42,8 +42,8 @@ export const taskOrderAt = (position: DeliveryTaskPosition): StatusTaskOrder => 
 export const canonicalIdentity = (parts: ReadonlyArray<IdentityPart>): string =>
   parts
     .map((part) => {
-      const value =
-        typeof part === "number" ? (Object.is(part, -0) ? "-0" : Number.isNaN(part) ? "NaN" : String(part)) : part
+      // Domain callers provide finite branded ordinals/positions; numeric zero has one identity.
+      const value = typeof part === "number" ? String(part) : part
       return `${typeof part === "number" ? "n" : "s"}${value.length}:${value}`
     })
     .join("")
@@ -68,9 +68,11 @@ const subjectKey = (subject: DeliveryStatusSubject): string =>
     ? canonicalIdentity(["Run", subject.runId])
     : canonicalIdentity(["Task", subject.runId, subject.taskId])
 
+const workflowResponsibilityIdentity = (responsibility: WorkflowResponsibilityEntry): string =>
+  canonicalIdentity(["workflow", workflowResponsibilityKey(responsibility)])
+
 const obligationIdentity = (obligation: ExactWorkflowObligation): string => {
-  if (obligation._tag === "WorkflowResponsibility")
-    return canonicalIdentity(["workflow", workflowResponsibilityKey(obligation.responsibility)])
+  if (obligation._tag === "WorkflowResponsibility") return workflowResponsibilityIdentity(obligation.responsibility)
   if (obligation._tag === "AcceptedAwaitingIntegration") {
     return canonicalIdentity([
       "attempt",
@@ -237,9 +239,7 @@ export const statusEntryIdentity = Match.typeTags<DeliveryStatusEntry, string>()
       entry.evidence._tag === "ProposalDerivationIssue"
         ? proposalDerivationIssueIdentity(entry.evidence.issue)
         : entry.evidence._tag === "ResponsibilityFacts"
-          ? entry.responsibility === null
-            ? "subject"
-            : obligationIdentity(entry.responsibility)
+          ? workflowResponsibilityIdentity(entry.evidence.facts.responsibility)
           : canonicalIdentity([
               entry.evidence.wait._tag,
               plannedAttemptExecutorCorrelationKey(
@@ -389,13 +389,8 @@ const structuralOrderBefore = comparisonRank(structuralOrderBeforeValue)
 const structuralOrderAfter = comparisonRank(1)
 
 const compareOrderPosition = (left: StructuralOrderPosition, right: StructuralOrderPosition): number =>
-  left._tag === "MissingOrderPosition"
-    ? right._tag === "MissingOrderPosition"
-      ? 0
-      : structuralOrderBefore
-    : right._tag === "MissingOrderPosition"
-      ? structuralOrderAfter
-      : left.value - right.value
+  (left._tag === "MissingOrderPosition" ? structuralOrderBeforeValue : left.value) -
+  (right._tag === "MissingOrderPosition" ? structuralOrderBeforeValue : right.value)
 
 const isStructuralOrderPosition = (value: StructuralOrderToken): value is StructuralOrderPosition =>
   typeof value === "object"

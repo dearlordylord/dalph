@@ -1,11 +1,9 @@
 /* eslint-disable functional/immutable-data -- local projection scratch state never escapes the read. */
 import { plannedAttemptExecutorCorrelation, type TaskId } from "@dalph/contracts"
 import { Option, Schema } from "effect"
-import { deliveryProposalOrderTaskId } from "./delivery-action-proposal.js"
-import type { DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
 import type { StatusTaskOrder } from "./delivery-status-order.js"
 import type {
-  DeliveryRuntimeEvaluation,
+  ExactWorkflowObligation,
   TicketDelivery,
   TicketDeliveryPlacement,
   TicketDeliveryStanding
@@ -23,26 +21,48 @@ import {
   addDependencyEntry,
   canonicalIdentity,
   emptyDependencyConflictFor,
-  integrationConfigurationStandingFor,
-  integrationDependencyStandingFor,
-  integrationTargetStandingFor,
-  integrationTrackerStandingFor,
   includeForSubject,
   integrationTrackerFactForWait,
   obligationForEvidenceConflict,
   obligationForPlannedAttempt,
   obligationForResponsibility,
-  ownerIsSettled,
   queuedIntegrationResponsibilityFor,
-  runWideTaskOrder,
-  targetPromotionConfigurationStandingFor,
   taskStatusSubject,
-  taskOrderOrConflictFor,
   trackerFactForDisposition,
   unavailableFromFacts,
   type OrderedStatusEntry
 } from "./delivery-status-support.js"
 import { addAcceptedStandingSettlementEntryFor } from "./delivery-status-settlement.js"
+
+const nonEmptyTaskIdsFor = (taskIds: ReadonlyArray<TaskId>): readonly [TaskId, ...ReadonlyArray<TaskId>] | null => {
+  const [first, ...rest] = taskIds
+  return first === undefined ? null : [first, ...rest]
+}
+
+const acceptedAwaitingIntegrationFor = (
+  delivery: TicketDelivery,
+  plannedAttempt: IntegrationWaitStanding["wait"]["plannedAttempt"]
+): Extract<ExactWorkflowObligation, { readonly _tag: "AcceptedAwaitingIntegration" }> | null => {
+  const responsibility = obligationForPlannedAttempt(delivery, plannedAttempt)
+  return responsibility?._tag === "AcceptedAwaitingIntegration" ? responsibility : null
+}
+
+const startedIntegrationFor = (
+  delivery: TicketDelivery,
+  plannedAttempt: IntegrationWaitStanding["wait"]["plannedAttempt"]
+): Extract<ExactWorkflowObligation, { readonly _tag: "StartedIntegration" }> | null => {
+  const responsibility = obligationForPlannedAttempt(delivery, plannedAttempt)
+  return responsibility?._tag === "StartedIntegration" ? responsibility : null
+}
+
+const queuedIntegrationFor = (
+  delivery: TicketDelivery,
+  plannedAttempt: IntegrationWaitStanding["wait"]["plannedAttempt"]
+): Extract<ExactWorkflowObligation, { readonly _tag: "QueuedIntegration" }> | null => {
+  const responsibility = queuedIntegrationResponsibilityFor(delivery, plannedAttempt)
+  return responsibility?._tag === "QueuedIntegration" ? responsibility : null
+}
+
 export const dependencyEntriesFor = (
   subject: DeliveryStatusSubject,
   taskId: TaskId,
@@ -53,10 +73,11 @@ export const dependencyEntriesFor = (
   if (!includeForSubject(subject, taskId) || placement._tag !== "GraphExcluded") return null
   for (const reason of placement.reasons) {
     if (reason._tag === "PrerequisitesIncomplete") {
-      if (reason.prerequisiteTaskIds.length === 0) {
+      const prerequisiteTaskIds = nonEmptyTaskIdsFor(reason.prerequisiteTaskIds)
+      if (prerequisiteTaskIds === null) {
         return emptyDependencyConflictFor(subject, taskId, "GraphExcluded")
       }
-      addDependencyEntry(subject, taskId, reason.prerequisiteTaskIds, placement, taskOrder, entries)
+      addDependencyEntry(subject, taskId, prerequisiteTaskIds, placement, taskOrder, entries)
     }
   }
   return null
@@ -107,17 +128,20 @@ const addUnavailableEvidenceEntryFor = (
     taskOrder
   )
 }
+type IntegrationWaitStanding = Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>
+type IntegrationStandingFor<Tag extends IntegrationWaitStanding["wait"]["_tag"]> = IntegrationWaitStanding & {
+  readonly wait: Extract<IntegrationWaitStanding["wait"], { readonly _tag: Tag }>
+}
+
 const addIntegrationConfigurationEvidenceEntryFor = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
-  standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>,
+  standing: IntegrationStandingFor<"IntegrationConfigurationWait">,
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const typedStanding = integrationConfigurationStandingFor(standing)
-  if (typedStanding === null) return
-  const responsibility = obligationForPlannedAttempt(delivery, typedStanding.wait.plannedAttempt)
-  if (responsibility?._tag !== "AcceptedAwaitingIntegration") return
+  const responsibility = acceptedAwaitingIntegrationFor(delivery, standing.wait.plannedAttempt)
+  if (responsibility === null) return
   addEntry(
     entries,
     {
@@ -125,7 +149,7 @@ const addIntegrationConfigurationEvidenceEntryFor = (
       classification: "Blocked",
       subject: taskStatusSubject(subject, delivery.taskId),
       responsibility,
-      evidence: { _tag: "IntegrationConfigurationWait", wait: typedStanding.wait, standing: typedStanding }
+      evidence: { _tag: "IntegrationConfigurationWait", wait: standing.wait, standing }
     },
     taskOrder
   )
@@ -133,14 +157,12 @@ const addIntegrationConfigurationEvidenceEntryFor = (
 const addTargetPromotionConfigurationEvidenceEntryFor = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
-  standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>,
+  standing: IntegrationStandingFor<"TargetPromotionConfigurationWait">,
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const typedStanding = targetPromotionConfigurationStandingFor(standing)
-  if (typedStanding === null) return
-  const responsibility = obligationForPlannedAttempt(delivery, typedStanding.wait.plannedAttempt)
-  if (responsibility?._tag !== "StartedIntegration") return
+  const responsibility = startedIntegrationFor(delivery, standing.wait.plannedAttempt)
+  if (responsibility === null) return
   addEntry(
     entries,
     {
@@ -148,7 +170,7 @@ const addTargetPromotionConfigurationEvidenceEntryFor = (
       classification: "Blocked",
       subject: taskStatusSubject(subject, delivery.taskId),
       responsibility,
-      evidence: { _tag: "TargetPromotionConfigurationWait", wait: typedStanding.wait, standing: typedStanding }
+      evidence: { _tag: "TargetPromotionConfigurationWait", wait: standing.wait, standing }
     },
     taskOrder
   )
@@ -156,20 +178,13 @@ const addTargetPromotionConfigurationEvidenceEntryFor = (
 const addIntegrationDependencyEntryFor = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
-  standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>,
+  standing: IntegrationStandingFor<"IntegrationDependencyWait">,
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const typedStanding = integrationDependencyStandingFor(standing)
-  if (typedStanding === null) return
-  addDependencyEntry(
-    subject,
-    delivery.taskId,
-    typedStanding.wait.prerequisiteTaskIds,
-    typedStanding,
-    taskOrder,
-    entries
-  )
+  const prerequisiteTaskIds = nonEmptyTaskIdsFor(standing.wait.prerequisiteTaskIds)
+  if (prerequisiteTaskIds === null) return
+  addDependencyEntry(subject, delivery.taskId, prerequisiteTaskIds, standing, taskOrder, entries)
 }
 const relinquishmentSupportingFor = (
   responsibility: WorkflowResponsibilityEntry
@@ -210,14 +225,9 @@ const addResponsibilityEntriesFor = (
   entries: Array<OrderedStatusEntry>
 ): void => {
   if (standing.facts.disposition._tag === "DependencyWait") {
-    addDependencyEntry(
-      subject,
-      delivery.taskId,
-      standing.facts.disposition.prerequisiteTaskIds,
-      standing,
-      taskOrder,
-      entries
-    )
+    const prerequisiteTaskIds = nonEmptyTaskIdsFor(standing.facts.disposition.prerequisiteTaskIds)
+    if (prerequisiteTaskIds === null) return
+    addDependencyEntry(subject, delivery.taskId, prerequisiteTaskIds, standing, taskOrder, entries)
   }
   addTrackerFactEntryFor(subject, delivery, standing, taskOrder, entries)
   addUnavailableEvidenceEntryFor(subject, delivery, standing, taskOrder, entries)
@@ -228,15 +238,13 @@ const addResponsibilityEntriesFor = (
 const addIntegrationTrackerEntryFor = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
-  standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>,
+  standing: IntegrationStandingFor<"IntegrationTrackerFactsWait" | "IntegrationTaskClaimConstraint">,
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const typedStanding = integrationTrackerStandingFor(standing)
-  if (typedStanding === null) return
-  const responsibility = obligationForPlannedAttempt(delivery, typedStanding.wait.plannedAttempt)
-  const trackerFact = integrationTrackerFactForWait(typedStanding.wait)
+  const responsibility = obligationForPlannedAttempt(delivery, standing.wait.plannedAttempt)
   if (responsibility === null) return
+  const trackerFact = integrationTrackerFactForWait(standing.wait)
   addEntry(
     entries,
     {
@@ -246,7 +254,7 @@ const addIntegrationTrackerEntryFor = (
       responsibility,
       fact: trackerFact.fact,
       wakeCondition: trackerFact.wakeCondition,
-      standing: typedStanding
+      standing
     },
     taskOrder
   )
@@ -255,25 +263,23 @@ const addIntegrationTrackerEntryFor = (
 const addIntegrationTargetEntryFor = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
-  standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>,
+  standing: IntegrationStandingFor<"IntegrationTargetWait">,
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const typedStanding = integrationTargetStandingFor(standing)
-  if (typedStanding === null) return
-  const responsibility = queuedIntegrationResponsibilityFor(delivery, typedStanding.wait.plannedAttempt)
-  if (responsibility?._tag !== "QueuedIntegration") return
+  const responsibility = queuedIntegrationFor(delivery, standing.wait.plannedAttempt)
+  if (responsibility === null) return
   addEntry(
     entries,
     {
       _tag: "IntegrationTargetWait",
       classification: "Waiting",
       subject: taskStatusSubject(subject, delivery.taskId),
-      plannedAttempt: typedStanding.wait.plannedAttempt,
+      plannedAttempt: standing.wait.plannedAttempt,
       integrationTarget: responsibility.responsibility.integrationTarget,
       responsibility,
-      wait: typedStanding.wait,
-      standing: typedStanding
+      wait: standing.wait,
+      standing
     },
     taskOrder
   )
@@ -286,11 +292,32 @@ const addIntegrationEntriesFor = (
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  addIntegrationDependencyEntryFor(subject, delivery, standing, taskOrder, entries)
-  addIntegrationConfigurationEvidenceEntryFor(subject, delivery, standing, taskOrder, entries)
-  addTargetPromotionConfigurationEvidenceEntryFor(subject, delivery, standing, taskOrder, entries)
-  addIntegrationTrackerEntryFor(subject, delivery, standing, taskOrder, entries)
-  addIntegrationTargetEntryFor(subject, delivery, standing, taskOrder, entries)
+  if (standing.wait._tag === "IntegrationDependencyWait") {
+    addIntegrationDependencyEntryFor(subject, delivery, { ...standing, wait: standing.wait }, taskOrder, entries)
+  } else if (standing.wait._tag === "IntegrationConfigurationWait") {
+    addIntegrationConfigurationEvidenceEntryFor(
+      subject,
+      delivery,
+      { ...standing, wait: standing.wait },
+      taskOrder,
+      entries
+    )
+  } else if (standing.wait._tag === "TargetPromotionConfigurationWait") {
+    addTargetPromotionConfigurationEvidenceEntryFor(
+      subject,
+      delivery,
+      { ...standing, wait: standing.wait },
+      taskOrder,
+      entries
+    )
+  } else if (
+    standing.wait._tag === "IntegrationTrackerFactsWait" ||
+    standing.wait._tag === "IntegrationTaskClaimConstraint"
+  ) {
+    addIntegrationTrackerEntryFor(subject, delivery, { ...standing, wait: standing.wait }, taskOrder, entries)
+  } else {
+    addIntegrationTargetEntryFor(subject, delivery, { ...standing, wait: standing.wait }, taskOrder, entries)
+  }
 }
 
 const addEvidenceConflictEntryFor = (
@@ -352,81 +379,6 @@ export const trackerAndEvidenceEntriesFor = (
   for (const standing of delivery.standings) {
     const conflict = entriesForStanding(subject, delivery, standing, taskOrder, entries)
     if (conflict !== null) return conflict
-  }
-  return null
-}
-
-const addProposedDeliveryEntriesFor = (
-  subject: DeliveryStatusSubject,
-  evaluation: DeliveryRuntimeEvaluation,
-  liveProposalIds: ReadonlySet<string>,
-  entries: Array<OrderedStatusEntry>,
-  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>
-): DeliveryStatusProjectionConflict | null => {
-  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return null
-  for (const proposal of evaluation.proposedActions.proposals) {
-    if (liveProposalIds.has(proposal.id)) continue
-    const taskId = deliveryProposalOrderTaskId(proposal.order)
-    if (!includeForSubject(subject, taskId)) continue
-    const taskOrder = taskId === null ? runWideTaskOrder : taskOrderOrConflictFor(subject, taskOrders, taskId)
-    if (taskOrder instanceof DeliveryStatusProjectionConflict) return taskOrder
-    addEntry(
-      entries,
-      {
-        _tag: "ProposedDeliveryAction",
-        classification: "Waiting",
-        subject: taskId === null ? subject : taskStatusSubject(subject, taskId),
-        proposal
-      },
-      taskOrder
-    )
-  }
-  return null
-}
-
-const addLiveOwnerEntryFor = (
-  subject: DeliveryStatusSubject,
-  evaluation: DeliveryRuntimeEvaluation,
-  owner: DeliveryRuntimeLiveOwnerSnapshot,
-  entries: Array<OrderedStatusEntry>,
-  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>
-): DeliveryStatusProjectionConflict | null => {
-  const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
-  if (!includeForSubject(subject, taskId)) return null
-  const ownerTaskOrder = taskId === null ? runWideTaskOrder : taskOrderOrConflictFor(subject, taskOrders, taskId)
-  if (ownerTaskOrder instanceof DeliveryStatusProjectionConflict) return ownerTaskOrder
-  const entrySubject = taskId === null ? subject : taskStatusSubject(subject, taskId)
-  const entry: DeliveryStatusEntry = ownerIsSettled(owner)
-    ? {
-        _tag: "AcceptedFactPublicationWait",
-        classification: "Waiting",
-        subject: entrySubject,
-        owner,
-        acceptedAt: evaluation.acceptedAt
-      }
-    : { _tag: "LiveDeliveryAction", classification: "Progressing", subject: entrySubject, owner }
-  addEntry(entries, entry, ownerTaskOrder)
-  return null
-}
-
-export const actionEntriesFor = (
-  subject: DeliveryStatusSubject,
-  evaluation: DeliveryRuntimeEvaluation,
-  liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>,
-  entries: Array<OrderedStatusEntry>,
-  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>
-): DeliveryStatusProjectionConflict | null => {
-  const proposedConflict = addProposedDeliveryEntriesFor(
-    subject,
-    evaluation,
-    new Set(liveOwners.map(({ proposal }) => proposal.id)),
-    entries,
-    taskOrders
-  )
-  if (proposedConflict !== null) return proposedConflict
-  for (const owner of liveOwners) {
-    const ownerConflict = addLiveOwnerEntryFor(subject, evaluation, owner, entries, taskOrders)
-    if (ownerConflict !== null) return ownerConflict
   }
   return null
 }

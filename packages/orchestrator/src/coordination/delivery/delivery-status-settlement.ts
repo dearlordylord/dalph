@@ -110,11 +110,11 @@ const acceptedStandingSettlementResolutionFor = (
   delivery: TicketDelivery,
   standing: ResponsibilityStanding
 ): AcceptedStandingSettlementResolution => {
+  // The accepted terminal dispositions are restricted to executor fresh facts by
+  // ResponsibilityFreshFacts; workflow-operation facts cannot form this variant.
+  if (standing.facts._tag !== "PlannedAttemptExecutorFreshFacts") return { _tag: "NotAccepted" }
   const disposition = acceptedStandingSettlementDispositionFor(standing.facts)
   if (disposition === null) return { _tag: "NotAccepted" }
-  if (standing.facts._tag !== "PlannedAttemptExecutorFreshFacts") {
-    return { _tag: "ProjectionConflict", reason: "MismatchedPlannedAttemptIdentity" }
-  }
   const responsibility = standing.facts.responsibility
   if (
     responsibility.plannedAttempt.taskId !== delivery.taskId ||

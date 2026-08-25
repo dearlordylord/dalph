@@ -8,7 +8,8 @@ import {
   PlannedAttemptExecutorReport,
   RunId,
   TaskId,
-  plannedAttemptExecutorCorrelation
+  plannedAttemptExecutorCorrelation,
+  plannedAttemptExecutorCorrelationKey
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { Context, Effect, Ref, Schema, Stream } from "effect"
@@ -56,6 +57,8 @@ import {
   currentSignalOf,
   currentSignalFromCurrentFirstStream,
   makeDeliveryReflection,
+  makeDeliverySettlement,
+  makeDeliverySettlements,
   TrackerGraphState,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeSnapshot,
@@ -104,6 +107,7 @@ import {
 import {
   deliveryStatusOf,
   deliveryStatusSignalOf,
+  observeDeliveryStatus,
   DeliveryStatusProjectionConflict,
   DeliveryStatusRunIdentityUnavailable,
   DeliveryStatusRunMismatch,
@@ -1566,6 +1570,33 @@ it("maps every integration tracker fact state to its exact passive wake conditio
       ]
     })
   }
+
+  // A queued lifecycle is also an exact planned-attempt obligation for tracker waits.
+  // Keep this through the public projection so obligationForPlannedAttempt traverses
+  // its queued branch before finding the matching attempt.
+  const { queued } = integrationFactsOf()
+  const queuedStatus = statusFor(
+    evaluationOf({
+      runtimeRunId: fixture.runId,
+      tasks: [{ id: String(fixture.taskId) }],
+      evidence: [
+        { _tag: "QueuedIntegration", responsibility: queued },
+        {
+          _tag: "IntegrationWait",
+          wait: { _tag: "IntegrationTrackerFactsWait", plannedAttempt: fixture.plannedAttempt }
+        }
+      ]
+    }),
+    { _tag: "Task", runId: fixture.runId, taskId: fixture.taskId }
+  )
+  expect(queuedStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (queuedStatus._tag === "DeliveryStatusAvailable") {
+    expect(queuedStatus.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ _tag: "TrackerFactWait", fact: expect.objectContaining({ _tag: "Unobserved" }) })
+      ])
+    )
+  }
 })
 
 it("fails closed for every integration wait without its exact supporting responsibility", () => {
@@ -2290,4 +2321,461 @@ it("retains projection errors when a closed status carries a final ready snapsho
   })
   const result = deliveryStatusOf({ _tag: "Run", runId: RunId.make("status-closed-foreign-run") }, closed)
   expect(result).toBeInstanceOf(DeliveryStatusRunMismatch)
+})
+
+it("covers scoped filtering, holder ties, and missing task-order conflicts through public status", () => {
+  const holderTask = TaskId.make("holder-task")
+  const capacityState = evaluationOf({
+    tasks: [{ id: "A" }, { id: String(holderTask) }, { id: "C" }],
+    capacity: TaskWorkCapacity.make(2),
+    held: [
+      { taskId: holderTask, correlation: { attemptId: AttemptId.make("holder-z"), runId } },
+      { taskId: holderTask, correlation: { attemptId: AttemptId.make("holder-a"), runId } }
+    ]
+  })
+  const capacityStatus = statusFor(capacityState, { _tag: "Task", runId, taskId: TaskId.make("A") })
+  expect(capacityStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (capacityStatus._tag === "DeliveryStatusAvailable") {
+    const capacityWait = capacityStatus.entries.find(({ _tag }) => _tag === "TaskWorkCapacityWait")
+    expect(capacityWait).toMatchObject({
+      _tag: "TaskWorkCapacityWait",
+      holders: [
+        { taskId: holderTask, correlation: { attemptId: AttemptId.make("holder-a") } },
+        { taskId: holderTask, correlation: { attemptId: AttemptId.make("holder-z") } }
+      ]
+    })
+  }
+
+  const issueTask = TaskId.make("issue-order-missing")
+  const issue: DeliveryProposalDerivationIssue = {
+    _tag: "AcceptedOperationEvidenceMissing",
+    operationId: OperationId.make("status-issue-order-missing"),
+    taskId: issueTask,
+    transition: "CommitFreshTaskClaimIntent"
+  }
+  const issueState = evaluationOf({
+    tasks: [{ id: String(issueTask) }],
+    isolatedIssues: [issue],
+    proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [issue], proposals: [] }
+  })
+  if (issueState._tag !== "Ready") return expect.fail("issue ordering fixture must be ready")
+  const withoutIssueDelivery = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...issueState.evaluation,
+      current: {
+        ...issueState.evaluation.current,
+        ticketDeliveries: {
+          ...issueState.evaluation.current.ticketDeliveries,
+          deliveries: issueState.evaluation.current.ticketDeliveries.deliveries.filter(
+            ({ taskId }) => taskId !== issueTask
+          )
+        }
+      }
+    },
+    liveOwners: issueState.liveOwners
+  })
+  expect(deliveryStatusOf({ _tag: "Run", runId }, withoutIssueDelivery)).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  const filteredIssue = statusFor(
+    evaluationOf({
+      tasks: [{ id: "A" }, { id: "B" }],
+      isolatedIssues: [{ ...issue, taskId: TaskId.make("B"), operationId: OperationId.make("status-filtered-issue") }],
+      proposedActions: {
+        _tag: "DeliveryProposalsAvailable",
+        isolatedIssues: [
+          { ...issue, taskId: TaskId.make("B"), operationId: OperationId.make("status-filtered-issue") }
+        ],
+        proposals: []
+      }
+    }),
+    { _tag: "Task", runId, taskId: TaskId.make("A") }
+  )
+  expect(filteredIssue).toMatchObject({ _tag: "DeliveryStatusAvailable", entries: [] })
+
+  const actionTask = TaskId.make("action-order-missing")
+  const action = taskProposalOf("status-action-order-missing", actionTask)
+  const actionState = evaluationOf({ tasks: [{ id: String(actionTask) }], proposals: [action] })
+  if (actionState._tag !== "Ready") return expect.fail("action ordering fixture must be ready")
+  const withoutActionDelivery = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...actionState.evaluation,
+      current: {
+        ...actionState.evaluation.current,
+        ticketDeliveries: {
+          ...actionState.evaluation.current.ticketDeliveries,
+          deliveries: actionState.evaluation.current.ticketDeliveries.deliveries.filter(
+            ({ taskId }) => taskId !== actionTask
+          )
+        }
+      }
+    },
+    liveOwners: actionState.liveOwners
+  })
+  expect(deliveryStatusOf({ _tag: "Run", runId }, withoutActionDelivery)).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  const withoutOwnerDelivery = DeliveryRuntimeObservationState.Ready({
+    evaluation: actionState.evaluation,
+    liveOwners: [ownerOf(action, false)]
+  })
+  const ownerOrderConflict = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...withoutOwnerDelivery.evaluation,
+      current: {
+        ...withoutOwnerDelivery.evaluation.current,
+        ticketDeliveries: {
+          ...withoutOwnerDelivery.evaluation.current.ticketDeliveries,
+          deliveries: withoutOwnerDelivery.evaluation.current.ticketDeliveries.deliveries.filter(
+            ({ taskId }) => taskId !== actionTask
+          )
+        }
+      }
+    },
+    liveOwners: withoutOwnerDelivery.liveOwners
+  })
+  expect(deliveryStatusOf({ _tag: "Run", runId }, ownerOrderConflict)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+
+  const otherTask = TaskId.make("other-action-task")
+  const otherProposal = taskProposalOf("status-other-action", otherTask)
+  const filteredOwner = statusFor(
+    evaluationOf({
+      tasks: [{ id: "A" }, { id: String(otherTask) }],
+      proposals: [otherProposal],
+      liveOwners: [ownerOf(otherProposal, false)]
+    }),
+    { _tag: "Task", runId, taskId: TaskId.make("A") }
+  )
+  expect(filteredOwner).toMatchObject({ _tag: "DeliveryStatusAvailable", entries: [] })
+
+  const conflictForOtherTask: DeliveryProposalFrontier = {
+    _tag: "DeliveryProposalOwnershipConflict",
+    conflicts: [{ id: otherProposal.id, order: otherProposal.order, owners: ["TrackerGraph", "TicketDelivery"] }]
+  }
+  const filteredConflict = statusFor(
+    evaluationOf({ tasks: [{ id: "A" }, { id: String(otherTask) }], proposedActions: conflictForOtherTask }),
+    { _tag: "Task", runId, taskId: TaskId.make("A") }
+  )
+  expect(filteredConflict).toMatchObject({ _tag: "DeliveryStatusAvailable", entries: [] })
+
+  const runWideFirst = proposalOf("status-run-wide-first")
+  const runWideSecond = proposalOf("status-run-wide-second")
+  const taskAction = taskProposalOf("status-task-after-run-wide", TaskId.make("A"))
+  const runWideStatus = statusFor(
+    evaluationOf({ tasks: [{ id: "A" }], proposals: [taskAction, runWideSecond, runWideFirst] }),
+    { _tag: "Run", runId }
+  )
+  expect(runWideStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (runWideStatus._tag === "DeliveryStatusAvailable") {
+    expect(runWideStatus.entries.filter(({ _tag }) => _tag === "ProposedDeliveryAction")).toHaveLength(3)
+  }
+})
+
+it("fails closed for empty dependency evidence and preserves exact conflict responsibility", () => {
+  const graphState = evaluationOf({ tasks: [{ id: "empty-graph-placement" }] })
+  if (graphState._tag !== "Ready") return expect.fail("empty graph placement fixture must be ready")
+  const graphDelivery = graphState.evaluation.current.ticketDeliveries.deliveries[0]
+  if (graphDelivery === undefined) return expect.fail("empty graph placement delivery must exist")
+  const emptyGraphPlacement = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...graphState.evaluation,
+      current: {
+        ...graphState.evaluation.current,
+        ticketDeliveries: {
+          ...graphState.evaluation.current.ticketDeliveries,
+          deliveries: [
+            {
+              ...graphDelivery,
+              placement: {
+                _tag: "GraphExcluded" as const,
+                reasons: [{ _tag: "PrerequisitesIncomplete" as const, prerequisiteTaskIds: [] }]
+              }
+            }
+          ]
+        }
+      }
+    },
+    liveOwners: graphState.liveOwners
+  })
+  expect(deliveryStatusOf({ _tag: "Run", runId }, emptyGraphPlacement)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  const terminalGraphPlacement = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...graphState.evaluation,
+      current: {
+        ...graphState.evaluation.current,
+        ticketDeliveries: {
+          ...graphState.evaluation.current.ticketDeliveries,
+          deliveries: [
+            {
+              ...graphDelivery,
+              placement: { _tag: "GraphExcluded" as const, reasons: [{ _tag: "SuccessfulCompletion" as const }] }
+            }
+          ]
+        }
+      }
+    },
+    liveOwners: graphState.liveOwners
+  })
+  const terminalGraphStatus = statusFor(terminalGraphPlacement, { _tag: "Task", runId, taskId: graphDelivery.taskId })
+  expect(terminalGraphStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (terminalGraphStatus._tag === "DeliveryStatusAvailable") {
+    expect(terminalGraphStatus.entries.some(({ _tag }) => _tag === "DependencyWait")).toBe(false)
+  }
+
+  const responsibilityTask = TaskId.make("empty-responsibility-dependency")
+  const responsibilityEvidence = taskClaimEvidenceOf(responsibilityTask)
+  if (
+    responsibilityEvidence._tag !== "ResponsibilityFacts" ||
+    responsibilityEvidence.facts._tag !== "WorkflowOperationFreshFacts"
+  ) {
+    return expect.fail("empty responsibility fixture must retain facts")
+  }
+  const emptyResponsibility = evaluationOf({
+    tasks: [{ id: String(responsibilityTask) }],
+    evidence: [
+      {
+        ...responsibilityEvidence,
+        facts: {
+          _tag: "WorkflowOperationFreshFacts" as const,
+          disposition: ResponsibilityDisposition.DependencyWait({ prerequisiteTaskIds: [] }),
+          responsibility: responsibilityEvidence.facts.responsibility
+        }
+      }
+    ]
+  })
+  expect(deliveryStatusOf({ _tag: "Task", runId, taskId: responsibilityTask }, emptyResponsibility)).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+
+  const { fixture, queued } = integrationFactsOf()
+  const queuedState = evaluationOf({
+    runtimeRunId: fixture.runId,
+    tasks: [{ id: String(fixture.taskId) }],
+    evidence: [{ _tag: "QueuedIntegration", responsibility: queued }]
+  })
+  if (queuedState._tag !== "Ready") return expect.fail("queued conflict fixture must be ready")
+  const queuedDelivery = queuedState.evaluation.current.ticketDeliveries.deliveries[0]
+  if (queuedDelivery === undefined) return expect.fail("queued conflict delivery must exist")
+  const queuedEvidenceIdentity = JSON.stringify([
+    "integration",
+    plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(queued.plannedAttempt))
+  ])
+  const queuedConflict = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...queuedState.evaluation,
+      current: {
+        ...queuedState.evaluation.current,
+        ticketDeliveries: {
+          ...queuedState.evaluation.current.ticketDeliveries,
+          deliveries: [
+            {
+              ...queuedDelivery,
+              standings: [{ _tag: "ExactEvidenceConflict", evidenceIdentities: [queuedEvidenceIdentity] }],
+              obligations: [{ _tag: "QueuedIntegration", responsibility: queued }]
+            }
+          ]
+        }
+      }
+    },
+    liveOwners: queuedState.liveOwners
+  })
+  const queuedConflictStatus = deliveryStatusOf(
+    { _tag: "Task", runId: fixture.runId, taskId: fixture.taskId },
+    queuedConflict
+  )
+  expect(queuedConflictStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (queuedConflictStatus._tag === "DeliveryStatusAvailable") {
+    const conflict = queuedConflictStatus.entries.find(({ _tag }) => _tag === "EvidenceConflict")
+    expect(conflict).toBeDefined()
+    if (conflict?._tag === "EvidenceConflict") expect(conflict.responsibility?._tag).toBe("QueuedIntegration")
+  }
+
+  const duplicateFactTask = TaskId.make("duplicate-fact-status")
+  const duplicateFact = taskClaimEvidenceOf(duplicateFactTask)
+  if (duplicateFact._tag !== "ResponsibilityFacts" || duplicateFact.facts._tag !== "WorkflowOperationFreshFacts") {
+    return expect.fail("duplicate fact fixture must retain workflow facts")
+  }
+  const firstDuplicateFact = {
+    ...duplicateFact,
+    facts: {
+      ...duplicateFact.facts,
+      disposition: ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: "Unreadable" })
+    }
+  }
+  const duplicateFactState = evaluationOf({
+    tasks: [{ id: String(duplicateFactTask) }],
+    evidence: [
+      firstDuplicateFact,
+      {
+        ...duplicateFact,
+        facts: {
+          ...duplicateFact.facts,
+          disposition: ResponsibilityDisposition.UnreadableFactWait({ boundary: "TaskTracker" })
+        }
+      }
+    ]
+  })
+  expect(deliveryStatusOf({ _tag: "Task", runId, taskId: duplicateFactTask }, duplicateFactState)).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+})
+
+it("retains workflow release identities and supports a workflow-owned integration wait", () => {
+  const releaseTask = TaskId.make("release-identity-status")
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make("status-release-acquisition"),
+    owner: ClaimOwner.make("status-release-owner"),
+    taskId: releaseTask,
+    token: ClaimToken.make("status-release-token")
+  })
+  const releaseOperation = makeTaskClaimReleaseOperation({
+    authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+    predecessorOperationIds: [claim.operationId],
+    release: { claim, operationId: OperationId.make("status-release-operation") }
+  })
+  const releaseResponsibility = WorkflowResponsibilityEntry.cases.TaskClaimReleaseResponsibility.make({
+    beganAt: JournalPosition.make(2),
+    operation: releaseOperation,
+    taskId: releaseTask
+  })
+  const releaseStatus = statusFor(
+    evaluationOf({
+      tasks: [{ id: String(releaseTask) }],
+      evidence: [
+        {
+          _tag: "ResponsibilityFacts",
+          facts: {
+            _tag: "WorkflowOperationFreshFacts",
+            disposition: ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: "Missing" }),
+            responsibility: releaseResponsibility
+          }
+        }
+      ]
+    }),
+    { _tag: "Task", runId, taskId: releaseTask }
+  )
+  expect(releaseStatus).toMatchObject({ _tag: "DeliveryStatusAvailable", entries: [{ _tag: "TrackerFactWait" }] })
+
+  const { fixture } = integrationFactsOf()
+  const executorResponsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+    beganAt: JournalPosition.make(2),
+    plannedAttempt: fixture.plannedAttempt
+  })
+  const workflowWaitStatus = statusFor(
+    evaluationOf({
+      runtimeRunId: fixture.runId,
+      tasks: [{ id: String(fixture.taskId) }],
+      evidence: [
+        {
+          _tag: "ResponsibilityFacts",
+          facts: {
+            _tag: "PlannedAttemptExecutorFreshFacts",
+            disposition: ResponsibilityDisposition.PlannedAttemptExecutorWorkSafelySuspended({
+              correlation: plannedAttemptExecutorCorrelation(fixture.plannedAttempt)
+            }),
+            responsibility: executorResponsibility
+          }
+        },
+        {
+          _tag: "IntegrationWait",
+          wait: { _tag: "IntegrationTrackerFactsWait", plannedAttempt: fixture.plannedAttempt }
+        }
+      ]
+    }),
+    { _tag: "Task", runId: fixture.runId, taskId: fixture.taskId }
+  )
+  expect(workflowWaitStatus).toMatchObject({ _tag: "DeliveryStatusAvailable", entries: [{ _tag: "TrackerFactWait" }] })
+})
+
+it.effect("opens the public status observation stream", () =>
+  Effect.gen(function* () {
+    const observed = yield* observeDeliveryStatus(
+      currentSignalOf(evaluationOf({ tasks: [{ id: "observe-status" }] })),
+      { _tag: "Run", runId }
+    ).pipe(Stream.take(1), Stream.runCollect)
+    expect(observed).toHaveLength(1)
+    expect(observed[0]).toMatchObject({ _tag: "DeliveryStatusAvailable", subject: { _tag: "Run", runId } })
+  })
+)
+
+it("orders and filters established settlements while failing closed on missing task order", () => {
+  const settlementTask = TaskId.make("settlement-filter-task")
+  const otherTask = TaskId.make("settlement-filter-other")
+  const settlement = makeDeliverySettlement({
+    attemptId: AttemptId.make("settlement-filter-attempt"),
+    taskId: settlementTask
+  })
+  const state = evaluationOf({ tasks: [{ id: String(settlementTask) }, { id: String(otherTask) }] })
+  if (state._tag !== "Ready") return expect.fail("settlement filter fixture must be ready")
+  const withSettlement = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...state.evaluation,
+      current: {
+        ...state.evaluation.current,
+        settlements: makeDeliverySettlements(state.evaluation.current.ticketDeliveries, [settlement])
+      }
+    },
+    liveOwners: state.liveOwners
+  })
+  const filtered = statusFor(withSettlement, { _tag: "Task", runId, taskId: otherTask })
+  expect(filtered).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (filtered._tag === "DeliveryStatusAvailable") {
+    expect(filtered.entries.some(({ _tag }) => _tag === "Settlement")).toBe(false)
+  }
+
+  const missingOrder = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...withSettlement.evaluation,
+      current: {
+        ...withSettlement.evaluation.current,
+        ticketDeliveries: {
+          ...withSettlement.evaluation.current.ticketDeliveries,
+          deliveries: withSettlement.evaluation.current.ticketDeliveries.deliveries.filter(
+            ({ taskId }) => taskId !== settlementTask
+          )
+        },
+        settlements: withSettlement.evaluation.current.settlements
+      }
+    },
+    liveOwners: state.liveOwners
+  })
+  expect(deliveryStatusOf({ _tag: "Run", runId }, missingOrder)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+
+  const mixedTask = TaskId.make("settlement-structural-order")
+  const mixedState = evaluationOf({ tasks: [{ id: String(mixedTask) }] })
+  if (mixedState._tag !== "Ready") return expect.fail("settlement ordering fixture must be ready")
+  const responsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+    beganAt: JournalPosition.make(3),
+    plannedAttempt: { ...integrationFinalityFixture.plannedAttempt, taskId: mixedTask, runId }
+  })
+  const acceptedStanding: TicketDelivery["standings"][number] = {
+    _tag: "ResponsibilitySituation",
+    facts: {
+      _tag: "PlannedAttemptExecutorFreshFacts",
+      disposition: ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "NoRelease" }),
+      responsibility
+    }
+  }
+  const accepted = readyWithFirstDeliveryOf(mixedState, [acceptedStanding])
+  if (accepted._tag !== "Ready") return expect.fail("accepted settlement fixture must be ready")
+  const mixedSettlements = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...accepted.evaluation,
+      current: {
+        ...accepted.evaluation.current,
+        settlements: makeDeliverySettlements(accepted.evaluation.current.ticketDeliveries, [
+          makeDeliverySettlement({ attemptId: AttemptId.make("settlement-structural-delivery"), taskId: mixedTask })
+        ])
+      }
+    },
+    liveOwners: accepted.liveOwners
+  })
+  const mixedStatus = statusFor(mixedSettlements, { _tag: "Task", runId, taskId: mixedTask })
+  expect(mixedStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (mixedStatus._tag === "DeliveryStatusAvailable") {
+    const settlements = mixedStatus.entries.filter(({ _tag }) => _tag === "Settlement")
+    expect(settlements).toHaveLength(2)
+    expect(settlements[0]).toMatchObject({ settlement: { _tag: "DeliverySettlement" } })
+    expect(settlements[1]).toMatchObject({ settlement: { _tag: "AcceptedStandingSettlement" } })
+  }
 })
