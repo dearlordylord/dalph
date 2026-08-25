@@ -257,6 +257,32 @@ const allPhenomenaStateOf = (permutation: PhenomenonPermutation): DeliveryRuntim
     relinquishedTask,
     ResponsibilityDisposition.Relinquished({ reason: "AuthorizedHandoff" })
   )
+  const acceptedStandingOf = (
+    taskId: TaskId,
+    disposition: ReturnType<
+      typeof ResponsibilityDisposition.CancelledAttemptSettled | typeof ResponsibilityDisposition.StoppedAttemptSettled
+    >
+  ) => {
+    const plannedAttempt = PlannedTaskAttempt.make({ ...fixture.plannedAttempt, runId, taskId })
+    const responsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+      beganAt: JournalPosition.make(2),
+      plannedAttempt
+    })
+    return {
+      standing: {
+        _tag: "ResponsibilitySituation" as const,
+        facts: { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
+      }
+    }
+  }
+  const cancelled = acceptedStandingOf(
+    settlementTaskA,
+    ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })
+  )
+  const stopped = acceptedStandingOf(
+    settlementTaskB,
+    ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" })
+  )
   const proposal = proposalOf("property-publication", capacityTask, 3)
   const settledOwner: DeliveryRuntimeLiveOwnerSnapshot = { _tag: "SettledBeforeMaterialization", proposal }
   const extraDeliveries: ReadonlyArray<TicketDelivery> = [
@@ -297,7 +323,7 @@ const allPhenomenaStateOf = (permutation: PhenomenonPermutation): DeliveryRuntim
       evidence: [],
       obligations: [],
       placement: { _tag: "Selected", rank: BoundedTicketRank.make(6) },
-      standings: [{ _tag: "ProposedDelivery" }],
+      standings: [cancelled.standing],
       taskId: settlementTaskA
     },
     {
@@ -305,7 +331,7 @@ const allPhenomenaStateOf = (permutation: PhenomenonPermutation): DeliveryRuntim
       evidence: [],
       obligations: [],
       placement: { _tag: "Selected", rank: BoundedTicketRank.make(7) },
-      standings: [{ _tag: "ProposedDelivery" }],
+      standings: [stopped.standing],
       taskId: settlementTaskB
     }
   ]
@@ -459,9 +485,18 @@ it("orders every simultaneous delivery-status phenomenon independently of source
     IntegrationTargetWait: 1,
     EvidenceUnavailable: 2,
     EvidenceConflict: 2,
-    Settlement: 2,
+    Settlement: 4,
     Relinquishment: 1
   })
+  expect(
+    canonical.entries
+      .filter(
+        (entry): entry is Extract<DeliveryStatusEntry, { readonly _tag: "Settlement" }> => entry._tag === "Settlement"
+      )
+      .map((entry) =>
+        entry.settlement._tag === "AcceptedStandingSettlement" ? entry.settlement.standing._tag : entry.settlement._tag
+      )
+  ).toEqual(["DeliverySettlement", "CancelledAttemptSettled", "DeliverySettlement", "StoppedAttemptSettled"])
   fc.assert(
     fc.property(
       fc.record({

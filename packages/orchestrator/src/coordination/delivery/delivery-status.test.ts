@@ -636,13 +636,13 @@ it("maps responsibility dispositions by meaning without turning terminal or paus
     plannedAttempt: integrationFinalityFixture.plannedAttempt
   }
   const executorCases: ReadonlyArray<
-    readonly [PlannedAttemptExecutorDisposition, "TrackerFactWait" | "Relinquishment" | null]
+    readonly [PlannedAttemptExecutorDisposition, "TrackerFactWait" | "Relinquishment" | "Settlement" | null]
   > = [
     [ResponsibilityDisposition.TaskClaimMissingConstraint(), "TrackerFactWait"],
     [ResponsibilityDisposition.TaskClaimUnreadableWait(), "TrackerFactWait"],
     [ResponsibilityDisposition.TaskForeignClaimIsolation(), "TrackerFactWait"],
-    [ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" }), null],
-    [ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" }), null],
+    [ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" }), "Settlement"],
+    [ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" }), "Settlement"],
     [
       ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({
         report: PlannedAttemptExecutorReport.cases.Terminal.make({
@@ -680,7 +680,114 @@ it("maps responsibility dispositions by meaning without turning terminal or paus
         }
       })
     }
+    if (expected === "Settlement") {
+      expect(status.entries[0]).toMatchObject({
+        _tag: "Settlement",
+        settlement: {
+          _tag: "AcceptedStandingSettlement",
+          standing: { _tag: disposition._tag, claimDisposition: "Released", responsibility: executorResponsibility }
+        }
+      })
+    }
   }
+})
+
+it("projects cancelled and stopped accepted standings as distinct public settlements", () => {
+  const cases = [
+    ["cancelled-status", ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })],
+    ["stopped-status", ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" })]
+  ] as const
+  for (const [taskIdText, disposition] of cases) {
+    const taskId = TaskId.make(taskIdText)
+    const plannedAttempt = { ...integrationFinalityFixture.plannedAttempt, taskId }
+    const responsibility = {
+      _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+      beganAt: JournalPosition.make(2),
+      plannedAttempt
+    }
+    const state = evaluationOf({
+      runtimeRunId: integrationFinalityFixture.runId,
+      tasks: [{ id: taskIdText }],
+      evidence: [
+        {
+          _tag: "ResponsibilityFacts",
+          facts: { _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }
+        }
+      ]
+    })
+    if (state._tag !== "Ready") return expect.fail("settled standing fixture must be ready")
+    expect(state.evaluation.current.ticketDeliveries.deliveries[0]?.obligations).toEqual([])
+    const status = statusFor(state, { _tag: "Task", runId: integrationFinalityFixture.runId, taskId })
+    expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    if (status._tag !== "DeliveryStatusAvailable") continue
+    const settlement = status.entries.find(({ _tag }) => _tag === "Settlement")
+    expect(settlement).toMatchObject({
+      _tag: "Settlement",
+      taskId,
+      settlement: {
+        _tag: "AcceptedStandingSettlement",
+        standing: { _tag: disposition._tag, claimDisposition: "Released", responsibility }
+      }
+    })
+  }
+
+  const mismatchTaskId = TaskId.make("settled-mismatch")
+  const mismatchState = evaluationOf({
+    runtimeRunId: integrationFinalityFixture.runId,
+    tasks: [{ id: String(mismatchTaskId) }],
+    evidence: [
+      {
+        _tag: "ResponsibilityFacts",
+        facts: {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          disposition: ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" }),
+          responsibility: {
+            _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+            beganAt: JournalPosition.make(2),
+            plannedAttempt: { ...integrationFinalityFixture.plannedAttempt, taskId: mismatchTaskId }
+          }
+        }
+      }
+    ]
+  })
+  if (mismatchState._tag !== "Ready") return expect.fail("mismatched settled fixture must be ready")
+  const mismatchDelivery = mismatchState.evaluation.current.ticketDeliveries.deliveries[0]
+  if (mismatchDelivery === undefined) return expect.fail("mismatched settled delivery must exist")
+  const malformedResponsibility = {
+    _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+    beganAt: JournalPosition.make(2),
+    plannedAttempt: { ...integrationFinalityFixture.plannedAttempt, taskId: TaskId.make("foreign-settled") }
+  }
+  const malformedState = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...mismatchState.evaluation,
+      current: {
+        ...mismatchState.evaluation.current,
+        ticketDeliveries: {
+          ...mismatchState.evaluation.current.ticketDeliveries,
+          deliveries: [
+            {
+              ...mismatchDelivery,
+              standings: [
+                {
+                  _tag: "ResponsibilitySituation" as const,
+                  facts: {
+                    _tag: "PlannedAttemptExecutorFreshFacts" as const,
+                    disposition: ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" }),
+                    responsibility: malformedResponsibility
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    liveOwners: []
+  })
+  expect(
+    deliveryStatusOf({ _tag: "Task", runId: integrationFinalityFixture.runId, taskId: mismatchTaskId }, malformedState)
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
 })
 
 it("retains materialized operation identity through live and settled owner chronology", () => {

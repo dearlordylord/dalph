@@ -65,7 +65,6 @@ const canonicalValue = (value: unknown): unknown => {
   return value
 }
 
-/** Stable structural encoding for values built from the same exact evidence. */
 export const canonicalEncodingOf = (value: unknown): string => JSON.stringify(canonicalValue(value))
 
 const subjectKey = (subject: DeliveryStatusSubject): string =>
@@ -109,7 +108,6 @@ const evidenceIdentityForObligation = (obligation: ExactWorkflowObligation): str
   ])
 }
 
-/** Finds an exact responsibility only when one of the conflicting source identities names it. */
 export const obligationForEvidenceConflict = (
   delivery: TicketDelivery,
   standing: Extract<TicketDeliveryStanding, { readonly _tag: "ExactEvidenceConflict" }>
@@ -130,7 +128,6 @@ const proposalDerivationIssueIdentity = (issue: DeliveryProposalDerivationIssue)
 const statusEntryPrefix = (entry: DeliveryStatusEntry): string =>
   canonicalIdentity([entry._tag, subjectKey(entry.subject)])
 
-/** Internal category/ranking value used only while comparing status entries. */
 const StatusComparisonRank = Schema.Int.pipe(Schema.brand("StatusComparisonRank"))
 type StatusComparisonRank = typeof StatusComparisonRank.Type
 
@@ -208,7 +205,7 @@ const dependencyStandingIdentity = (
   return canonicalIdentity(["responsibility", workflowResponsibilityKey(standing.facts.responsibility)])
 }
 
-const statusEntryIdentityFor = Match.typeTags<DeliveryStatusEntry, string>()({
+export const statusEntryIdentity = Match.typeTags<DeliveryStatusEntry, string>()({
   DependencyWait: (entry) =>
     canonicalIdentity([
       statusEntryPrefix(entry),
@@ -250,12 +247,18 @@ const statusEntryIdentityFor = Match.typeTags<DeliveryStatusEntry, string>()({
             ])
     ]),
   EvidenceConflict: (entry) => canonicalIdentity([statusEntryPrefix(entry), ...entry.evidenceIdentities]),
-  Settlement: (entry) => canonicalIdentity([statusEntryPrefix(entry), entry.attemptId]),
+  Settlement: (entry) =>
+    entry.settlement._tag === "DeliverySettlement"
+      ? canonicalIdentity([statusEntryPrefix(entry), "DeliverySettlement", entry.attemptId])
+      : canonicalIdentity([
+          statusEntryPrefix(entry),
+          "AcceptedStandingSettlement",
+          entry.settlement.standing._tag,
+          workflowResponsibilityKey(entry.settlement.standing.responsibility)
+        ]),
   Relinquishment: (entry) =>
     canonicalIdentity([statusEntryPrefix(entry), workflowResponsibilityKey(entry.responsibility.responsibility)])
 })
-
-export const statusEntryIdentity = statusEntryIdentityFor
 
 export const statusEntryJson: (entry: DeliveryStatusEntry) => string = canonicalEncodingOf
 
@@ -266,16 +269,15 @@ export interface OrderedStatusEntry {
   readonly structuralOrder: ReadonlyArray<StructuralOrderToken>
 }
 
-const freshOrderKind = comparisonRank(0)
-const recoveredOrderKind = comparisonRank(1)
-const integrationOrderKindValue = 2
-const unqueuedAcceptedOrderKindValue = 3
-const trackerGraphOrderKindValue = 4
+const freshOrderKind = comparisonRank(0),
+  recoveredOrderKind = comparisonRank(1)
+const integrationOrderKindValue = 2,
+  unqueuedAcceptedOrderKindValue = 3,
+  trackerGraphOrderKindValue = 4
 const integrationOrderKind = comparisonRank(integrationOrderKindValue)
 const unqueuedAcceptedOrderKind = comparisonRank(unqueuedAcceptedOrderKindValue)
 const trackerGraphOrderKind = comparisonRank(trackerGraphOrderKindValue)
 
-/** The accepted structural tie-breakers do not depend on provider-array order. */
 const proposalOrderStructuralOrder = (order: DeliveryProposalOrderEvidence): ReadonlyArray<StructuralOrderToken> => {
   return Match.valueTags(order, {
     FreshWorkflowOrder: ({ frontierOrdinal, step, taskId }) => [freshOrderKind, frontierOrdinal, step, taskId],
@@ -385,12 +387,14 @@ const structuralOrderBeforeValue = -1
 const structuralOrderBefore = comparisonRank(structuralOrderBeforeValue)
 const structuralOrderAfter = comparisonRank(1)
 
-const compareOrderPosition = (left: StructuralOrderPosition, right: StructuralOrderPosition): number => {
-  if (left._tag === "MissingOrderPosition" && right._tag === "MissingOrderPosition") return 0
-  if (left._tag === "MissingOrderPosition") return structuralOrderBefore
-  if (right._tag === "MissingOrderPosition") return structuralOrderAfter
-  return left.value - right.value
-}
+const compareOrderPosition = (left: StructuralOrderPosition, right: StructuralOrderPosition): number =>
+  left._tag === "MissingOrderPosition"
+    ? right._tag === "MissingOrderPosition"
+      ? 0
+      : structuralOrderBefore
+    : right._tag === "MissingOrderPosition"
+      ? structuralOrderAfter
+      : left.value - right.value
 
 const isStructuralOrderPosition = (value: StructuralOrderToken): value is StructuralOrderPosition =>
   typeof value === "object"
@@ -398,21 +402,19 @@ const isStructuralOrderPosition = (value: StructuralOrderToken): value is Struct
 type PrimitiveStructuralToken = StructuralOrderValue | string
 
 const comparePrimitiveStructuralToken = (left: PrimitiveStructuralToken, right: PrimitiveStructuralToken): number => {
-  if (typeof left === "number" && typeof right === "number") return left - right
-  if (typeof left === "number") return structuralOrderBefore
+  if (typeof left === "number") return typeof right === "number" ? left - right : structuralOrderBefore
   if (typeof right === "number") return structuralOrderAfter
-  if (typeof left === "string" && typeof right === "string") return left.localeCompare(right)
-  if (typeof left === "string") return structuralOrderBefore
-  return structuralOrderAfter
+  return left.localeCompare(right)
 }
 
-const compareStructuralToken = (left: StructuralOrderToken, right: StructuralOrderToken): number => {
-  if (isStructuralOrderPosition(left)) {
-    return isStructuralOrderPosition(right) ? compareOrderPosition(left, right) : structuralOrderAfter
-  }
-  if (isStructuralOrderPosition(right)) return structuralOrderBefore
-  return comparePrimitiveStructuralToken(left, right)
-}
+const compareStructuralToken = (left: StructuralOrderToken, right: StructuralOrderToken): number =>
+  isStructuralOrderPosition(left)
+    ? isStructuralOrderPosition(right)
+      ? compareOrderPosition(left, right)
+      : structuralOrderAfter
+    : isStructuralOrderPosition(right)
+      ? structuralOrderBefore
+      : comparePrimitiveStructuralToken(left, right)
 
 const compareStructuralOrder = (
   left: ReadonlyArray<StructuralOrderToken>,
@@ -430,12 +432,14 @@ const compareStructuralOrder = (
   return 0
 }
 
-const compareTaskOrder = (left: StatusTaskOrder, right: StatusTaskOrder): number => {
-  if (left._tag === "RunWideTaskOrder" && right._tag === "RunWideTaskOrder") return 0
-  if (left._tag === "RunWideTaskOrder") return structuralOrderBefore
-  if (right._tag === "RunWideTaskOrder") return structuralOrderAfter
-  return left.position - right.position
-}
+const compareTaskOrder = (left: StatusTaskOrder, right: StatusTaskOrder): number =>
+  left._tag === "RunWideTaskOrder"
+    ? right._tag === "RunWideTaskOrder"
+      ? 0
+      : structuralOrderBefore
+    : right._tag === "RunWideTaskOrder"
+      ? structuralOrderAfter
+      : left.position - right.position
 
 export const compareOrderedEntries = (left: OrderedStatusEntry, right: OrderedStatusEntry): number => {
   const taskOrder = compareTaskOrder(left.taskOrder, right.taskOrder)

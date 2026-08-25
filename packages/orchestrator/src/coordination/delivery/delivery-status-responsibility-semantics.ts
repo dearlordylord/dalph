@@ -66,9 +66,19 @@ export const trackerFactForDisposition = (facts: ResponsibilityFreshFacts): Trac
 type ResponsibilityStatusMeaning =
   | "DependencyWait"
   | "Relinquishment"
+  | "Settlement"
   | "TrackerFact"
   | "UnavailableEvidence"
   | "NoEntry"
+
+type AcceptedStandingSettlementTag = "CancelledAttemptSettled" | "StoppedAttemptSettled"
+
+export const acceptedStandingSettlementTagFor = (
+  facts: ResponsibilityFreshFacts
+): AcceptedStandingSettlementTag | null => {
+  const tag = facts.disposition._tag
+  return tag === "CancelledAttemptSettled" || tag === "StoppedAttemptSettled" ? tag : null
+}
 
 /** Every fresh responsibility disposition has one explicit passive-status meaning. */
 const responsibilityStatusMeaningByTag = {
@@ -86,7 +96,7 @@ const responsibilityStatusMeaningByTag = {
   CancelledAttemptClaimReleasePending: "UnavailableEvidence",
   CancelledAttemptClaimPlanningWait: "UnavailableEvidence",
   CancelledAttemptClaimUnreadableWait: "UnavailableEvidence",
-  CancelledAttemptSettled: "NoEntry",
+  CancelledAttemptSettled: "Settlement",
   DependencyWait: "DependencyWait",
   FinalOutcome: "NoEntry",
   PlannedAttemptExecutorWorkSafelySuspended: "NoEntry",
@@ -100,7 +110,7 @@ const responsibilityStatusMeaningByTag = {
   StoppedAttemptClaimReleasePending: "UnavailableEvidence",
   StoppedAttemptClaimPlanningWait: "UnavailableEvidence",
   StoppedAttemptClaimUnreadableWait: "UnavailableEvidence",
-  StoppedAttemptSettled: "NoEntry",
+  StoppedAttemptSettled: "Settlement",
   PlannedAttemptGitConstraint: "UnavailableEvidence",
   TaskExternalSuccessConstraint: "UnavailableEvidence",
   TaskExternalSuccessReleaseNeeded: "NoEntry",

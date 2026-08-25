@@ -11,6 +11,7 @@ import type {
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import {
+  acceptedStandingSettlementTagFor,
   trackerFactForClaimState,
   trackerFactForDisposition,
   unavailableFromFacts
@@ -28,6 +29,7 @@ import {
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
 import { addEntry, canonicalEncodingOf, canonicalIdentity, taskOrderFor } from "./delivery-status-order.js"
 import type { OrderedStatusEntry, StatusTaskOrder, StatusTaskOrderLookup } from "./delivery-status-order.js"
+import { validateAcceptedStandingForStatus } from "./delivery-status-settlement.js"
 
 export {
   addEntry,
@@ -271,24 +273,26 @@ const responsibilityProjectionConflict = (
     detail: "a tracker or unavailable-fact standing has no matching exact responsibility obligation"
   })
 
-const responsibilityHasStatusProjection = (facts: ResponsibilityFreshFacts): boolean => {
-  const dependency = facts.disposition._tag === "DependencyWait" && facts.disposition.prerequisiteTaskIds.length > 0
-  return (
-    trackerFactForDisposition(facts) !== null ||
-    unavailableFromFacts(facts)?._tag === "ResponsibilityFacts" ||
-    dependency
-  )
-}
-
 const validateResponsibilityStandingForStatus = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
   standing: Extract<TicketDeliveryStanding, { readonly _tag: "ResponsibilitySituation" }>
 ): DeliveryStatusProjectionConflict | null => {
+  const acceptedConflict = validateAcceptedStandingForStatus(subject, delivery, standing)
+  if (acceptedConflict !== null) return acceptedConflict
   const responsibility = obligationForResponsibility(delivery, standing.facts)
   if (standing.facts.disposition._tag === "Relinquished") return null
-  const hasStatusProjection = responsibilityHasStatusProjection(standing.facts)
-  if (responsibility === null && hasStatusProjection) return responsibilityProjectionConflict(subject, delivery)
+  const acceptedStanding = acceptedStandingSettlementTagFor(standing.facts) !== null
+  const dependency =
+    standing.facts.disposition._tag === "DependencyWait" && standing.facts.disposition.prerequisiteTaskIds.length > 0
+  const hasStatusProjection =
+    trackerFactForDisposition(standing.facts) !== null ||
+    unavailableFromFacts(standing.facts)?._tag === "ResponsibilityFacts" ||
+    dependency ||
+    acceptedStanding
+  if (responsibility === null && hasStatusProjection && !acceptedStanding) {
+    return responsibilityProjectionConflict(subject, delivery)
+  }
   if (
     standing.facts.disposition._tag === "DependencyWait" &&
     standing.facts.disposition.prerequisiteTaskIds.length === 0

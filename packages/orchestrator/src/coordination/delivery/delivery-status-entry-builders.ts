@@ -42,6 +42,7 @@ import {
   unavailableFromFacts,
   type OrderedStatusEntry
 } from "./delivery-status-support.js"
+import { addAcceptedStandingSettlementEntryFor } from "./delivery-status-settlement.js"
 export const dependencyEntriesFor = (
   subject: DeliveryStatusSubject,
   taskId: TaskId,
@@ -221,6 +222,7 @@ const addResponsibilityEntriesFor = (
   addTrackerFactEntryFor(subject, delivery, standing, taskOrder, entries)
   addUnavailableEvidenceEntryFor(subject, delivery, standing, taskOrder, entries)
   addRelinquishmentEntryFor(subject, delivery, standing, taskOrder, entries)
+  addAcceptedStandingSettlementEntryFor(subject, delivery, standing, taskOrder, entries)
 }
 
 const addIntegrationTrackerEntryFor = (

@@ -12,6 +12,7 @@ import type {
   TicketDeliveryStanding
 } from "./relations.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
+import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import type { FrontierExplanation } from "../frontier/frontier.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
@@ -152,6 +153,36 @@ export type DeliveryStatusEvidenceConflictEntry =
       readonly standing: Extract<TicketDeliveryStanding, { readonly _tag: "ExactEvidenceConflict" }>
     }
 
+type AcceptedStandingResponsibility = Extract<
+  WorkflowResponsibilityEntry,
+  { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
+>
+
+/**
+ * An accepted terminal executor standing that remains visible after the
+ * cancellation/stop disposition is settled. The two variants are separate so
+ * a cancelled standing cannot be represented as a stopped standing (or vice
+ * versa); the exact workflow responsibility and executor correlation remain
+ * attached to both.
+ */
+export type DeliveryStatusAcceptedStandingSettlement =
+  | {
+      readonly _tag: "AcceptedStandingSettlement"
+      readonly standing: {
+        readonly _tag: "CancelledAttemptSettled"
+        readonly claimDisposition: "NoRelease" | "Released"
+        readonly responsibility: AcceptedStandingResponsibility
+      }
+    }
+  | {
+      readonly _tag: "AcceptedStandingSettlement"
+      readonly standing: {
+        readonly _tag: "StoppedAttemptSettled"
+        readonly claimDisposition: "NoRelease" | "Released"
+        readonly responsibility: AcceptedStandingResponsibility
+      }
+    }
+
 /** A graph observation identity carried with a task-absent result. */
 export interface DeliveryStatusGraphSource {
   readonly _tag: "EstablishedGraph"
@@ -238,7 +269,7 @@ export type DeliveryStatusEntry =
       readonly subject: DeliveryStatusSubject
       readonly taskId: TaskId
       readonly attemptId: DeliverySettlement["attemptId"]
-      readonly settlement: DeliverySettlement
+      readonly settlement: DeliverySettlement | DeliveryStatusAcceptedStandingSettlement
     }
   | {
       readonly _tag: "Relinquishment"
