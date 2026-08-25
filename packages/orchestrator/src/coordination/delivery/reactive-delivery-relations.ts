@@ -168,7 +168,7 @@ const latestUnresolvedGraphReadOperationIdOf = (
   graphReads: ReturnType<typeof executorProgressGraphReadInputOf>["graphReads"]
 ) =>
   graphReads
-    .filter(({ observation }) => observation === null)
+    .filter(({ observation }) => observation._tag === "Unresolved")
     .toSorted((left, right) => Number(right.intentAt) - Number(left.intentAt))[0]?.operationId
 
 const trackerGraphProposalsOf = (
@@ -259,6 +259,9 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const fresh = freshCandidates.filter(
       ({ transition }) =>
         !executorProgressBlocked(transition, progressRequirement) &&
+        ((transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
+          transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts") ||
+          executorContinuationWithinLimit(transition, records)) &&
         !recoveredContinuationBlocksFreshExecutorWork(recoveredCandidates, transition)
     )
     const establishCurrentGraph =

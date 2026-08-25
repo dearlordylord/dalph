@@ -4,10 +4,18 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
+  executorProgressGraphReadInputOf,
   executorProgressGraphReadRequirementOf,
   type ExecutorProgressCommand,
   type ExecutorProgressGraphRead
 } from "./executor-progress-graph-read.js"
+import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import {
+  taskTrackerFactsObservedEvent,
+  makeCompleteTaskTrackerFactsObserved
+} from "../../workflow/task-tracker-facts/observation.js"
+import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 
 const runId = RunId.make("executor-progress-requirement-test")
 const target = FixtureTarget.make("executor-progress-requirement-target")
@@ -26,12 +34,15 @@ const readAt = (
   operationId: string,
   intentAt: number,
   observedAt: number | null,
-  observation: ExecutorProgressGraphRead["observation"] = "Complete"
+  observation: "Complete" | "Unchanged" | "Failed" | null = "Complete"
 ): ExecutorProgressGraphRead => ({
   intentAt: JournalPosition.make(intentAt),
-  observation,
-  observedAt: observedAt === null ? null : JournalPosition.make(observedAt),
+  observation:
+    observedAt === null
+      ? { _tag: "Unresolved" }
+      : { _tag: "Observed", outcome: observation ?? "Failed", observedAt: JournalPosition.make(observedAt) },
   operationId: OperationId.make(operationId),
+  runId,
   target
 })
 
@@ -142,5 +153,32 @@ describe("executor progress graph-read requirement", () => {
 
     expect(requirement?.pendingReports).toHaveLength(1)
     expect(requirement?.unresolvedReadOperationId).toBeNull()
+  })
+
+  it("keeps a foreign-run observation with the same operation ID unresolved", () => {
+    const operation = makeTrackerGraphObservationOperation(OperationId.make("shared-progress-read"), target)
+    const graph = projectTrackerSnapshot({ revision: "foreign-progress-graph", tasks: [] })
+    expect(graph._tag).toBe("Valid")
+    if (graph._tag === "Invalid") return
+
+    const derived = executorProgressGraphReadInputOf(
+      [
+        { event: taskTrackerReadIntent(operation), position: JournalPosition.make(2), runId },
+        {
+          event: taskTrackerFactsObservedEvent(
+            operation.operationId,
+            makeCompleteTaskTrackerFactsObserved(operation, graph.snapshot)
+          ),
+          position: JournalPosition.make(3),
+          runId: foreignRunId
+        }
+      ],
+      runId,
+      target
+    )
+
+    expect(derived.graphReads[0]?.observation).toEqual({ _tag: "Unresolved" })
+    const requirement = executorProgressGraphReadRequirementOf({ ...derived, reports: [reportAt("A", 1, "Running")] })
+    expect(requirement?.unresolvedReadOperationId).toBe(OperationId.make("shared-progress-read"))
   })
 })
