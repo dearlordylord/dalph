@@ -1723,7 +1723,7 @@ export const changedAttemptStopReleaseResponseLostAuthoredCassette: ScenarioCass
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     {
       _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
     },
     {
       _tag: "OperatorStopsAttempt",
@@ -1739,7 +1739,7 @@ export const changedAttemptStopReleaseResponseLostAuthoredCassette: ScenarioCass
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     {
       _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
     },
     attemptChoiceExpectedBehavior
   ]
