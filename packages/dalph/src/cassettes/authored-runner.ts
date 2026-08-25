@@ -894,6 +894,10 @@ const taskWorkAdmissionSummary = (proposal: DeliveryProposal): string => {
   const requirement = proposal.admission.taskWorkPosition
   return Match.valueTags(requirement, {
     NoTaskWorkPosition: () => "needs no task-work position",
+    PreStartTaskWorkPositionRequired: (value) =>
+      value.mode === "AcquireFresh"
+        ? "must acquire and retain a fresh pre-start task-work position"
+        : `must reuse the pre-start task-work position held by claim operation ${value.claimOperationId}`,
     TaskWorkPositionRequired: (value) =>
       Match.value(value.mode).pipe(
         Match.when("Existing", () => "requires the existing task-work position"),
@@ -965,6 +969,8 @@ const authoredActionIssueFactOf = (issue: DeliveryProposalIssue): AuthoredAction
     AcceptedOperationEvidenceMissing: () =>
       `Dalph cannot ${action.toLowerCase()} because accepted journal evidence is missing`,
     FreshRouteProvenanceMissing: () => `Dalph cannot ${action.toLowerCase()} because fresh route provenance is missing`,
+    PreStartClaimProvenanceMissing: () =>
+      `Dalph cannot ${action.toLowerCase()} because the exact pre-start claim provenance is missing`,
     TypedRoutePolicyContradiction: () =>
       `Dalph cannot ${action.toLowerCase()} because the typed route policy contradicts this transition`
   })
@@ -1133,6 +1139,9 @@ const latestArrayElementIndex = -1
 const authoredSettlementYieldTurns = 10
 /** A maintained authored run must either consume a story item or fail with its exact stalled boundary. */
 const authoredProgressWatchdogTurns = 100_000
+const authoredCapstoneProgressWatchdogTurns = 5_000
+const authoredDiagnosticJournalTailLength = 12
+const authoredDiagnosticOwnerHistoryLength = 8
 
 const operatorControlFailureMatches = (
   failure: unknown,
@@ -1466,7 +1475,10 @@ const runAuthoredScenarioCassetteWith = (request: {
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
       const coordinatorLifecycleBoundaryCount = cassette.story.filter(
-        (item) => item._tag === "CoordinatorActivationReturned" || item._tag === "CoordinatorProcessDies"
+        (item) =>
+          item._tag === "CoordinatorActivationReturned" ||
+          item._tag === "CoordinatorProcessDies" ||
+          item._tag === "CassetteKillsCoordinatorWithTargetLineageReadHeld"
       ).length
       const operatorControlGraphReadGate = yield* Ref.make<
         Option.Option<{ readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }>
@@ -1874,7 +1886,14 @@ const runAuthoredScenarioCassetteWith = (request: {
                 }
                 return yield* observePlannedAttemptWorktreeThrough(gitWorktree, operation)
               }),
-            readTargetLineage: (operation) => observeTargetLineageThrough(authoredGitTargetLineage, operation),
+            readTargetLineage: (operation) =>
+              Effect.gen(function* () {
+                yield* cursor.awaitTargetLineageReadBoundary(
+                  operation.plannedAttempt.taskId,
+                  operation.plannedAttempt.attemptId
+                )
+                return yield* observeTargetLineageThrough(authoredGitTargetLineage, operation)
+              }),
             reconcileTaskWorktree: (operation) =>
               runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
                 Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
@@ -2540,6 +2559,14 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
             const driveTaskWorkSpecificationReadBoundaryRelease =
               cursor.consumeTaskWorkSpecificationReadBoundaryRelease.pipe(Effect.asVoid, Effect.orDie)
+            const driveTargetLineageReadBoundaryHold = cursor.consumeTargetLineageReadBoundaryHold.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const driveTargetLineageReadBoundaryRelease = cursor.consumeTargetLineageReadBoundaryRelease.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
             type DirectlyDrivenStoryItem = Extract<
               AuthoredCassetteStoryItem,
               {
@@ -2555,6 +2582,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                   | "CassetteReleasesHeldTargetPromotionReconciliationRead"
                   | "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary"
                   | "CassetteReleasesHeldTaskWorkSpecificationRead"
+                  | "CassetteHoldsTargetLineageReadBeforeBoundary"
+                  | "CassetteReleasesHeldTargetLineageRead"
                   | "OperatorContinuesAttempt"
                   | "OperatorDirectsTaskClaimReacquisition"
                   | "OperatorRacesContinueAndStop"
@@ -2580,6 +2609,8 @@ const runAuthoredScenarioCassetteWith = (request: {
               "CassetteReleasesHeldTargetPromotionReconciliationRead",
               "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
               "CassetteReleasesHeldTaskWorkSpecificationRead",
+              "CassetteHoldsTargetLineageReadBeforeBoundary",
+              "CassetteReleasesHeldTargetLineageRead",
               "OperatorContinuesAttempt",
               "OperatorDirectsTaskClaimReacquisition",
               "OperatorRacesContinueAndStop",
@@ -2611,6 +2642,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                   driveTargetPromotionReconciliationReadBoundaryRelease,
                 CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: () => driveTaskWorkSpecificationReadBoundaryHold,
                 CassetteReleasesHeldTaskWorkSpecificationRead: () => driveTaskWorkSpecificationReadBoundaryRelease,
+                CassetteHoldsTargetLineageReadBeforeBoundary: () => driveTargetLineageReadBoundaryHold,
+                CassetteReleasesHeldTargetLineageRead: () => driveTargetLineageReadBoundaryRelease,
                 OperatorContinuesAttempt: () => driveAttemptChoice,
                 OperatorDirectsTaskClaimReacquisition: () => driveClaimReacquisition,
                 OperatorRacesContinueAndStop: () => driveAttemptChoiceRace,
@@ -2800,6 +2833,9 @@ const runAuthoredScenarioCassetteWith = (request: {
       const authoredProgressWatchdog = Effect.gen(function* () {
         let lastPosition = yield* cursor.storyPosition
         let stagnantTurns = 0
+        const watchdogTurns = cassette.name.startsWith("DS01-17")
+          ? authoredCapstoneProgressWatchdogTurns
+          : authoredProgressWatchdogTurns
         for (;;) {
           yield* Effect.yieldNow
           const position = yield* cursor.storyPosition
@@ -2809,10 +2845,48 @@ const runAuthoredScenarioCassetteWith = (request: {
             continue
           }
           stagnantTurns += 1
-          if (stagnantTurns < authoredProgressWatchdogTurns) continue
+          if (stagnantTurns < watchdogTurns) continue
           const current = yield* cursor.currentStoryItem
+          const latestPublication = (yield* Ref.get(capturedDeliveryPublications)).at(latestArrayElementIndex)
+          const journalTail = (yield* sharedJournal.read(runId))
+            .slice(-authoredDiagnosticJournalTailLength)
+            .map(({ event, position }) => ({ position, tag: event._tag }))
+          const publicationDiagnostic =
+            latestPublication === undefined
+              ? undefined
+              : {
+                  activationOrdinal: latestPublication.activationOrdinal,
+                  storyPosition: latestPublication.storyPosition,
+                  runtimeFacts: latestPublication.bundle.actionInputs.runtimeFacts,
+                  proposals: [
+                    ...latestPublication.bundle.actionInputs.proposalContributions.deliverySettlement,
+                    ...latestPublication.bundle.actionInputs.proposalContributions.ticketDelivery,
+                    ...latestPublication.bundle.actionInputs.reflectionProposals,
+                    ...latestPublication.bundle.actionInputs.trackerGraphProposals
+                  ].map(({ admission, id, route, waitsForLiveOperationId }) => ({
+                    id,
+                    taskWorkPosition: admission.taskWorkPosition._tag,
+                    route: route._tag === "IdentityFreeWorkflowRoute" ? route.transition._tag : route._tag,
+                    waitsForLiveOperationId
+                  }))
+                }
           return yield* Effect.die(
-            `authored scenario progress stalled at story position ${position}: ${JSON.stringify(current ?? "EndOfStory")}`
+            `authored scenario progress stalled at story position ${position}: ${JSON.stringify({
+              current: current ?? "EndOfStory",
+              latestPublication: publicationDiagnostic,
+              ownerHistory: (yield* Ref.get(observationCaptureState)).captures
+                .filter((capture) => capture._tag === "DeliveryRuntimeOwnersCaptured")
+                .slice(-authoredDiagnosticOwnerHistoryLength)
+                .map((capture) =>
+                  capture.liveOwners.map((owner) =>
+                    owner.proposal.route._tag === "IdentityFreeWorkflowRoute"
+                      ? owner.proposal.route.transition._tag
+                      : owner.proposal.route._tag
+                  )
+                ),
+              liveOwners: yield* Ref.get(lastRuntimeOwners),
+              journalTail
+            })}`
           )
         }
       })

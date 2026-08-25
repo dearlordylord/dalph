@@ -51,16 +51,16 @@ const staleTargetHead = "2222222222222222222222222222222222222222"
 const successorCandidateCommit = "dddddddddddddddddddddddddddddddddddddddd"
 const integratorCandidateA = "refs/heads/dalph/integrator-candidate-A"
 const integratorSuccessorCandidateA = "refs/heads/dalph/integrator-candidate-A-successor"
-const initialCandidateTargetLineageObservedAt = 155
-const promotionStaleQuarantineAt = 186
-const successorTargetLineageObservedAt = 233
+const initialCandidateTargetLineageObservedAt = 180
+const promotionStaleQuarantineAt = 190
+const successorTargetLineageObservedAt = 235
 const initialAttempts = [
   { taskId: "A", attemptId: "attempt:A:0" },
   { taskId: "B", attemptId: "attempt:B:1" },
   { taskId: "C", attemptId: "attempt:C:2" }
 ] as const
 const integratorSessionCorrelationA = (targetLineageObservedAt: number) => {
-  const suffix = `$authored-run:attempt:A:0:147:${targetLineageObservedAt}:${expectedHead}:${acceptedCommitA}:/dalph/cassettes/ds-probe.git:refs/heads/master`
+  const suffix = `$authored-run:attempt:A:0:178:${targetLineageObservedAt}:${expectedHead}:${acceptedCommitA}:/dalph/cassettes/ds-probe.git:refs/heads/master`
   return {
     acceptedResult: {
       commit: acceptedCommitA,
@@ -79,14 +79,14 @@ const integratorSessionCorrelationA = (targetLineageObservedAt: number) => {
       taskRevision: makeTaskWorkSpecification(specification("A")).fingerprint,
       worktree: "/dalph/cassettes/ds-probe/attempt-A-0"
     },
-    queuedAt: 140,
+    queuedAt: 177,
     sessionId: `integrator-session:${suffix}`,
-    startedAt: 147,
+    startedAt: 178,
     targetLineageObservedAt
   }
 }
 
-const integratorSuccessorSessionCorrelationA = (targetLineageObservedAt: number, directionAppliedAt = 187) => {
+const integratorSuccessorSessionCorrelationA = (targetLineageObservedAt: number, directionAppliedAt = 191) => {
   const predecessor = integratorSessionCorrelationA(initialCandidateTargetLineageObservedAt)
   const material = [
     "full-rerun-successor",
@@ -191,22 +191,12 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "A" } },
     { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "B" } },
     { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "C" } },
-    { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "D" } },
-    { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "E" } },
-    ...graphRead,
-    ...graphRead,
     ...graphRead,
     ...graphRead,
     ...graphRead,
     ...["A", "B", "C"].flatMap(specRead),
-    ...specRead("D"),
-    ...specRead("E"),
     ...initialAttempts.map(({ attemptId, taskId }) => plan(taskId, attemptId)),
-    plan("D", "attempt:D:3"),
-    plan("E", "attempt:E:4"),
     ...initialAttempts.map(({ attemptId, taskId }) => worktree(taskId, attemptId)),
-    worktree("D", "attempt:D:3"),
-    worktree("E", "attempt:E:4"),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:A:0" },
@@ -237,9 +227,22 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       report: { _tag: "SafelySuspended", attemptId: "attempt:B:1" },
       request: "Suspend"
     },
+    { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "D" } },
+    ...graphReadG1,
+    ...graphReadG1,
+    ...specRead("D"),
+    plan("D", "attempt:D:3"),
+    worktree("D", "attempt:D:3"),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:A:0" },
+      request: "StartOrContinue"
+    },
+    ...specRead("C"),
+    ...specRead("C"),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "Running", attemptId: "attempt:C:2" },
       request: "StartOrContinue"
     },
     {
@@ -288,29 +291,35 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:C:2" },
+      report: { _tag: "Running", attemptId: "attempt:D:3" },
       request: "StartOrContinue"
     },
+    ...graphReadG1,
+    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "C" },
+    ...specRead("C"),
+    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "D" },
+    ...specRead("D"),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "C" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "C" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:C:2", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:C:2", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "A" },
+    { _tag: "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary", attemptId: "attempt:A:0", taskId: "A" },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:D:3" },
       request: "StartOrContinue"
     },
-    ...graphReadG1,
     ...graphReadG2,
-    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "C" },
-    ...specRead("C"),
-    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "D" },
     ...specRead("D"),
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: {
-        _tag: "Terminal",
-        attemptId: "attempt:A:0",
-        result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
-      },
-      request: "StartOrContinue"
-    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:3", taskId: "D" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "SafelySuspended", attemptId: "attempt:C:2" },
@@ -324,25 +333,30 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       requestNonce: "continue-B-after-C-safe",
       taskId: "B"
     },
-    ...specRead("D"),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
-    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "ds-probe-target" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
-    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
-    { _tag: "TrackerGraphReadReturned", graph: graphG1 },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "CassetteReleasesHeldPlannedAttemptContinuation", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "A" },
+    ...graphReadG2,
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
     { _tag: "TaskWorkSpecificationReadReturned", ...changedSpecification },
-    ...specRead("C"),
     ...specRead("D"),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "C" } },
-    { _tag: "TaskClaimCurrentReadReturned", taskId: "C" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: {
+        _tag: "Terminal",
+        attemptId: "attempt:A:0",
+        result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
+      },
+      request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
     {
       _tag: "IntegratorRequestReceived",
       correlation: integratorSessionCorrelationA(initialCandidateTargetLineageObservedAt)
@@ -358,12 +372,12 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
         directParents: [expectedHead, acceptedCommitA]
       }
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:C:2", taskId: "C" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:3", taskId: "D" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:C:2", taskId: "C" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:3", taskId: "D" } },
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      candidateCommit: "cccccccccccccccccccccccccccccccccccccccc",
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: expectedHead },
+      repository: "/dalph/cassettes/ds-probe.git"
+    },
     {
       _tag: "TargetPromotionGitReadReturned",
       candidateCommit: "cccccccccccccccccccccccccccccccccccccccc",
@@ -386,12 +400,35 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
         requestId: { nonce: "full-rerun-A", runId: "$authored-run" }
       }
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "CassetteHoldsTargetLineageReadBeforeBoundary", attemptId: "attempt:A:0", taskId: "A" },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:B:1" },
       request: "StartOrContinue"
     },
-    { _tag: "CoordinatorProcessDies" },
+    { _tag: "CassetteKillsCoordinatorWithTargetLineageReadHeld", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "ds-probe-target" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
+    { _tag: "TrackerGraphReadReturned", graph: graphG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
+    { _tag: "TaskWorkSpecificationReadReturned", ...changedSpecification },
+    ...specRead("C"),
+    ...specRead("D"),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "C" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "C" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "D" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:C:2", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:C:2", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:3", taskId: "D" } },
     ...graphReadG2,
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
@@ -421,6 +458,7 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:3", taskId: "D" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:3", taskId: "D" } },
+    { _tag: "CassetteReleasesHeldTargetLineageRead", attemptId: "attempt:A:0", taskId: "A" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
     {
       _tag: "IntegratorRequestReceived",
