@@ -120,6 +120,8 @@ const conformanceRequest = PlannedAttemptExecutorRequest.make({
 const conformanceCorrelation = plannedAttemptExecutorCorrelation(conformanceAttempt)
 const conformanceFinalResponse = JSON.stringify({ commit: head, correlation: conformanceCorrelation })
 
+type CodexActivityScope = "IntegratorSession" | "PlannedAttempt" | undefined
+
 // eslint-disable-next-line functional/no-mixed-types -- The controlled fixture intentionally groups immutable observations and test controls.
 type Harness = {
   readonly app: CodexAppServerService
@@ -144,9 +146,15 @@ type Harness = {
   readonly setActivityCensusSequence: (projections: ReadonlyArray<CodexOwnedActivityCensusProjection>) => void
   readonly observeActivityCensus: (
     thread: CodexThreadSnapshot,
-    backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
+    backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>,
+    scope?: CodexActivityScope
   ) => CodexOwnedActivityCensusProjection
-  readonly terminateDescendants: (descendants: ReadonlyArray<CodexOwnedProcessIdentity>) => void
+  readonly activityObservationScopes: () => ReadonlyArray<CodexActivityScope>
+  readonly terminateDescendants: (
+    descendants: ReadonlyArray<CodexOwnedProcessIdentity>,
+    scope?: CodexActivityScope
+  ) => void
+  readonly descendantTerminationScopes: () => ReadonlyArray<CodexActivityScope>
   readonly backgroundTerminationCount: () => number
   readonly descendantTerminationCount: () => number
   readonly makeResumeUnavailable: () => void
@@ -205,8 +213,10 @@ const makeHarness = (
   let terminalActivity = false
   let activityCensusOverride: CodexOwnedActivityCensusProjection | undefined
   let activityCensusSequence: Array<CodexOwnedActivityCensusProjection> = []
+  let activityObservationScopes: Array<CodexActivityScope> = []
   let backgroundTerminationCount = 0
   let descendantTerminationCount = 0
+  let descendantTerminationScopes: Array<CodexActivityScope> = []
   let associatedRecord: CodexAttemptRecord | undefined
   let readOverride: CodexAttemptRecord | undefined
   let threadStartCount = 0
@@ -493,7 +503,8 @@ const makeHarness = (
       activityCensusOverride = undefined
       activityCensusSequence = [...projections]
     },
-    observeActivityCensus: (thread, backgroundTerminals) => {
+    observeActivityCensus: (thread, backgroundTerminals, scope) => {
+      activityObservationScopes = [...activityObservationScopes, scope]
       const next = activityCensusSequence[0]
       if (next !== undefined) {
         activityCensusSequence = activityCensusSequence.slice(1)
@@ -508,9 +519,12 @@ const makeHarness = (
       ]
       return activities.length === 0 ? { _tag: "Absent" } : { _tag: "ExactLive", activities }
     },
-    terminateDescendants: (descendants) => {
+    activityObservationScopes: () => activityObservationScopes,
+    terminateDescendants: (descendants, scope) => {
       descendantTerminationCount += descendants.length
+      descendantTerminationScopes = [...descendantTerminationScopes, scope]
     },
+    descendantTerminationScopes: () => descendantTerminationScopes,
     backgroundTerminationCount: () => backgroundTerminationCount,
     descendantTerminationCount: () => descendantTerminationCount,
     makeResumeUnavailable: () => {
@@ -584,6 +598,11 @@ const makeHarness = (
   }
 }
 
+const expectPlannedAttemptScopes = (scopes: ReadonlyArray<CodexActivityScope>): void => {
+  expect(scopes.length).toBeGreaterThan(0)
+  expect(scopes.every((scope) => scope === "PlannedAttempt")).toBe(true)
+}
+
 const defaultGitCommand: GitCommandService = {
   run: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: "" }),
   runInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: `${head}\n` }),
@@ -605,9 +624,10 @@ const layerForImplementation =
         ? Layer.mergeAll(
             controlledCodexAppServerLayer(harness.app),
             controlledCodexOwnedActivityCensusLayer({
-              observe: (thread, backgroundTerminals) =>
-                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
-              terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+              observe: (thread, backgroundTerminals, scope) =>
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals, scope)),
+              terminateDescendants: (descendants, scope) =>
+                Effect.sync(() => harness.terminateDescendants(descendants, scope))
             }),
             Layer.succeed(CodexAttemptStore, store),
             Layer.succeed(GitCommand, gitCommand)
@@ -615,9 +635,10 @@ const layerForImplementation =
         : Layer.mergeAll(
             controlledCodexAppServerLayer(harness.app),
             controlledCodexOwnedActivityCensusLayer({
-              observe: (thread, backgroundTerminals) =>
-                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
-              terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
+              observe: (thread, backgroundTerminals, scope) =>
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals, scope)),
+              terminateDescendants: (descendants, scope) =>
+                Effect.sync(() => harness.terminateDescendants(descendants, scope))
             }),
             Layer.succeed(CodexAttemptStore, store),
             Layer.succeed(GitCommand, gitCommand),
@@ -1353,6 +1374,8 @@ it.effect("does not report safe suspension while a process-group descendant surv
     const failed = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
     expect(failed._tag).toBe("Failure")
     expect(harness.descendantTerminationCount()).toBeGreaterThan(0)
+    expectPlannedAttemptScopes(harness.activityObservationScopes())
+    expectPlannedAttemptScopes(harness.descendantTerminationScopes())
     harness.setActivityCensus({ _tag: "Absent" })
     const suspended = yield* executor.requestSuspension(attempt)
     expect(suspended._tag).toBe("SafelySuspended")
@@ -2524,8 +2547,8 @@ it.effect("rejects replacement U2 token and predecessor-identity reuse", () =>
             Layer.mergeAll(
               controlledCodexAppServerLayer(reusedIdentityApp),
               controlledCodexOwnedActivityCensusLayer({
-                observe: (thread, terminals) =>
-                  Effect.succeed(reusedIdentityHarness.observeActivityCensus(thread, terminals)),
+                observe: (thread, terminals, scope) =>
+                  Effect.succeed(reusedIdentityHarness.observeActivityCensus(thread, terminals, scope)),
                 terminateDescendants: () => Effect.void
               }),
               Layer.succeed(CodexAttemptStore, reusedIdentityHarness.store),
@@ -2743,7 +2766,8 @@ it.effect("replaces from every observed private record and fails closed after an
               Layer.mergeAll(
                 controlledCodexAppServerLayer(app),
                 controlledCodexOwnedActivityCensusLayer({
-                  observe: (thread, terminals) => Effect.succeed(harness.observeActivityCensus(thread, terminals)),
+                  observe: (thread, terminals, scope) =>
+                    Effect.succeed(harness.observeActivityCensus(thread, terminals, scope)),
                   terminateDescendants: () => Effect.void
                 }),
                 Layer.succeed(CodexAttemptStore, harness.store),
@@ -2917,6 +2941,7 @@ it.effect("reconciles a lost turn/start response and seals one U2", () => {
     expect(harness.turnTexts[0]).toContain("do not describe this turn as a resumption of the purged unit")
     expect(harness.turnTexts[0]).toContain(`retained_worktree: ${attempt.worktree}`)
     expect(harness.turnTexts[0]).toContain("purged_predecessor_turn_id: issue-111-u1-turn")
+    expectPlannedAttemptScopes(harness.activityObservationScopes())
   })
 })
 

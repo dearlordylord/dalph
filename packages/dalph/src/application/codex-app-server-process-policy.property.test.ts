@@ -792,15 +792,30 @@ describe("Codex process observation policy", () => {
     ).toBeInstanceOf(CodexAppServerFailure)
     const darwinGroup = makeNodeCodexProcessGroupCensusService(withNative(darwinNative, (value) => value))
     expect(await Effect.runPromise(darwinGroup.observe(darwinLaunch))).toMatchObject({ _tag: "ExactLive" })
+    const darwinActivityCensus = makeNodeCodexOwnedActivityCensusService(
+      withNative(darwinNative, (value) => value),
+      60,
+      darwinIncarnation
+    )
     expect(
       await Effect.runPromise(
-        makeNodeCodexOwnedActivityCensusService(
-          withNative(darwinNative, (value) => value),
-          60,
-          darwinIncarnation
-        ).observe({ cwd: "/worktree", id: CodexThreadId.make("darwin-thread"), status: "idle", turns: [] }, [])
+        darwinActivityCensus.observe(
+          { cwd: "/worktree", id: CodexThreadId.make("darwin-thread"), status: "idle", turns: [] },
+          []
+        )
       )
     ).toEqual({ _tag: "Absent" })
+    expect(darwinBatchCommandReads).toBe(0)
+    expect(
+      await Effect.runPromise(
+        darwinActivityCensus.observe(
+          { cwd: "/worktree", id: CodexThreadId.make("darwin-thread"), status: "idle", turns: [] },
+          [],
+          "PlannedAttempt"
+        )
+      )
+    ).toEqual({ _tag: "Absent" })
+    expect(darwinBatchCommandReads).toBe(1)
     expect(
       await discoverAppServerProcesses(
         darwinLaunch.incarnation,
