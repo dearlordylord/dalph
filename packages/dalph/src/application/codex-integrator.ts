@@ -185,6 +185,7 @@ const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
     correlation: run,
     phase: "IntentRecorded",
     result: null,
+    terminalStatus: null,
     token: newToken(),
     turnId: null
   })
@@ -285,6 +286,9 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
       return yield* Effect.fail(providerFailure("sealed result thread ownership changed before replay"))
     const { turn } = yield* readOrRecoverTurn(app, census, store, record, run, freshThread)
     if (!isTerminalTurn(turn)) return yield* Effect.fail(providerFailure("sealed provider turn is still active"))
+    if (run.terminalStatus === null || turn.status !== run.terminalStatus) {
+      return yield* Effect.fail(providerFailure("fresh terminal turn status contradicts the sealed private result"))
+    }
     yield* observeQuiescence(app, census, freshThread)
     return run.result
   }
@@ -302,7 +306,8 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
           detail: IntegratorNotPreparedDetail.make("Codex provider turn failed before producing a candidate")
         })
       : yield* exactEnvelope(turn, currentRun.correlation)
-  const sealed = updateRun(currentRecord, currentRun, { phase: "Sealed", result, turnId: turn.id })
+  const terminalStatus = turn.status === "failed" ? "failed" : "completed"
+  const sealed = updateRun(currentRecord, currentRun, { phase: "Sealed", result, terminalStatus, turnId: turn.id })
   yield* boundary(store.write(sealed))
   return result
 })

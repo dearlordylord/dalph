@@ -38,6 +38,7 @@ import {
 } from "./codex-integrator-private-store.js"
 import {
   IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
   IntegratorNotPreparedDetail,
   IntegratorResult,
   IntegratorRunCorrelation,
@@ -102,10 +103,17 @@ const terminalResult = (correlation = runCorrelation(1)) =>
     detail: IntegratorNotPreparedDetail.make("private-store test result")
   })
 
+const preparedResult = (correlation = runCorrelation(1)) =>
+  IntegratorResult.cases.PreparedCandidate.make({
+    candidateText: IntegratorCandidateText.make("private-store-candidate"),
+    correlation
+  })
+
 const validRun = (ordinal = 1) => ({
   correlation: runCorrelation(ordinal),
   phase: "IntentRecorded" as const,
   result: null,
+  terminalStatus: null,
   token: CodexOwnedTurnToken.make(`private-store-turn-${ordinal}`),
   turnId: null
 })
@@ -180,6 +188,7 @@ describe("Codex Integrator private store", () => {
           correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session }),
           phase: "Sealed",
           result: null,
+          terminalStatus: "completed",
           token: CodexOwnedTurnToken.make("malformed-turn"),
           turnId: CodexTurnId.make("malformed-turn-id")
         }
@@ -232,7 +241,14 @@ describe("Codex Integrator private store", () => {
       { ...validRun(), phase: "TurnObserved", result: terminalResult(), turnId: CodexTurnId.make("observed") },
       { ...validRun(), phase: "TurnObserved", turnId: null },
       { ...validRun(), phase: "Sealed", turnId: CodexTurnId.make("sealed") },
-      { ...validRun(), phase: "Sealed", result: terminalResult(), turnId: null }
+      { ...validRun(), phase: "Sealed", result: terminalResult(), turnId: null },
+      {
+        ...validRun(),
+        phase: "Sealed" as const,
+        result: preparedResult(),
+        terminalStatus: "failed" as const,
+        turnId: CodexTurnId.make("failed-prepared")
+      }
     ]
     for (const run of invalidRuns) {
       expect(
@@ -245,6 +261,7 @@ describe("Codex Integrator private store", () => {
       ...validRun(),
       phase: "Sealed" as const,
       result: terminalResult(),
+      terminalStatus: "completed" as const,
       turnId: CodexTurnId.make("sealed-valid")
     }
     expect(

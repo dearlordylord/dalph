@@ -156,6 +156,7 @@ type CleanupCase = {
   readonly removeExitCode?: number
   readonly removeStderr?: string
   readonly applyRemoval?: boolean
+  readonly registrationAfterRemoval?: Registration
   readonly readSequence?: ReadonlyArray<CodexIntegratorPrivateRecord | null>
 }
 
@@ -276,19 +277,23 @@ const runCase = <A>(
             }),
           terminateDescendants: () => Effect.void
         })
-        const porcelain =
-          options.registration === "foreign"
-            ? `worktree ${candidatePath}\nHEAD ${"c".repeat(40)}\nbranch refs/heads/foreign\n\n`
-            : `worktree ${candidatePath}\nHEAD ${head}\ndetached\n\n`
         const commands: GitCommandService = {
           run: (_directory, args) =>
             Effect.gen(function* () {
               if (args[0] === "worktree" && args[1] === "list") {
                 const value = yield* Ref.get(registration)
-                return { exitCode: 0, stderr: "", stdout: value === "none" ? "" : porcelain }
+                const stdout =
+                  value === "none"
+                    ? ""
+                    : value === "foreign"
+                      ? `worktree ${candidatePath}\nHEAD ${"c".repeat(40)}\nbranch refs/heads/foreign\n\n`
+                      : `worktree ${candidatePath}\nHEAD ${head}\ndetached\n\n`
+                return { exitCode: 0, stderr: "", stdout }
               }
               if (args[0] === "worktree" && args[1] === "remove") {
-                if (options.applyRemoval === true) {
+                if (options.registrationAfterRemoval !== undefined) {
+                  yield* Ref.set(registration, options.registrationAfterRemoval)
+                } else if (options.applyRemoval === true) {
                   yield* Ref.set(registration, "none")
                   if (
                     yield* fileSystem
@@ -350,6 +355,7 @@ const recordFor = (
     threadStartIntent: boolean
     worktreeMaterializationIntent: boolean
     worktreeReady: boolean
+    terminalStatus: "completed" | "failed"
   }> = {}
 ) => {
   const correlation = overrides.correlation ?? predecessor
@@ -369,6 +375,7 @@ const recordFor = (
           correlation: run,
           detail: IntegratorNotPreparedDetail.make("cleanup test terminal result")
         }),
+        terminalStatus: overrides.terminalStatus ?? "completed",
         token: CodexOwnedTurnToken.make("cleanup-turn-token"),
         turnId: CodexTurnId.make("cleanup-turn")
       }
@@ -589,7 +596,10 @@ describe("Codex Integrator cleanup boundary", () => {
     for (const [terminalTurnMode, expected] of cases) {
       const observed = await runCase(
         {
-          record: recordFor("/tmp/unused", { removalIntent: true }),
+          record: recordFor("/tmp/unused", {
+            removalIntent: true,
+            terminalStatus: terminalTurnMode === "failed" ? "failed" : "completed"
+          }),
           registration: "none",
           projection: { _tag: "Absent" },
           terminalTurnMode
@@ -598,6 +608,30 @@ describe("Codex Integrator cleanup boundary", () => {
       )
       expect(observed._tag, terminalTurnMode).toBe(expected)
     }
+  })
+
+  it("fails closed when the fresh terminal status contradicts the sealed private result", async () => {
+    const failedInsteadOfCompleted = await runCase(
+      {
+        record: recordFor("/tmp/unused", { removalIntent: true, terminalStatus: "completed" }),
+        registration: "none",
+        projection: { _tag: "Absent" },
+        terminalTurnMode: "failed"
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(failedInsteadOfCompleted._tag).toBe("Unreadable")
+
+    const completedInsteadOfFailed = await runCase(
+      {
+        record: recordFor("/tmp/unused", { removalIntent: true, terminalStatus: "failed" }),
+        registration: "none",
+        projection: { _tag: "Absent" },
+        terminalTurnMode: "exact"
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(completedInsteadOfFailed._tag).toBe("Unreadable")
   })
 
   it("classifies exact registrations and all activity outcomes", async () => {
@@ -841,6 +875,35 @@ describe("Codex Integrator cleanup boundary", () => {
       (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
     )
     expect(result._tag).toBe("Unknown")
+  })
+
+  it("maps a failed removal race to DefinitelyNotApplied when registration transfers", async () => {
+    const result = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        removeExitCode: 1,
+        removeStderr: "remove response failed",
+        registrationAfterRemoval: "foreign"
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(result._tag).toBe("DefinitelyNotApplied")
+  })
+
+  it("maps a successful removal race to DefinitelyNotApplied when registration transfers", async () => {
+    const result = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        applyRemoval: true,
+        registrationAfterRemoval: "foreign"
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(result._tag).toBe("DefinitelyNotApplied")
   })
 
   it("keeps cleanup retryable when the post-removal private tombstone disappears", async () => {

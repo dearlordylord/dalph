@@ -70,22 +70,30 @@ export const CodexIntegratorPrivateRun = Schema.Struct({
   correlation: IntegratorRunCorrelation,
   phase: Schema.Literals(["IntentRecorded", "TurnBoundaryCrossing", "TurnObserved", "Sealed"]),
   result: Schema.NullOr(IntegratorResult),
+  /** Terminal provider status is durable because NotPrepared may come from either terminal status. */
+  terminalStatus: Schema.NullOr(Schema.Literals(["completed", "failed"])),
   token: CodexOwnedTurnToken,
   turnId: Schema.NullOr(CodexTurnId)
 }).check(
   Schema.makeFilter((run) => {
     if (run.phase === "IntentRecorded" || run.phase === "TurnBoundaryCrossing") {
-      return run.result !== null || run.turnId !== null
-        ? "an unobserved provider turn cannot retain a result or turn id"
+      return run.result !== null || run.terminalStatus !== null || run.turnId !== null
+        ? "an unobserved provider turn cannot retain a result, terminal status, or turn id"
         : undefined
     }
     if (run.phase === "TurnObserved") {
-      return run.result !== null || run.turnId === null
+      return run.result !== null || run.terminalStatus !== null || run.turnId === null
         ? "an observed provider turn must retain only its exact turn id"
         : undefined
     }
-    return run.result === null || run.turnId === null
-      ? "a sealed provider turn must retain its exact turn and terminal result"
+    if (run.result === null || run.terminalStatus === null || run.turnId === null) {
+      return "a sealed provider turn must retain its exact turn, terminal status, and terminal result"
+    }
+    if (run.terminalStatus === "failed" && run.result._tag !== "NotPrepared") {
+      return "a failed provider turn may retain only a sanitized NotPrepared result"
+    }
+    return run.result._tag === "PreparedCandidate" && run.terminalStatus !== "completed"
+      ? "a PreparedCandidate result requires a completed provider turn"
       : undefined
   })
 )

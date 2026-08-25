@@ -177,7 +177,15 @@ type FixtureOptions = {
   readonly turnTokenMode?: "exact" | "tokenless" | "foreign"
   readonly resumeThreadTokenMode?: "exact" | "tokenless" | "foreign"
   readonly resumeThreadTokenSequence?: ReadonlyArray<"exact" | "tokenless" | "foreign">
-  readonly resumeThreadState?: "exact" | "active" | "foreign" | "tokenless" | "missing" | "wrongId"
+  readonly resumeThreadState?:
+    | "exact"
+    | "active"
+    | "foreign"
+    | "tokenless"
+    | "missing"
+    | "wrongId"
+    | "completed"
+    | "failed"
   readonly persistedTurnCorrelation?: boolean
   readonly hideTurnsOnRead?: boolean
   readonly activeTurn?: boolean
@@ -350,11 +358,15 @@ const fixtureLayer = (
                         { id: CodexTurnId.make("tokenless-replay-turn"), status: "completed" as const, items: [] }
                       ]
                     : current.map((turn) =>
-                        options.resumeThreadState === "active"
-                          ? { ...turn, status: "inProgress" as const }
-                          : options.resumeThreadState === "wrongId"
-                            ? { ...turn, id: CodexTurnId.make("foreign-replay-turn-id") }
-                            : turn
+                        options.resumeThreadState === "completed"
+                          ? { ...turn, status: "completed" as const }
+                          : options.resumeThreadState === "failed"
+                            ? { ...turn, status: "failed" as const }
+                            : options.resumeThreadState === "active"
+                              ? { ...turn, status: "inProgress" as const }
+                              : options.resumeThreadState === "wrongId"
+                                ? { ...turn, id: CodexTurnId.make("foreign-replay-turn-id") }
+                                : turn
                       )
             const visibleTurns =
               options.hideTurnsOnRead === true
@@ -761,6 +773,37 @@ describe("Codex Integrator", () => {
     expect(turnStarts.value).toBe(1)
   })
 
+  it.each([
+    ["completed result with a fresh failed turn", false, "failed"],
+    ["failed result with a fresh completed turn", true, "completed"]
+  ] as const)("fails sealed replay when there is a %s", async (_description, failedFirstTurn, freshStatus) => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        `/tmp/dalph-integrator-test/replay-terminal-status-${failedFirstTurn ? "failed" : "completed"}.json`
+      ),
+      repository
+    })
+    const turnStarts = { value: 0 }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* integrator.prepare(requestFor(1))
+        const replay = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        return { first, replay }
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, { failedTerminalTurn: failedFirstTurn, resumeThreadState: freshStatus, turnStarts })
+        )
+      )
+    )
+    expect(result.first._tag).toBe(failedFirstTurn ? "NotPrepared" : "PreparedCandidate")
+    expect(result.replay._tag).toBe("IntegratorCallFailure")
+    expect(result.replay.detail).toContain("terminal turn status")
+    expect(turnStarts.value).toBe(1)
+  })
+
   it("fails closed on a registered candidate whose path is missing or prunable", async () => {
     for (const [name, options] of [
       ["missing", { preRegisteredWorktree: true }],
@@ -1121,6 +1164,7 @@ describe("Codex Integrator", () => {
     if (Option.isSome(result.stored)) {
       expect(result.stored.value.runs[0]?.result?._tag).toBe("NotPrepared")
       expect(result.stored.value.runs[0]?.result?._tag).not.toBe("PreparedCandidate")
+      expect(result.stored.value.runs[0]?.terminalStatus).toBe("failed")
     }
   })
 

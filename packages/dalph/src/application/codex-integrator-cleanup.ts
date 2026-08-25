@@ -88,6 +88,13 @@ const terminalTurnEvidence = (
   if (expected === undefined || expected.phase !== "Sealed" || expected.result === null || expected.turnId === null) {
     return cleanupUnreadable(authorization, "private predecessor has no sealed terminal turn evidence")
   }
+  if (
+    expected.terminalStatus === null ||
+    (expected.terminalStatus === "failed" && expected.result._tag !== "NotPrepared") ||
+    (expected.result._tag === "PreparedCandidate" && expected.terminalStatus !== "completed")
+  ) {
+    return cleanupUnreadable(authorization, "private predecessor has contradictory sealed terminal outcome evidence")
+  }
   if (thread.status === "active") return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter")
   const knownTokens = new Set(record.runs.map((run) => run.token))
   if (thread.turns.some((turn) => turn.ownedTurnToken === undefined)) {
@@ -109,6 +116,9 @@ const terminalTurnEvidence = (
   if (exact.status === "inProgress") return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter")
   if (exact.status !== "completed" && exact.status !== "failed") {
     return cleanupUnreadable(authorization, "candidate terminal turn status is not conclusive")
+  }
+  if (exact.status !== expected.terminalStatus) {
+    return cleanupUnreadable(authorization, "candidate terminal turn status contradicts the private sealed result")
   }
   return undefined
 }
@@ -288,11 +298,17 @@ const reconcileFailedRemoval = (
         revision: authorization.evidenceRevision,
         sessionId: authorization.owner.sessionId
       })
-    : IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
-        detail: result.stderr.trim() || `git exited ${result.exitCode}`,
-        locator: authorization.locator,
-        sessionId: authorization.owner.sessionId
-      })
+    : observation._tag === "Foreign"
+      ? IntegratorCandidateCleanupMutationResult.cases.DefinitelyNotApplied.make({
+          detail: `candidate ownership changed during Git removal (${observation.reason})`,
+          locator: authorization.locator,
+          sessionId: authorization.owner.sessionId
+        })
+      : IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+          detail: result.stderr.trim() || `git exited ${result.exitCode}`,
+          locator: authorization.locator,
+          sessionId: authorization.owner.sessionId
+        })
 
 const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(function* (
   authorization: IntegratorCandidateCleanupAuthorization,
@@ -367,6 +383,13 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
   if (result.exitCode !== 0) return reconcileFailedRemoval(authorization, result, yield* observe(authorization))
   const settled = yield* observe(authorization)
   if (settled._tag !== "Absent") {
+    if (settled._tag === "Foreign") {
+      return IntegratorCandidateCleanupMutationResult.cases.DefinitelyNotApplied.make({
+        detail: `candidate ownership changed after Git removal (${settled.reason})`,
+        locator: authorization.locator,
+        sessionId: authorization.owner.sessionId
+      })
+    }
     return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
       detail: "Git remove returned but exact candidate remains registered",
       locator: authorization.locator,
