@@ -16,8 +16,8 @@ import type { RecoveryPrefixCutLabel } from "./recovery-prefix-contract.js"
 /** The two physical journal-store executions required for each retained prefix. */
 export type RecoveryStoreLane = "memory" | "sqlite"
 
-export interface RecoveryPrefix {
-  readonly cut: RecoveryPrefixCutLabel
+export interface RecoveryPrefix<Cut extends string = RecoveryPrefixCutLabel> {
+  readonly cut: Cut
   readonly endpoint: string
   readonly records: readonly [JournalRecord, ...Array<JournalRecord>]
 }
@@ -186,8 +186,8 @@ const replaySqlite = Effect.fn("RecoveryStoreLanes.replaySqlite")(function* (
  * prefix, so callers can install the production RunLifecycleJournal and
  * journaled bootstrap against this exact memory or SQLite boundary.
  */
-export const withRecoveryPrefixStore = <A, E, R>(
-  prefix: RecoveryPrefix,
+export const withRecoveryPrefixStore = <A, E, R, Cut extends string>(
+  prefix: RecoveryPrefix<Cut>,
   lane: RecoveryStoreLane,
   use: (journal: JournalStore["Service"]) => Effect.Effect<A, E, R>
 ): Effect.Effect<A, unknown, R> => {
@@ -214,8 +214,8 @@ export const withRecoveryPrefixStore = <A, E, R>(
 }
 
 /** Replays one retained prefix through exactly one fresh physical store lane. */
-export const replayRecoveryPrefix = (
-  prefix: RecoveryPrefix,
+export const replayRecoveryPrefix = <Cut extends string>(
+  prefix: RecoveryPrefix<Cut>,
   lane: RecoveryStoreLane,
   resume?: RecoveryPrefixResume
 ): Effect.Effect<RecoveryStoreReplay, unknown> =>
@@ -223,7 +223,7 @@ export const replayRecoveryPrefix = (
 
 /** Returns a lane-qualified diagnostic when decoded history or semantic projection diverges. */
 export const recoveryPrefixMismatch = (
-  cut: RecoveryPrefixCutLabel,
+  cut: string,
   lane: RecoveryStoreLane,
   expected: RecoveryStoreReplay,
   actual: RecoveryStoreReplay
@@ -272,9 +272,9 @@ export const recoveryPrefixMismatch = (
 }
 
 /** Computes the expected decoded history and production projection once per source prefix. */
-export const expectedRecoveryPrefix = Effect.fn("RecoveryStoreLanes.expectedRecoveryPrefix")(function* (
-  prefix: RecoveryPrefix
-): Effect.fn.Return<ExpectedRecoveryPrefix, unknown> {
+export const expectedRecoveryPrefix = Effect.fn("RecoveryStoreLanes.expectedRecoveryPrefix")(function* <
+  Cut extends string
+>(prefix: RecoveryPrefix<Cut>): Effect.fn.Return<ExpectedRecoveryPrefix, unknown> {
   const runId = prefix.records[0].runId
   const history = reduceWorkflowJournalHistory(runId, prefix.records)
   const projection = yield* projectWorkflowOccurrences(prefix.records)
@@ -282,13 +282,18 @@ export const expectedRecoveryPrefix = Effect.fn("RecoveryStoreLanes.expectedReco
 })
 
 /** Builds one prefix record from an endpoint in a production-produced chronology. */
-export const prefixThrough = (
+export const prefixThrough = <Cut extends string>(
   records: ReadonlyArray<JournalRecord>,
-  cut: RecoveryPrefixCutLabel,
+  cut: Cut,
   endpoint: string,
   position: number
-): RecoveryPrefix | undefined => {
-  const retained = records.slice(0, position + 1)
+): RecoveryPrefix<Cut> | undefined => {
+  // Journal positions are one-based; the exclusive array end is therefore the
+  // position itself.  Keep the endpoint as the final retained record.
+  const retained = records.slice(0, position)
   const first = retained[0]
-  return first === undefined ? undefined : { cut, endpoint, records: [first, ...retained.slice(1)] }
+  const lastRecordOffset = -1
+  const endpointRecord = retained.at(lastRecordOffset)
+  if (first === undefined || endpointRecord?.position !== position) return undefined
+  return { cut, endpoint, records: [first, ...retained.slice(1)] }
 }
