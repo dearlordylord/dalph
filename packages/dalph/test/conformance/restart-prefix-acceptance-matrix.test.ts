@@ -164,8 +164,12 @@ const restartPrefixesFrom = (records: ReadonlyArray<JournalRecord>): RestartPref
     ["SuccessorFixed", successor, "IntegratorSuccessorSessionFixed"]
   ]
   const prefixes = endpoints.flatMap(([cut, endpoint, description]) => {
-    const prefix = prefixThrough(records, cut, description, Number(endpoint.position))
-    return prefix === undefined ? [] : [prefix]
+    const endpointIndex = records.indexOf(endpoint)
+    if (endpointIndex < 0) return []
+    const prefix = prefixThrough(records, cut, description, endpointIndex)
+    if (prefix === undefined) return []
+    if (prefix.records.at(-1)?.position !== endpoint.position) return []
+    return [prefix]
   })
   return { attempt, stale, quarantine, direction, successorReadIntent, successorLineage, successor, prefixes }
 }
@@ -272,13 +276,16 @@ const resumeFreshTargetLineage = (
       if (action?._tag !== "ReadTargetLineage" || operationId === undefined) {
         return yield* Effect.die("restart target-lineage action identity was not reconstructed")
       }
-      yield* executeRestartRecoveredObservation(action, operationId, {
-        forwardBoundary: {
-          _tag: "InterruptibleBoundary",
-          execution: { run: (_intent, effect, recordResult) => effect.pipe(Effect.flatMap(recordResult)) }
-        },
-        recordIntent: () => Effect.void
-      }).pipe(
+      yield* executeRestartRecoveredObservation(
+        { action, operationId },
+        {
+          forwardBoundary: {
+            _tag: "InterruptibleBoundary",
+            execution: { run: (_intent, effect, recordResult) => effect.pipe(Effect.flatMap(recordResult)) }
+          },
+          recordIntent: () => Effect.void
+        }
+      ).pipe(
         Effect.provide(journaledLayer),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))

@@ -288,12 +288,10 @@ export const prefixThrough = <Cut extends string>(
   endpoint: string,
   position: number
 ): RecoveryPrefix<Cut> | undefined => {
-  // Journal positions are one-based; the exclusive array end is therefore the
-  // position itself.  Keep the endpoint as the final retained record.
-  const retained = records.slice(0, position)
+  const retained = records.slice(0, position + 1)
   const first = retained[0]
   const lastRecordOffset = -1
   const endpointRecord = retained.at(lastRecordOffset)
-  if (first === undefined || endpointRecord?.position !== position) return undefined
+  if (first === undefined || endpointRecord === undefined) return undefined
   return { cut, endpoint, records: [first, ...retained.slice(1)] }
 }
