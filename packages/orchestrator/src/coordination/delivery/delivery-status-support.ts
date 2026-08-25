@@ -31,7 +31,11 @@ import { addEntry, canonicalEncodingOf, canonicalIdentity, taskOrderFor } from "
 import type { OrderedStatusEntry, StatusTaskOrder, StatusTaskOrderLookup } from "./delivery-status-order.js"
 import * as deliveryStatusSettlement from "./delivery-status-settlement.js"
 import { taskStatusSubject } from "./delivery-status-subject.js"
-import { validateResponsibilityIdentityForStatus } from "./delivery-status-responsibility-identity.js"
+import {
+  validateDeliveryObligationsForStatus,
+  validatePlannedAttemptIdentityForStatus,
+  validateResponsibilityIdentityForStatus
+} from "./delivery-status-responsibility-identity.js"
 
 export {
   addEntry,
@@ -384,9 +388,8 @@ const validateIntegrationStandingForStatus = (
   delivery: TicketDelivery,
   standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>
 ): DeliveryStatusProjectionConflict | null => {
-  if (standing.wait.plannedAttempt.taskId !== delivery.taskId) {
-    return integrationWaitProjectionConflict(subject, delivery, standing.wait)
-  }
+  const identityConflict = validatePlannedAttemptIdentityForStatus(subject, delivery, standing.wait.plannedAttempt)
+  if (identityConflict !== null) return identityConflict
   const dependencyConflict = validateIntegrationDependencyWait(subject, delivery, standing)
   if (dependencyConflict !== null) return dependencyConflict
   const configurationConflict = validateIntegrationConfigurationWait(subject, delivery, standing)
@@ -439,6 +442,8 @@ export const validateDeliveryEvidenceForStatus = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery
 ): DeliveryStatusProjectionConflict | null => {
+  const obligationConflict = validateDeliveryObligationsForStatus(subject, delivery)
+  if (obligationConflict !== null) return obligationConflict
   const compositionConflict = deliveryStatusSettlement.validateAcceptedStandingCompositionForStatus(subject, delivery)
   if (compositionConflict !== null) return compositionConflict
   for (const standing of delivery.standings) {

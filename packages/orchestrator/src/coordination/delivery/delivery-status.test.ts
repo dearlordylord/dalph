@@ -25,7 +25,7 @@ import {
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
-import { makeTaskClaimObservationOperation } from "../../workflow/registry/operation.js"
+import { makeTaskClaimObservationOperation, WorkflowOperation } from "../../workflow/registry/operation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import {
   DeliveryProposalId,
@@ -1413,6 +1413,81 @@ it("fails closed when any integration wait names another delivery task", () => {
     expect(deliveryStatusOf({ _tag: "Task", runId: fixture.runId, taskId: fixture.taskId }, malformed)).toBeInstanceOf(
       DeliveryStatusProjectionConflict
     )
+  }
+})
+
+it("fails closed for foreign-run integration waits and key-matched integration obligations", () => {
+  const { fixture, queued } = integrationFactsOf()
+  const foreignTaskId = TaskId.make("foreign-integration-obligation-task")
+  const foreignRunId = RunId.make("foreign-integration-obligation-run")
+  const state = evaluationOf({ runtimeRunId: fixture.runId, tasks: [{ id: String(fixture.taskId) }] })
+  if (state._tag !== "Ready") return expect.fail("integration identity fixture must be ready")
+  const currentWait = { _tag: "IntegrationTargetWait" as const, plannedAttempt: fixture.plannedAttempt }
+  const foreignAttempt = { ...fixture.plannedAttempt, runId: foreignRunId }
+  const crossTaskAttempt = { ...fixture.plannedAttempt, taskId: foreignTaskId }
+  const foreignQueued = QueuedIntegrationResponsibility.make({
+    ...queued,
+    plannedAttempt: foreignAttempt,
+    preIntegrationCancellation: { ...queued.preIntegrationCancellation, runId: foreignRunId }
+  })
+  const crossTaskQueued = QueuedIntegrationResponsibility.make({ ...queued, plannedAttempt: crossTaskAttempt })
+  const statusForDelivery = (wait: typeof currentWait, obligations: TicketDelivery["obligations"]) =>
+    deliveryStatusOf(
+      { _tag: "Task", runId: fixture.runId, taskId: fixture.taskId },
+      readyWithFirstDeliveryOf(state, [{ _tag: "IntegrationWait", wait }], obligations)
+    )
+
+  expect(statusForDelivery({ ...currentWait, plannedAttempt: foreignAttempt }, [])).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  expect(
+    statusForDelivery({ ...currentWait, plannedAttempt: foreignAttempt }, [
+      { _tag: "QueuedIntegration", responsibility: foreignQueued }
+    ])
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(
+    statusForDelivery(currentWait, [{ _tag: "QueuedIntegration", responsibility: crossTaskQueued }])
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(statusForDelivery(currentWait, [{ _tag: "QueuedIntegration", responsibility: foreignQueued }])).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+})
+
+it("fails closed for workflow obligations with cross-task or foreign-run identity", () => {
+  const { fixture } = integrationFactsOf()
+  const foreignTaskId = TaskId.make("foreign-workflow-obligation-task")
+  const foreignRunId = RunId.make("foreign-workflow-obligation-run")
+  const operationId = OperationId.make("status-obligation-identity-collision")
+  const state = evaluationOf({ runtimeRunId: fixture.runId, tasks: [{ id: String(fixture.taskId) }] })
+  if (state._tag !== "Ready") return expect.fail("workflow obligation identity fixture must be ready")
+  const responsibilityOf = (taskId: TaskId, runId: RunId) =>
+    WorkflowResponsibilityEntry.cases.TaskWorktreeResponsibility.make({
+      beganAt: JournalPosition.make(2),
+      operation: WorkflowOperation.cases.ReconcileTaskWorktree.make({
+        operationId,
+        plannedAttempt: { ...fixture.plannedAttempt, taskId, runId },
+        predecessorOperationIds: []
+      }),
+      taskId
+    })
+  const standing = {
+    _tag: "ResponsibilitySituation" as const,
+    facts: {
+      _tag: "WorkflowOperationFreshFacts" as const,
+      disposition: ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: "Missing" }),
+      responsibility: responsibilityOf(fixture.taskId, fixture.runId)
+    }
+  } satisfies TicketDelivery["standings"][number]
+  const subject = { _tag: "Task" as const, runId: fixture.runId, taskId: fixture.taskId }
+  for (const responsibility of [
+    responsibilityOf(foreignTaskId, fixture.runId),
+    responsibilityOf(fixture.taskId, foreignRunId)
+  ]) {
+    const status = deliveryStatusOf(
+      subject,
+      readyWithFirstDeliveryOf(state, [standing], [{ _tag: "WorkflowResponsibility", responsibility }])
+    )
+    expect(status).toBeInstanceOf(DeliveryStatusProjectionConflict)
   }
 })
 
