@@ -2544,6 +2544,18 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       event.operation._tag === "ReadTargetLineage" &&
       !gitReadIntentHasOutcome(runState.workflowHistory.records, event.operation.operationId)
   )
+  const recordsAtActivationBaseline = runState.workflowHistory.records.filter(
+    ({ position }) => !positionIsAfter(position, activationBaselinePosition)
+  )
+  const activationPendingTargetLineageAttemptIds = new Set(
+    recordsAtActivationBaseline.flatMap(({ event }) =>
+      event._tag === "GitReadIntentRecorded" &&
+      event.operation._tag === "ReadTargetLineage" &&
+      !gitReadIntentHasOutcome(recordsAtActivationBaseline, event.operation.operationId)
+        ? [event.operation.plannedAttempt.attemptId]
+        : []
+    )
+  )
   const postQuiescenceGraphReconfirmationAvailable = (): boolean => {
     if (!isRestartActivation || !hasPendingTargetLineageRead) return true
     const currentGraphObservation = currentCompleteGraphObservationAfter(
@@ -2624,6 +2636,17 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
             plannedAttempt: event.operation.plannedAttempt
           })
     )
+  /** A crashed target-lineage read keeps its exact journaled operation identity when replayed after reacquisition. */
+  const pendingTargetLineageTransitions = pendingGitReadIntents.flatMap(({ event }) =>
+    event.operation._tag === "ReadTargetLineage"
+      ? [
+          RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+            operation: event.operation,
+            plannedAttempt: event.operation.plannedAttempt
+          })
+        ]
+      : []
+  )
   const latestPendingTargetLineageIntentPosition = pendingGitReadIntents.findLast(
     ({ event }) => event.operation._tag === "ReadTargetLineage"
   )?.position
@@ -2788,6 +2811,31 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
         event.observation.coverage.taskId === taskId
     )?.position
+  /** A restarted responsibility's exact claim reread may causally follow the fresh graph it consumed. */
+  const graphCausallyPrecedesClaimRereadFor = (
+    taskId: TaskId,
+    graphObservation: CurrentGraphObservation | undefined
+  ): boolean => {
+    if (graphObservation === undefined) return false
+    const claimObservation = runState.workflowHistory.records.findLast(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "FocusedTaskClaimFacts" ||
+          event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+        event.observation.coverage.taskId === taskId
+    )
+    if (claimObservation?.event._tag !== "TaskTrackerFactsObserved") return false
+    if (claimObservation.position <= graphObservation.position) return false
+    const claimOperationId = claimObservation.event.operationId
+    const graphOperationId = graphObservation.event.operationId
+    return runState.workflowHistory.records.some(
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTaskClaim" &&
+        event.operation.operationId === claimOperationId &&
+        event.operation.predecessorOperationIds.includes(graphOperationId)
+    )
+  }
   const directionLineageByAttemptId = new Map(
     integrationResponsibilities.flatMap((responsibility) => {
       if (responsibility._tag !== "StartedIntegrationResponsibility") return []
@@ -2908,6 +2956,11 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           claimObservedAt !== undefined &&
           taskGraphObservation !== undefined &&
           taskGraphObservation.position > claimObservedAt
+        const restartedGraphSupportsExactClaim =
+          isRestartActivation &&
+          activationPendingTargetLineageAttemptIds.has(responsibility.plannedAttempt.attemptId) &&
+          graphCausallyPrecedesClaimRereadFor(responsibility.plannedAttempt.taskId, taskGraphObservation)
+        const graphSupportsExactClaim = graphWasCheckedAfterClaim || restartedGraphSupportsExactClaim
         const claimIsExact =
           taskClaimAuthorityByAttemptId.get(responsibility.plannedAttempt.attemptId)?._tag === "Exact"
         const targetIsHeld = integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt)
@@ -2921,24 +2974,32 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               )
         const directionLineageWasObserved =
           quarantineDirection !== undefined &&
-          directionLineageOperationId !== undefined &&
           runState.workflowHistory.records.some(
             ({ event, position }) =>
               position > quarantineDirection.directionAt &&
-              event._tag === "TargetLineageObserved" &&
-              event.operationId === directionLineageOperationId &&
-              plannedTaskAttemptEquivalence(event.plannedAttempt, responsibility.plannedAttempt)
+              event._tag === "GitReadIntentRecorded" &&
+              event.operation._tag === "ReadTargetLineage" &&
+              plannedTaskAttemptEquivalence(event.operation.plannedAttempt, responsibility.plannedAttempt) &&
+              (taskGraphObservation === undefined || position > taskGraphObservation.position) &&
+              event.operation.predecessorOperationIds.includes(quarantineDirection.predecessorOperationId) &&
+              gitReadIntentHasOutcome(runState.workflowHistory.records, event.operation.operationId)
           )
         const targetLineageReadIsRequired =
           quarantineDirection === undefined
             ? !targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) ||
               targetLineageRefreshRequiredAttemptIds.has(responsibility.plannedAttempt.attemptId)
             : !directionLineageWasObserved
+        const pendingTargetLineageReadIsRestartRecovery =
+          isRestartActivation && pendingTargetLineageAttemptIds.has(responsibility.plannedAttempt.attemptId)
+        const pendingTargetLineageTransition = pendingTargetLineageTransitions.find((transition) =>
+          plannedTaskAttemptEquivalence(transition.plannedAttempt, responsibility.plannedAttempt)
+        )
         const lineageReadIsReady =
           !integrationResourceSnapshot.activeResponsibilityPositions.has(responsibility.queuedAt) &&
-          graphWasCheckedAfterClaim &&
+          graphSupportsExactClaim &&
           claimIsExact &&
-          !pendingAttemptIds.has(responsibility.plannedAttempt.attemptId) &&
+          (!pendingAttemptIds.has(responsibility.plannedAttempt.attemptId) ||
+            pendingTargetLineageReadIsRestartRecovery) &&
           targetLineageReadIsRequired &&
           !integration.transitions.some(
             (transition) =>
@@ -2960,20 +3021,22 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
         }
         return targetIsHeld && lineageReadIsReady
           ? [
-              RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
-                operation: makeTargetLineageObservationOperation({
-                  integrationTarget: target,
-                  operationId: OperationId.make(
-                    directionLineageOperationId === undefined
-                      ? `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(requiredFreshnessBaseline, () => 0)}:target-lineage`
-                      : directionLineageOperationId
-                  ),
-                  plannedAttempt: responsibility.plannedAttempt,
-                  predecessorOperationIds:
-                    quarantineDirection === undefined ? [] : [quarantineDirection.predecessorOperationId]
-                }),
-                plannedAttempt: responsibility.plannedAttempt
-              })
+              pendingTargetLineageReadIsRestartRecovery && pendingTargetLineageTransition !== undefined
+                ? pendingTargetLineageTransition
+                : RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+                    operation: makeTargetLineageObservationOperation({
+                      integrationTarget: target,
+                      operationId: OperationId.make(
+                        directionLineageOperationId === undefined
+                          ? `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(requiredFreshnessBaseline, () => 0)}:target-lineage`
+                          : directionLineageOperationId
+                      ),
+                      plannedAttempt: responsibility.plannedAttempt,
+                      predecessorOperationIds:
+                        quarantineDirection === undefined ? [] : [quarantineDirection.predecessorOperationId]
+                    }),
+                    plannedAttempt: responsibility.plannedAttempt
+                  })
             ]
           : []
       })
