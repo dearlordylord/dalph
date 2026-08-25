@@ -41,7 +41,7 @@ type BoundaryExecutionLease = Pick<DeliveryActionExecutionLease, "forwardBoundar
  * It deliberately excludes live admission state: restart execution may use
  * only the reconstructed action identity and the owner-provided boundary.
  */
-export type RestartObservationExecutionLease = BoundaryExecutionLease
+type RestartObservationExecutionLease = BoundaryExecutionLease
 
 /** Executes the protocol carried by each accepted transition without consulting planning policy. */
 const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTransition, lease: BoundaryExecutionLease) =>
@@ -133,23 +133,25 @@ const executeRecoveredObservation = Effect.fn("DeliveryAction.executeRecoveredOb
  */
 export const executeRestartRecoveredObservation = Effect.fn("DeliveryAction.executeRestartRecoveredObservation")(
   function* (
-    action: Exclude<
-      NewRecoveredWorkflowAction,
-      Extract<
+    recovered: {
+      readonly action: Exclude<
         NewRecoveredWorkflowAction,
-        {
-          readonly _tag:
-            | "TaskClaimReacquisition"
-            | "ReleaseExternallyCompletedTaskClaim"
-            | "ReleaseStoppedAttemptClaim"
-            | "ReleaseCancelledAttemptClaim"
-        }
+        Extract<
+          NewRecoveredWorkflowAction,
+          {
+            readonly _tag:
+              | "TaskClaimReacquisition"
+              | "ReleaseExternallyCompletedTaskClaim"
+              | "ReleaseStoppedAttemptClaim"
+              | "ReleaseCancelledAttemptClaim"
+          }
+        >
       >
-    >,
-    operationId: OperationId,
+      readonly operationId: OperationId
+    },
     lease: RestartObservationExecutionLease
   ) {
-    return yield* executeRecoveredObservation(action, operationId, lease)
+    return yield* executeRecoveredObservation(recovered.action, recovered.operationId, lease)
   }
 )
 
