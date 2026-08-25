@@ -2,12 +2,7 @@
 import { plannedAttemptExecutorCorrelation, type TaskId } from "@dalph/contracts"
 import { Option, Schema } from "effect"
 import type { StatusTaskOrder } from "./delivery-status-order.js"
-import type {
-  ExactWorkflowObligation,
-  TicketDelivery,
-  TicketDeliveryPlacement,
-  TicketDeliveryStanding
-} from "./relations.js"
+import type { TicketDelivery, TicketDeliveryPlacement, TicketDeliveryStanding } from "./relations.js"
 import { workflowResponsibilityOperationId, type WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import {
   DeliveryStatusEvidenceIdentity,
@@ -37,30 +32,6 @@ import { addAcceptedStandingSettlementEntryFor } from "./delivery-status-settlem
 const nonEmptyTaskIdsFor = (taskIds: ReadonlyArray<TaskId>): readonly [TaskId, ...ReadonlyArray<TaskId>] | null => {
   const [first, ...rest] = taskIds
   return first === undefined ? null : [first, ...rest]
-}
-
-const acceptedAwaitingIntegrationFor = (
-  delivery: TicketDelivery,
-  plannedAttempt: IntegrationWaitStanding["wait"]["plannedAttempt"]
-): Extract<ExactWorkflowObligation, { readonly _tag: "AcceptedAwaitingIntegration" }> | null => {
-  const responsibility = obligationForPlannedAttempt(delivery, plannedAttempt)
-  return responsibility?._tag === "AcceptedAwaitingIntegration" ? responsibility : null
-}
-
-const startedIntegrationFor = (
-  delivery: TicketDelivery,
-  plannedAttempt: IntegrationWaitStanding["wait"]["plannedAttempt"]
-): Extract<ExactWorkflowObligation, { readonly _tag: "StartedIntegration" }> | null => {
-  const responsibility = obligationForPlannedAttempt(delivery, plannedAttempt)
-  return responsibility?._tag === "StartedIntegration" ? responsibility : null
-}
-
-const queuedIntegrationFor = (
-  delivery: TicketDelivery,
-  plannedAttempt: IntegrationWaitStanding["wait"]["plannedAttempt"]
-): Extract<ExactWorkflowObligation, { readonly _tag: "QueuedIntegration" }> | null => {
-  const responsibility = queuedIntegrationResponsibilityFor(delivery, plannedAttempt)
-  return responsibility?._tag === "QueuedIntegration" ? responsibility : null
 }
 
 export const dependencyEntriesFor = (
@@ -140,8 +111,8 @@ const addIntegrationConfigurationEvidenceEntryFor = (
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const responsibility = acceptedAwaitingIntegrationFor(delivery, standing.wait.plannedAttempt)
-  if (responsibility === null) return
+  const responsibility = obligationForPlannedAttempt(delivery, standing.wait.plannedAttempt)
+  if (responsibility?._tag !== "AcceptedAwaitingIntegration") return
   addEntry(
     entries,
     {
@@ -161,8 +132,8 @@ const addTargetPromotionConfigurationEvidenceEntryFor = (
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const responsibility = startedIntegrationFor(delivery, standing.wait.plannedAttempt)
-  if (responsibility === null) return
+  const responsibility = obligationForPlannedAttempt(delivery, standing.wait.plannedAttempt)
+  if (responsibility?._tag !== "StartedIntegration") return
   addEntry(
     entries,
     {
@@ -267,8 +238,8 @@ const addIntegrationTargetEntryFor = (
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const responsibility = queuedIntegrationFor(delivery, standing.wait.plannedAttempt)
-  if (responsibility === null) return
+  const responsibility = queuedIntegrationResponsibilityFor(delivery, standing.wait.plannedAttempt)
+  if (responsibility?._tag !== "QueuedIntegration") return
   addEntry(
     entries,
     {

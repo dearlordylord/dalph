@@ -1,6 +1,6 @@
 /* eslint-disable functional/immutable-data -- local projection scratch state never escapes the read. */
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey, type TaskId } from "@dalph/contracts"
-import { Match, Schema } from "effect"
+import { Match, Option, Schema } from "effect"
 import type {
   DeliveryActionProposal,
   DeliveryProposalDerivationIssue,
@@ -387,42 +387,36 @@ const phenomenonOrder: Readonly<Record<DeliveryStatusEntry["_tag"], StatusCompar
 const structuralOrderBeforeValue = -1
 const structuralOrderBefore = comparisonRank(structuralOrderBeforeValue)
 const structuralOrderAfter = comparisonRank(1)
+const structuralNumericKeyWidth = 20
 
-const compareOrderPosition = (left: StructuralOrderPosition, right: StructuralOrderPosition): number =>
-  (left._tag === "MissingOrderPosition" ? structuralOrderBeforeValue : left.value) -
-  (right._tag === "MissingOrderPosition" ? structuralOrderBeforeValue : right.value)
+/**
+ * The accepted status phenomena emit structurally aligned token arrays: positions
+ * only compare with positions, numeric ranks with numeric ranks, and strings with
+ * strings. Prefixes keep those domains disjoint while fixed-width numeric keys
+ * preserve numeric ordering without a mixed-token fallback.
+ */
+const structuralNumberKey = (value: StructuralOrderValue): string =>
+  String(value).padStart(structuralNumericKeyWidth, "0")
 
-const isStructuralOrderPosition = (value: StructuralOrderToken): value is StructuralOrderPosition =>
-  typeof value === "object"
-
-type PrimitiveStructuralToken = StructuralOrderValue | string
-
-const comparePrimitiveStructuralToken = (left: PrimitiveStructuralToken, right: PrimitiveStructuralToken): number => {
-  if (typeof left === "number") return typeof right === "number" ? left - right : structuralOrderBefore
-  if (typeof right === "number") return structuralOrderAfter
-  return left.localeCompare(right)
+const structuralTokenKey = (token: StructuralOrderToken): string => {
+  if (typeof token === "object") {
+    return token._tag === "MissingOrderPosition" ? "0" : `1${structuralNumberKey(token.value)}`
+  }
+  return typeof token === "number" ? `2${structuralNumberKey(token)}` : `3${token}`
 }
-
-const compareStructuralToken = (left: StructuralOrderToken, right: StructuralOrderToken): number =>
-  isStructuralOrderPosition(left)
-    ? isStructuralOrderPosition(right)
-      ? compareOrderPosition(left, right)
-      : structuralOrderAfter
-    : isStructuralOrderPosition(right)
-      ? structuralOrderBefore
-      : comparePrimitiveStructuralToken(left, right)
 
 const compareStructuralOrder = (
   left: ReadonlyArray<StructuralOrderToken>,
   right: ReadonlyArray<StructuralOrderToken>
 ): number => {
   for (const [index, leftToken] of left.entries()) {
-    const rightToken = right[index]
-    if (rightToken === undefined) return structuralOrderAfter
-    const compared = compareStructuralToken(leftToken, rightToken)
+    // Every status phenomenon supplies the same structural shape for equal
+    // phenomenon/order ranks; an absent pair is therefore not a source state.
+    const rightToken = Option.getOrThrow(Option.fromUndefinedOr(right[index]))
+    const compared = structuralTokenKey(leftToken).localeCompare(structuralTokenKey(rightToken))
     if (compared !== 0) return compared
   }
-  return left.length === right.length ? 0 : structuralOrderBefore
+  return left.length - right.length
 }
 
 const compareTaskOrder = (left: StatusTaskOrder, right: StatusTaskOrder): number => {
