@@ -178,6 +178,20 @@ const selectionCanWaitAfterClaim = (
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
+
+type MismatchedStoryItem = Extract<ClaimedStoryItem<StoryItem>, { readonly _tag: "Mismatch" }>
+
+const authoredSelectionMismatch = (operation: CassetteDecision, claimed: MismatchedStoryItem) =>
+  new AuthoredCassetteInteractionMismatch({
+    actual: JSON.stringify(operation),
+    expected:
+      claimed.item?._tag === "DalphSelects"
+        ? JSON.stringify(claimed.item.operation)
+        : claimed.item?._tag === "ExpectedBehavior"
+          ? claimed.item._tag
+          : (claimed.item?._tag ?? "EndOfStory"),
+    storyPosition: claimed.index
+  })
 export interface StoryCursor {
   /** Release the exact pre-admission control latch after its production application has completed. */
   readonly completeControlDirectionBeforeDeliveryActionAdmission: Effect.Effect<void>
@@ -636,38 +650,31 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
   })
-  const consumeDalphSelectionForLoop: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
-    "AuthoredCassette.consumeDalphSelectionForLoop"
-  )(function* (operation) {
-    const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation))
-    if (claimed._tag === "Claimed") return claimed.item
+  const awaitSelectionRecovery = Effect.fn("AuthoredCassette.awaitSelectionRecovery")(function* (
+    claimed: MismatchedStoryItem,
+    operation: CassetteDecision
+  ) {
     const activeRequests = yield* SubscriptionRef.get(activeExecutorReportRequests)
     const activeIntegratorRequests = yield* SubscriptionRef.get(activeIntegratorGitObservations)
     const activeSelections = yield* SubscriptionRef.get(activeDalphSelections)
     if (selectionCanWaitAfterClaim(claimed.item, activeRequests, activeIntegratorRequests, activeSelections)) {
       yield* awaitsLaterStoryItem(position, claimed.index)
-      return yield* consumeDalphSelectionForLoop(operation)
+      return true
     }
-    if (yield* awaitOwnedStoryItemImmediatelyBeforeSelection(claimed.item, claimed.index, operation)) {
-      return yield* consumeDalphSelectionForLoop(operation)
-    }
+    if (yield* awaitOwnedStoryItemImmediatelyBeforeSelection(claimed.item, claimed.index, operation)) return true
     // Concurrent production fibers can request a later authored selection
     // before the operation occupying the current selection/response has
     // registered. Wait for one bounded registration window; if no owner
     // advances the story, this remains a fail-closed authored mismatch.
-    if (yield* awaitFutureAuthoredSelectionOrAdvance(claimed.index, operation)) {
-      return yield* consumeDalphSelectionForLoop(operation)
-    }
-    return yield* new AuthoredCassetteInteractionMismatch({
-      actual: JSON.stringify(operation),
-      expected:
-        claimed.item?._tag === "DalphSelects"
-          ? JSON.stringify(claimed.item.operation)
-          : claimed.item?._tag === "ExpectedBehavior"
-            ? claimed.item._tag
-            : (claimed.item?._tag ?? "EndOfStory"),
-      storyPosition: claimed.index
-    })
+    return yield* awaitFutureAuthoredSelectionOrAdvance(claimed.index, operation)
+  })
+  const consumeDalphSelectionForLoop: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
+    "AuthoredCassette.consumeDalphSelectionForLoop"
+  )(function* (operation) {
+    const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation))
+    if (claimed._tag === "Claimed") return claimed.item
+    if (yield* awaitSelectionRecovery(claimed, operation)) return yield* consumeDalphSelectionForLoop(operation)
+    return yield* authoredSelectionMismatch(operation, claimed)
   })
   const consumeDalphSelectionFor: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
     "AuthoredCassette.consumeDalphSelectionFor"
@@ -809,6 +816,22 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       })
     )
   const targetLineageBoundaryKey = (taskId: TaskId, attemptId: AttemptId) => `${taskId}:${attemptId}`
+  const targetLineageBoundaryHoldMatches = (
+    item: StoryItem | undefined,
+    taskId: TaskId,
+    attemptId: AttemptId
+  ): boolean =>
+    item?._tag === "CassetteHoldsTargetLineageReadBeforeBoundary" &&
+    item.taskId === taskId &&
+    item.attemptId === attemptId
+  const targetLineageBoundaryDeathMatches = (
+    item: StoryItem | undefined,
+    taskId: TaskId,
+    attemptId: AttemptId
+  ): boolean =>
+    item?._tag === "CassetteKillsCoordinatorWithTargetLineageReadHeld" &&
+    item.taskId === taskId &&
+    item.attemptId === attemptId
   const consumeTargetLineageReadBoundaryHold = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTargetLineageReadBeforeBoundary.Type =>
@@ -854,59 +877,49 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     // reconstructed observations, immediately before replaying the read.
     return Option.some(claimed.item)
   })
+  const awaitTargetLineageReadBoundaryRelease = (key: string) =>
+    SubscriptionRef.changes(targetLineageReadBoundaries).pipe(
+      Stream.map((candidate) => candidate.get(key)),
+      Stream.filter((candidate): candidate is Deferred.Deferred<void> => candidate !== undefined),
+      Stream.take(1),
+      Stream.runHead,
+      Effect.map(Option.getOrUndefined)
+    )
+  const dieAtTargetLineageBoundary = (key: string, taskId: TaskId, attemptId: AttemptId) =>
+    Effect.gen(function* () {
+      for (;;) {
+        const item = yield* SubscriptionRef.get(position).pipe(Effect.map((index) => story[index]))
+        if (targetLineageBoundaryDeathMatches(item, taskId, attemptId)) {
+          const death = yield* consumeTargetLineageReadBoundaryDeath
+          if (Option.isNone(death)) {
+            return yield* Effect.die(`target-lineage read death was not armed for ${key}`)
+          }
+          return yield* Effect.die(
+            new AuthoredCoordinatorProcessDies({ storyPosition: (yield* SubscriptionRef.get(position)) - 1 })
+          )
+        }
+        const observedPosition = yield* SubscriptionRef.get(position)
+        yield* SubscriptionRef.changes(position).pipe(
+          Stream.filter((next) => next > observedPosition),
+          Stream.take(1),
+          Stream.runDrain
+        )
+      }
+    })
   const awaitTargetLineageReadBoundary = (taskId: TaskId, attemptId: AttemptId) =>
     Effect.gen(function* () {
       const key = targetLineageBoundaryKey(taskId, attemptId)
       const gates = yield* SubscriptionRef.get(targetLineageReadBoundaries)
       let release = gates.get(key)
       let current = yield* SubscriptionRef.get(position).pipe(Effect.map((index) => story[index]))
-      if (
-        release === undefined &&
-        current?._tag === "CassetteHoldsTargetLineageReadBeforeBoundary" &&
-        current.taskId === taskId &&
-        current.attemptId === attemptId
-      ) {
-        const next = yield* SubscriptionRef.changes(targetLineageReadBoundaries).pipe(
-          Stream.map((candidate) => candidate.get(key)),
-          Stream.filter((candidate): candidate is Deferred.Deferred<void> => candidate !== undefined),
-          Stream.take(1),
-          Stream.runHead
-        )
-        release = Option.getOrUndefined(next)
+      if (release === undefined && targetLineageBoundaryHoldMatches(current, taskId, attemptId)) {
+        release = yield* awaitTargetLineageReadBoundaryRelease(key)
         current = yield* SubscriptionRef.get(position).pipe(Effect.map((index) => story[index]))
       }
-      const isMatchingDeath =
-        current?._tag === "CassetteKillsCoordinatorWithTargetLineageReadHeld" &&
-        current.taskId === taskId &&
-        current.attemptId === attemptId
-      if (release === undefined && !isMatchingDeath) return
-
-      const dieAtTargetLineageBoundary = Effect.gen(function* () {
-        for (;;) {
-          const item = yield* SubscriptionRef.get(position).pipe(Effect.map((index) => story[index]))
-          if (
-            item?._tag === "CassetteKillsCoordinatorWithTargetLineageReadHeld" &&
-            item.taskId === taskId &&
-            item.attemptId === attemptId
-          ) {
-            const death = yield* consumeTargetLineageReadBoundaryDeath
-            if (Option.isNone(death)) {
-              return yield* Effect.die(`target-lineage read death was not armed for ${key}`)
-            }
-            return yield* Effect.die(
-              new AuthoredCoordinatorProcessDies({ storyPosition: (yield* SubscriptionRef.get(position)) - 1 })
-            )
-          }
-          const observedPosition = yield* SubscriptionRef.get(position)
-          yield* SubscriptionRef.changes(position).pipe(
-            Stream.filter((next) => next > observedPosition),
-            Stream.take(1),
-            Stream.runDrain
-          )
-        }
-      })
-      if (release === undefined) return yield* dieAtTargetLineageBoundary
-      yield* Effect.raceFirst(Deferred.await(release), dieAtTargetLineageBoundary)
+      if (release === undefined && !targetLineageBoundaryDeathMatches(current, taskId, attemptId)) return
+      const dieAtBoundary = dieAtTargetLineageBoundary(key, taskId, attemptId)
+      if (release === undefined) return yield* dieAtBoundary
+      yield* Effect.raceFirst(Deferred.await(release), dieAtBoundary)
     })
   const consumeExecutorRequestPublicationHold = Effect.gen(function* () {
     const claimed = yield* claimNext(

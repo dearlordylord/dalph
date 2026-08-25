@@ -385,28 +385,53 @@ const controlDirectionOperatorLyric = (item: ControlDirectionOperatorItem): stri
         : ""
   }.`
 
+type DirectOperatorStoryItem = Extract<
+  OperatorStoryItem,
+  {
+    readonly _tag:
+      | "SetTaskExecutionCapacity"
+      | "OperatorControlDirectionFailed"
+      | "OperatorAppliesRunCancellation"
+      | "OperatorAppliesRunCancellationWhileExecutorRequestInFlight"
+      | "OperatorAppliesIntegrationQuarantineDirection"
+  }
+>
+
+type TaskClaimReacquisitionOperatorItem = Extract<
+  OperatorStoryItem,
+  { readonly _tag: "OperatorDirectsTaskClaimReacquisition" }
+>
+
+const unreachableOperatorStoryItem = (item: never): never => item
+
+const directOperatorLyric = (item: DirectOperatorStoryItem): string => {
+  switch (item._tag) {
+    case "SetTaskExecutionCapacity":
+      return `Operator applies task-execution capacity ${item.capacity} to the Run.`
+    case "OperatorControlDirectionFailed":
+      return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
+    case "OperatorAppliesRunCancellation":
+      return "Operator applies whole-Run cancellation."
+    case "OperatorAppliesRunCancellationWhileExecutorRequestInFlight":
+      return `Operator applies whole-Run cancellation while executor attempt ${item.duringAttemptId} is in flight.`
+    case "OperatorAppliesIntegrationQuarantineDirection":
+      return `Alice applies ${item.request.fingerprint.direction} to the Integrator quarantine at ${item.request.fingerprint.quarantineAt}.`
+    default:
+      return unreachableOperatorStoryItem(item)
+  }
+}
+
+const taskClaimReacquisitionOperatorLyric = (item: TaskClaimReacquisitionOperatorItem): string =>
+  `Operator request ${item.requestId} directs Dalph to reacquire the claim for task ${item.taskId}.`
+
 const operatorLyric = (item: OperatorStoryItem): string => {
-  if (item._tag === "SetTaskExecutionCapacity") {
-    return `Operator applies task-execution capacity ${item.capacity} to the Run.`
-  }
-  if (item._tag === "OperatorControlDirectionFailed") {
-    return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
-  }
-  if (item._tag === "OperatorAppliesRunCancellation") {
-    return "Operator applies whole-Run cancellation."
-  }
-  if (item._tag === "OperatorAppliesRunCancellationWhileExecutorRequestInFlight") {
-    return `Operator applies whole-Run cancellation while executor attempt ${item.duringAttemptId} is in flight.`
-  }
-  if (item._tag === "OperatorAppliesIntegrationQuarantineDirection") {
-    return `Alice applies ${item.request.fingerprint.direction} to the Integrator quarantine at ${item.request.fingerprint.quarantineAt}.`
-  }
   if (isAttemptChoiceOperatorItem(item)) return attemptChoiceOperatorLyric(item)
   if (item._tag === "OperatorRacesContinueAndStop") {
     return `Alice concurrently submits Continue ${item.continueRequestNonce} and Stop ${item.stopRequestNonce} for task ${item.taskId}, attempt ${item.attemptId}; exactly one journaled request wins.`
   }
   if (isControlDirectionOperatorItem(item)) return controlDirectionOperatorLyric(item)
-  return `Operator request ${item.requestId} directs Dalph to reacquire the claim for task ${item.taskId}.`
+  if (item._tag === "OperatorDirectsTaskClaimReacquisition") return taskClaimReacquisitionOperatorLyric(item)
+  return directOperatorLyric(item)
 }
 
 // eslint-disable-next-line complexity -- Every remaining authored story variant is rendered at this exhaustive presentation boundary.

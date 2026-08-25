@@ -1,14 +1,4 @@
 {
-  "packages/dalph/src/cassettes/authored-cursor.ts": {
-    "complexity": {
-      "count": 2
-    }
-  },
-  "packages/dalph/src/cassettes/authored-presentation.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "packages/dalph/src/cassettes/catalog.ts": {
     "complexity": {
       "count": 1
