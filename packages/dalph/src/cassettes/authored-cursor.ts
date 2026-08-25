@@ -782,6 +782,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return ownershipOrAdvance !== "Unowned"
   })
+  const awaitOwnedStoryItemBeforeExecutorReport = Effect.fn("AuthoredCassette.awaitOwnedStoryItemBeforeExecutorReport")(
+    function* (item: StoryItem | undefined, index: number) {
+      if (isAuthoredPlannedAttemptExecutorOutcomeItem(item)) {
+        const owned = yield* awaitOwnedExecutorReport(item, index)
+        return owned || story[index - 1]?._tag === "DalphSelects"
+      }
+      // Non-report items are consumed by their protocol operation. A report is
+      // the only independently claimable item that must have a live owner before
+      // the lookahead may wait; an unowned report must never be skipped.
+      return true
+    }
+  )
   const consumeExecutorReportForLoop: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
     "AuthoredCassette.consumeExecutorReportFor"
   )(function* (request, attemptId) {
@@ -800,6 +812,20 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           storyPosition: claimed.index
         })
       }
+      return yield* consumeExecutorReportForLoop(request, attemptId)
+    }
+    const matchingReportIndex = story.findIndex(
+      (candidate, index) => index > claimed.index && authoredExecutorReportMatches(candidate, request, attemptId)
+    )
+    if (matchingReportIndex > claimed.index) {
+      if (!(yield* awaitOwnedStoryItemBeforeExecutorReport(claimed.item, claimed.index))) {
+        return yield* new AuthoredCassetteInteractionMismatch({
+          actual: `${request}/${attemptId}`,
+          expected: claimed.item?._tag ?? "EndOfStory",
+          storyPosition: claimed.index
+        })
+      }
+      yield* awaitsLaterStoryItem(position, claimed.index)
       return yield* consumeExecutorReportForLoop(request, attemptId)
     }
     return yield* new AuthoredCassetteInteractionMismatch({

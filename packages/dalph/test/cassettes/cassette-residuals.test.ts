@@ -356,6 +356,32 @@ it("fails closed when an exact executor report has no permitted immediate predec
   )
 })
 
+it("fails closed instead of skipping an unowned story item to a later executor report", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const reports = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story.filter(
+        (item) => item._tag === "PlannedAttemptExecutorWorkReported"
+      )
+      const first = reports[0]
+      const second = reports.find((item) => first !== undefined && item.report.attemptId !== first.report.attemptId)
+      const unrelatedSelection = maintainedStoryItems.find(
+        (item) => item._tag === "DalphSelects" && item.operation._tag === "ReadTaskClaim"
+      )
+      if (first === undefined || second === undefined || unrelatedSelection?._tag !== "DalphSelects") {
+        return yield* Effect.die("missing separated executor report fixtures")
+      }
+
+      const cursor = yield* makeStoryCursor([first, unrelatedSelection, second])
+      const exit = yield* Effect.exit(
+        cursor.consumeExecutorReportFor(second.request, second.report.attemptId).pipe(Effect.timeout(100))
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("AuthoredCassetteInteractionMismatch")
+    })
+  )
+})
+
 it("lets an exact operation selection wait for an actively owned sibling executor outcome", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {

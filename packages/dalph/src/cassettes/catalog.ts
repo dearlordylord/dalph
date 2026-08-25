@@ -4278,6 +4278,11 @@ const doubleDiamondSpecification = (taskId: (typeof doubleDiamondTaskIds)[number
   title: `Complete ${taskId}`
 })
 
+const doubleDiamondFocusedSpecificationRead = (taskId: (typeof doubleDiamondTaskIds)[number]) => [
+  { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
+  { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
+]
+
 const lastArrayItemOffset = -1
 
 const doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems = (
@@ -4384,16 +4389,16 @@ const fiveTaskDiamondIntegrationPositions = {
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const doubleDiamondIntegrationPositions = {
-  A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 123, startedAt: 125, targetLineageObservedAt: 110 },
-  C: { queuedAt: 124, startedAt: 151, targetLineageObservedAt: 119 },
-  D: { queuedAt: 211, startedAt: 213, targetLineageObservedAt: 223 },
-  E: { queuedAt: 311, startedAt: 313, targetLineageObservedAt: 325 },
-  F: { queuedAt: 312, startedAt: 351, targetLineageObservedAt: 353 },
-  G: { queuedAt: 499, startedAt: 500, targetLineageObservedAt: 510 },
-  H: { queuedAt: 413, startedAt: 415, targetLineageObservedAt: 427 },
-  I: { queuedAt: 414, startedAt: 453, targetLineageObservedAt: 455 },
-  X: { queuedAt: 212, startedAt: 249, targetLineageObservedAt: 251 }
+  A: { queuedAt: 24, startedAt: 25, targetLineageObservedAt: 35 },
+  B: { queuedAt: 125, startedAt: 130, targetLineageObservedAt: 136 },
+  C: { queuedAt: 166, startedAt: 183, targetLineageObservedAt: 154 },
+  D: { queuedAt: 243, startedAt: 246, targetLineageObservedAt: 261 },
+  E: { queuedAt: 359, startedAt: 361, targetLineageObservedAt: 373 },
+  F: { queuedAt: 360, startedAt: 399, targetLineageObservedAt: 401 },
+  G: { queuedAt: 557, startedAt: 558, targetLineageObservedAt: 568 },
+  H: { queuedAt: 467, startedAt: 469, targetLineageObservedAt: 481 },
+  I: { queuedAt: 468, startedAt: 507, targetLineageObservedAt: 509 },
+  X: { queuedAt: 249, startedAt: 287, targetLineageObservedAt: 289 }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const integrationPositionsForDiamondTask = (
@@ -4412,7 +4417,13 @@ const doubleDiamondIntegrationFinality = (
     readonly attemptId: string
     readonly taskId: (typeof doubleDiamondTaskIds)[number]
   }> = [attempt],
-  repository = "/dalph/cassettes/double-diamond.git"
+  repository = "/dalph/cassettes/double-diamond.git",
+  // This seam intentionally accepts raw fixture fragments; the enclosing
+  // cassette schema remains the single runtime/type validation boundary.
+  interleavedAfterGitObservation: ReadonlyArray<unknown> = [],
+  interleavedExecutorReportsAfterPromotion: ReadonlyArray<unknown> = [],
+  interleavedGraphReadsAfterCompletionRequest: ReadonlyArray<unknown> = [],
+  interleavedFocusedSpecificationsAfterCompletion: ReadonlyArray<unknown> = []
 ) => {
   const acceptedResultCommit = doubleDiamondAcceptedCommit(attempt.taskId)
   const candidateCommit = doubleDiamondCandidateCommit(attempt.taskId)
@@ -4481,11 +4492,13 @@ const doubleDiamondIntegrationFinality = (
         directParents: [expectedTargetHead, acceptedResultCommit]
       }
     },
+    ...interleavedAfterGitObservation,
     targetPromotionGitReadReturned(repository, candidateCommit, {
       _tag: "CandidateNotInAncestry" as const,
       currentHeadSha: expectedTargetHead
     }),
     { _tag: "TargetPromotionCompareAndSetReturned" as const, result: { _tag: "Applied" as const } },
+    ...interleavedExecutorReportsAfterPromotion,
     { _tag: "CompletionClaimReadReturned" as const, claim: "Active" as const, taskId: attempt.taskId },
     { _tag: "CompletionClaimReplacementApplied" as const, taskId: attempt.taskId },
     {
@@ -4499,12 +4512,14 @@ const doubleDiamondIntegrationFinality = (
       currentHeadSha: candidateCommit
     }),
     { _tag: "CompletionTaskRequestReturned" as const, outcome: "Acknowledged" as const, taskId: attempt.taskId },
+    ...interleavedGraphReadsAfterCompletionRequest,
     {
       _tag: "CompletionTaskFocusedReadReturned" as const,
       lifecycle: "CompletedSuccessfully" as const,
       taskId: attempt.taskId,
       unfinishedPrerequisiteTaskIds: []
     },
+    ...interleavedFocusedSpecificationsAfterCompletion,
     { _tag: "CompletionClaimReadReturned" as const, claim: "Completion" as const, taskId: attempt.taskId },
     { _tag: "CompletionClaimDeletionApplied" as const, taskId: attempt.taskId }
   ]
@@ -4512,15 +4527,17 @@ const doubleDiamondIntegrationFinality = (
 
 const doubleDiamondRecoveryReads = (
   tasks: ReadonlyArray<{ readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] }>,
-  reconfirmSpecifications = false
+  reconfirmSpecifications = false,
+  progressGraph?: DoubleDiamondGraph
 ) => [
   ...tasks.flatMap(({ taskId }) => [
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
     { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
   ]),
+  ...(progressGraph === undefined ? [] : doubleDiamondGraphRead(progressGraph)),
   ...tasks.flatMap(({ taskId }) => [
     /* v8 ignore next -- @preserve This helper is used by the reconfirmation variant; the base variant uses its shorter fixture. */
-    ...(reconfirmSpecifications
+    ...(reconfirmSpecifications && progressGraph === undefined
       ? [
           { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
           { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
@@ -4529,8 +4546,20 @@ const doubleDiamondRecoveryReads = (
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
     { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
   ]),
+  ...(progressGraph === undefined
+    ? []
+    : tasks.flatMap(({ taskId }) => [
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
+        { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
+      ])),
+  ...(progressGraph === undefined
+    ? []
+    : tasks.flatMap(({ taskId }) => [
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
+        { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
+      ])),
   ...tasks.flatMap(({ attemptId, taskId }, index) => [
-    ...(reconfirmSpecifications && index > 0
+    ...(reconfirmSpecifications && progressGraph === undefined && index > 0
       ? [
           { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
           { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
@@ -4539,7 +4568,7 @@ const doubleDiamondRecoveryReads = (
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorktree" as const, attemptId, taskId } }
   ]),
   ...tasks.flatMap(({ attemptId, taskId }, index) => [
-    ...(reconfirmSpecifications && index > 0
+    ...(reconfirmSpecifications && progressGraph === undefined && index > 0
       ? [{ _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorktree" as const, attemptId, taskId } }]
       : []),
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId } }
@@ -4550,8 +4579,8 @@ const doubleDiamondAttempts = {
   a: { attemptId: "attempt:A:0", taskId: "A" },
   b: { attemptId: "attempt:B:0", taskId: "B" },
   c: { attemptId: "attempt:C:1", taskId: "C" },
-  d: { attemptId: "attempt:D:0", taskId: "D" },
-  x: { attemptId: "attempt:X:1", taskId: "X" },
+  d: { attemptId: "attempt:D:1", taskId: "D" },
+  x: { attemptId: "attempt:X:0", taskId: "X" },
   e: { attemptId: "attempt:E:0", taskId: "E" },
   f: { attemptId: "attempt:F:1", taskId: "F" },
   h: { attemptId: "attempt:H:0", taskId: "H" },
@@ -4591,6 +4620,9 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       doubleDiamondAttempts.a
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.a, "Running"),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.initialAEligible),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: doubleDiamondAttempts.a.taskId } },
+    { _tag: "TaskWorkSpecificationReadReturned", ...doubleDiamondSpecification(doubleDiamondAttempts.a.taskId) },
     doubleDiamondAcceptedReport(doubleDiamondAttempts.a),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.initialAEligible),
     {
@@ -4610,34 +4642,152 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     doubleDiamondExecutorReport(doubleDiamondAttempts.c, "Running"),
     { _tag: "CoordinatorProcessDies" },
     ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
-    ...doubleDiamondRecoveryReads([doubleDiamondAttempts.b, doubleDiamondAttempts.c], true),
+    ...doubleDiamondRecoveryReads(
+      [doubleDiamondAttempts.b, doubleDiamondAttempts.c],
+      true,
+      doubleDiamondGraphs.xObservedDuringRestart
+    ),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.b),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.c, "Running"),
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim" as const, taskId: doubleDiamondAttempts.x.taskId } },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.c.taskId),
     {
       _tag: "DalphSelects",
-      operation: { _tag: "ReadTargetLineage", attemptId: doubleDiamondAttempts.c.attemptId, taskId: "C" }
+      operation: {
+        _tag: "ReadTargetLineage" as const,
+        attemptId: doubleDiamondAttempts.b.attemptId,
+        taskId: doubleDiamondAttempts.b.taskId
+      }
     },
-    doubleDiamondAcceptedReport(doubleDiamondAttempts.c),
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.b, doubleDiamondGraphs.xObservedDuringRestart, [], true),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.x.taskId),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.c.taskId),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim" as const, taskId: doubleDiamondAttempts.c.taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: doubleDiamondAttempts.c.taskId },
+    ...doubleDiamondIntegrationFinality(
+      doubleDiamondAttempts.b,
+      doubleDiamondGraphs.xObservedDuringRestart,
+      [],
+      true,
+      [doubleDiamondAttempts.b],
+      "/dalph/cassettes/double-diamond.git",
+      [
+        {
+          _tag: "DalphSelects" as const,
+          operation: {
+            _tag: "RecordTaskAttemptPlan" as const,
+            attemptId: doubleDiamondAttempts.x.attemptId,
+            taskId: doubleDiamondAttempts.x.taskId
+          }
+        },
+        {
+          _tag: "DalphSelects" as const,
+          operation: { _tag: "ReadTaskClaim" as const, taskId: doubleDiamondAttempts.c.taskId }
+        },
+        { _tag: "TaskClaimCurrentReadReturned" as const, taskId: doubleDiamondAttempts.c.taskId },
+        {
+          _tag: "DalphSelects" as const,
+          operation: {
+            _tag: "ReadTaskWorktree" as const,
+            attemptId: doubleDiamondAttempts.c.attemptId,
+            taskId: doubleDiamondAttempts.c.taskId
+          }
+        },
+        {
+          _tag: "DalphSelects" as const,
+          operation: {
+            _tag: "ReadTargetLineage" as const,
+            attemptId: doubleDiamondAttempts.c.attemptId,
+            taskId: doubleDiamondAttempts.c.taskId
+          }
+        }
+      ],
+      [
+        {
+          _tag: "DalphSelects" as const,
+          operation: {
+            _tag: "ReconcileTaskWorktree" as const,
+            attemptId: doubleDiamondAttempts.x.attemptId,
+            taskId: doubleDiamondAttempts.x.taskId
+          }
+        },
+        doubleDiamondAcceptedReport(doubleDiamondAttempts.c)
+      ]
+    ),
     ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.c, doubleDiamondGraphs.bComplete, [], true),
-    ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.middlePairComplete, [
-      doubleDiamondAttempts.d,
-      doubleDiamondAttempts.x
-    ]),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.x, "Running"),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.x.taskId),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim" as const, taskId: doubleDiamondAttempts.x.taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: doubleDiamondAttempts.x.taskId },
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.x.taskId),
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim" as const, taskId: doubleDiamondAttempts.d.taskId } },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.d.taskId),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "RecordTaskAttemptPlan" as const,
+        attemptId: doubleDiamondAttempts.d.attemptId,
+        taskId: doubleDiamondAttempts.d.taskId
+      }
+    },
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReconcileTaskWorktree" as const,
+        attemptId: doubleDiamondAttempts.d.attemptId,
+        taskId: doubleDiamondAttempts.d.taskId
+      }
+    },
     doubleDiamondExecutorReport(doubleDiamondAttempts.d, "Running"),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.d.taskId),
     doubleDiamondExecutorReport(doubleDiamondAttempts.x, "Running"),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.d),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.x.taskId),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.x),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.d, doubleDiamondGraphs.middlePairComplete, [
-      doubleDiamondAttempts.d,
-      doubleDiamondAttempts.x
-    ]),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:X:1", taskId: "X" } },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.x, doubleDiamondGraphs.dComplete, [], true),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim" as const, taskId: doubleDiamondAttempts.d.taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: doubleDiamondAttempts.d.taskId },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim" as const, taskId: doubleDiamondAttempts.x.taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: doubleDiamondAttempts.x.taskId },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage" as const,
+        attemptId: doubleDiamondAttempts.d.attemptId,
+        taskId: doubleDiamondAttempts.d.taskId
+      }
+    },
+    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.d, doubleDiamondGraphs.middlePairComplete, [], true),
+    {
+      _tag: "DalphSelects",
+      operation: { _tag: "ReadTargetLineage", attemptId: doubleDiamondAttempts.x.attemptId, taskId: "X" }
+    },
+    ...doubleDiamondIntegrationFinality(
+      doubleDiamondAttempts.x,
+      doubleDiamondGraphs.dComplete,
+      [],
+      true,
+      [doubleDiamondAttempts.x],
+      "/dalph/cassettes/double-diamond.git"
+    ),
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+    },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.middlePairComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4648,6 +4798,9 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.e, "Running"),
     doubleDiamondExecutorReport(doubleDiamondAttempts.f, "Running"),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.dAndXComplete),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.e.taskId),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.f.taskId),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.e),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.f),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dAndXComplete),
@@ -4671,6 +4824,9 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.h, "Running"),
     doubleDiamondExecutorReport(doubleDiamondAttempts.i, "Running"),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.h.taskId),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.i.taskId),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.h),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.i),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
@@ -4692,6 +4848,8 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       doubleDiamondAttempts.g
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.g, "Running"),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.deepPairComplete),
+    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.g.taskId),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.g),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.deepPairComplete),
     {
