@@ -1,10 +1,16 @@
-import { RunId, TaskId } from "@dalph/contracts"
+import { AttemptId, PlannedTaskAttempt, RunId, TaskId } from "@dalph/contracts"
 import * as fc from "fast-check"
 import { expect, it } from "vitest"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
+import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { QueuedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import {
   trackerGraphReadProposalOf,
   DeliveryProposalId,
@@ -19,6 +25,7 @@ import {
 import {
   BoundedTicketRank,
   makeDeliveryReflection,
+  makeDeliverySettlement,
   makeDeliverySettlements,
   TrackerGraphState,
   type BoundedParallelTickets,
@@ -182,6 +189,206 @@ const statusFor = (state: DeliveryRuntimeObservationState): CurrentDeliveryStatu
 
 const SchemaSubject = DeliveryStatusSubject.cases.Run.make({ runId })
 
+const statusTaskStandingOf = (taskId: TaskId, disposition: StatusPropertyDisposition) => {
+  const responsibility = WorkflowResponsibilityEntry.cases.TaskClaimResponsibility.make({
+    acquisition: TaskClaimAcquisition.make({
+      operationId: OperationId.make(`status-property-claim:${taskId}`),
+      owner: ClaimOwner.make("dalph"),
+      taskId,
+      token: ClaimToken.make(`status-property-token:${taskId}`)
+    }),
+    beganAt: JournalPosition.make(3),
+    taskId
+  })
+  return {
+    standing: {
+      _tag: "ResponsibilitySituation" as const,
+      facts: { _tag: "WorkflowOperationFreshFacts" as const, disposition, responsibility }
+    },
+    obligation: { _tag: "WorkflowResponsibility" as const, responsibility }
+  }
+}
+
+type PhenomenonPermutation = {
+  readonly proposals: boolean
+  readonly owners: boolean
+  readonly standings: boolean
+  readonly sourcePlacements: boolean
+  readonly obligations: boolean
+  readonly issues: boolean
+  readonly settlements: boolean
+}
+
+type StatusPropertyDisposition =
+  | ReturnType<typeof ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint>
+  | ReturnType<typeof ResponsibilityDisposition.Relinquished>
+
+const nonEmptyStandingsOf = (standings: TicketDelivery["standings"]): TicketDelivery["standings"] => {
+  const reversed = standings.toReversed()
+  const [first, ...rest] = reversed
+  if (first === undefined) return expect.fail("all-phenomena property fixture requires one standing")
+  return [first, ...rest]
+}
+
+const allPhenomenaStateOf = (permutation: PhenomenonPermutation): DeliveryRuntimeObservationState => {
+  const base = stateOf(["A", "A2", "B"], ["A", "B"], permutation.standings, !permutation.standings, permutation.issues)
+  if (base._tag !== "Ready") return expect.fail("all-phenomena property fixture must be ready")
+
+  const capacityTask = TaskId.make("C")
+  const targetTask = TaskId.make("I")
+  const trackerTask = TaskId.make("T")
+  const relinquishedTask = TaskId.make("R")
+  const settlementTaskA = TaskId.make("S1")
+  const settlementTaskB = TaskId.make("S2")
+  const fixture = integrationFinalityFixture
+  const plannedAttempt = PlannedTaskAttempt.make({ ...fixture.plannedAttempt, runId, taskId: targetTask })
+  const queued = QueuedIntegrationResponsibility.make({
+    acceptedResult: fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult,
+    integrationTarget: fixture.integrationTarget,
+    plannedAttempt,
+    preIntegrationCancellation: { attemptId: plannedAttempt.attemptId, queuedAt: JournalPosition.make(2), runId },
+    queuedAt: JournalPosition.make(2)
+  })
+  const tracker = statusTaskStandingOf(
+    trackerTask,
+    ResponsibilityDisposition.WorkflowOperationTaskClaimConstraint({ claimState: "Missing" })
+  )
+  const relinquished = statusTaskStandingOf(
+    relinquishedTask,
+    ResponsibilityDisposition.Relinquished({ reason: "AuthorizedHandoff" })
+  )
+  const proposal = proposalOf("property-publication", capacityTask, 3)
+  const settledOwner: DeliveryRuntimeLiveOwnerSnapshot = { _tag: "SettledBeforeMaterialization", proposal }
+  const extraDeliveries: ReadonlyArray<TicketDelivery> = [
+    {
+      _tag: "TicketDelivery",
+      evidence: [],
+      obligations: [],
+      placement: { _tag: "Selected", rank: BoundedTicketRank.make(2) },
+      standings: [{ _tag: "ProposedDelivery" }],
+      taskId: capacityTask
+    },
+    {
+      _tag: "TicketDelivery",
+      evidence: [{ _tag: "QueuedIntegration", responsibility: queued }],
+      obligations: [{ _tag: "QueuedIntegration", responsibility: queued }],
+      placement: { _tag: "Selected", rank: BoundedTicketRank.make(3) },
+      standings: [{ _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt } }],
+      taskId: targetTask
+    },
+    {
+      _tag: "TicketDelivery",
+      evidence: [],
+      obligations: [tracker.obligation],
+      placement: { _tag: "Selected", rank: BoundedTicketRank.make(4) },
+      standings: [tracker.standing],
+      taskId: trackerTask
+    },
+    {
+      _tag: "TicketDelivery",
+      evidence: [],
+      obligations: [relinquished.obligation],
+      placement: { _tag: "Selected", rank: BoundedTicketRank.make(5) },
+      standings: [relinquished.standing],
+      taskId: relinquishedTask
+    },
+    {
+      _tag: "TicketDelivery",
+      evidence: [],
+      obligations: [],
+      placement: { _tag: "Selected", rank: BoundedTicketRank.make(6) },
+      standings: [{ _tag: "ProposedDelivery" }],
+      taskId: settlementTaskA
+    },
+    {
+      _tag: "TicketDelivery",
+      evidence: [],
+      obligations: [],
+      placement: { _tag: "Selected", rank: BoundedTicketRank.make(7) },
+      standings: [{ _tag: "ProposedDelivery" }],
+      taskId: settlementTaskB
+    }
+  ]
+  const source = base.evaluation.current.ticketDeliveries.source
+  const placements: BoundedParallelTickets["placements"] = [
+    ...source.placements,
+    ...extraDeliveries.map(({ placement, taskId }) => {
+      if (placement._tag === "AbsentFromCurrentGraph" || placement._tag === "GraphNotEstablished") {
+        return expect.fail("all-phenomena property fixture requires bounded ticket placements")
+      }
+      return { taskId, placement }
+    })
+  ]
+  const deliveries = [...base.evaluation.current.ticketDeliveries.deliveries, ...extraDeliveries]
+  const ticketDeliveries = {
+    ...base.evaluation.current.ticketDeliveries,
+    deliveries,
+    source: { ...source, placements: permutation.sourcePlacements ? placements.toReversed() : placements }
+  }
+  const settlementEntries = [
+    makeDeliverySettlement({ attemptId: AttemptId.make("property-settlement-S1"), taskId: settlementTaskA }),
+    makeDeliverySettlement({ attemptId: AttemptId.make("property-settlement-S2"), taskId: settlementTaskB })
+  ]
+  const settlements = makeDeliverySettlements(
+    ticketDeliveries,
+    permutation.settlements ? settlementEntries.toReversed() : settlementEntries
+  )
+  const current = {
+    ...base.evaluation.current,
+    reflection: makeDeliveryReflection(settlements),
+    settlements,
+    ticketDeliveries
+  }
+  const proposals = [
+    ...(base.evaluation.proposedActions._tag === "DeliveryProposalsAvailable"
+      ? base.evaluation.proposedActions.proposals
+      : []),
+    proposal
+  ]
+  const issues =
+    base.evaluation.proposedActions._tag === "DeliveryProposalsAvailable"
+      ? base.evaluation.proposedActions.isolatedIssues
+      : []
+  const liveOwners = [...base.liveOwners, settledOwner]
+  const evaluation = {
+    ...base.evaluation,
+    current,
+    proposedActions: {
+      _tag: "DeliveryProposalsAvailable" as const,
+      isolatedIssues: permutation.issues ? issues.toReversed() : issues,
+      proposals: permutation.proposals ? proposals.toReversed() : proposals
+    },
+    taskWork: {
+      ...base.evaluation.taskWork,
+      held: [
+        { taskId: TaskId.make("A"), correlation: { attemptId: AttemptId.make("property-holder-A"), runId } },
+        { taskId: TaskId.make("B"), correlation: { attemptId: AttemptId.make("property-holder-B"), runId } }
+      ]
+    }
+  }
+  const orderedOwners = permutation.owners ? liveOwners.toReversed() : liveOwners
+  const orderedDeliveries = permutation.standings
+    ? evaluation.current.ticketDeliveries.deliveries.map((delivery) => ({
+        ...delivery,
+        obligations: permutation.obligations ? delivery.obligations.toReversed() : delivery.obligations,
+        standings: nonEmptyStandingsOf(delivery.standings)
+      }))
+    : evaluation.current.ticketDeliveries.deliveries.map((delivery) => ({
+        ...delivery,
+        obligations: permutation.obligations ? delivery.obligations.toReversed() : delivery.obligations
+      }))
+  return DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...evaluation,
+      current: {
+        ...evaluation.current,
+        ticketDeliveries: { ...evaluation.current.ticketDeliveries, deliveries: orderedDeliveries }
+      }
+    },
+    liveOwners: orderedOwners
+  })
+}
+
 it("keeps simultaneous status entries deterministic when proposal, owner, and standing arrays are permuted", () => {
   const canonical = statusFor(stateOf(["A", "A2", "B"], ["A", "B"], false, false, false))
   if (canonical._tag !== "DeliveryStatusAvailable") return expect.fail("property fixture must be available")
@@ -219,6 +426,63 @@ it("keeps simultaneous status entries deterministic when proposal, owner, and st
           {}
         )
         expect(counts).toEqual(phenomenonCounts)
+      }
+    ),
+    { numRuns: 50 }
+  )
+})
+
+it("orders every simultaneous delivery-status phenomenon independently of source permutations", () => {
+  const canonical = statusFor(
+    allPhenomenaStateOf({
+      proposals: false,
+      owners: false,
+      standings: false,
+      sourcePlacements: false,
+      obligations: false,
+      issues: false,
+      settlements: false
+    })
+  )
+  if (canonical._tag !== "DeliveryStatusAvailable") return expect.fail("all-phenomena property must be available")
+  const phenomenonCounts = canonical.entries.reduce<Partial<Record<DeliveryStatusEntry["_tag"], number>>>(
+    (counts, entry) => ({ ...counts, [entry._tag]: (counts[entry._tag] ?? 0) + 1 }),
+    {}
+  )
+  expect(phenomenonCounts).toMatchObject({
+    DependencyWait: 2,
+    TrackerFactWait: 2,
+    TaskWorkCapacityWait: 6,
+    ProposedDeliveryAction: 1,
+    LiveDeliveryAction: 2,
+    AcceptedFactPublicationWait: 1,
+    IntegrationTargetWait: 1,
+    EvidenceUnavailable: 2,
+    EvidenceConflict: 2,
+    Settlement: 2,
+    Relinquishment: 1
+  })
+  fc.assert(
+    fc.property(
+      fc.record({
+        proposals: fc.boolean(),
+        owners: fc.boolean(),
+        standings: fc.boolean(),
+        sourcePlacements: fc.boolean(),
+        obligations: fc.boolean(),
+        issues: fc.boolean(),
+        settlements: fc.boolean()
+      }),
+      (permutation) => {
+        const projected = statusFor(allPhenomenaStateOf(permutation))
+        expect(projected).toEqual(canonical)
+        if (projected._tag !== "DeliveryStatusAvailable") return
+        expect(
+          projected.entries.reduce<Partial<Record<DeliveryStatusEntry["_tag"], number>>>(
+            (counts, entry) => ({ ...counts, [entry._tag]: (counts[entry._tag] ?? 0) + 1 }),
+            {}
+          )
+        ).toEqual(phenomenonCounts)
       }
     ),
     { numRuns: 50 }

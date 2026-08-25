@@ -10,9 +10,14 @@ import type {
 } from "./relations.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
-import { trackerFactForDisposition, unavailableFromFacts } from "./delivery-status-responsibility-semantics.js"
+import {
+  trackerFactForClaimState,
+  trackerFactForDisposition,
+  unavailableFromFacts
+} from "./delivery-status-responsibility-semantics.js"
 import {
   DeliveryStatusProjectionConflict,
+  makeDeliveryStatusEntryIdentity,
   type DeliveryStatusGraphSource,
   type DeliveryStatusIntegrationStanding,
   type DeliveryStatusEntry,
@@ -21,8 +26,8 @@ import {
   type DeliveryStatusWakeCondition
 } from "./delivery-status-model.js"
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
-import { addEntry, canonicalEncodingOf, canonicalIdentity } from "./delivery-status-order.js"
-import type { OrderedStatusEntry } from "./delivery-status-order.js"
+import { addEntry, canonicalEncodingOf, canonicalIdentity, taskOrderFor } from "./delivery-status-order.js"
+import type { OrderedStatusEntry, StatusTaskOrder, StatusTaskOrderLookup } from "./delivery-status-order.js"
 
 export {
   addEntry,
@@ -44,12 +49,42 @@ export const includeForSubject = (subject: DeliveryStatusSubject, taskId: TaskId
 export const taskStatusSubject = (subject: DeliveryStatusSubject, taskId: TaskId): DeliveryStatusSubject =>
   subject._tag === "Task" ? subject : { _tag: "Task", runId: subject.runId, taskId }
 
+const missingTaskOrderConflictFor = (
+  subject: DeliveryStatusSubject,
+  taskId: TaskId
+): DeliveryStatusProjectionConflict =>
+  new DeliveryStatusProjectionConflict({
+    subject,
+    entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["missing-task-order", taskId])),
+    detail: "a task-scoped status entry has no accepted task order"
+  })
+
+export const taskOrderOrConflictFor = (
+  subject: DeliveryStatusSubject,
+  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>,
+  taskId: TaskId
+): StatusTaskOrder | DeliveryStatusProjectionConflict => {
+  const order: StatusTaskOrderLookup = taskOrderFor(taskOrders, taskId)
+  return order._tag === "MissingTaskOrder" ? missingTaskOrderConflictFor(subject, taskId) : order
+}
+
+export const emptyDependencyConflictFor = (
+  subject: DeliveryStatusSubject,
+  taskId: TaskId,
+  standingTag: "GraphExcluded" | "PromotedPrerequisiteReleasePending" | "ResponsibilitySituation" | "IntegrationWait"
+): DeliveryStatusProjectionConflict =>
+  new DeliveryStatusProjectionConflict({
+    subject,
+    entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["empty-dependency", taskId, standingTag])),
+    detail: "a dependency wait has no prerequisite task identity"
+  })
+
 export const addDependencyEntry = (
   subject: DeliveryStatusSubject,
   taskId: TaskId,
   prerequisiteTaskIds: ReadonlyArray<TaskId>,
   standing: Extract<DeliveryStatusEntry, { readonly _tag: "DependencyWait" }>["standing"],
-  taskOrder: number,
+  taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
   const [first, ...rest] = prerequisiteTaskIds
@@ -161,7 +196,7 @@ const liveOwnerConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: canonicalIdentity(["live-owner", proposalId]),
+    entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["live-owner", proposalId])),
     detail
   })
 
@@ -208,24 +243,9 @@ export const integrationTrackerFactForWait = (
   >
 ): { readonly fact: DeliveryStatusTrackerFact; readonly wakeCondition: DeliveryStatusWakeCondition } => {
   if (wait._tag === "IntegrationTrackerFactsWait") {
-    return { fact: { _tag: "Unobserved", boundary: "TaskTracker" }, wakeCondition: "TaskTrackerFactsObserved" }
+    return { fact: trackerFactForClaimState("Unobserved").fact, wakeCondition: "TaskTrackerFactsObserved" }
   }
-  if (wait.claimState === "Missing") {
-    return {
-      fact: { _tag: "Missing", boundary: "TaskTracker" },
-      wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
-    }
-  }
-  if (wait.claimState === "Unreadable") {
-    return { fact: { _tag: "Unreadable", boundary: "TaskTracker" }, wakeCondition: "TaskClaimFactsObserved" }
-  }
-  if (wait.claimState === "Foreign") {
-    return {
-      fact: { _tag: "Foreign", boundary: "TaskTracker" },
-      wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
-    }
-  }
-  return { fact: { _tag: "Unobserved", boundary: "TaskTracker" }, wakeCondition: "TaskClaimFactsObserved" }
+  return trackerFactForClaimState(wait.claimState)
 }
 
 export const graphSourceOf = (snapshot: DeliveryRuntimeSnapshot): DeliveryStatusGraphSource | null => {
@@ -247,7 +267,7 @@ const responsibilityProjectionConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: canonicalIdentity(["responsibility", delivery.taskId]),
+    entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["responsibility", delivery.taskId])),
     detail: "a tracker or unavailable-fact standing has no matching exact responsibility obligation"
   })
 
@@ -275,7 +295,9 @@ const validateResponsibilityStandingForStatus = (
   ) {
     return new DeliveryStatusProjectionConflict({
       subject,
-      entryIdentity: canonicalIdentity(["responsibility", delivery.taskId, "DependencyWait"]),
+      entryIdentity: makeDeliveryStatusEntryIdentity(
+        canonicalIdentity(["responsibility", delivery.taskId, "DependencyWait"])
+      ),
       detail: "a dependency wait must retain at least one prerequisite task"
     })
   }
@@ -288,7 +310,7 @@ const integrationTargetProjectionConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: canonicalIdentity(["integration-target", delivery.taskId]),
+    entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["integration-target", delivery.taskId])),
     detail: "an integration target wait has no matching queued integration responsibility"
   })
 
@@ -298,7 +320,7 @@ const integrationTrackerProjectionConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: canonicalIdentity(["integration-tracker", delivery.taskId]),
+    entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["integration-tracker", delivery.taskId])),
     detail: "an integration tracker wait has no matching exact planned-attempt obligation"
   })
 
@@ -322,7 +344,7 @@ const integrationWaitProjectionConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: canonicalIdentity(["integration-wait", delivery.taskId, wait._tag]),
+    entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["integration-wait", delivery.taskId, wait._tag])),
     detail: `the ${wait._tag} has no matching exact obligation or non-empty supporting facts`
   })
 
@@ -333,9 +355,7 @@ const validateIntegrationDependencyWait = (
 ): DeliveryStatusProjectionConflict | null => {
   if (standing.wait._tag !== "IntegrationDependencyWait") return null
   const responsibility = obligationForPlannedAttempt(delivery, standing.wait.plannedAttempt)
-  return standing.wait.prerequisiteTaskIds.length === 0 ||
-    standing.wait.plannedAttempt.taskId !== delivery.taskId ||
-    responsibility?._tag !== "StartedIntegration"
+  return standing.wait.prerequisiteTaskIds.length === 0 || responsibility?._tag !== "StartedIntegration"
     ? integrationWaitProjectionConflict(subject, delivery, standing.wait)
     : null
 }
@@ -369,6 +389,9 @@ const validateIntegrationStandingForStatus = (
   delivery: TicketDelivery,
   standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>
 ): DeliveryStatusProjectionConflict | null => {
+  if (standing.wait.plannedAttempt.taskId !== delivery.taskId) {
+    return integrationWaitProjectionConflict(subject, delivery, standing.wait)
+  }
   const dependencyConflict = validateIntegrationDependencyWait(subject, delivery, standing)
   if (dependencyConflict !== null) return dependencyConflict
   const configurationConflict = validateIntegrationConfigurationWait(subject, delivery, standing)
@@ -395,9 +418,29 @@ const validateEvidenceConflictForStatus = (
     ? null
     : new DeliveryStatusProjectionConflict({
         subject,
-        entryIdentity: canonicalIdentity(["evidence-conflict", delivery.taskId]),
+        entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["evidence-conflict", delivery.taskId])),
         detail: "an exact evidence conflict repeats one evidence identity"
       })
+}
+
+const validateStandingForStatus = (
+  subject: DeliveryStatusSubject,
+  delivery: TicketDelivery,
+  standing: TicketDeliveryStanding
+): DeliveryStatusProjectionConflict | null => {
+  if (standing._tag === "ResponsibilitySituation") {
+    return validateResponsibilityStandingForStatus(subject, delivery, standing)
+  }
+  if (standing._tag === "ExactEvidenceConflict") {
+    return validateEvidenceConflictForStatus(subject, delivery, standing)
+  }
+  if (standing._tag === "PromotedPrerequisiteReleasePending" && standing.prerequisiteTaskIds.length === 0) {
+    return emptyDependencyConflictFor(subject, delivery.taskId, standing._tag)
+  }
+  if (standing._tag === "IntegrationWait") {
+    return validateIntegrationStandingForStatus(subject, delivery, standing)
+  }
+  return null
 }
 
 export const validateDeliveryEvidenceForStatus = (
@@ -405,17 +448,8 @@ export const validateDeliveryEvidenceForStatus = (
   delivery: TicketDelivery
 ): DeliveryStatusProjectionConflict | null => {
   for (const standing of delivery.standings) {
-    const responsibilityConflict =
-      standing._tag === "ResponsibilitySituation"
-        ? validateResponsibilityStandingForStatus(subject, delivery, standing)
-        : null
-    if (responsibilityConflict !== null) return responsibilityConflict
-    const evidenceConflict =
-      standing._tag === "ExactEvidenceConflict" ? validateEvidenceConflictForStatus(subject, delivery, standing) : null
-    if (evidenceConflict !== null) return evidenceConflict
-    const integrationConflict =
-      standing._tag === "IntegrationWait" ? validateIntegrationStandingForStatus(subject, delivery, standing) : null
-    if (integrationConflict !== null) return integrationConflict
+    const conflict = validateStandingForStatus(subject, delivery, standing)
+    if (conflict !== null) return conflict
   }
   return null
 }

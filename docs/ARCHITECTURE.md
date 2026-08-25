@@ -77,6 +77,7 @@ not incidental glue.
 | Stable meaning | Current exported symbol | Visible argument | Other established input | Result | Colour | Source |
 | --- | --- | --- | --- | --- | --- | --- |
 | Current graph becomes coherent delivery consequences | `delivery` | none | current tracker graph, Run policy, exact obligations/current evidence, and established settlement evidence | `CurrentSignal<DeliveryConsequences>` | description | [`delivery.ts`](../packages/orchestrator/src/coordination/delivery/delivery.ts) |
+| Current delivery runtime observation becomes a passive status read | `deliveryStatusOf`, `deliveryStatusSignalOf`, `observeDeliveryStatus` | decoded Run/task subject | one coherent `DeliveryRuntimeObservationState` | `CurrentDeliveryStatus` / `CurrentSignal<CurrentDeliveryStatus>` | description | [`delivery-status.ts`](../packages/orchestrator/src/coordination/delivery/delivery-status.ts) |
 | Current frontier is viewed through current Run policy | `boundedParallelTickets` | current delivery frontier | current Run control policy | current bounded parallel tickets | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
 | Bounded placements and exact obligations become ticket deliveries | `executorResponsibilities` | current bounded parallel tickets | established exact obligations and their current evidence | `TicketDeliveryRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
 | Ticket deliveries become established settlement facts | `deliverySettlements` | ticket-delivery relation | established Integrator, Git qualification, promotion, cleanup, and disposition evidence | `DeliverySettlementRelation` | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
@@ -97,6 +98,12 @@ architecture guard. The current exact source guard is in
 [`delivery.test.ts`](../packages/orchestrator/src/coordination/delivery/delivery.test.ts);
 extending that guard to all indexed compositions is allowed without changing
 their source.
+
+The delivery status composition is descriptive only. Reading its current value
+or subscribing to its changes does not call an owning authority, append the
+workflow journal, mutate a live-action controller, acquire capacity, or create
+a proposal identity. A projection conflict fails closed at this boundary; it
+does not authorize a repair action.
 
 ## Function Colours and Composition
 

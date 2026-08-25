@@ -5,13 +5,15 @@ import {
   type PlannedAttemptExecutorCorrelation,
   type TaskId
 } from "@dalph/contracts"
-import { Match } from "effect"
+import { Match, Schema } from "effect"
 import type {
   DeliveryActionProposal,
   DeliveryProposalDerivationIssue,
+  DeliveryProposalOrdinal,
   DeliveryProposalOrderEvidence
 } from "./delivery-action-proposal.js"
 import type {
+  BoundedTicketRank,
   DeliveryRuntimeEvaluation,
   ExactWorkflowObligation,
   TicketDelivery,
@@ -19,8 +21,27 @@ import type {
 } from "./relations.js"
 import { type DeliveryStatusEntry, type DeliveryStatusSubject } from "./delivery-status-model.js"
 import { workflowResponsibilityKey, type WorkflowResponsibilityEntry } from "../reconstruction/state.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 
 type IdentityPart = string | number
+
+/** Non-negative position of a task in the accepted delivery order. */
+const DeliveryTaskPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("DeliveryTaskPosition")
+)
+type DeliveryTaskPosition = typeof DeliveryTaskPosition.Type
+
+export type StatusTaskOrder =
+  | { readonly _tag: "RunWideTaskOrder" }
+  | { readonly _tag: "TaskOrder"; readonly position: DeliveryTaskPosition }
+
+export type StatusTaskOrderLookup = StatusTaskOrder | { readonly _tag: "MissingTaskOrder"; readonly taskId: TaskId }
+
+export const runWideTaskOrder: StatusTaskOrder = { _tag: "RunWideTaskOrder" }
+
+export const deliveryTaskPositionAt = (index: number): DeliveryTaskPosition => DeliveryTaskPosition.make(index)
+
+export const taskOrderAt = (position: DeliveryTaskPosition): StatusTaskOrder => ({ _tag: "TaskOrder", position })
 
 /** Injective identity encoding: every typed component carries its own length. */
 export const canonicalIdentity = (parts: ReadonlyArray<IdentityPart>): string =>
@@ -109,9 +130,34 @@ const proposalDerivationIssueIdentity = (issue: DeliveryProposalDerivationIssue)
 const statusEntryPrefix = (entry: DeliveryStatusEntry): string =>
   canonicalIdentity([entry._tag, subjectKey(entry.subject)])
 
-const responsibilityPosition = (responsibility: WorkflowResponsibilityEntry): number => responsibility.beganAt
+/** Internal category/ranking value used only while comparing status entries. */
+const StatusComparisonRank = Schema.Int.pipe(Schema.brand("StatusComparisonRank"))
+type StatusComparisonRank = typeof StatusComparisonRank.Type
 
-const obligationPosition = (obligation: ExactWorkflowObligation): number => {
+const comparisonRank = (value: number): StatusComparisonRank => StatusComparisonRank.make(value)
+
+type StructuralOrderValue =
+  | BoundedTicketRank
+  | DeliveryProposalOrdinal
+  | DeliveryTaskPosition
+  | JournalPosition
+  | StatusComparisonRank
+
+type StructuralOrderPosition =
+  | { readonly _tag: "OrderPosition"; readonly value: StructuralOrderValue }
+  | { readonly _tag: "MissingOrderPosition" }
+
+type StructuralOrderToken = StructuralOrderValue | string | StructuralOrderPosition
+
+const orderPosition = (value: StructuralOrderValue): StructuralOrderPosition => ({ _tag: "OrderPosition", value })
+const missingOrderPosition: StructuralOrderPosition = { _tag: "MissingOrderPosition" }
+
+const optionalJournalPosition = (value: JournalPosition | null | undefined): StructuralOrderPosition =>
+  value === null || value === undefined ? missingOrderPosition : orderPosition(value)
+
+const responsibilityPosition = (responsibility: WorkflowResponsibilityEntry): JournalPosition => responsibility.beganAt
+
+const obligationPosition = (obligation: ExactWorkflowObligation): JournalPosition => {
   if (obligation._tag === "WorkflowResponsibility") return responsibilityPosition(obligation.responsibility)
   if (obligation._tag === "AcceptedAwaitingIntegration") return obligation.accepted.terminalAt
   if (obligation._tag === "QueuedIntegration") return obligation.responsibility.queuedAt
@@ -120,25 +166,28 @@ const obligationPosition = (obligation: ExactWorkflowObligation): number => {
 
 const dependencyEntryPosition = (
   standing: Extract<DeliveryStatusEntry, { readonly _tag: "DependencyWait" }>["standing"]
-): number => (standing._tag === "ResponsibilitySituation" ? standing.facts.responsibility.beganAt : 0)
+): StructuralOrderPosition =>
+  standing._tag === "ResponsibilitySituation"
+    ? orderPosition(standing.facts.responsibility.beganAt)
+    : missingOrderPosition
 
-const optionalObligationPosition = (obligation: ExactWorkflowObligation | null): number =>
-  obligation === null ? 0 : obligationPosition(obligation)
+const optionalObligationPosition = (obligation: ExactWorkflowObligation | null): StructuralOrderPosition =>
+  obligation === null ? missingOrderPosition : orderPosition(obligationPosition(obligation))
 
 type NonActionStatusEntry = Exclude<
   DeliveryStatusEntry,
   { readonly _tag: "ProposedDeliveryAction" | "LiveDeliveryAction" | "AcceptedFactPublicationWait" }
 >
 
-const statusEntryPosition = Match.typeTags<NonActionStatusEntry, number>()({
+const statusEntryPosition = Match.typeTags<NonActionStatusEntry, StructuralOrderPosition>()({
   DependencyWait: (entry) => dependencyEntryPosition(entry.standing),
   TrackerFactWait: (entry) => optionalObligationPosition(entry.responsibility),
-  TaskWorkCapacityWait: (entry) => entry.placement.rank,
-  IntegrationTargetWait: (entry) => obligationPosition(entry.responsibility),
+  TaskWorkCapacityWait: (entry) => orderPosition(entry.placement.rank),
+  IntegrationTargetWait: (entry) => orderPosition(obligationPosition(entry.responsibility)),
   EvidenceUnavailable: (entry) => optionalObligationPosition(entry.responsibility),
   EvidenceConflict: (entry) => optionalObligationPosition(entry.responsibility),
-  Settlement: () => 0,
-  Relinquishment: (entry) => entry.responsibility.responsibility.beganAt
+  Settlement: () => missingOrderPosition,
+  Relinquishment: (entry) => orderPosition(entry.responsibility.responsibility.beganAt)
 })
 
 const dependencyStandingIdentity = (
@@ -212,26 +261,28 @@ export const statusEntryJson: (entry: DeliveryStatusEntry) => string = canonical
 
 export interface OrderedStatusEntry {
   readonly entry: DeliveryStatusEntry
-  readonly taskOrder: number
-  readonly phenomenonOrder: number
-  readonly structuralOrder: ReadonlyArray<number | string>
+  readonly taskOrder: StatusTaskOrder
+  readonly phenomenonOrder: StatusComparisonRank
+  readonly structuralOrder: ReadonlyArray<StructuralOrderToken>
 }
 
-const freshOrderKind = 0
-const recoveredOrderKind = 1
-const integrationOrderKind = 2
-const unqueuedAcceptedOrderKind = 3
-const trackerGraphOrderKind = 4
-const noJournalPosition = 0
+const freshOrderKind = comparisonRank(0)
+const recoveredOrderKind = comparisonRank(1)
+const integrationOrderKindValue = 2
+const unqueuedAcceptedOrderKindValue = 3
+const trackerGraphOrderKindValue = 4
+const integrationOrderKind = comparisonRank(integrationOrderKindValue)
+const unqueuedAcceptedOrderKind = comparisonRank(unqueuedAcceptedOrderKindValue)
+const trackerGraphOrderKind = comparisonRank(trackerGraphOrderKindValue)
 
 /** The accepted structural tie-breakers do not depend on provider-array order. */
-const proposalOrderStructuralOrder = (order: DeliveryProposalOrderEvidence): ReadonlyArray<number | string> => {
+const proposalOrderStructuralOrder = (order: DeliveryProposalOrderEvidence): ReadonlyArray<StructuralOrderToken> => {
   return Match.valueTags(order, {
     FreshWorkflowOrder: ({ frontierOrdinal, step, taskId }) => [freshOrderKind, frontierOrdinal, step, taskId],
     RecoveredWorkflowOrder: ({ acceptedAt, frontierOrdinal, responsibilityBeganAt, taskId, transition }) => [
       recoveredOrderKind,
-      acceptedAt ?? noJournalPosition,
-      responsibilityBeganAt ?? noJournalPosition,
+      optionalJournalPosition(acceptedAt),
+      optionalJournalPosition(responsibilityBeganAt),
       frontierOrdinal,
       taskId,
       transition
@@ -239,7 +290,7 @@ const proposalOrderStructuralOrder = (order: DeliveryProposalOrderEvidence): Rea
     IntegrationOrder: ({ frontierOrdinal, queuedAt, startedAt, taskId }) => [
       integrationOrderKind,
       queuedAt,
-      startedAt ?? noJournalPosition,
+      optionalJournalPosition(startedAt),
       frontierOrdinal,
       taskId
     ],
@@ -249,7 +300,7 @@ const proposalOrderStructuralOrder = (order: DeliveryProposalOrderEvidence): Rea
       frontierOrdinal,
       taskId
     ],
-    TrackerGraphOrder: ({ acceptedAt }) => [trackerGraphOrderKind, acceptedAt ?? noJournalPosition]
+    TrackerGraphOrder: ({ acceptedAt }) => [trackerGraphOrderKind, optionalJournalPosition(acceptedAt)]
   })
 }
 
@@ -289,7 +340,7 @@ const proposalCorrelationTieBreaker = (proposal: DeliveryActionProposal): string
       `planned-attempt-protocol:${plannedAttemptExecutorCorrelationKey(correlation)}`
   })
 
-const statusEntryStructuralOrder = (entry: DeliveryStatusEntry): ReadonlyArray<number | string> => {
+const statusEntryStructuralOrder = (entry: DeliveryStatusEntry): ReadonlyArray<StructuralOrderToken> => {
   if (
     entry._tag === "ProposedDeliveryAction" ||
     entry._tag === "LiveDeliveryAction" ||
@@ -306,34 +357,66 @@ const statusEntryStructuralOrder = (entry: DeliveryStatusEntry): ReadonlyArray<n
   return [statusEntryPosition(entry), statusEntryIdentity(entry)]
 }
 
-const phenomenonOrder: Readonly<Record<DeliveryStatusEntry["_tag"], number>> = {
-  DependencyWait: 1,
-  TrackerFactWait: 2,
-  TaskWorkCapacityWait: 3,
-  ProposedDeliveryAction: 4,
-  LiveDeliveryAction: 5,
-  AcceptedFactPublicationWait: 6,
-  IntegrationTargetWait: 7,
-  EvidenceUnavailable: 8,
-  EvidenceConflict: 9,
-  Settlement: 10,
-  Relinquishment: 11
+const trackerFactPhenomenonOrderValue = 2
+const taskWorkCapacityPhenomenonOrderValue = 3
+const proposedActionPhenomenonOrderValue = 4
+const liveActionPhenomenonOrderValue = 5
+const publicationWaitPhenomenonOrderValue = 6
+const integrationTargetPhenomenonOrderValue = 7
+const unavailableEvidencePhenomenonOrderValue = 8
+const evidenceConflictPhenomenonOrderValue = 9
+const settlementPhenomenonOrderValue = 10
+const relinquishmentPhenomenonOrderValue = 11
+const phenomenonOrder: Readonly<Record<DeliveryStatusEntry["_tag"], StatusComparisonRank>> = {
+  DependencyWait: comparisonRank(1),
+  TrackerFactWait: comparisonRank(trackerFactPhenomenonOrderValue),
+  TaskWorkCapacityWait: comparisonRank(taskWorkCapacityPhenomenonOrderValue),
+  ProposedDeliveryAction: comparisonRank(proposedActionPhenomenonOrderValue),
+  LiveDeliveryAction: comparisonRank(liveActionPhenomenonOrderValue),
+  AcceptedFactPublicationWait: comparisonRank(publicationWaitPhenomenonOrderValue),
+  IntegrationTargetWait: comparisonRank(integrationTargetPhenomenonOrderValue),
+  EvidenceUnavailable: comparisonRank(unavailableEvidencePhenomenonOrderValue),
+  EvidenceConflict: comparisonRank(evidenceConflictPhenomenonOrderValue),
+  Settlement: comparisonRank(settlementPhenomenonOrderValue),
+  Relinquishment: comparisonRank(relinquishmentPhenomenonOrderValue)
 }
 
-export const runWideTaskOrder = -1
-const structuralOrderBefore = -1
-const structuralOrderAfter = 1
+const structuralOrderBeforeValue = -1
+const structuralOrderBefore = comparisonRank(structuralOrderBeforeValue)
+const structuralOrderAfter = comparisonRank(1)
 
-const compareStructuralToken = (left: number | string, right: number | string): number => {
+const compareOrderPosition = (left: StructuralOrderPosition, right: StructuralOrderPosition): number => {
+  if (left._tag === "MissingOrderPosition" && right._tag === "MissingOrderPosition") return 0
+  if (left._tag === "MissingOrderPosition") return structuralOrderBefore
+  if (right._tag === "MissingOrderPosition") return structuralOrderAfter
+  return left.value - right.value
+}
+
+const isStructuralOrderPosition = (value: StructuralOrderToken): value is StructuralOrderPosition =>
+  typeof value === "object"
+
+type PrimitiveStructuralToken = StructuralOrderValue | string
+
+const comparePrimitiveStructuralToken = (left: PrimitiveStructuralToken, right: PrimitiveStructuralToken): number => {
   if (typeof left === "number" && typeof right === "number") return left - right
   if (typeof left === "number") return structuralOrderBefore
   if (typeof right === "number") return structuralOrderAfter
-  return left.localeCompare(right)
+  if (typeof left === "string" && typeof right === "string") return left.localeCompare(right)
+  if (typeof left === "string") return structuralOrderBefore
+  return structuralOrderAfter
+}
+
+const compareStructuralToken = (left: StructuralOrderToken, right: StructuralOrderToken): number => {
+  if (isStructuralOrderPosition(left)) {
+    return isStructuralOrderPosition(right) ? compareOrderPosition(left, right) : structuralOrderAfter
+  }
+  if (isStructuralOrderPosition(right)) return structuralOrderBefore
+  return comparePrimitiveStructuralToken(left, right)
 }
 
 const compareStructuralOrder = (
-  left: ReadonlyArray<number | string>,
-  right: ReadonlyArray<number | string>
+  left: ReadonlyArray<StructuralOrderToken>,
+  right: ReadonlyArray<StructuralOrderToken>
 ): number => {
   const length = Math.max(left.length, right.length)
   for (let index = 0; index < length; index += 1) {
@@ -347,15 +430,29 @@ const compareStructuralOrder = (
   return 0
 }
 
+const compareTaskOrder = (left: StatusTaskOrder, right: StatusTaskOrder): number => {
+  if (left._tag === "RunWideTaskOrder" && right._tag === "RunWideTaskOrder") return 0
+  if (left._tag === "RunWideTaskOrder") return structuralOrderBefore
+  if (right._tag === "RunWideTaskOrder") return structuralOrderAfter
+  return left.position - right.position
+}
+
 export const compareOrderedEntries = (left: OrderedStatusEntry, right: OrderedStatusEntry): number => {
-  const taskOrder = left.taskOrder - right.taskOrder
+  const taskOrder = compareTaskOrder(left.taskOrder, right.taskOrder)
   if (taskOrder !== 0) return taskOrder
   const phenomenon = left.phenomenonOrder - right.phenomenonOrder
   return phenomenon !== 0 ? phenomenon : compareStructuralOrder(left.structuralOrder, right.structuralOrder)
 }
 
-export const deliveryTaskOrder = (evaluation: DeliveryRuntimeEvaluation): ReadonlyMap<TaskId, number> =>
-  new Map(evaluation.current.ticketDeliveries.deliveries.map(({ taskId }, index) => [taskId, index] as const))
+export const deliveryTaskOrder = (evaluation: DeliveryRuntimeEvaluation): ReadonlyMap<TaskId, StatusTaskOrder> =>
+  new Map(
+    evaluation.current.ticketDeliveries.deliveries.map(
+      ({ taskId }, index) => [taskId, taskOrderAt(deliveryTaskPositionAt(index))] as const
+    )
+  )
+
+export const taskOrderFor = (taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>, taskId: TaskId): StatusTaskOrderLookup =>
+  taskOrders.get(taskId) ?? { _tag: "MissingTaskOrder", taskId }
 
 export const deliveryHolderOrder = (
   holders: ReadonlyArray<{ readonly taskId: TaskId; readonly correlation: PlannedAttemptExecutorCorrelation }>
@@ -369,7 +466,11 @@ export const deliveryHolderOrder = (
         )
   })
 
-export const addEntry = (entries: Array<OrderedStatusEntry>, entry: DeliveryStatusEntry, taskOrder: number): void => {
+export const addEntry = (
+  entries: Array<OrderedStatusEntry>,
+  entry: DeliveryStatusEntry,
+  taskOrder: StatusTaskOrder
+): void => {
   entries.push({
     entry,
     taskOrder,

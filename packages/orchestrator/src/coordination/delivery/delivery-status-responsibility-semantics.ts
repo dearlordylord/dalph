@@ -31,7 +31,7 @@ const taskTrackerRereadFact: TrackerFactProjection = {
   wakeCondition: "BoundaryRereadSucceeded"
 }
 
-const trackerFactForClaimState = (
+export const trackerFactForClaimState = (
   claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved"
 ): TrackerFactProjection => {
   if (claimState === "Missing") return missingTrackerFact

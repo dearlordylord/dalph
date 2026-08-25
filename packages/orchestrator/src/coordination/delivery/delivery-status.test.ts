@@ -30,6 +30,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import {
   DeliveryProposalId,
   DeliveryProposalOrdinal,
+  deliveryProposalOrderTaskId,
   trackerGraphReadProposalOf,
   type DeliveryActionProposal,
   type DeliveryProposalDerivationIssue
@@ -242,7 +243,24 @@ const evaluationOf = ({
   readonly withRunId?: boolean
   readonly runtimeRunId?: RunId
 } = {}): DeliveryRuntimeObservationState => {
-  const graph = graphStateOf(tasks, established)
+  // A coherent runtime snapshot contains an accepted task order for every
+  // task-scoped proposal/issue. Keep small fixtures honest without weakening
+  // the production projection's fail-closed missing-order check.
+  const actionProposals = [
+    ...proposals,
+    ...(proposedActions._tag === "DeliveryProposalsAvailable" ? proposedActions.proposals : []),
+    ...liveOwners.map(({ proposal }) => proposal)
+  ]
+  const inferredTaskIds = [
+    ...actionProposals.map(({ order }) => deliveryProposalOrderTaskId(order)),
+    ...isolatedIssues.map(({ taskId }) => taskId)
+  ].filter((taskId): taskId is TaskId => taskId !== null)
+  const configuredTasks = new Map(tasks.map((task) => [task.id, task] as const))
+  for (const taskId of inferredTaskIds) {
+    const id = String(taskId)
+    if (!configuredTasks.has(id)) configuredTasks.set(id, { id })
+  }
+  const graph = graphStateOf([...configuredTasks.values()], established)
   const publication = { exactEvidence: evidence, graph, policy: { ...policy, taskExecutionCapacity: capacity } }
   const tickets = boundedParallelTicketsOf(frontierOf(publication))
   const ticketDeliveries = ticketDeliveriesOf(tickets, evidence)
@@ -316,6 +334,36 @@ it.effect("explains graph-only dependency waits without workflow evidence", () =
     expect(status.entries.some((entry) => entry._tag === "DependencyWait" && entry.taskId === TaskId.make("D"))).toBe(
       true
     )
+
+    const ready = evaluationOf({ tasks: [{ id: "A" }, { id: "B" }, { id: "D", prerequisiteIds: ["A", "B"] }] })
+    if (ready._tag !== "Ready") return expect.fail("graph-only malformed fixture must be ready")
+    const malformedGraph = DeliveryRuntimeObservationState.Ready({
+      evaluation: {
+        ...ready.evaluation,
+        current: {
+          ...ready.evaluation.current,
+          ticketDeliveries: {
+            ...ready.evaluation.current.ticketDeliveries,
+            source: {
+              ...ready.evaluation.current.ticketDeliveries.source,
+              placements: ready.evaluation.current.ticketDeliveries.source.placements.map(({ placement, taskId }) =>
+                taskId === TaskId.make("D") && placement._tag === "GraphExcluded"
+                  ? {
+                      taskId,
+                      placement: {
+                        ...placement,
+                        reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [] }]
+                      }
+                    }
+                  : { placement, taskId }
+              )
+            }
+          }
+        }
+      },
+      liveOwners: []
+    })
+    expect(deliveryStatusOf({ _tag: "Run", runId }, malformedGraph)).toBeInstanceOf(DeliveryStatusProjectionConflict)
   })
 )
 
@@ -420,6 +468,35 @@ it("projects promoted prerequisite release as an exact dependency wait", () => {
   expect(wait.taskId).toBe(promotedTask)
   expect(wait.prerequisiteTaskIds).toEqual([TaskId.make("A")])
   expect(wait.standing._tag).toBe("PromotedPrerequisiteReleasePending")
+
+  const emptyPromoted = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...state.evaluation,
+      current: {
+        ...state.evaluation.current,
+        ticketDeliveries: {
+          ...state.evaluation.current.ticketDeliveries,
+          deliveries: [
+            {
+              ...delivery,
+              standings: [
+                {
+                  _tag: "PromotedPrerequisiteReleasePending",
+                  // @ts-expect-error -- malformed fixture exercises fail-closed validation.
+                  prerequisiteTaskIds: []
+                }
+              ]
+            },
+            ...state.evaluation.current.ticketDeliveries.deliveries.filter(({ taskId }) => taskId !== promotedTask)
+          ]
+        }
+      }
+    },
+    liveOwners: []
+  })
+  expect(deliveryStatusOf({ _tag: "Task", runId, taskId: promotedTask }, emptyPromoted)).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
 })
 
 it.effect("distinguishes proposed, live, and accepted publication-pending actions", () =>
@@ -1006,6 +1083,45 @@ it("retains every integration wait family with its typed supporting responsibili
         wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
       })
     }
+  }
+})
+
+it("fails closed when any integration wait names another delivery task", () => {
+  const { fixture, started } = integrationFactsOf()
+  const otherTaskId = TaskId.make("other-integration-task")
+  const crossTaskAttempt = { ...fixture.plannedAttempt, taskId: otherTaskId }
+  const waits: ReadonlyArray<Extract<TicketDeliveryEvidence, { readonly _tag: "IntegrationWait" }>["wait"]> = [
+    { _tag: "IntegrationConfigurationWait", plannedAttempt: crossTaskAttempt },
+    { _tag: "TargetPromotionConfigurationWait", plannedAttempt: crossTaskAttempt },
+    { _tag: "IntegrationTrackerFactsWait", plannedAttempt: crossTaskAttempt },
+    { _tag: "IntegrationTaskClaimConstraint", claimState: "Missing", plannedAttempt: crossTaskAttempt },
+    { _tag: "IntegrationTargetWait", plannedAttempt: crossTaskAttempt }
+  ]
+  const state = evaluationOf({
+    runtimeRunId: fixture.runId,
+    tasks: [{ id: String(fixture.taskId) }],
+    evidence: [{ _tag: "StartedIntegration", responsibility: started }]
+  })
+  if (state._tag !== "Ready") return expect.fail("cross-task integration fixture must be ready")
+  const delivery = state.evaluation.current.ticketDeliveries.deliveries.find(({ taskId }) => taskId === fixture.taskId)
+  if (delivery === undefined) return expect.fail("cross-task integration delivery must exist")
+  for (const wait of waits) {
+    const malformed = DeliveryRuntimeObservationState.Ready({
+      evaluation: {
+        ...state.evaluation,
+        current: {
+          ...state.evaluation.current,
+          ticketDeliveries: {
+            ...state.evaluation.current.ticketDeliveries,
+            deliveries: [{ ...delivery, standings: [{ _tag: "IntegrationWait", wait }] }]
+          }
+        }
+      },
+      liveOwners: []
+    })
+    expect(deliveryStatusOf({ _tag: "Task", runId: fixture.runId, taskId: fixture.taskId }, malformed)).toBeInstanceOf(
+      DeliveryStatusProjectionConflict
+    )
   }
 })
 

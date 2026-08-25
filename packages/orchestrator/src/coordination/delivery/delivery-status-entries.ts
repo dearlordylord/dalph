@@ -5,6 +5,7 @@ import type { DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observ
 import type { DeliveryRuntimeEvaluation, TicketDelivery } from "./relations.js"
 import {
   DeliveryStatusProjectionConflict,
+  makeDeliveryStatusEntryIdentity,
   type DeliveryStatusEntry,
   type DeliveryStatusSubject
 } from "./delivery-status-model.js"
@@ -19,8 +20,10 @@ import {
   statusEntryJson,
   validateLiveOwnersForStatus,
   validateDeliveryEvidenceForStatus,
+  taskOrderOrConflictFor,
   type OrderedStatusEntry
 } from "./delivery-status-support.js"
+import { deliveryTaskPositionAt, taskOrderAt, type StatusTaskOrder } from "./delivery-status-order.js"
 import {
   actionEntriesFor,
   dependencyEntriesFor,
@@ -39,7 +42,7 @@ const ownershipConflictFor = (
     ? null
     : new DeliveryStatusProjectionConflict({
         subject,
-        entryIdentity: first.id,
+        entryIdentity: makeDeliveryStatusEntryIdentity(first.id),
         detail: "the current proposal frontier contains incompatible owners for one exact action"
       })
 }
@@ -75,8 +78,9 @@ const deliveryEntriesFor = (
     const evidenceConflict = validateDeliveryEvidenceForStatus(subject, delivery)
     if (evidenceConflict !== null) return evidenceConflict
     const capacityEntry = capacityWaitFor(subject, evaluation, runId, delivery)
-    if (capacityEntry !== null) addEntry(entries, capacityEntry, index)
-    const builderConflict = trackerAndEvidenceEntriesFor(subject, delivery, index, entries)
+    const taskOrder = taskOrderAt(deliveryTaskPositionAt(index))
+    if (capacityEntry !== null) addEntry(entries, capacityEntry, taskOrder)
+    const builderConflict = trackerAndEvidenceEntriesFor(subject, delivery, taskOrder, entries)
     if (builderConflict !== null) return builderConflict
   }
   return null
@@ -87,23 +91,33 @@ const graphDependencyEntriesFor = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
   entries: Array<OrderedStatusEntry>
-): void => {
+): DeliveryStatusProjectionConflict | null => {
   const retainedTaskIds = new Set(evaluation.current.ticketDeliveries.deliveries.map(({ taskId }) => taskId))
   for (const [index, placement] of evaluation.current.ticketDeliveries.source.placements.entries()) {
     if (retainedTaskIds.has(placement.taskId)) continue
-    dependencyEntriesFor(subject, placement.taskId, placement.placement, index, entries)
+    const conflict = dependencyEntriesFor(
+      subject,
+      placement.taskId,
+      placement.placement,
+      taskOrderAt(deliveryTaskPositionAt(index)),
+      entries
+    )
+    if (conflict !== null) return conflict
   }
+  return null
 }
 
 const issueEntriesFor = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
-  taskOrders: ReadonlyMap<TaskId, number>,
+  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>,
   entries: Array<OrderedStatusEntry>
-): void => {
-  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return
+): DeliveryStatusProjectionConflict | null => {
+  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return null
   for (const issue of evaluation.proposedActions.isolatedIssues) {
     if (!includeForSubject(subject, issue.taskId)) continue
+    const taskOrder = taskOrderOrConflictFor(subject, taskOrders, issue.taskId)
+    if (taskOrder instanceof DeliveryStatusProjectionConflict) return taskOrder
     addEntry(
       entries,
       {
@@ -113,19 +127,22 @@ const issueEntriesFor = (
         responsibility: null,
         evidence: { _tag: "ProposalDerivationIssue", issue }
       },
-      taskOrders.get(issue.taskId) ?? Number.MAX_SAFE_INTEGER
+      taskOrder
     )
   }
+  return null
 }
 
 const settlementEntriesFor = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
-  taskOrders: ReadonlyMap<TaskId, number>,
+  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>,
   entries: Array<OrderedStatusEntry>
-): void => {
+): DeliveryStatusProjectionConflict | null => {
   for (const settlement of evaluation.current.settlements.settlements) {
     if (!includeForSubject(subject, settlement.taskId)) continue
+    const taskOrder = taskOrderOrConflictFor(subject, taskOrders, settlement.taskId)
+    if (taskOrder instanceof DeliveryStatusProjectionConflict) return taskOrder
     addEntry(
       entries,
       {
@@ -136,9 +153,10 @@ const settlementEntriesFor = (
         attemptId: settlement.attemptId,
         settlement
       },
-      taskOrders.get(settlement.taskId) ?? Number.MAX_SAFE_INTEGER
+      taskOrder
     )
   }
+  return null
 }
 
 const uniqueEntriesFor = (
@@ -160,12 +178,40 @@ const uniqueEntriesFor = (
     if (previous !== encoded) {
       return new DeliveryStatusProjectionConflict({
         subject,
-        entryIdentity: identity,
+        entryIdentity: makeDeliveryStatusEntryIdentity(identity),
         detail: "one exact status identity produced incompatible current values"
       })
     }
   }
   return result
+}
+
+const retainedDependencyEntriesFor = (
+  subject: DeliveryStatusSubject,
+  evaluation: DeliveryRuntimeEvaluation,
+  entries: Array<OrderedStatusEntry>
+): DeliveryStatusProjectionConflict | null => {
+  for (const [index, delivery] of evaluation.current.ticketDeliveries.deliveries.entries()) {
+    const conflict = dependencyEntriesFor(
+      subject,
+      delivery.taskId,
+      delivery.placement,
+      taskOrderAt(deliveryTaskPositionAt(index)),
+      entries
+    )
+    if (conflict !== null) return conflict
+  }
+  return null
+}
+
+const statusInputConflictFor = (
+  subject: DeliveryStatusSubject,
+  evaluation: DeliveryRuntimeEvaluation,
+  liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+): DeliveryStatusProjectionConflict | null => {
+  const ownershipConflict = ownershipConflictFor(subject, evaluation)
+  if (ownershipConflict !== null) return ownershipConflict
+  return validateLiveOwnersForStatus(subject, evaluation, liveOwners)
 }
 
 export const statusEntriesFor = (
@@ -174,20 +220,21 @@ export const statusEntriesFor = (
   runId: RunId,
   liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
 ): Array<DeliveryStatusEntry> | DeliveryStatusProjectionConflict => {
-  const ownershipConflict = ownershipConflictFor(subject, evaluation)
-  if (ownershipConflict !== null) return ownershipConflict
-  const liveOwnerConflict = validateLiveOwnersForStatus(subject, evaluation, liveOwners)
-  if (liveOwnerConflict !== null) return liveOwnerConflict
+  const inputConflict = statusInputConflictFor(subject, evaluation, liveOwners)
+  if (inputConflict !== null) return inputConflict
   const entries: Array<OrderedStatusEntry> = []
   const taskOrders = deliveryTaskOrder(evaluation)
-  graphDependencyEntriesFor(subject, evaluation, entries)
-  for (const [index, delivery] of evaluation.current.ticketDeliveries.deliveries.entries()) {
-    dependencyEntriesFor(subject, delivery.taskId, delivery.placement, index, entries)
-  }
+  const graphConflict = graphDependencyEntriesFor(subject, evaluation, entries)
+  if (graphConflict !== null) return graphConflict
+  const retainedDependencyConflict = retainedDependencyEntriesFor(subject, evaluation, entries)
+  if (retainedDependencyConflict !== null) return retainedDependencyConflict
   const deliveryConflict = deliveryEntriesFor(subject, evaluation, runId, entries)
   if (deliveryConflict !== null) return deliveryConflict
-  actionEntriesFor(subject, evaluation, liveOwners, entries, taskOrders)
-  issueEntriesFor(subject, evaluation, taskOrders, entries)
-  settlementEntriesFor(subject, evaluation, taskOrders, entries)
+  const actionConflict = actionEntriesFor(subject, evaluation, liveOwners, entries, taskOrders)
+  if (actionConflict !== null) return actionConflict
+  const issueConflict = issueEntriesFor(subject, evaluation, taskOrders, entries)
+  if (issueConflict !== null) return issueConflict
+  const settlementConflict = settlementEntriesFor(subject, evaluation, taskOrders, entries)
+  if (settlementConflict !== null) return settlementConflict
   return uniqueEntriesFor(subject, entries)
 }

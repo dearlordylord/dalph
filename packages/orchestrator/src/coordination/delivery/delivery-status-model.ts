@@ -37,6 +37,13 @@ export type DeliveryStatusTrackerFact =
 export const DeliveryStatusEvidenceIdentity = Schema.NonEmptyString.pipe(Schema.brand("DeliveryStatusEvidenceIdentity"))
 export type DeliveryStatusEvidenceIdentity = typeof DeliveryStatusEvidenceIdentity.Type
 
+/** Branded identity of one passive status projection conflict. */
+export const DeliveryStatusEntryIdentity = Schema.NonEmptyString.pipe(Schema.brand("DeliveryStatusEntryIdentity"))
+export type DeliveryStatusEntryIdentity = typeof DeliveryStatusEntryIdentity.Type
+
+export const makeDeliveryStatusEntryIdentity = (value: string): DeliveryStatusEntryIdentity =>
+  DeliveryStatusEntryIdentity.make(value)
+
 /** Wake conditions already owned by frontier explanations; status does not invent scheduler vocabulary. */
 export type DeliveryStatusWakeCondition = Extract<
   FrontierExplanation,
@@ -60,7 +67,6 @@ export type DeliveryStatusTrackerFactWait =
       readonly standing:
         | Extract<TicketDeliveryStanding, { readonly _tag: "ResponsibilitySituation" }>
         | DeliveryStatusIntegrationStanding<"IntegrationTaskClaimConstraint" | "IntegrationTrackerFactsWait">
-        | { readonly _tag: "GraphNotEstablished" }
     }
   | {
       readonly _tag: "TrackerFactWait"
@@ -284,7 +290,7 @@ export class DeliveryStatusRunIdentityUnavailable extends Schema.TaggedError<Del
 /** Two observations claimed the same exact status identity with incompatible values. */
 export class DeliveryStatusProjectionConflict extends Schema.TaggedError<DeliveryStatusProjectionConflict>()(
   "DeliveryStatusProjectionConflict",
-  { subject: DeliveryStatusSubject, entryIdentity: Schema.String, detail: Schema.String }
+  { subject: DeliveryStatusSubject, entryIdentity: DeliveryStatusEntryIdentity, detail: Schema.String }
 ) {}
 
 export type DeliveryStatusProjectionError =
