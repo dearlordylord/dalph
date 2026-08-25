@@ -84,7 +84,7 @@ not incidental glue.
 | Settlement facts become coherent tracker-reflection meaning | `reflectDeliverySettlements` | delivery-settlement relation | none | `CurrentSignal<DeliveryConsequences>` with semantic tracker consequences, never executable proposals | description | [`relations.ts`](../packages/orchestrator/src/coordination/delivery/relations.ts) |
 | Current delivery consequences and accepted action requirements become one checked proposal frontier | `deliveryActionPlanning` | current delivery consequences | named tracker-graph, ticket-delivery, settlement/integration, and tracker-reflection requirements | `CurrentSignal<DeliveryProposalFrontier>` | planning | [`delivery-action-planning.ts`](../packages/orchestrator/src/coordination/delivery/delivery-action-planning.ts) |
 
-The five delivery compositions and the downstream planning composition are
+The six delivery compositions and the downstream planning composition are
 indexed by stable meaning, current exported symbol, and source file.
 `executorResponsibilities` is the current source locator; its returned domain
 value is broader `TicketDelivery`, not proof that an executor responsibility
