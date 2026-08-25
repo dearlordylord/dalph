@@ -7,6 +7,7 @@ import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "
 const catalogEntries = Object.entries(maintainedAuthoredCassetteCatalog)
 const dedicatedCapstoneKeys = new Set([
   "deliveryInvariantStory",
+  "deliveryInvariantStoryCapstone",
   "dependentTasksCompleteInOneRun",
   "productionShapedFiveTaskDiamond"
 ])

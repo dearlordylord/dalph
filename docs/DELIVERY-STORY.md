@@ -4,27 +4,21 @@ One Run, told twice: as beats a person can follow, and as a state table that
 makes each beat's arithmetic checkable. The story is chosen to touch as many of
 `docs/DELIVERY-INVARIANTS.md` as one chronology can.
 
-Both registers are prose. The maintained cassette
-`authored:deliveryInvariantStory` is an executable graph-and-restart chronology:
-one real Run consumes the staggered
-graph A → B+C → D → E+F → H+I → G with X added
-during process loss between A and G, and reconstructs the exact B and C
-task-work positions before newly observed X can use capacity. Every executor
-returns an immutable accepted commit; each result then crosses one outer
-Integrator session, Dalph's Git validation of the explicitly reported
-candidate, exact-head promotion, tracker completion, exact completion-claim
-deletion, and delivery settlement. Merge construction, repository checks,
-review, and private retries are inside the Integrator and are not Dalph stages.
-Later complete tracker graphs—not executor completion reports—release each
-dependent wave and finally authorize `RunMayTerminate`. The separate
-`authored:deliveryFinalitySpine` retains the real A promotion and
-completion-finality chronology while B remains open. Later graph answers report
-C through G successful, but that cassette contains no executor or integration
-chronology for those tasks. Neither cassette pretends to execute all 22
-beats below. The checked-in manifest maps every beat either to exact maintained
-evidence or to an explicit implementation gap. Repository tests fail when the
-document, manifest, catalog key, or cited evidence changes without the others.
-The Lab never fabricates the missing combined chronology.
+Both registers are prose. The maintained capstone
+`authored:deliveryInvariantStoryCapstone` is one executable graph-and-restart
+chronology: one real Run starts A, B, and C at capacity three, observes Alice's
+B instruction edit, safely suspends and retains B, admits D, contracts capacity
+to two, reconstructs A/C/D plus retained B, safely closes C, resumes B ahead of
+unstarted E, and accepts A. It then records A's exact candidate parents
+`[H,C]`, observes stale H2, durably quarantines that predecessor, applies
+Alice's exact FullRerun direction, reads fresh H2, builds a distinct successor
+candidate with parents `[H2,C]`, promotes it, and crosses completion finality.
+The older `authored:deliveryInvariantStory` remains a separate historical
+double-diamond cassette for existing Lab regressions. Neither cassette pretends
+to execute beats DS18–DS22 below. The checked-in manifest maps every beat either
+to exact maintained evidence or to an explicit implementation gap. Repository
+tests fail when the document, manifest, catalog key, or cited evidence changes
+without the others.
 
 Alice is the Operator. `Gₙ` is a tracker graph revision. Capacity is the
 configured bound on concurrent task work. A task is **held** while it occupies a
@@ -214,59 +208,55 @@ consistent with `INVARIANTS.md`: I9 is modelled by no tool in the study.
 
 ## Executable linkage and acceptance tests
 
-The maintained catalog key is `authored:deliveryInvariantStory`. Its source
-manifest names this document and all 22 beat numbers; this document names the
-same key. Every demonstrated manifest row also names the exact registered
+The maintained catalog key is `authored:deliveryInvariantStoryCapstone`. Its
+source manifest names this document and all 22 beat numbers; this document names
+the same key. Every demonstrated manifest row names the exact registered
 acceptance test that checks its evidence; a catalog key by itself is not proof.
 `keeps every delivery-story beat linked to maintained evidence or an explicit
 implementation gap` checks both directions, exact catalog keys, exact test
-declarations, and the byte-for-byte manifest block. `consumes a staggered graph
-while reconstructed positions delay restart-added X` runs the executable graph slice
-through `runAuthoredScenarioCassette` and checks that it reaches its declared
-end.
+declarations, and the byte-for-byte manifest block. `executes DS01 through DS13
+in one maintained chronology` runs the capacity, suspension, retention, restart,
+and admission prefix through `runAuthoredScenarioCassette`; `executes DS-14
+through DS-17 from rejected exact-head offer through Operator-authorized
+successor finality` checks the exact stale-head, FullRerun, successor, and
+finality fields.
 
-- `consumes a staggered graph while reconstructed positions delay restart-added
-  X` checks the exact twelve prerequisite edges,
-  ordered eligible waves A, B+C, B+C+X after restart, D+X, E+F, H+I, G, and empty, plus the held
-  sequence B+C, C, D+X, X, E+F, F, H+I, I, G; it also checks all ten accepted
-  results settle in order and that no coarse executor-completion result appears.
-- `preserves the double-diamond middle positions across coordinator restart` checks
-  that B and C both hold task-work positions before death and that recovered
-  publications retain the same Run and Attempt identities.
-- `settles a promoted authored task through the real completion-claim boundary`
-  checks promotion alone settles nothing; the exact A claim is replaced and
-  deleted only after the declared fresh successful tracker read, producing one
-  real settlement/reflection frame without claiming whole-Run termination.
-- `shows the staggered double-diamond frontier being consumed on one graph` checks the
-  same topology, waves, and recovered B/C correlations through the Lab's
-  presentation model.
-- The real-browser checkpoint drives that catalog option while it is Running,
-  traverses the rendered frames, and checks the exact graph, frontier waves,
-  and recovered middle-wave responsibilities. The manifest explicitly
-  identifies every beat whose full actor, authority facts, and chronology are
-  still missing; no acceptance mapping claims those gaps.
+The highest-seam cassette is supplemented by existing protocol and
+conformance evidence for the required forbidden outcomes:
+
+- swapped or extra candidate parents: `rejects changed ordered parents before a candidate can become a promotion correlation` in `packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts`;
+- omitted, foreign, duplicate, or out-of-order FullRerun chronology: `accepts only one exact FullRerun successor and rejects absent, duplicate, or foreign successors` and `rejects duplicate, foreign, and out-of-order exact run facts` in `packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts`;
+- reused predecessor session or resource: `rejects a FullRerun successor that reuses predecessor identities` in `packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts`;
+- foreign completion claim: `rejects every cleanup and settlement occurrence whose success binds a different same-task claim` in `packages/orchestrator/src/workflow/protocols/integration-finality/history.test.ts`;
+- restart after the recorded direction and after successor fixation: `delivers the already-recorded FullRerun successor after restart` and `accepts a deterministic FullRerun successor only after its quarantine, direction, and fresh lineage` in `packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts` and `packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts`.
+
+The accepted-result conformance adapter also exercises `observeWrongParentCandidateOne`,
+`redeliverFullRerunOne`, `rejectConflictingFullRerunOne`, and
+`startFullRerunOne` against the collected `acceptedResultIntegration.qnt`
+laws. These are negative and restart-prefix evidence, not substitutes for the
+maintained DS-14–DS-17 cassette chronology.
 
 <!-- DELIVERY-STORY-MANIFEST:START -->
-cassette|authored:deliveryInvariantStory
-cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#consumes a staggered graph while reconstructed positions delay restart-added X
-cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
-DS-01|NotImplemented|The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks.
-DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
-DS-03|NotImplemented|No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change.
-DS-04|NotImplemented|No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together.
-DS-05|NotImplemented|The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart.
-DS-06|NotImplemented|No maintained run admits D after B's changed-instruction suspension releases one of three held positions.
-DS-07|NotImplemented|No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held.
-DS-08|DemonstratedBySpine|authored:deliveryInvariantStory|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
-DS-09|NotImplemented|The maintained double diamond recovers held B and C, not held A, C, and D plus retained B.
-DS-10|NotImplemented|No maintained run closes C without success and then asks its exact executor to suspend.
-DS-11|NotImplemented|No maintained run releases closed C's position while retaining its reversible lifecycle wait.
-DS-12|NotImplemented|No maintained run applies Continue to retained B while two other tasks consume all current capacity.
-DS-13|NotImplemented|No maintained run releases A's position after its accepted result and then admits already-owned B.
-DS-14|DemonstratedByMaintainedSlice|authored:acceptedResultRestartsIntoIntegration|packages/dalph/test/cassettes/scenario.test.ts#it.effect#continues an accepted result after process death and crosses its integration cutoff once
-DS-15|NotImplemented|No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat.
-DS-16|NotImplemented|The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer.
-DS-17|NotImplemented|The separate A-finality spine settles A, but does not first reconcile a stale head and rebuild its successor candidate.
+cassette|authored:deliveryInvariantStoryCapstone
+cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality
+DS-01|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-02|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-03|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-04|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-05|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-06|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-07|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-08|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-09|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-10|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-11|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-12|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-13|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS01 through DS13 in one maintained chronology
+DS-14|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality
+DS-15|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality
+DS-16|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality
+DS-17|DemonstratedBySpine|authored:deliveryInvariantStoryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality
 DS-18|NotImplemented|No maintained run reopens a tracker lifecycle wait for C; Operator task Unpause is a different phenomenon.
 DS-19|NotImplemented|No maintained run combines the retained C attempt with a later capacity increase.
 DS-20|NotImplemented|The maintained staggered graph adds X during process loss and delays it behind reconstructed B/C positions; it does not add F and G behind three running tasks.

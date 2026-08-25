@@ -309,7 +309,7 @@ export const controlledExecutorLayer = (
     return yield* Effect.gen(function* () {
       yield* beforeExecutorReport(plannedAttempt, request)
       yield* cursor.pauseAtCoordinatorProcessDeath
-      const storyPosition = yield* cursor.storyPosition
+      const storyPosition = (yield* cursor.storyPosition) - 1
       const item = yield* cursor
         .consumeExecutorReportFor(request, plannedAttempt.attemptId)
         .pipe(

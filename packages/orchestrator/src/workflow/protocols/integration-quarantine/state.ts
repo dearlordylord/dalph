@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Quarantine state validation and its exact causal indexes stay co-located for auditability. */
 import { Schema } from "effect"
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import {
@@ -5,7 +6,8 @@ import {
   integrationQuarantinedRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunResultRecordedRecordKey,
-  integratorRunStartedRecordKey
+  integratorRunStartedRecordKey,
+  targetPromotionStaleRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -327,6 +329,29 @@ function retryTargetHeadEvidenceMatchesRecords(
   )
 }
 
+const promotionStaleEvidenceMatchesRecords = (
+  records: ReadonlyArray<JournalRecord>,
+  quarantine: QuarantineRecord
+): boolean => {
+  if (quarantine.event.basis._tag !== "PromotionStale") return false
+  const { basis, correlation } = quarantine.event
+  const stale = recordAt(records, basis.targetPromotionStaleAt)
+  if (
+    stale === undefined ||
+    stale.event._tag !== "TargetPromotionStale" ||
+    stale.position >= quarantine.position ||
+    stale.runId !== quarantine.runId ||
+    stale.key !== targetPromotionStaleRecordKey(stale.event.correlation.requestId)
+  ) {
+    return false
+  }
+  return (
+    integratorCorrelationsEqual(stale.event.correlation.qualifiedCandidate.run.session, correlation) &&
+    stale.event.correlation.qualifiedCandidate.candidateCommit === basis.candidateCommit &&
+    stale.event.observation.observedHeadSha === basis.observedTargetHead
+  )
+}
+
 function quarantineEvidenceMatchesRecords(
   records: ReadonlyArray<JournalRecord>,
   quarantine: QuarantineRecord
@@ -334,6 +359,7 @@ function quarantineEvidenceMatchesRecords(
   const { basis } = quarantine.event
   if (basis._tag === "ConclusiveResult") return conclusiveEvidenceMatchesRecords(records, quarantine)
   if (basis._tag === "ProviderRunFailure") return providerFailureEvidenceMatchesRecords(records, quarantine, basis)
+  if (basis._tag === "PromotionStale") return promotionStaleEvidenceMatchesRecords(records, quarantine)
   return retryTargetHeadEvidenceMatchesRecords(records, quarantine)
 }
 

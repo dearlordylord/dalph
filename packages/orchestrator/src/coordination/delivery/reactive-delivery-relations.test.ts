@@ -89,6 +89,7 @@ import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 import {
   DeliveryControlPolicyMissing,
+  recoveredContinuationBlocksFreshExecutorWork,
   makeReactiveDeliveryRelationsLayer as makeProductionReactiveDeliveryRelationsLayer,
   reactiveDeliveryRelationsLayer
 } from "./reactive-delivery-relations.js"
@@ -859,6 +860,23 @@ it.effect("coalesces an accepted Running report behind one later complete graph 
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )
+
+it("does not let a fresh executor start overtake a retained continuation read", () => {
+  const recoveredGraphRead = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+    operation: makeTrackerGraphObservationOperation(OperationId.make("retained-continuation-graph"), target),
+    plannedAttempt: recoveredAttempt
+  })
+  const freshStart = RunnableFrontierTransition.StartPlannedAttemptExecutorWork({ plannedAttempt: recoveredAttempt })
+  const activeContinuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+    acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+    plannedAttempt: recoveredAttempt
+  })
+
+  expect(recoveredContinuationBlocksFreshExecutorWork([recoveredGraphRead], freshStart)).toBe(true)
+  expect(recoveredContinuationBlocksFreshExecutorWork([], freshStart)).toBe(false)
+  expect(recoveredContinuationBlocksFreshExecutorWork([recoveredGraphRead], recoveredGraphRead)).toBe(false)
+  expect(recoveredContinuationBlocksFreshExecutorWork([recoveredGraphRead], activeContinuation)).toBe(false)
+})
 
 it.effect("does not propose the initial graph read while recovered boundary work remains", () =>
   Effect.scoped(

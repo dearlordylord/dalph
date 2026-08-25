@@ -4,162 +4,95 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
-const lastItemIndex = -1
 const capstoneTimeout = 600_000
 const cachedRun = Effect.runSync(
   Effect.cached(
-    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory).pipe(
+    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone).pipe(
       Effect.provide(NodeCrypto.layer)
     )
   )
 )
 
 it.effect(
-  "consumes a staggered graph while reconstructed positions delay restart-added X",
+  "executes DS01 through DS13 in one maintained chronology",
   () =>
     Effect.gen(function* () {
       const run = yield* cachedRun
-      const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
-      const completeTopology = established.find(
-        ({ graph }) => graph._tag === "Established" && graph.tasks.length === 10
-      )
-      const edges =
-        completeTopology?.graph._tag === "Established"
-          ? completeTopology.graph.tasks.flatMap(({ id, prerequisiteIds }) =>
-              prerequisiteIds.map((prerequisiteId) => `${prerequisiteId}->${id}`)
-            )
-          : []
-      const heldSets = run.deliveryFrames.map(({ heldPositions }) =>
-        heldPositions
-          .map(({ taskId }) => taskId)
-          .toSorted()
-          .join("+")
-      )
-      const eligibleSets = established.map(({ frontier }) =>
-        frontier
-          .filter(({ standing }) => standing === "Eligible")
-          .map(({ taskId }) => taskId)
-          .toSorted()
-          .join("+")
-      )
-      const expectedFrontiers = ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""]
-      let previousFrontier = lastItemIndex
-      const frontierPositions = expectedFrontiers.map((frontier) => {
-        previousFrontier = eligibleSets.indexOf(frontier, previousFrontier + 1)
-        return previousFrontier
-      })
-      const expectedOverlaps = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
-      let previousOverlap = lastItemIndex
-      const overlapPositions = expectedOverlaps.map((overlap) => {
-        previousOverlap = heldSets.indexOf(overlap, previousOverlap + 1)
-        return previousOverlap
-      })
-      const taskByAttempt = new Map(
-        run.records.flatMap(({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-            ? [[event.plannedAttempt.attemptId, event.plannedAttempt.taskId] as const]
-            : []
-        )
-      )
-      const taskWork = run.records.flatMap(({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-          ? [`began:${event.plannedAttempt.taskId}`]
-          : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
-            ? [`terminal:${taskByAttempt.get(event.report.correlation.attemptId)}`]
-            : []
-      )
-      const taskIds = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"]
+      expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
 
-      expect(completeTopology).toBeDefined()
-      expect(edges.toSorted()).toEqual([
-        "A->B",
-        "A->C",
-        "A->X",
-        "B->D",
-        "C->D",
-        "D->E",
-        "D->F",
-        "E->H",
-        "F->I",
-        "H->G",
-        "I->G",
-        "X->G"
-      ])
-      expect(completeTopology?.frontier).toHaveLength(10)
-      expect(overlapPositions.every((position) => position >= 0)).toBe(true)
-      expect(frontierPositions.every((position) => position >= 0)).toBe(true)
-      expect(
-        run.deliveryFrames.every(({ capacity, heldPositions }) => capacity === 2 && heldPositions.length <= 2)
-      ).toBe(true)
-      expect(taskWork.toSorted()).toEqual(
-        taskIds.flatMap((taskId) => [`began:${taskId}`, `terminal:${taskId}`]).toSorted()
-      )
-      const aSettledAt = run.records.findIndex(
-        ({ event }) => event._tag === "IntegrationFinalitySettled" && event.claim.plannedAttempt.taskId === "A"
-      )
-      const bBeganAt = run.records.findIndex(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === "B"
-      )
-      expect(aSettledAt).toBeGreaterThanOrEqual(0)
-      expect(bBeganAt).toBeGreaterThan(aSettledAt)
-      expect(
-        run.records.flatMap(({ event }) =>
-          event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
-        )
-      ).toEqual(["A", "B", "C", "D", "X", "E", "F", "H", "I", "G"])
-      expect(
-        run.records.some(
-          ({ event }) =>
-            event._tag === "PlannedAttemptExecutorWorkReported" &&
-            event.report._tag === "Terminal" &&
-            event.report.result._tag === "Completed"
-        )
-      ).toBe(false)
-      expect(run.records.at(lastItemIndex)?.event._tag).toBe("WorkflowRunTerminated")
-      expect(run.deliveryFrames.at(lastItemIndex)?.heldPositions).toEqual([])
-      expect(run.cassette.story.at(lastItemIndex)?._tag).toBe("ExpectedBehavior")
+      const storyTags = run.cassette.story.map(({ _tag }) => _tag)
+      expect(storyTags).toContain("InitialControlPolicy")
+      expect(storyTags).toContain("SetTaskExecutionCapacity")
+      expect(storyTags.filter((tag) => tag === "CoordinatorProcessDies").length).toBeGreaterThanOrEqual(2)
+      expect(storyTags).toContain("OperatorContinuesAttempt")
+      expect(storyTags).toContain("OperatorAppliesIntegrationQuarantineDirection")
+      expect(storyTags).toContain("CompletionClaimDeletionApplied")
     }),
   capstoneTimeout
 )
 
 it.effect(
-  "preserves the double-diamond middle positions across coordinator restart",
+  "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality",
   () =>
     Effect.gen(function* () {
       const run = yield* cachedRun
-      const initial = run.deliveryFrames.find(
-        ({ heldPositions }) =>
-          heldPositions.some(({ taskId }) => taskId === "B") && heldPositions.some(({ taskId }) => taskId === "C")
-      )
-      const later = run.deliveryFrames.find(
-        ({ activationOrdinal }) => initial !== undefined && activationOrdinal > initial.activationOrdinal
-      )
-      const correlations = (frame: NonNullable<typeof initial>) =>
-        frame.heldPositions
-          .filter(({ taskId }) => taskId === "B" || taskId === "C")
-          .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
-          .toSorted()
+      const events = run.records.map(({ event }) => event)
+      const at = (tag: string) => events.findIndex((event) => event._tag === tag)
+      const all = (tag: string) => events.filter((event) => event._tag === tag)
 
-      expect(initial).toBeDefined()
-      expect(later).toBeDefined()
-      if (initial === undefined || later === undefined) return
-      expect(later.heldPositions.map(({ taskId }) => taskId).toSorted()).toEqual(["B", "C"])
-      expect(correlations(later)).toEqual(correlations(initial))
-      const xObservedWithBothPositions = run.deliveryFrames.findIndex(
-        ({ graph, heldPositions }) =>
-          graph._tag === "Established" &&
-          graph.tasks.some(({ id }) => id === "X") &&
-          ["B", "C"].every((taskId) => heldPositions.some((position) => position.taskId === taskId))
+      const stale = all("TargetPromotionStale")
+      const quarantines = all("IntegrationQuarantined").filter(
+        (event) => event._tag === "IntegrationQuarantined" && event.basis._tag === "PromotionStale"
       )
-      const xHeld = run.deliveryFrames.findIndex(({ heldPositions }) =>
-        heldPositions.some(({ taskId }) => taskId === "X")
+      const directions = all("IntegrationQuarantineDirectionApplied")
+      const successors = all("IntegratorSuccessorSessionFixed")
+      const candidateObservations = all("IntegratorRunCandidateGitObserved")
+      const promotions = all("TargetPromotionObservedSuccess")
+
+      expect(stale).toHaveLength(1)
+      expect(quarantines).toHaveLength(1)
+      expect(directions).toHaveLength(1)
+      expect(successors).toHaveLength(1)
+      expect(promotions).toHaveLength(1)
+      expect(all("CompletionTaskAcknowledged")).toHaveLength(1)
+      expect(all("CompletionClaimReplaced")).toHaveLength(1)
+      expect(all("CompletionClaimDeleted")).toHaveLength(1)
+      expect(all("IntegrationFinalitySettled")).toHaveLength(1)
+
+      const successor = successors[0]
+      const predecessor = successor?._tag === "IntegratorSuccessorSessionFixed" ? successor.predecessor : undefined
+      const successorCorrelation =
+        successor?._tag === "IntegratorSuccessorSessionFixed" ? successor.successor : undefined
+      expect(predecessor?.sessionId).toBeDefined()
+      expect(successorCorrelation?.sessionId).toBeDefined()
+      expect(successorCorrelation?.sessionId).not.toBe(predecessor?.sessionId)
+      expect(successorCorrelation?.expectedTargetHead).toBe("2222222222222222222222222222222222222222")
+
+      const successorCandidate = candidateObservations.find(
+        (event) =>
+          event._tag === "IntegratorRunCandidateGitObserved" &&
+          event.observation._tag === "Commit" &&
+          event.observation.commit === "dddddddddddddddddddddddddddddddddddddddd"
       )
-      expect(xObservedWithBothPositions).toBeGreaterThanOrEqual(0)
-      expect(xHeld).toBeGreaterThan(xObservedWithBothPositions)
-      expect(run.deliveryFrames[xHeld]?.heldPositions.some(({ taskId }) => taskId === "B" || taskId === "C")).toBe(
-        false
-      )
+      expect(successorCandidate?._tag).toBe("IntegratorRunCandidateGitObserved")
+      if (
+        successorCandidate?._tag === "IntegratorRunCandidateGitObserved" &&
+        successorCandidate.observation._tag === "Commit"
+      ) {
+        expect(successorCandidate.observation.directParents).toEqual([
+          "2222222222222222222222222222222222222222",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ])
+      }
+
+      expect(at("TargetPromotionStale")).toBeLessThan(at("IntegrationQuarantined"))
+      expect(at("IntegrationQuarantined")).toBeLessThan(at("IntegrationQuarantineDirectionApplied"))
+      expect(at("IntegrationQuarantineDirectionApplied")).toBeLessThan(at("IntegratorSuccessorSessionFixed"))
+      expect(at("IntegratorSuccessorSessionFixed")).toBeLessThan(at("TargetPromotionObservedSuccess"))
+      expect(at("TargetPromotionObservedSuccess")).toBeLessThan(at("CompletionClaimReplaced"))
+      expect(at("CompletionClaimReplaced")).toBeLessThan(at("CompletionTaskAcknowledged"))
+      expect(at("CompletionTaskAcknowledged")).toBeLessThan(at("CompletionClaimDeleted"))
+      expect(at("CompletionClaimDeleted")).toBeLessThan(at("IntegrationFinalitySettled"))
     }),
   capstoneTimeout
 )

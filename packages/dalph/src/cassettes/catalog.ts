@@ -3,6 +3,7 @@ import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
 import { AuthoredCassetteStoryItem } from "./authored-domain.js"
+import { deliveryStoryCapstoneAuthoredCassette } from "./delivery-story-capstone.js"
 
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
 const terminalStoryItemOffset = -1
@@ -215,6 +216,15 @@ export const singletonTaskCompletesAuthoredCassette: ScenarioCassette = Schema.d
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the accepted singleton behavior.",
+      taskId: "A",
+      title: "Implement singleton"
     },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
@@ -1345,6 +1355,10 @@ const changedAttemptSuccessorStory = [
     report: { _tag: "Running", attemptId: "attempt:A:1" },
     request: "StartOrContinue"
   },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+  { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
   {
     _tag: "PlannedAttemptExecutorWorkReported",
     report: { _tag: "Terminal", attemptId: "attempt:A:1", result: { _tag: "Completed" } },
@@ -5172,6 +5186,7 @@ type MaintainedAuthoredCassetteName =
   | "currentCompletionGraphAuthority"
   | "deliveryFinalitySpine"
   | "deliveryInvariantStory"
+  | "deliveryInvariantStoryCapstone"
   | "productionShapedFiveTaskDiamond"
   | "dependentTasksCompleteInOneRun"
   | "incompatibleTargetRewriteSafelySuspends"
@@ -5237,6 +5252,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,
     deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
     deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
+    deliveryInvariantStoryCapstone: deliveryStoryCapstoneAuthoredCassette,
     productionShapedFiveTaskDiamond: productionShapedFiveTaskDiamondAuthoredCassette,
     dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
     incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,

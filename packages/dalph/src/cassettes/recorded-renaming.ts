@@ -411,6 +411,13 @@ const renameIntegrationQuarantineBasis = (basis: IntegrationQuarantineBasis): In
         detail: preserveCassetteValue(value.detail),
         ownedActivityProvenAbsentAt: preserveCassetteValue(value.ownedActivityProvenAbsentAt)
       }),
+    PromotionStale: (value) =>
+      completeFields<typeof value>({
+        _tag: "PromotionStale",
+        candidateCommit: preserveCassetteValue(value.candidateCommit),
+        observedTargetHead: preserveCassetteValue(value.observedTargetHead),
+        targetPromotionStaleAt: preserveCassetteValue(value.targetPromotionStaleAt)
+      }),
     RetryTargetHeadChanged: (value) =>
       completeFields<typeof value>({
         _tag: "RetryTargetHeadChanged",

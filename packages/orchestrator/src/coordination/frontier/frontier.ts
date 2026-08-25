@@ -59,6 +59,7 @@ import type { PlannedAttemptContinuationWitness } from "../../workflow/protocols
 import type { CompletionTaskConflictReason } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { ChangedHeadRetryQuarantineInput } from "../../workflow/protocols/integration-quarantine/changed-head-retry.js"
+import type { PromotionStaleIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
@@ -201,6 +202,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly request: ChangedHeadRetryQuarantineInput
     readonly responsibility: StartedIntegrationResponsibility
   }
+  /** Records Q after target promotion proves the Integrator candidate's fixed head stale. */
+  RecordPromotionStaleIntegrationQuarantine: {
+    readonly input: PromotionStaleIntegrationQuarantineInput
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   /** Records Q after a modern initial Integrator run already has a conclusive result but Q is absent. */
   RecordInitialConclusiveIntegrationQuarantine: {
     readonly result: InitialConclusiveIntegrationQuarantineInput
@@ -306,6 +312,7 @@ const transitionTrackerGraphRequirements = {
   ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
   RecordChangedHeadRetryQuarantine: "CurrentTrackerGraphRequired",
+  RecordPromotionStaleIntegrationQuarantine: "CurrentTrackerGraphRequired",
   RecordInitialConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
   RecordProviderRunFailureIntegrationQuarantine: "AcceptedHistorySufficient",
   RecordRetryConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
@@ -997,12 +1004,24 @@ export const deriveRunnableFrontier = (input: RunnableFrontierInput): RunnableFr
     return { ...decision, beganAt: responsibility.beganAt, taskId: workflowResponsibilityTaskId(responsibility) }
   })
   const responsibleTaskIds = new Set(input.responsibility.entries.map(workflowResponsibilityTaskId))
+  const isExecutorTransition = (transition: RunnableFrontierTransition): boolean =>
+    transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+    transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+    transition._tag === "SuspendPlannedAttemptExecutorWork"
+  const executorTransitionPriority = (transition: RunnableFrontierTransition): number =>
+    transition._tag === "SuspendPlannedAttemptExecutorWork" ? 0 : 1
   const responsibleTransitions = responsibleDecisions
     .filter(
       (decision): decision is typeof decision & { readonly transition: RunnableFrontierTransition } =>
         decision.transition !== undefined
     )
-    .toSorted((left, right) => left.beganAt - right.beganAt || left.taskId.localeCompare(right.taskId))
+    .toSorted((left, right) => {
+      if (isExecutorTransition(left.transition) && isExecutorTransition(right.transition)) {
+        const priority = executorTransitionPriority(left.transition) - executorTransitionPriority(right.transition)
+        if (priority !== 0) return priority
+      }
+      return left.beganAt - right.beganAt || left.taskId.localeCompare(right.taskId)
+    })
     .map(({ transition }) => transition)
   const freshTransitions = input.freshEligibleTasks
     .filter(({ taskId }) => !responsibleTaskIds.has(taskId))

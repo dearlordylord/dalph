@@ -32,6 +32,7 @@ export const deliveryTransitionPolicy = {
   FixIntegratorSuccessorSession: policy("IdentityFree", "None"),
   RecordChangedHeadRetryQuarantine: policy("IdentityFree", "None"),
   RecordInitialConclusiveIntegrationQuarantine: policy("IdentityFree", "None"),
+  RecordPromotionStaleIntegrationQuarantine: policy("IdentityFree", "None"),
   RecordProviderRunFailureIntegrationQuarantine: policy("IdentityFree", "None"),
   RecordRetryConclusiveIntegrationQuarantine: policy("IdentityFree", "None"),
   RunIntegrator: policy("IdentityFree", "None"),

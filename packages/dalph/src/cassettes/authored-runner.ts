@@ -30,6 +30,7 @@ import {
 } from "@dalph/contracts"
 import {
   AuthoritativeTaskWorktreeReady,
+  ApplyIntegrationQuarantineDirectionRequest,
   type AttemptChoiceApplicationResult,
   attemptChoiceControlLayer,
   AttemptChoiceRequestId,
@@ -846,6 +847,7 @@ const proposalActionLabels = {
   ReconcileTaskWorktree: "Check or create the exact Git worktree",
   RecordChangedHeadRetryQuarantine: "Record that Retry observed a changed integration-target head",
   RecordInitialConclusiveIntegrationQuarantine: "Record the exact conclusive Integrator result as quarantined",
+  RecordPromotionStaleIntegrationQuarantine: "Record the exact stale promotion as quarantined",
   RecordProviderRunFailureIntegrationQuarantine: "Recover quarantine after exact provider-owned activity absence",
   RecordRetryConclusiveIntegrationQuarantine: "Record the exact conclusive Retry run result as quarantined",
   RecordStoppedAttemptClaimNoRelease: "Record that the stopped attempt has no exact claim to release",
@@ -1129,6 +1131,8 @@ export const evaluateAuthoredObservationCapture: (
 
 const latestArrayElementIndex = -1
 const authoredSettlementYieldTurns = 10
+/** A maintained authored run must either consume a story item or fail with its exact stalled boundary. */
+const authoredProgressWatchdogTurns = 100_000
 
 const operatorControlFailureMatches = (
   failure: unknown,
@@ -1486,6 +1490,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         )
       )
       const sharedJournal = Context.get(sharedContext, JournalStore)
+      const promotionStaleQuarantineDurable = yield* Deferred.make<void>()
       const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
       const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
       const acceptedEvidencePublicationFailure = yield* Ref.make<EvidenceStoreFailure | undefined>(undefined)
@@ -1622,6 +1627,10 @@ const runAuthoredScenarioCassetteWith = (request: {
         event: AuthoredJournalAppendEvent
       ): Effect.Effect<void> =>
         Effect.gen(function* () {
+          // The FullRerun operator action owns an explicit cursor gate until
+          // its journal append returns; pausing on that append would wait on
+          // the same gate and deadlock the direction before the crash seam.
+          if (event._tag === "IntegrationQuarantineDirectionApplied") return
           yield* pauseAtAuthoredJournalBoundary(event)
           if (!isExecutorLifecycleAppend(event)) return
           const firstDurableAppend = yield* Ref.modify(observedExecutorLifecycleKeys, (observed) => {
@@ -1647,6 +1656,9 @@ const runAuthoredScenarioCassetteWith = (request: {
                       event
                     })
                     if (taskClaimHandled) return
+                    if (event._tag === "IntegrationQuarantined" && String(event.basis._tag) === "PromotionStale") {
+                      yield* Deferred.succeed(promotionStaleQuarantineDurable, undefined)
+                    }
                     yield* pauseAfterJournalAppend(key, event)
                   })
                 )
@@ -2282,6 +2294,45 @@ const runAuthoredScenarioCassetteWith = (request: {
                   yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
                 }
               }).pipe(Effect.ensuring(releaseOperatorGraphReadGate), Effect.orDie)
+            const driveIntegrationQuarantineDirection = Effect.gen(function* () {
+              const authored = yield* cursor.consumeIntegrationQuarantineDirection
+              /* v8 ignore next -- @preserve The direct-item dispatcher invokes this consumer only for the exact FullRerun choice tag. */
+              if (Option.isNone(authored)) return
+              /* v8 ignore stop -- @preserve */
+              const request = Schema.decodeUnknownSync(ApplyIntegrationQuarantineDirectionRequest)(
+                JSON.parse(JSON.stringify(authored.value.request).replaceAll("$authored-run", String(runId)))
+              )
+              yield* Deferred.await(promotionStaleQuarantineDurable)
+              // The stale-Q signal is emitted by the storage tap immediately
+              // after raw append; yield once so the enclosing Journal can
+              // publish that append before the Operator control rereads it.
+              yield* Effect.yieldNow
+              const quarantineObserved = (yield* sharedJournal.read(runId)).some(
+                (record) =>
+                  record.position === request.fingerprint.quarantineAt &&
+                  record.event._tag === "IntegrationQuarantined" &&
+                  record.event.correlation.sessionId === request.fingerprint.sessionId
+              )
+              if (!quarantineObserved) {
+                const quarantinePositions = (yield* sharedJournal.read(runId))
+                  .filter((record) => record.event._tag === "IntegrationQuarantined")
+                  .map((record) => `${record.position}`)
+                return yield* Effect.die(
+                  `authored FullRerun choice reached before quarantine ${request.fingerprint.quarantineAt} was durable; observed=${quarantinePositions.join(",")}`
+                )
+              }
+              const applied = yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)
+              if (
+                applied.application.event.fingerprint.direction !== request.fingerprint.direction ||
+                applied.application.event.fingerprint.quarantineAt !== request.fingerprint.quarantineAt ||
+                applied.application.event.fingerprint.sessionId !== request.fingerprint.sessionId
+              ) {
+                return yield* Effect.die(
+                  `authored quarantine direction expected ${request.fingerprint.direction} at ${request.fingerprint.quarantineAt}`
+                )
+              }
+              yield* cursor.completeIntegrationQuarantineDirection
+            }).pipe(Effect.orDie)
             const driveRunCancellation = Effect.gen(function* () {
               const authored = yield* cursor.consumeRunCancellation
               /* v8 ignore next -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current cancellation tag. */
@@ -2495,6 +2546,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 readonly _tag:
                   | "OperatorAppliesControlDirection"
                   | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+                  | "OperatorAppliesIntegrationQuarantineDirection"
                   | "OperatorAppliesRunCancellation"
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
                   | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
@@ -2519,6 +2571,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             const directlyDrivenTags: ReadonlySet<AuthoredCassetteStoryItem["_tag"]> = new Set([
               "OperatorAppliesControlDirection",
               "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+              "OperatorAppliesIntegrationQuarantineDirection",
               "OperatorAppliesRunCancellation",
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
               "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
@@ -2546,6 +2599,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               Match.valueTags(item, {
                 OperatorAppliesControlDirection: (item) => driveControlDirection(item),
                 OperatorAppliesControlDirectionBeforeDeliveryActionAdmission: (item) => driveControlDirection(item),
+                OperatorAppliesIntegrationQuarantineDirection: () => driveIntegrationQuarantineDirection,
                 OperatorAppliesRunCancellation: () => driveRunCancellation,
                 CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: () =>
                   drivePlannedSuspensionExecutorBoundaryHold,
@@ -2743,8 +2797,33 @@ const runAuthoredScenarioCassetteWith = (request: {
         if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossActivations
         return yield* runSingleActivation
       })
+      const authoredProgressWatchdog = Effect.gen(function* () {
+        let lastPosition = yield* cursor.storyPosition
+        let stagnantTurns = 0
+        for (;;) {
+          yield* Effect.yieldNow
+          const position = yield* cursor.storyPosition
+          if (position !== lastPosition) {
+            lastPosition = position
+            stagnantTurns = 0
+            continue
+          }
+          stagnantTurns += 1
+          if (stagnantTurns < authoredProgressWatchdogTurns) continue
+          const current = yield* cursor.currentStoryItem
+          return yield* Effect.die(
+            `authored scenario progress stalled at story position ${position}: ${JSON.stringify(current ?? "EndOfStory")}`
+          )
+        }
+      })
+      // The maintained DS01-17 capstone is the long-running concurrency
+      // witness; keep its bounded progress assertion local so ordinary
+      // authored cassettes retain their existing asynchronous boundaries.
+      const guardedCoordinatorExecution = cassette.name.startsWith("DS01-17")
+        ? Effect.raceFirst(coordinatorExecution, authoredProgressWatchdog)
+        : coordinatorExecution
       const execution = yield* Effect.scoped(
-        coordinatorExecution.pipe(
+        guardedCoordinatorExecution.pipe(
           Effect.provide(application),
           Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
           Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)

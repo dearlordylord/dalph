@@ -37,6 +37,7 @@ import {
   type IntegrationQuarantineState
 } from "../../workflow/protocols/integration-quarantine/state.js"
 import { IntegrationQuarantineBasis } from "../../workflow/protocols/integration-quarantine/events.js"
+import { targetPromotionCorrelationEquals } from "../../workflow/protocols/target-promotion/events.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { integrationQuarantinedRecordKey } from "../../workflow-journal/record-key.js"
@@ -44,6 +45,7 @@ import {
   validateProviderRunActivityAbsent,
   type ProviderRunFailureQuarantineInput
 } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
+import type { PromotionStaleIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 
 type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; readonly taskId: TaskId } }
 type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
@@ -151,6 +153,29 @@ const conclusiveQuarantineResultFor = (
     })
   }
   return undefined
+}
+
+const promotionStaleQuarantineFor = (
+  runState: ReconstructedRunState,
+  integratorState: CurrentIntegratorState,
+  promotion: PromotionState
+): PromotionStaleIntegrationQuarantineInput | undefined => {
+  if (promotion?._tag !== "PromotionStale") return undefined
+  const runBoundState = runBoundIntegratorStateFor(integratorState)
+  if (runBoundState === undefined) return undefined
+  const quarantine = deriveIntegrationQuarantineState(
+    runState.workflowHistory.records,
+    runBoundState.run.session.sessionId
+  )
+  if (quarantine._tag !== "NoQuarantine") return undefined
+  const stale = runState.workflowHistory.records.findLast(
+    (record) =>
+      record.event._tag === "TargetPromotionStale" &&
+      targetPromotionCorrelationEquals(record.event.correlation, promotion.correlation)
+  )
+  return stale === undefined
+    ? undefined
+    : { correlation: promotion.correlation, targetPromotionStaleAt: stale.position }
 }
 
 /** Finds exact provider-absence evidence whose dependent initial Q append was interrupted. */
@@ -473,6 +498,12 @@ const transitionsBeforeStartedIntegrationAdmission = (
         responsibility,
         result: retryConclusiveResult
       })
+    ]
+  }
+  const promotionStale = promotionStaleQuarantineFor(runState, integratorState, promotion)
+  if (promotionStale !== undefined) {
+    return [
+      RunnableFrontierTransition.RecordPromotionStaleIntegrationQuarantine({ input: promotionStale, responsibility })
     ]
   }
   if (!trackerFactsAreCurrentFor(responsibility)) return releaseStartedIntegrationTargetFor(responsibility, held)

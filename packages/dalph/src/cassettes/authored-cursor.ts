@@ -90,6 +90,7 @@ const awaitsLaterStoryItem = (position: SubscriptionRef.SubscriptionRef<number>,
 // its exact ownership. A malformed story without that owner fails closed after
 // the window instead of retaining a permanently pending cursor fiber.
 const authoredOwnershipRegistrationTurns = 8
+const authoredFutureSelectionRegistrationTurns = 128
 
 const executorReportRequestMatches = (
   active: ActiveExecutorReportRequest,
@@ -121,6 +122,15 @@ const authoredDalphSelectionMatches = (
 
 const cassetteDecisionMatches = (left: CassetteDecision, right: CassetteDecision): boolean =>
   JSON.stringify(left) === JSON.stringify(right)
+
+const hasLaterAuthoredSelection = (
+  story: ReadonlyArray<StoryItem>,
+  index: number,
+  operation: CassetteDecision
+): boolean =>
+  story.findIndex(
+    (candidate, candidateIndex) => candidateIndex > index && authoredDalphSelectionMatches(candidate, operation)
+  ) > index
 
 const isIntegratorRecoverySelection = (operation: CassetteDecision): boolean =>
   operation._tag === "ReadTrackerGraph" || operation._tag === "ReadTaskClaim" || operation._tag === "ReadTargetLineage"
@@ -155,12 +165,15 @@ const selectionPredecessorFor = (
 const selectionCanWaitAfterClaim = (
   item: StoryItem | undefined,
   activeRequests: ReadonlyArray<ActiveExecutorReportRequest>,
-  activeIntegratorGitObservations: ReadonlyArray<IntegratorCandidateText>
+  activeIntegratorGitObservations: ReadonlyArray<IntegratorCandidateText>,
+  activeSelections: ReadonlyArray<CassetteDecision>
 ): boolean =>
   item?._tag === "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary" ||
   (isAuthoredPlannedAttemptExecutorOutcomeItem(item) &&
     activeRequests.some((active) => executorReportRequestMatches(active, item))) ||
-  activeIntegratorGitObservations.some((candidateText) => integratorGitStoryItemMatches(item, candidateText))
+  activeIntegratorGitObservations.some((candidateText) => integratorGitStoryItemMatches(item, candidateText)) ||
+  (item?._tag === "DalphSelects" &&
+    activeSelections.some((selection) => cassetteDecisionMatches(selection, item.operation)))
 
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
@@ -327,6 +340,12 @@ export interface StoryCursor {
       | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
     >
   >
+  /** Consume Alice's exact FullRerun choice for one durable Integrator quarantine. */
+  readonly consumeIntegrationQuarantineDirection: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesIntegrationQuarantineDirection.Type>
+  >
+  /** Releases the in-flight FullRerun choice so the authored crash boundary may be consumed. */
+  readonly completeIntegrationQuarantineDirection: Effect.Effect<void>
   /** Consume Alice's exact whole-Run cancellation boundary. */
   readonly consumeRunCancellation: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellation.Type>
@@ -415,6 +434,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
 ): Effect.fn.Return<StoryCursor> {
   const position = yield* SubscriptionRef.make(0)
   const controlDirectionBeforeAdmission = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
+    Option.none()
+  )
+  const integrationQuarantineDirectionInFlight = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
     Option.none()
   )
   const terminalAssertionsReached = yield* Deferred.make<void>()
@@ -540,6 +562,18 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if ((yield* SubscriptionRef.get(position)) > index) return "Advanced"
     return (yield* isOwned) ? "Owned" : "Unowned"
   })
+  const awaitFutureAuthoredSelectionOrAdvance = Effect.fn("AuthoredCassette.awaitFutureAuthoredSelectionOrAdvance")(
+    function* (index: number, operation: CassetteDecision) {
+      if (!hasLaterAuthoredSelection(story, index, operation)) return false
+      const outcome = yield* Effect.raceFirst(
+        awaitsLaterStoryItem(position, index).pipe(Effect.as("Advanced" as const)),
+        Effect.forEach(Array.from({ length: authoredFutureSelectionRegistrationTurns }), () => Effect.yieldNow, {
+          discard: true
+        }).pipe(Effect.as("RegistrationClosed" as const))
+      )
+      return outcome === "Advanced"
+    }
+  )
   const awaitOwnedIntegratorGitBeforeSelection = Effect.fn("AuthoredCassette.awaitOwnedIntegratorGitBeforeSelection")(
     function* (candidateText: IntegratorCandidateText, index: number) {
       const ownership = SubscriptionRef.changes(activeIntegratorGitObservations).pipe(
@@ -594,16 +628,29 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (claimed._tag === "Claimed") return claimed.item
     const activeRequests = yield* SubscriptionRef.get(activeExecutorReportRequests)
     const activeIntegratorRequests = yield* SubscriptionRef.get(activeIntegratorGitObservations)
-    if (selectionCanWaitAfterClaim(claimed.item, activeRequests, activeIntegratorRequests)) {
+    const activeSelections = yield* SubscriptionRef.get(activeDalphSelections)
+    if (selectionCanWaitAfterClaim(claimed.item, activeRequests, activeIntegratorRequests, activeSelections)) {
       yield* awaitsLaterStoryItem(position, claimed.index)
       return yield* consumeDalphSelectionForLoop(operation)
     }
     if (yield* awaitOwnedStoryItemImmediatelyBeforeSelection(claimed.item, claimed.index, operation)) {
       return yield* consumeDalphSelectionForLoop(operation)
     }
+    // Concurrent production fibers can request a later authored selection
+    // before the operation occupying the current selection/response has
+    // registered. Wait for one bounded registration window; if no owner
+    // advances the story, this remains a fail-closed authored mismatch.
+    if (yield* awaitFutureAuthoredSelectionOrAdvance(claimed.index, operation)) {
+      return yield* consumeDalphSelectionForLoop(operation)
+    }
     return yield* new AuthoredCassetteInteractionMismatch({
       actual: JSON.stringify(operation),
-      expected: claimed.item?._tag === "ExpectedBehavior" ? claimed.item._tag : (claimed.item?._tag ?? "EndOfStory"),
+      expected:
+        claimed.item?._tag === "DalphSelects"
+          ? JSON.stringify(claimed.item.operation)
+          : claimed.item?._tag === "ExpectedBehavior"
+            ? claimed.item._tag
+            : (claimed.item?._tag ?? "EndOfStory"),
       storyPosition: claimed.index
     })
   })
@@ -1111,6 +1158,21 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       if (Option.isSome(gate)) yield* SubscriptionRef.set(controlDirectionBeforeAdmission, gate)
       return Option.some(claimed.item)
     })
+  const consumeIntegrationQuarantineDirection = Effect.gen(function* () {
+    const completion = yield* Deferred.make<void>()
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesIntegrationQuarantineDirection.Type =>
+        item?._tag === "OperatorAppliesIntegrationQuarantineDirection"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher invokes this consumer only for the exact operator-choice tag. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    yield* SubscriptionRef.set(integrationQuarantineDirectionInFlight, Option.some(completion))
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorAppliesIntegrationQuarantineDirection)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
   const consumeRunCancellation = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellation.Type =>
@@ -1255,6 +1317,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   })
   const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
     const bypassControlBoundary = Option.isSome(yield* SubscriptionRef.get(controlDirectionBeforeAdmission))
+    const activeIntegrationDirection = yield* SubscriptionRef.get(integrationQuarantineDirectionInFlight)
+    if (Option.isSome(activeIntegrationDirection)) yield* Deferred.await(activeIntegrationDirection.value)
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type =>
         item?._tag === "CoordinatorProcessDies",
@@ -1281,11 +1345,35 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   )
-  const consumeTaskClaimRead = Effect.gen(function* () {
+  const awaitOwnedSelectionBeforeTaskClaimRead = Effect.fn("AuthoredCassette.awaitOwnedSelectionBeforeTaskClaimRead")(
+    function* (item: StoryItem | undefined, index: number) {
+      if (item?._tag !== "DalphSelects" || item.operation._tag !== "ReadTaskClaim") return false
+      const taskClaimSelection: CassetteDecision = item.operation
+      const ownership = SubscriptionRef.changes(activeDalphSelections).pipe(
+        Stream.filter((active) => active.some((selection) => cassetteDecisionMatches(selection, taskClaimSelection)))
+      )
+      const isOwned = SubscriptionRef.get(activeDalphSelections).pipe(
+        Effect.map((active) => active.some((selection) => cassetteDecisionMatches(selection, taskClaimSelection)))
+      )
+      const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+      if (ownershipOrAdvance === "Unowned") return false
+      if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+      return true
+    }
+  )
+  const consumeTaskClaimReadLoop: () => StoryCursor["consumeTaskClaimRead"] = Effect.fn(
+    "AuthoredCassette.consumeTaskClaimReadLoop"
+  )(function* () {
     const claimed = yield* claimNext(isTaskClaimReadItem)
-    if (claimed._tag === "Mismatch") return Option.none()
+    if (claimed._tag === "Mismatch") {
+      if (yield* awaitOwnedSelectionBeforeTaskClaimRead(claimed.item, claimed.index)) {
+        return yield* consumeTaskClaimReadLoop()
+      }
+      return Option.none()
+    }
     return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
   })
+  const consumeTaskClaimRead = consumeTaskClaimReadLoop()
   const consumeTaskClaimAcquisitionConflictReturned = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type =>
@@ -1365,7 +1453,24 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ExpectedBehavior)(item).pipe(Effect.orDie)
     )
   )
-  const consumeTrackerGraph = Effect.gen(function* () {
+  const awaitOwnedSelectionBeforeTrackerGraphResult = Effect.fn(
+    "AuthoredCassette.awaitOwnedSelectionBeforeTrackerGraphResult"
+  )(function* (item: StoryItem | undefined, index: number) {
+    if (item?._tag !== "DalphSelects" || !isIntegratorRecoverySelection(item.operation)) return false
+    const ownership = SubscriptionRef.changes(activeDalphSelections).pipe(
+      Stream.filter((active) => active.some((selection) => cassetteDecisionMatches(selection, item.operation)))
+    )
+    const isOwned = SubscriptionRef.get(activeDalphSelections).pipe(
+      Effect.map((active) => active.some((selection) => cassetteDecisionMatches(selection, item.operation)))
+    )
+    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    if (ownershipOrAdvance === "Unowned") return false
+    if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+    return true
+  })
+  const consumeTrackerGraphLoop: () => StoryCursor["consumeTrackerGraph"] = Effect.fn(
+    "AuthoredCassette.consumeTrackerGraphLoop"
+  )(function* () {
     const claimed = yield* claimNext(
       (item): item is AuthoredTrackerGraphReadResult =>
         item?._tag === "TrackerGraphReadFailed" ||
@@ -1373,6 +1478,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         item?._tag === "RunActivationFinalTrackerGraphReadReturned"
     )
     if (claimed._tag === "Mismatch") {
+      if (yield* awaitOwnedSelectionBeforeTrackerGraphResult(claimed.item, claimed.index)) {
+        return yield* consumeTrackerGraphLoop()
+      }
       return yield* new AuthoredCassetteInteractionMismatch({
         actual: "TrackerGraphReadFailed | TrackerGraphReadReturned | RunActivationFinalTrackerGraphReadReturned",
         /* v8 ignore next -- A decoded story retains its terminal assertion after any graph interaction. */
@@ -1382,12 +1490,19 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(claimed.item).pipe(Effect.orDie)
   })
+  const consumeTrackerGraph = consumeTrackerGraphLoop()
   return {
     completeControlDirectionBeforeDeliveryActionAdmission: Effect.gen(function* () {
       const gate = yield* SubscriptionRef.get(controlDirectionBeforeAdmission)
       /* v8 ignore next -- @preserve Closure pairs this completion with the exact earlier before-admission control item. */
       if (Option.isNone(gate)) return
       yield* SubscriptionRef.set(controlDirectionBeforeAdmission, Option.none())
+      yield* Deferred.succeed(gate.value, undefined)
+    }),
+    completeIntegrationQuarantineDirection: Effect.gen(function* () {
+      const gate = yield* SubscriptionRef.get(integrationQuarantineDirectionInFlight)
+      if (Option.isNone(gate)) return
+      yield* SubscriptionRef.set(integrationQuarantineDirectionInFlight, Option.none())
       yield* Deferred.succeed(gate.value, undefined)
     }),
     storyPosition: SubscriptionRef.get(position),
@@ -1421,6 +1536,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeAttemptChoiceRace,
     consumeCapacityChange,
     consumeControlDirection,
+    consumeIntegrationQuarantineDirection,
     consumeControlDirectionFailure,
     consumeRunCancellation,
     consumePauseObservationStart,

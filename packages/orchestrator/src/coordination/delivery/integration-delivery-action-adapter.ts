@@ -48,6 +48,7 @@ import {
   fixIntegratorSuccessorSession,
   recordInitialConclusiveIntegrationQuarantine,
   recordProviderRunFailureIntegrationQuarantine,
+  recordPromotionStaleIntegrationQuarantine,
   recordRetryConclusiveIntegrationQuarantine
 } from "./integrator-delivery-action.js"
 import { recordChangedHeadRetryQuarantine } from "./integration-quarantine-disposition-action.js"
@@ -88,6 +89,7 @@ type OuterIntegratorTransition = Extract<
     readonly _tag:
       | "FixIntegratorSuccessorSession"
       | "RecordChangedHeadRetryQuarantine"
+      | "RecordPromotionStaleIntegrationQuarantine"
       | "RecordInitialConclusiveIntegrationQuarantine"
       | "RecordProviderRunFailureIntegrationQuarantine"
       | "RecordRetryConclusiveIntegrationQuarantine"
@@ -346,6 +348,9 @@ const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterInteg
   }
   if (transition._tag === "RecordChangedHeadRetryQuarantine") {
     return yield* recordChangedHeadRetryQuarantine(action, transition, lease)
+  }
+  if (transition._tag === "RecordPromotionStaleIntegrationQuarantine") {
+    return yield* recordPromotionStaleIntegrationQuarantine(action, transition, lease)
   }
   if (transition._tag === "RecordInitialConclusiveIntegrationQuarantine") {
     return yield* recordInitialConclusiveIntegrationQuarantine(action, transition, lease)

@@ -230,6 +230,46 @@ it("correlates concurrent operation selections before advancing the authored sto
   )
 })
 
+it("waits for a later sibling selection after its predecessor result advances", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const story = maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone.story
+      const cSelectionIndex = story.findIndex(
+        (item) =>
+          item._tag === "DalphSelects" &&
+          item.operation._tag === "ReadTaskWorkSpecification" &&
+          item.operation.taskId === "C"
+      )
+      const aPlanIndex = story.findIndex(
+        (item) =>
+          item._tag === "DalphSelects" &&
+          item.operation._tag === "RecordTaskAttemptPlan" &&
+          item.operation.taskId === "A"
+      )
+      const cSelection = story[cSelectionIndex]
+      const cResult = story[cSelectionIndex + 1]
+      const aSelection = story[aPlanIndex]
+      if (
+        cSelection?._tag !== "DalphSelects" ||
+        cResult?._tag !== "TaskWorkSpecificationReadReturned" ||
+        aSelection?._tag !== "DalphSelects"
+      ) {
+        return yield* Effect.die("missing capstone sibling-selection fixtures")
+      }
+
+      const cursor = yield* makeStoryCursor([cSelection, cResult, aSelection])
+      const cOperation = yield* cursor.consumeDalphSelectionFor(cSelection.operation).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      const aOperation = yield* cursor.consumeDalphSelectionFor(aSelection.operation).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+
+      expect(yield* Fiber.join(cOperation)).toEqual(cSelection)
+      expect((yield* cursor.consumeTaskWorkSpecification).taskId).toBe("C")
+      expect(yield* Fiber.join(aOperation)).toEqual(aSelection)
+    })
+  )
+})
+
 it("correlates concurrent executor reports when the later request arrives first", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {

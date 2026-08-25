@@ -13,6 +13,7 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
+  ApplyIntegrationQuarantineDirectionRequest,
   ClaimOwner,
   ControlDirection,
   InitialControlPolicy,
@@ -713,6 +714,11 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
   /** The fake outer Integrator receives this exact session/responsibility correlation. */
   IntegratorRequestReceived: { correlation: IntegratorSessionCorrelation },
+  /** Alice authorizes the exact FullRerun direction for one durable Integrator quarantine. */
+  OperatorAppliesIntegrationQuarantineDirection: {
+    expected: Schema.Literal("Applied"),
+    request: ApplyIntegrationQuarantineDirectionRequest
+  },
   /** The fake outer Integrator returns only its public prepared/not-prepared result. */
   IntegratorResultReturned: { result: AuthoredOuterIntegratorResult },
   /** Git returns object-kind and ordered-parent facts for the explicitly reported candidate text. */
@@ -886,7 +892,8 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "OperatorAppliesRunCancellation",
     "OperatorStopsAttempt",
     "RunCoordinator",
-    "SetTaskExecutionCapacity"
+    "SetTaskExecutionCapacity",
+    "OperatorAppliesIntegrationQuarantineDirection"
   ],
   CassetteLifecycle: ["CoordinatorActivationReturned", "CoordinatorProcessDies"],
   CassetteObservation: ["PauseProgressObserved", "PauseProgressObservedCancelledAndReconnected"],
