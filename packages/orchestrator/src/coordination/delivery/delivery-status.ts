@@ -90,6 +90,9 @@ const snapshotFor = (
   if (state._tag === "NotReady") return { _tag: "DeliveryStatusNotReady", subject }
   if (state._tag === "Ready") return readyFor(subject, state)
   if (state.final === null) return { _tag: "DeliveryStatusClosed", subject, final: null }
+  if (state.final._tag === "NotReady") {
+    return { _tag: "DeliveryStatusClosed", subject, final: { _tag: "DeliveryStatusNotReady", subject } }
+  }
   const final = readyFor(subject, state.final)
   if (
     final instanceof DeliveryStatusRunMismatch ||

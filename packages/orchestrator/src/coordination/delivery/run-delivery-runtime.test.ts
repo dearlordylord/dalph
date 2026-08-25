@@ -1425,7 +1425,7 @@ it.effect("releases acquired integration ownership and its relation subscriber o
     })
     expect(yield* Ref.get(subscribers)).toBe(0)
     const afterRollback = yield* capabilities.resources.runtimeObservation.get
-    if (afterRollback._tag !== "Closed" || afterRollback.final === null) {
+    if (afterRollback._tag !== "Closed" || afterRollback.final?._tag !== "Ready") {
       return expect.fail("interrupted owner rollback must be observable")
     }
     expect(afterRollback.final.liveOwners).toEqual([])
