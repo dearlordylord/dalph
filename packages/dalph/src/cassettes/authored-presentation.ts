@@ -46,6 +46,10 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteReleasesHeldTargetPromotionReconciliationRead: noLandmark,
       CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: noLandmark,
       CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
+      CassetteHoldsTargetLineageReadBeforeBoundary: noLandmark,
+      CassetteKillsCoordinatorWithTargetLineageReadHeld: () =>
+        "The coordinator dies while an exact target-lineage read remains held before Git",
+      CassetteReleasesHeldTargetLineageRead: noLandmark,
       DalphSelects: noLandmark,
       ExpectedBehavior: noLandmark,
       GitWorktreeObservationChanged: noLandmark,
@@ -434,6 +438,12 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `The cassette holds task ${item.taskId}'s specification read before its boundary.`,
       CassetteReleasesHeldTaskWorkSpecificationRead: (item) =>
         `The cassette releases task ${item.taskId}'s held specification read.`,
+      CassetteHoldsTargetLineageReadBeforeBoundary: (item) =>
+        `The cassette holds task ${item.taskId} attempt ${item.attemptId}'s target-lineage read before Git.`,
+      CassetteKillsCoordinatorWithTargetLineageReadHeld: (item) =>
+        `The cassette kills the coordinator while task ${item.taskId} attempt ${item.attemptId}'s target-lineage read is held.`,
+      CassetteReleasesHeldTargetLineageRead: (item) =>
+        `The cassette releases task ${item.taskId} attempt ${item.attemptId}'s held target-lineage read.`,
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,

@@ -260,6 +260,16 @@ export interface StoryCursor {
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTaskWorkSpecificationRead.Type>
   >
   readonly awaitTaskWorkSpecificationReadBoundary: (taskId: TaskId) => Effect.Effect<void>
+  readonly consumeTargetLineageReadBoundaryHold: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTargetLineageReadBeforeBoundary.Type>
+  >
+  readonly consumeTargetLineageReadBoundaryDeath: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteKillsCoordinatorWithTargetLineageReadHeld.Type>
+  >
+  readonly consumeTargetLineageReadBoundaryRelease: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTargetLineageRead.Type>
+  >
+  readonly awaitTargetLineageReadBoundary: (taskId: TaskId, attemptId: AttemptId) => Effect.Effect<void>
   readonly consumeExecutorRequestPublicationHold: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type>
   >
@@ -449,12 +459,17 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const taskWorkSpecificationReadBoundaries = yield* SubscriptionRef.make<ReadonlyMap<TaskId, Deferred.Deferred<void>>>(
     new Map()
   )
+  const targetLineageReadBoundaries = yield* SubscriptionRef.make<ReadonlyMap<string, Deferred.Deferred<void>>>(
+    new Map()
+  )
   const cursorDriverBarrierTags: ReadonlySet<StoryItem["_tag"]> = new Set([
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteReleasesHeldTargetPromotionReconciliationRead",
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
     "CassetteReleasesHeldTaskWorkSpecificationRead",
+    "CassetteHoldsTargetLineageReadBeforeBoundary",
+    "CassetteReleasesHeldTargetLineageRead",
     "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
     "OperatorAwaitsPauseProgress",
     "OperatorStartsPauseObservation",
@@ -782,8 +797,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     /* v8 ignore stop -- @preserve */
     yield* Deferred.succeed(release, undefined)
-    const remaining = new Map(gates)
-    remaining.delete(claimed.item.taskId)
+    const remaining = new Map([...gates].filter(([taskId]) => taskId !== claimed.item.taskId))
     yield* SubscriptionRef.set(taskWorkSpecificationReadBoundaries, remaining)
     return Option.some(claimed.item)
   })
@@ -794,6 +808,106 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         return release === undefined ? Effect.void : Deferred.await(release)
       })
     )
+  const targetLineageBoundaryKey = (taskId: TaskId, attemptId: AttemptId) => `${taskId}:${attemptId}`
+  const consumeTargetLineageReadBoundaryHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTargetLineageReadBeforeBoundary.Type =>
+        item?._tag === "CassetteHoldsTargetLineageReadBeforeBoundary"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    const key = targetLineageBoundaryKey(claimed.item.taskId, claimed.item.attemptId)
+    const gates = yield* SubscriptionRef.get(targetLineageReadBoundaries)
+    if (gates.has(key)) return yield* Effect.die(`a target-lineage read hold is already armed for ${key}`)
+    const release = yield* Deferred.make<void>()
+    yield* SubscriptionRef.set(targetLineageReadBoundaries, new Map(gates).set(key, release))
+    return Option.some(claimed.item)
+  })
+  const consumeTargetLineageReadBoundaryRelease = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTargetLineageRead.Type =>
+        item?._tag === "CassetteReleasesHeldTargetLineageRead"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    const key = targetLineageBoundaryKey(claimed.item.taskId, claimed.item.attemptId)
+    const gates = yield* SubscriptionRef.get(targetLineageReadBoundaries)
+    const release = gates.get(key)
+    if (release === undefined) return yield* Effect.die(`no held target-lineage read matches ${key}`)
+    yield* Deferred.succeed(release, undefined)
+    const remaining = new Map([...gates].filter(([candidate]) => candidate !== key))
+    yield* SubscriptionRef.set(targetLineageReadBoundaries, remaining)
+    return Option.some(claimed.item)
+  })
+  const consumeTargetLineageReadBoundaryDeath = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteKillsCoordinatorWithTargetLineageReadHeld.Type =>
+        item?._tag === "CassetteKillsCoordinatorWithTargetLineageReadHeld"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    const key = targetLineageBoundaryKey(claimed.item.taskId, claimed.item.attemptId)
+    const gates = yield* SubscriptionRef.get(targetLineageReadBoundaries)
+    const release = gates.get(key)
+    if (release === undefined) {
+      return yield* Effect.die(`no held target-lineage read matches ${key}`)
+    }
+    // Keep the exact Git boundary held across the activation disposal. The
+    // next activation releases this retained gate after its ordinary
+    // reconstructed observations, immediately before replaying the read.
+    return Option.some(claimed.item)
+  })
+  const awaitTargetLineageReadBoundary = (taskId: TaskId, attemptId: AttemptId) =>
+    Effect.gen(function* () {
+      const key = targetLineageBoundaryKey(taskId, attemptId)
+      const gates = yield* SubscriptionRef.get(targetLineageReadBoundaries)
+      let release = gates.get(key)
+      let current = yield* SubscriptionRef.get(position).pipe(Effect.map((index) => story[index]))
+      if (
+        release === undefined &&
+        current?._tag === "CassetteHoldsTargetLineageReadBeforeBoundary" &&
+        current.taskId === taskId &&
+        current.attemptId === attemptId
+      ) {
+        const next = yield* SubscriptionRef.changes(targetLineageReadBoundaries).pipe(
+          Stream.map((candidate) => candidate.get(key)),
+          Stream.filter((candidate): candidate is Deferred.Deferred<void> => candidate !== undefined),
+          Stream.take(1),
+          Stream.runHead
+        )
+        release = Option.getOrUndefined(next)
+        current = yield* SubscriptionRef.get(position).pipe(Effect.map((index) => story[index]))
+      }
+      const isMatchingDeath =
+        current?._tag === "CassetteKillsCoordinatorWithTargetLineageReadHeld" &&
+        current.taskId === taskId &&
+        current.attemptId === attemptId
+      if (release === undefined && !isMatchingDeath) return
+
+      const dieAtTargetLineageBoundary = Effect.gen(function* () {
+        for (;;) {
+          const item = yield* SubscriptionRef.get(position).pipe(Effect.map((index) => story[index]))
+          if (
+            item?._tag === "CassetteKillsCoordinatorWithTargetLineageReadHeld" &&
+            item.taskId === taskId &&
+            item.attemptId === attemptId
+          ) {
+            const death = yield* consumeTargetLineageReadBoundaryDeath
+            if (Option.isNone(death)) {
+              return yield* Effect.die(`target-lineage read death was not armed for ${key}`)
+            }
+            return yield* Effect.die(
+              new AuthoredCoordinatorProcessDies({ storyPosition: (yield* SubscriptionRef.get(position)) - 1 })
+            )
+          }
+          const observedPosition = yield* SubscriptionRef.get(position)
+          yield* SubscriptionRef.changes(position).pipe(
+            Stream.filter((next) => next > observedPosition),
+            Stream.take(1),
+            Stream.runDrain
+          )
+        }
+      })
+      if (release === undefined) return yield* dieAtTargetLineageBoundary
+      yield* Effect.raceFirst(Deferred.await(release), dieAtTargetLineageBoundary)
+    })
   const consumeExecutorRequestPublicationHold = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (
@@ -1298,6 +1412,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
     "CassetteReleasesHeldTaskWorkSpecificationRead",
+    "CassetteHoldsTargetLineageReadBeforeBoundary",
+    "CassetteKillsCoordinatorWithTargetLineageReadHeld",
+    "CassetteReleasesHeldTargetLineageRead",
     "OperatorAppliesControlDirection",
     "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
     "OperatorStartsPauseObservation",
@@ -1524,6 +1641,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeTaskWorkSpecificationReadBoundaryHold,
     consumeTaskWorkSpecificationReadBoundaryRelease,
     awaitTaskWorkSpecificationReadBoundary,
+    consumeTargetLineageReadBoundaryHold,
+    consumeTargetLineageReadBoundaryDeath,
+    consumeTargetLineageReadBoundaryRelease,
+    awaitTargetLineageReadBoundary,
     consumeCoordinatorActivationReturned,
     consumeCompletionClaimDeletionApplied,
     consumeCompletionClaimReadReturned,

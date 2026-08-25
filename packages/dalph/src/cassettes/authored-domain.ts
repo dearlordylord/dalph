@@ -698,6 +698,12 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: { taskId: TaskId },
   /** Harness synchronization: release the exact task specification read named by its paired hold. */
   CassetteReleasesHeldTaskWorkSpecificationRead: { taskId: TaskId },
+  /** Harness synchronization: hold this exact target-lineage read before crossing Git. */
+  CassetteHoldsTargetLineageReadBeforeBoundary: { attemptId: AttemptId, taskId: TaskId },
+  /** Harness lifecycle: kill the coordinator while this exact target-lineage read remains held before Git. */
+  CassetteKillsCoordinatorWithTargetLineageReadHeld: { attemptId: AttemptId, taskId: TaskId },
+  /** Harness synchronization: release the exact target-lineage read named by its paired hold. */
+  CassetteReleasesHeldTargetLineageRead: { attemptId: AttemptId, taskId: TaskId },
   /** Harness synchronization: keep this exact executor request in flight while the next ordinary delivery fact publishes. */
   DalphHoldsExecutorRequestThroughNextDeliveryPublication: {
     attemptId: AttemptId,
@@ -908,7 +914,10 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteKillsCoordinatorAtTargetPromotionReconciliationRead",
     "CassetteReleasesHeldTargetPromotionReconciliationRead",
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
-    "CassetteReleasesHeldTaskWorkSpecificationRead"
+    "CassetteReleasesHeldTaskWorkSpecificationRead",
+    "CassetteHoldsTargetLineageReadBeforeBoundary",
+    "CassetteKillsCoordinatorWithTargetLineageReadHeld",
+    "CassetteReleasesHeldTargetLineageRead"
   ],
   DalphOperationTrace: ["DalphSelects"],
   Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
