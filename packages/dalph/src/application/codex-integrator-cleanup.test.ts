@@ -135,8 +135,19 @@ type CleanupCase = {
   readonly registration?: Registration
   readonly pathExists?: boolean
   readonly projection?: CodexOwnedActivityCensusProjection
+  readonly projectionSequence?: ReadonlyArray<CodexOwnedActivityCensusProjection>
   readonly threadTokenMode?: "exact" | "tokenless" | "foreign"
-  readonly terminalTurnMode?: "exact" | "tokenless" | "foreign" | "active" | "missing" | "correlation"
+  readonly terminalTurnMode?:
+    | "exact"
+    | "tokenless"
+    | "foreign"
+    | "active"
+    | "inProgress"
+    | "failed"
+    | "interrupted"
+    | "missing"
+    | "wrongId"
+    | "correlation"
   readonly worktreeMaterializationIntent?: boolean
   readonly appFailure?: boolean
   readonly backgroundFailure?: boolean
@@ -180,6 +191,7 @@ const runCase = <A>(
             ? record
             : CodexIntegratorPrivateRecord.make({ ...record, candidatePath })
         const reads = yield* Ref.make(0)
+        const censusReads = yield* Ref.make(0)
         const registration = yield* Ref.make<Registration>(options.registration ?? "exact")
         const store: CodexIntegratorPrivateStoreService = {
           read: () =>
@@ -199,8 +211,15 @@ const runCase = <A>(
             ? []
             : [
                 {
-                  id: CodexTurnId.make("cleanup-turn"),
-                  status: terminalTurnMode === "active" ? "inProgress" : "completed",
+                  id: CodexTurnId.make(terminalTurnMode === "wrongId" ? "foreign-cleanup-turn-id" : "cleanup-turn"),
+                  status:
+                    terminalTurnMode === "active" || terminalTurnMode === "inProgress"
+                      ? "inProgress"
+                      : terminalTurnMode === "failed"
+                        ? "failed"
+                        : terminalTurnMode === "interrupted"
+                          ? "interrupted"
+                          : "completed",
                   items: [],
                   ...(terminalTurnMode === "tokenless"
                     ? {}
@@ -250,9 +269,11 @@ const runCase = <A>(
         })
         const census = CodexOwnedActivityCensus.of({
           observe: () =>
-            options.censusFailure
-              ? Effect.fail(failure("thread/resume"))
-              : Effect.succeed(options.projection ?? { _tag: "Absent" as const }),
+            Effect.gen(function* () {
+              if (options.censusFailure) return yield* Effect.fail(failure("thread/resume"))
+              const ordinal = yield* Ref.getAndUpdate(censusReads, (value) => value + 1)
+              return options.projectionSequence?.[ordinal] ?? options.projection ?? { _tag: "Absent" as const }
+            }),
           terminateDescendants: () => Effect.void
         })
         const porcelain =
@@ -381,6 +402,11 @@ describe("Codex Integrator cleanup boundary", () => {
       (authority) => revisionReadOutcome(authority, { locator: predecessor.candidateResource, predecessor })
     )
     expect(foreign._tag).toBe("Left")
+
+    const missing = await runCase({ record: null, registration: "none" }, (authority) =>
+      revisionReadOutcome(authority, { locator: predecessor.candidateResource, predecessor })
+    )
+    expect(missing._tag).toBe("Left")
   })
 
   it("fails closed for missing, foreign, unresolved, transferred, and settled ownership", async () => {
@@ -434,6 +460,44 @@ describe("Codex Integrator cleanup boundary", () => {
       (authority, authorization) => authority.observe(authorization)
     )
     expect(removalIntent._tag).toBe("Absent")
+
+    const missingTerminalEvidence = await runCase(
+      {
+        record: CodexIntegratorPrivateRecord.make({ ...recordFor("/tmp/unused", { removalIntent: true }), runs: [] }),
+        registration: "none"
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(missingTerminalEvidence._tag).toBe("Unreadable")
+
+    const materializingWithoutRegistration = await runCase(
+      {
+        record: recordFor("/tmp/unused", { worktreeMaterializationIntent: true, worktreeReady: false }),
+        registration: "none"
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(materializingWithoutRegistration._tag).toBe("Unreadable")
+
+    const unreadableRemovalProjection = await runCase(
+      {
+        record: recordFor("/tmp/unused", { removalIntent: true }),
+        registration: "none",
+        projection: { _tag: "Unreadable", detail: "census unavailable" }
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(unreadableRemovalProjection._tag).toBe("Unreadable")
+
+    const contradictoryRemovalProjection = await runCase(
+      {
+        record: recordFor("/tmp/unused", { removalIntent: true }),
+        registration: "none",
+        projection: { _tag: "Contradictory", detail: "census contradicted itself" }
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(contradictoryRemovalProjection._tag).toBe("Unreadable")
 
     const liveRemovalIntent = await runCase(
       {
@@ -515,7 +579,11 @@ describe("Codex Integrator cleanup boundary", () => {
       ["tokenless", "Unreadable"],
       ["foreign", "Foreign"],
       ["active", "Foreign"],
+      ["inProgress", "Foreign"],
+      ["interrupted", "Unreadable"],
+      ["failed", "Absent"],
       ["missing", "Unreadable"],
+      ["wrongId", "Unreadable"],
       ["correlation", "Foreign"]
     ] as const
     for (const [terminalTurnMode, expected] of cases) {
@@ -566,6 +634,12 @@ describe("Codex Integrator cleanup boundary", () => {
       (authority, authorization) => authority.observe(authorization)
     )
     expect(tokenMismatch._tag).toBe("Foreign")
+
+    const registeredTerminalEvidence = await runCase(
+      { record: recordFor("/tmp/unused"), registration: "exact", pathExists: true, terminalTurnMode: "wrongId" },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(registeredTerminalEvidence._tag).toBe("Unreadable")
 
     const activityCases = [
       [{ _tag: "ExactLive", activities: [] } as const, "Foreign"],
@@ -625,6 +699,39 @@ describe("Codex Integrator cleanup boundary", () => {
     )
     expect(staleBeforeMutation._tag).toBe("Unknown")
 
+    const changedPathBeforeMutation = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        readSequence: [recordFor("/tmp/unused"), recordFor("/tmp/foreign-record")]
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(changedPathBeforeMutation._tag).toBe("Unknown")
+
+    const intentDisappears = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        readSequence: [recordFor("/tmp/unused"), recordFor("/tmp/unused"), null]
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(intentDisappears._tag).toBe("Unknown")
+
+    const revalidationFindsLiveActivity = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        projectionSequence: [{ _tag: "Absent" }, { _tag: "ExactLive", activities: [] }]
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(revalidationFindsLiveActivity._tag).toBe("DefinitelyNotApplied")
+
     const alreadyAbsent = await runCase(
       {
         record: recordFor("/tmp/unused"),
@@ -672,6 +779,45 @@ describe("Codex Integrator cleanup boundary", () => {
       (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
     )
     expect(disappearsAfterRemoval._tag).toBe("Unknown")
+
+    const foreignAfterRemoval = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        applyRemoval: true,
+        readSequence: [
+          recordFor("/tmp/unused"),
+          recordFor("/tmp/unused"),
+          recordFor("/tmp/unused", { removalIntent: true }),
+          recordFor("/tmp/unused", { removalIntent: true }),
+          recordFor("/tmp/unused", { removalIntent: true }),
+          recordFor("/tmp/foreign-record", { correlation: sessionFor("foreign", "candidate:foreign") })
+        ]
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(foreignAfterRemoval._tag).toBe("Unknown")
+
+    const tombstoneDisappears = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        applyRemoval: true,
+        readSequence: [
+          recordFor("/tmp/unused"),
+          recordFor("/tmp/unused"),
+          recordFor("/tmp/unused", { removalIntent: true }),
+          recordFor("/tmp/unused", { removalIntent: true }),
+          recordFor("/tmp/unused", { removalIntent: true }),
+          recordFor("/tmp/unused"),
+          null
+        ]
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(tombstoneDisappears._tag).toBe("Unknown")
 
     const ownershipFailure = await runCase(
       { record: recordFor("/tmp/unused"), registration: "exact", pathExists: true, ownershipFailure: true },

@@ -176,6 +176,7 @@ type FixtureOptions = {
   readonly failAfterRecordingSecondTurn?: boolean
   readonly turnTokenMode?: "exact" | "tokenless" | "foreign"
   readonly resumeThreadTokenMode?: "exact" | "tokenless" | "foreign"
+  readonly resumeThreadTokenSequence?: ReadonlyArray<"exact" | "tokenless" | "foreign">
   readonly resumeThreadState?: "exact" | "active" | "foreign" | "tokenless" | "missing" | "wrongId"
   readonly persistedTurnCorrelation?: boolean
   readonly hideTurnsOnRead?: boolean
@@ -207,6 +208,7 @@ const fixtureLayer = (
         ReadonlyArray<{ readonly id: CodexThreadId; readonly ownedThreadToken?: CodexThreadOwnershipToken }>
       >(options.preexistingThread === true ? [{ id: CodexThreadId.make("fixture-thread") }] : [])
       const threadStartCalls = yield* Ref.make(0)
+      const resumeThreadCalls = yield* Ref.make(0)
       const turns = yield* Ref.make<
         ReadonlyArray<{
           readonly id: CodexTurnId
@@ -315,15 +317,18 @@ const fixtureLayer = (
           }),
         resumeThread: (_threadId, cwd) =>
           Effect.gen(function* () {
+            const resumeOrdinal = yield* Ref.getAndUpdate(resumeThreadCalls, (value) => value + 1)
             const current = yield* Ref.get(turns)
             const persisted = yield* Ref.get(persistentThreads)
             const persistedThreadToken = persisted.find(
               (item) => item.id === CodexThreadId.make("fixture-thread")
             )?.ownedThreadToken
+            const resumeThreadTokenMode =
+              options.resumeThreadTokenSequence?.[resumeOrdinal] ?? options.resumeThreadTokenMode
             const ownedThreadToken =
-              options.resumeThreadTokenMode === "tokenless"
+              resumeThreadTokenMode === "tokenless"
                 ? undefined
-                : options.resumeThreadTokenMode === "foreign"
+                : resumeThreadTokenMode === "foreign"
                   ? CodexThreadOwnershipToken.make("foreign-resumed-thread-token")
                   : persistedThreadToken
             const resumedTurns =
@@ -699,6 +704,30 @@ describe("Codex Integrator", () => {
     expect(result.replay._tag).toBe("NotPrepared")
     expect(result.replay.correlation.ordinal).toBe(1)
     expect(result.replay._tag === "NotPrepared" ? result.replay.detail : "").toBe("checks failed safely")
+    expect(turnStarts.value).toBe(1)
+  })
+
+  it("fails sealed-result replay when ownership changes between thread reads", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/replay-between-reads-store.json"
+      ),
+      repository
+    })
+    const turnStarts = { value: 0 }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* integrator.prepare(requestFor(1))
+        const replay = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        return { first, replay }
+      }).pipe(Effect.provide(providerLayer(config, { resumeThreadTokenSequence: ["exact", "foreign"], turnStarts })))
+    )
+    expect(result.first._tag).toBe("PreparedCandidate")
+    expect(result.replay._tag).toBe("IntegratorCallFailure")
+    expect(result.replay.detail).toContain("thread ownership changed")
     expect(turnStarts.value).toBe(1)
   })
 

@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -41,7 +41,8 @@ import {
   runIntegratorCandidateCleanup,
   TestIntegratorCandidateCleanupBoundary
 } from "./integrator-candidate.js"
-import { WorktreeCleanupMutationResult, WorktreeCleanupSettledEvent } from "./worktree.js"
+import { branchCleanupTestLayer } from "./branch.js"
+import { WorktreeCleanupMutationResult, WorktreeCleanupSettledEvent, worktreeCleanupTestLayer } from "./worktree.js"
 import {
   attempt,
   authorization as worktreeAuthorization,
@@ -51,7 +52,12 @@ import {
 } from "./fixtures.js"
 import { appendCandidateProvenance, appendReplacementProvenance } from "./provenance-fixtures.js"
 import { validateIntegratorCandidateCleanupProvenance } from "./provenance.js"
-import { activateDispositionCleanup, selectCleanupResponsibilitySet } from "./loop.js"
+import {
+  activateDispositionCleanup,
+  appendDerivedCleanupAuthorizations,
+  makeDispositionCleanupActivation,
+  selectCleanupResponsibilitySet
+} from "./loop.js"
 import { deriveCleanupAuthorizations } from "./activation.js"
 import {
   integratorCandidateCleanupAuthorizedRecordKey,
@@ -132,6 +138,20 @@ it.effect("controlled candidate cleanup satisfies the shared boundary contract",
     const boundary = yield* IntegratorCandidateCleanupBoundary.pipe(Effect.provide(implementationLayer))
     yield* dispositionCleanupContract({ authorization, boundary })
   })
+)
+
+it.effect("reports an unavailable private revision from the controlled boundary", () =>
+  Effect.gen(function* () {
+    const boundary = yield* IntegratorCandidateCleanupBoundary
+    const reader = boundary.readEvidenceRevision
+    expect(reader).toBeDefined()
+    if (reader === undefined) return
+    const result = yield* Effect.exit(reader({ locator: authorization.locator, predecessor }))
+    expect(result._tag).toBe("Failure")
+  }).pipe(
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
 )
 
 it.effect("table-reconciles changed candidate owner, locator, and revision without a mutation", () =>
@@ -315,6 +335,40 @@ it.effect("preserves a post-mutation candidate observation that is not absent", 
             locator: predecessor.candidateResource,
             revision: IntegratorCandidateCleanupEvidenceRevision.make(2),
             sessionId: predecessor.sessionId
+          })
+        ]
+      })
+    ),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("keeps an exact present candidate pending after a removal response", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-candidate-post-mutation-still-present"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const result = yield* runIntegratorCandidateCleanup(authorization)
+    expect(result._tag).toBe("Pending")
+    expect(result._tag === "Pending" ? result.reason : "").toContain("remains unresolved")
+    expect((yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()).map((call) => call._tag)).toEqual([
+      "Observe",
+      "Remove",
+      "Observe"
+    ])
+  }).pipe(
+    Effect.provide(
+      integratorCandidateCleanupTestLayer({
+        observations: [present, present],
+        mutations: [
+          IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+            locator: authorization.locator,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+            sessionId: authorization.owner.sessionId
           })
         ]
       })
@@ -877,6 +931,64 @@ it.effect("carries the exact provider-private revision into candidate cleanup au
     const activation = yield* activateDispositionCleanup(runId, () => Effect.succeed(expected))
     expect(activation.candidate[0]?.evidenceRevision).toBe(expected)
   }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("does not append a duplicate candidate authorization on repeated activation", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-repeated-candidate-activation"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const revisionReader = () => Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
+    yield* appendDerivedCleanupAuthorizations(runId, ["candidate"], revisionReader)
+    yield* appendDerivedCleanupAuthorizations(runId, ["candidate"], revisionReader)
+    expect(
+      (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
+    ).toHaveLength(1)
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("fails closed when ordinary activation has no private revision reader", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-activation-without-revision-reader"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const activation = yield* Effect.exit(makeDispositionCleanupActivation(runId))
+    expect(activation._tag).toBe("Failure")
+  }).pipe(
+    Effect.provide(
+      Layer.succeed(
+        IntegratorCandidateCleanupBoundary,
+        IntegratorCandidateCleanupBoundary.of({
+          observe: (candidateAuthorization) =>
+            Effect.succeed(
+              IntegratorCandidateCleanupObservation.cases.Unreadable.make({
+                detail: "private revision reader unavailable",
+                locator: candidateAuthorization.locator
+              })
+            ),
+          remove: (candidateAuthorization) =>
+            Effect.succeed(
+              IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+                detail: "private revision reader unavailable",
+                locator: candidateAuthorization.locator,
+                sessionId: candidateAuthorization.owner.sessionId
+              })
+            )
+        })
+      )
+    ),
+    Effect.provide(worktreeCleanupTestLayer({ observations: [], mutations: [] })),
+    Effect.provide(branchCleanupTestLayer({ observations: [], mutations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
 )
 
 it.effect("does not silently omit candidate authorization when evidence reread fails", () =>

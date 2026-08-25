@@ -5,7 +5,6 @@ import type { OperationId } from "../../identity.js"
 import { JournalRecord, type JournalAppendError, type JournalReadError } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import {
-  isCleanupEligibleDisposition,
   type BranchCleanupAuthorization,
   IntegratorCandidateCleanupEvidenceSubject,
   type IntegratorCandidateCleanupEvidenceRevision,
@@ -19,20 +18,20 @@ import {
 import {
   BranchCleanupAuthorizedEvent,
   BranchCleanupBoundary,
-  BranchCleanupOutcome,
+  type BranchCleanupOutcome,
   runBranchCleanup
 } from "./branch.js"
 import {
   IntegratorCandidateCleanupAuthorizedEvent,
   IntegratorCandidateCleanupBoundary,
   IntegratorCandidateCleanupEvidenceReadFailure,
-  IntegratorCandidateCleanupOutcome,
+  type IntegratorCandidateCleanupOutcome,
   runIntegratorCandidateCleanup
 } from "./integrator-candidate.js"
 import {
   WorktreeCleanupAuthorizedEvent,
   WorktreeCleanupBoundary,
-  WorktreeCleanupOutcome,
+  type WorktreeCleanupOutcome,
   runWorktreeCleanup
 } from "./worktree.js"
 import {
@@ -317,11 +316,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
       hasMutationBudget(initialRecords, authorization)
     )
   )
-  const worktreeOutcomes = yield* Effect.forEach(worktreeCandidates, (authorization) =>
-    isCleanupEligibleDisposition(authorization.disposition)
-      ? runWorktreeCleanup(authorization)
-      : Effect.succeed(WorktreeCleanupOutcome.cases.Preserved.make({ authorization, reason: "ineligible disposition" }))
-  )
+  const worktreeOutcomes = yield* Effect.forEach(worktreeCandidates, runWorktreeCleanup)
 
   yield* appendDerivedCleanupAuthorizations(runId, ["branch"])
   selectedSet = selectCleanupResponsibilitySet(yield* journal.read(runId))
@@ -331,11 +326,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
       hasMutationBudget(branchRecords, authorization)
     )
   )
-  const branchOutcomes = yield* Effect.forEach(branchCandidates, (authorization) =>
-    isCleanupEligibleDisposition(authorization.disposition)
-      ? runBranchCleanup(authorization)
-      : Effect.succeed(BranchCleanupOutcome.cases.Preserved.make({ authorization, reason: "ineligible disposition" }))
-  )
+  const branchOutcomes = yield* Effect.forEach(branchCandidates, runBranchCleanup)
 
   selectedSet = selectCleanupResponsibilitySet(yield* journal.read(runId))
   const candidateRecords = yield* journal.read(runId)
@@ -344,13 +335,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
       hasMutationBudget(candidateRecords, authorization)
     )
   )
-  const candidateOutcomes = yield* Effect.forEach(candidateCandidates, (authorization) =>
-    isCleanupEligibleDisposition(authorization.disposition)
-      ? runIntegratorCandidateCleanup(authorization)
-      : Effect.succeed(
-          IntegratorCandidateCleanupOutcome.cases.Preserved.make({ authorization, reason: "ineligible disposition" })
-        )
-  )
+  const candidateOutcomes = yield* Effect.forEach(candidateCandidates, runIntegratorCandidateCleanup)
 
   const selected = {
     branch: selectedSet.branch[0],
