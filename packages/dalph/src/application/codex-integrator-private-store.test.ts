@@ -253,6 +253,14 @@ describe("Codex Integrator private store", () => {
     expect(
       Option.isSome(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({ ...record(), runs: [sealedRun] }))
     ).toBe(true)
+    expect(
+      Option.isSome(
+        Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({
+          ...record(),
+          runs: [sealedRun, { ...validRun(2), turnId: null }]
+        })
+      )
+    ).toBe(true)
 
     const foreignSession = IntegratorSessionCorrelation.make({
       ...session,
@@ -261,6 +269,10 @@ describe("Codex Integrator private store", () => {
     const invalidRecords: ReadonlyArray<unknown> = [
       { ...record(), runs: [validRun(1), validRun(1)] },
       { ...record(), runs: [validRun(1), validRun(2), validRun(3)] },
+      { ...record(), runs: [validRun(2)] },
+      { ...record(), runs: [validRun(1), validRun(2)] },
+      { ...record(), runs: [validRun(2), validRun(1)] },
+      { ...record(), runs: [sealedRun, { ...validRun(2), token: sealedRun.token }] },
       { ...record(), runs: [{ ...validRun(), correlation: { ...runCorrelation(1), ordinal: 0 } }] },
       { ...record(), threadId: CodexThreadId.make("thread-with-intent"), threadStartIntent: true },
       { ...record(), removalIntent: true, removed: true },

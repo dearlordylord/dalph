@@ -176,6 +176,7 @@ type FixtureOptions = {
   readonly failAfterRecordingSecondTurn?: boolean
   readonly turnTokenMode?: "exact" | "tokenless" | "foreign"
   readonly resumeThreadTokenMode?: "exact" | "tokenless" | "foreign"
+  readonly resumeThreadState?: "exact" | "active" | "foreign" | "tokenless" | "missing" | "wrongId"
   readonly persistedTurnCorrelation?: boolean
   readonly hideTurnsOnRead?: boolean
   readonly activeTurn?: boolean
@@ -325,24 +326,50 @@ const fixtureLayer = (
                 : options.resumeThreadTokenMode === "foreign"
                   ? CodexThreadOwnershipToken.make("foreign-resumed-thread-token")
                   : persistedThreadToken
+            const resumedTurns =
+              options.resumeThreadState === "missing"
+                ? []
+                : options.resumeThreadState === "foreign"
+                  ? [
+                      ...current,
+                      {
+                        id: CodexTurnId.make("foreign-replay-turn"),
+                        status: "inProgress" as const,
+                        items: [],
+                        ownedTurnToken: CodexOwnedTurnToken.make("foreign-replay-token")
+                      }
+                    ]
+                  : options.resumeThreadState === "tokenless"
+                    ? [
+                        ...current,
+                        { id: CodexTurnId.make("tokenless-replay-turn"), status: "completed" as const, items: [] }
+                      ]
+                    : current.map((turn) =>
+                        options.resumeThreadState === "active"
+                          ? { ...turn, status: "inProgress" as const }
+                          : options.resumeThreadState === "wrongId"
+                            ? { ...turn, id: CodexTurnId.make("foreign-replay-turn-id") }
+                            : turn
+                      )
+            const visibleTurns =
+              options.hideTurnsOnRead === true
+                ? []
+                : resumedTurns.map((turn) =>
+                    options.persistedTurnCorrelation === true
+                      ? {
+                          ...turn,
+                          correlation: PlannedAttemptExecutorCorrelation.make({
+                            attemptId: AttemptId.make("persisted-foreign-attempt"),
+                            runId: RunId.make("persisted-foreign-run")
+                          })
+                        }
+                      : turn
+                  )
             return {
               id: CodexThreadId.make("fixture-thread"),
               cwd,
-              status: "idle" as const,
-              turns:
-                options.hideTurnsOnRead === true
-                  ? []
-                  : current.map((turn) =>
-                      options.persistedTurnCorrelation === true
-                        ? {
-                            ...turn,
-                            correlation: PlannedAttemptExecutorCorrelation.make({
-                              attemptId: AttemptId.make("persisted-foreign-attempt"),
-                              runId: RunId.make("persisted-foreign-run")
-                            })
-                          }
-                        : turn
-                    ),
+              status: options.resumeThreadState === "active" ? ("active" as const) : ("idle" as const),
+              turns: visibleTurns,
               ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
             }
           }),
@@ -672,6 +699,36 @@ describe("Codex Integrator", () => {
     expect(result.replay._tag).toBe("NotPrepared")
     expect(result.replay.correlation.ordinal).toBe(1)
     expect(result.replay._tag === "NotPrepared" ? result.replay.detail : "").toBe("checks failed safely")
+    expect(turnStarts.value).toBe(1)
+  })
+
+  it.each([
+    ["active", "still active"],
+    ["foreign", "tokenless or foreign"],
+    ["tokenless", "tokenless or foreign"],
+    ["missing", "not readable after a sealed turn"],
+    ["wrongId", "exact durable turn"]
+  ] as const)("revalidates sealed-result replay when the fresh thread is %s", async (resumeThreadState, detail) => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        `/tmp/dalph-integrator-test/replay-${resumeThreadState}-store.json`
+      ),
+      repository
+    })
+    const turnStarts = { value: 0 }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* integrator.prepare(requestFor(1))
+        const replay = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        return { first, replay }
+      }).pipe(Effect.provide(providerLayer(config, { resumeThreadState, turnStarts })))
+    )
+    expect(result.first._tag).toBe("PreparedCandidate")
+    expect(result.replay._tag).toBe("IntegratorCallFailure")
+    expect(result.replay.detail).toContain(detail)
     expect(turnStarts.value).toBe(1)
   })
 

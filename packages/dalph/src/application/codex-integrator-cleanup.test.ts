@@ -8,6 +8,7 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutorCorrelation,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -27,6 +28,10 @@ import {
   type IntegratorCandidateCleanupEvidenceSubject,
   type IntegratorCandidateProviderAuthority,
   IntegratorCandidateResourceLocator,
+  IntegratorNotPreparedDetail,
+  IntegratorResult,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorSessionCorrelation,
   IntegratorSessionId,
   JournalPosition,
@@ -37,13 +42,20 @@ import {
 } from "@dalph/orchestrator"
 import { Effect, FileSystem, Option, Ref } from "effect"
 import { describe, expect, it } from "vitest"
-import { CodexServerIncarnation, CodexThreadId, CodexThreadOwnershipToken } from "./codex-attempt-store.js"
+import {
+  CodexOwnedTurnToken,
+  CodexServerIncarnation,
+  CodexThreadId,
+  CodexThreadOwnershipToken,
+  CodexTurnId
+} from "./codex-attempt-store.js"
 import {
   CodexAppServer,
   CodexAppServerFailure,
   CodexOwnedActivityCensus,
   type CodexAppServerService,
-  type CodexOwnedActivityCensusProjection
+  type CodexOwnedActivityCensusProjection,
+  type CodexTurnSnapshot
 } from "./codex-app-server.js"
 import {
   CodexIntegratorConfiguration,
@@ -124,6 +136,8 @@ type CleanupCase = {
   readonly pathExists?: boolean
   readonly projection?: CodexOwnedActivityCensusProjection
   readonly threadTokenMode?: "exact" | "tokenless" | "foreign"
+  readonly terminalTurnMode?: "exact" | "tokenless" | "foreign" | "active" | "missing" | "correlation"
+  readonly worktreeMaterializationIntent?: boolean
   readonly appFailure?: boolean
   readonly backgroundFailure?: boolean
   readonly censusFailure?: boolean
@@ -179,11 +193,38 @@ const runCase = <A>(
             Effect.succeed(options.occupied === undefined ? Option.none() : Option.some(options.occupied)),
           write: (record) => Ref.set(current, record)
         }
+        const terminalTurnMode = options.terminalTurnMode ?? "exact"
+        const turns: ReadonlyArray<CodexTurnSnapshot> =
+          terminalTurnMode === "missing"
+            ? []
+            : [
+                {
+                  id: CodexTurnId.make("cleanup-turn"),
+                  status: terminalTurnMode === "active" ? "inProgress" : "completed",
+                  items: [],
+                  ...(terminalTurnMode === "tokenless"
+                    ? {}
+                    : {
+                        ownedTurnToken:
+                          terminalTurnMode === "foreign"
+                            ? CodexOwnedTurnToken.make("foreign-cleanup-turn-token")
+                            : CodexOwnedTurnToken.make("cleanup-turn-token")
+                      }),
+                  ...(terminalTurnMode === "correlation"
+                    ? {
+                        correlation: PlannedAttemptExecutorCorrelation.make({
+                          attemptId: AttemptId.make("foreign-cleanup-attempt"),
+                          runId: RunId.make("foreign-cleanup-run")
+                        })
+                      }
+                    : {})
+                }
+              ]
         const thread = {
           id: CodexThreadId.make("cleanup-thread"),
           cwd: candidatePath,
-          status: "idle" as const,
-          turns: [],
+          status: terminalTurnMode === "active" ? ("active" as const) : ("idle" as const),
+          turns,
           ...(options.threadTokenMode === "tokenless"
             ? {}
             : {
@@ -286,23 +327,38 @@ const recordFor = (
     removalIntent: boolean
     threadId: CodexThreadId | null
     threadStartIntent: boolean
+    worktreeMaterializationIntent: boolean
     worktreeReady: boolean
   }> = {}
-) =>
-  CodexIntegratorPrivateRecord.make({
+) => {
+  const correlation = overrides.correlation ?? predecessor
+  const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
+  return CodexIntegratorPrivateRecord.make({
     appServerIncarnation: CodexServerIncarnation.make("cleanup-incarnation"),
     candidatePath: IntegratorCandidateWorktreePath.make(candidatePath),
-    correlation: overrides.correlation ?? predecessor,
+    correlation,
     revision: revision(overrides.revision ?? 1),
     removed: overrides.removed ?? false,
     removalIntent: overrides.removalIntent ?? false,
-    runs: [],
+    runs: [
+      {
+        correlation: run,
+        phase: "Sealed",
+        result: IntegratorResult.cases.NotPrepared.make({
+          correlation: run,
+          detail: IntegratorNotPreparedDetail.make("cleanup test terminal result")
+        }),
+        token: CodexOwnedTurnToken.make("cleanup-turn-token"),
+        turnId: CodexTurnId.make("cleanup-turn")
+      }
+    ],
     threadId: overrides.threadId === undefined ? CodexThreadId.make("cleanup-thread") : overrides.threadId,
     threadToken: CodexThreadOwnershipToken.make("cleanup-thread-token"),
     threadStartIntent: overrides.threadStartIntent ?? false,
-    worktreeMaterializationIntent: false,
+    worktreeMaterializationIntent: overrides.worktreeMaterializationIntent ?? false,
     worktreeReady: overrides.worktreeReady ?? true
   })
+}
 
 describe("Codex Integrator cleanup boundary", () => {
   it("reads the exact private revision for authorization and rejects foreign evidence", async () => {
@@ -430,6 +486,50 @@ describe("Codex Integrator cleanup boundary", () => {
       (authority, authorization) => authority.observe(authorization)
     )
     expect(tokenlessThread._tag).toBe("Foreign")
+  })
+
+  it("keeps an unresolved worktree materialization unreadable and non-removable", async () => {
+    const observed = await runCase(
+      {
+        record: recordFor("/tmp/unused", { worktreeMaterializationIntent: true, worktreeReady: false }),
+        registration: "exact",
+        pathExists: true
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(observed._tag).toBe("Unreadable")
+
+    const removed = await runCase(
+      {
+        record: recordFor("/tmp/unused", { worktreeMaterializationIntent: true, worktreeReady: false }),
+        registration: "exact",
+        pathExists: true
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(removed._tag).toBe("DefinitelyNotApplied")
+  })
+
+  it("rejects tokenless, foreign, active, missing, and correlated terminal evidence", async () => {
+    const cases = [
+      ["tokenless", "Unreadable"],
+      ["foreign", "Foreign"],
+      ["active", "Foreign"],
+      ["missing", "Unreadable"],
+      ["correlation", "Foreign"]
+    ] as const
+    for (const [terminalTurnMode, expected] of cases) {
+      const observed = await runCase(
+        {
+          record: recordFor("/tmp/unused", { removalIntent: true }),
+          registration: "none",
+          projection: { _tag: "Absent" },
+          terminalTurnMode
+        },
+        (authority, authorization) => authority.observe(authorization)
+      )
+      expect(observed._tag, terminalTurnMode).toBe(expected)
+    }
   })
 
   it("classifies exact registrations and all activity outcomes", async () => {

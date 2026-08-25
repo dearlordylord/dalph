@@ -41,8 +41,10 @@ const standaloneNodeCodexOwnedActivityCensusLayer = Layer.succeed(
 
 const thread = (
   status: CodexThreadSnapshot["status"],
-  turns: ReadonlyArray<CodexTurnSnapshot>
-): CodexThreadSnapshot => ({ id: CodexThreadId.make("public-thread"), cwd: "/public/worktree", status, turns })
+  turns: ReadonlyArray<CodexTurnSnapshot>,
+  id = "public-thread",
+  cwd = "/public/worktree"
+): CodexThreadSnapshot => ({ id: CodexThreadId.make(id), cwd, status, turns })
 
 const turn = (id: string, status: CodexTurnSnapshot["status"]): CodexTurnSnapshot => ({
   id: CodexTurnId.make(id),
@@ -361,6 +363,26 @@ it.effect("reports exact owned activities only after fresh turn, terminal, and p
       expect(processBacked.activities.some((activity) => activity._tag === "ProcessGroupDescendant")).toBe(true)
     }
   })
+)
+
+it.effect("keeps two independent session threads scoped to their own activity", () =>
+  Effect.gen(function* () {
+    const firstSession = thread("idle", [], "session-one-thread", "/session-one/worktree")
+    const secondSession = thread(
+      "idle",
+      [turn("session-two-active-turn", "inProgress")],
+      "session-two-thread",
+      "/session-two/worktree"
+    )
+    const census = yield* CodexOwnedActivityCensus
+    const firstProjection = yield* census.observe(firstSession, [])
+    const secondProjection = yield* census.observe(secondSession, [])
+    expect(firstProjection).toEqual({ _tag: "Absent" })
+    expect(secondProjection).toEqual({
+      _tag: "ExactLive",
+      activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("session-two-active-turn") }]
+    })
+  }).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
 )
 
 it.effect("classifies controlled Linux process census observations at the public activity boundary", () => {

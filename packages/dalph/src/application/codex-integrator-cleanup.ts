@@ -1,10 +1,13 @@
+/* eslint-disable max-lines -- Exact provider cleanup observation and retry stay co-located for auditability. */
+
 import { Effect, Option } from "effect"
 import { WorktreeLocator } from "@dalph/contracts"
 import type { FileSystem } from "effect"
 import type {
   CodexAppServer,
   CodexOwnedActivityCensus,
-  CodexOwnedActivityCensusProjection
+  CodexOwnedActivityCensusProjection,
+  CodexThreadSnapshot
 } from "./codex-app-server.js"
 import {
   candidateWorktreePathFor,
@@ -75,6 +78,41 @@ const cleanupMissingPrivateRecord = Effect.fn("CodexIntegrator.cleanupMissingPri
     : cleanupUnreadable(authorization, "private predecessor record is absent; absence cannot be inferred")
 })
 
+const terminalTurnEvidence = (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  predecessor: IntegratorSessionCorrelation,
+  record: CodexIntegratorPrivateRecord,
+  thread: CodexThreadSnapshot
+): IntegratorCandidateCleanupObservation | undefined => {
+  const expected = record.runs[record.runs.length - 1]
+  if (expected === undefined || expected.phase !== "Sealed" || expected.result === null || expected.turnId === null) {
+    return cleanupUnreadable(authorization, "private predecessor has no sealed terminal turn evidence")
+  }
+  if (thread.status === "active") return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter")
+  const knownTokens = new Set(record.runs.map((run) => run.token))
+  if (thread.turns.some((turn) => turn.ownedTurnToken === undefined)) {
+    return cleanupUnreadable(authorization, "candidate thread contains a tokenless turn")
+  }
+  const foreign = thread.turns.find(
+    (turn) => turn.ownedTurnToken !== undefined && !knownTokens.has(turn.ownedTurnToken)
+  )
+  if (foreign !== undefined) return cleanupForeign(authorization, predecessor.sessionId, "OtherSession")
+  const matching = thread.turns.filter((turn) => turn.ownedTurnToken === expected.token)
+  if (matching.length !== 1) {
+    return cleanupUnreadable(authorization, "candidate thread lacks the exact sealed terminal turn")
+  }
+  const exact = matching[0]
+  if (exact === undefined || exact.id !== expected.turnId) {
+    return cleanupUnreadable(authorization, "candidate thread lacks the exact sealed terminal turn")
+  }
+  if (exact.correlation !== undefined) return cleanupForeign(authorization, predecessor.sessionId, "OtherSession")
+  if (exact.status === "inProgress") return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter")
+  if (exact.status !== "completed" && exact.status !== "failed") {
+    return cleanupUnreadable(authorization, "candidate terminal turn status is not conclusive")
+  }
+  return undefined
+}
+
 const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegistration")(function* (
   authorization: IntegratorCandidateCleanupAuthorization,
   predecessor: IntegratorSessionCorrelation,
@@ -85,6 +123,9 @@ const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegi
   census: CodexOwnedActivityCensus["Service"]
 ) {
   const revision = privateRevision(record)
+  if (record.worktreeMaterializationIntent === true) {
+    return cleanupUnreadable(authorization, "candidate worktree materialization remains unresolved")
+  }
   if (pathExists) return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
   if (record.removed === true) return cleanupAbsent(authorization, revision)
   if (record.threadStartIntent || record.threadId === null) {
@@ -95,6 +136,8 @@ const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegi
     if (thread.ownedThreadToken !== record.threadToken) {
       return cleanupForeign(authorization, predecessor.sessionId, "OtherSession", revision)
     }
+    const terminalEvidence = terminalTurnEvidence(authorization, predecessor, record, thread)
+    if (terminalEvidence !== undefined) return terminalEvidence
     const terminals = yield* boundary(app.listBackgroundTerminals(thread.id))
     const projection = yield* boundary(census.observe(thread, terminals))
     if (projection._tag === "ExactLive") {
@@ -149,6 +192,9 @@ const cleanupRegistered = Effect.fn("CodexIntegrator.cleanupRegistered")(functio
   census: CodexOwnedActivityCensus["Service"]
 ) {
   const revision = privateRevision(record)
+  if (record.worktreeMaterializationIntent === true) {
+    return cleanupUnreadable(authorization, "candidate worktree materialization remains unresolved")
+  }
   if (record.removed === true) return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
   if (registrationIsForeign(registration, predecessor)) {
     return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
@@ -162,6 +208,8 @@ const cleanupRegistered = Effect.fn("CodexIntegrator.cleanupRegistered")(functio
   if (thread.ownedThreadToken !== record.threadToken) {
     return cleanupForeign(authorization, predecessor.sessionId, "OtherSession", revision)
   }
+  const terminalEvidence = terminalTurnEvidence(authorization, predecessor, record, thread)
+  if (terminalEvidence !== undefined) return terminalEvidence
   const terminals = yield* boundary(app.listBackgroundTerminals(thread.id))
   const projection = yield* boundary(census.observe(thread, terminals))
   return cleanupProjection(authorization, predecessor, projection, revision)
@@ -303,6 +351,15 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
       sessionId: authorization.owner.sessionId
     })
   }
+  const revalidated = yield* observe(authorization)
+  if (revalidated._tag === "Unreadable") {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "provider ownership became unreadable before Git removal",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
+  if (revalidated._tag !== "Present") return removalNotPermitted(authorization, revalidated)
   const mutation = boundary(
     commands.run(config.commonDirectory, ["worktree", "remove", "--force", "--", candidatePath])
   )

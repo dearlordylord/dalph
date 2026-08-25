@@ -168,19 +168,19 @@ const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
   run: IntegratorRunCorrelation,
   app: CodexAppServer["Service"]
 ) {
+  if (Number(run.ordinal) < firstProviderRunOrdinal || Number(run.ordinal) > maximumProviderRunOrdinal)
+    return yield* Effect.fail(providerFailure("provider run ordinal exceeds Retry"))
+  if (run.ordinal === maximumProviderRunOrdinal) {
+    const first = record.runs.find((item) => item.correlation.ordinal === firstProviderRunOrdinal)
+    if (first === undefined || first.phase !== "Sealed" || first.result === null || first.turnId === null)
+      return yield* Effect.fail(providerFailure("Retry run two has no sealed run-one result"))
+  }
   const existing = runFor(record, run)
   if (existing !== undefined) return { record, run: existing }
   const ordinalCollision = record.runs.find((item) => item.correlation.ordinal === run.ordinal)
   /* v8 ignore next -- @preserve The private-record validator rejects duplicate ordinals before recovery reaches this guard. */
   if (ordinalCollision !== undefined)
     return yield* Effect.fail(providerFailure("private run ordinal is bound to another session"))
-  if (run.ordinal === maximumProviderRunOrdinal) {
-    const first = record.runs.find((item) => item.correlation.ordinal === firstProviderRunOrdinal)
-    if (first === undefined || first.result === null)
-      return yield* Effect.fail(providerFailure("Retry run two has no sealed run-one result"))
-  }
-  if (Number(run.ordinal) > maximumProviderRunOrdinal)
-    return yield* Effect.fail(providerFailure("provider run ordinal exceeds Retry"))
   const created = CodexIntegratorPrivateRun.make({
     correlation: run,
     phase: "IntentRecorded",
@@ -247,6 +247,8 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
   }
   const matchingTurn = matchingTurns[0]
   if (matchingTurn !== undefined) {
+    if (run.turnId !== null && matchingTurn.id !== run.turnId)
+      return yield* Effect.fail(providerFailure("owned turn id does not match the exact durable turn"))
     if (matchingTurn.correlation !== undefined) {
       return yield* Effect.fail(providerFailure("owned provider turn carries a foreign correlation"))
     }
@@ -255,9 +257,7 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
   if (run.phase !== "IntentRecorded" && run.phase !== "TurnBoundaryCrossing") {
     return yield* Effect.fail(providerFailure("owned turn token is not readable after a sealed turn"))
   }
-  // A missing token after the request boundary is retryable only after a
-  // fresh complete census proves that no unknown turn or descendant can
-  // still write the candidate worktree.
+  // A missing token is retryable only after a complete census proves quiescence.
   yield* observeQuiescence(app, census, thread)
   let currentRecord = record
   let currentRun = run
@@ -280,6 +280,12 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
     /* v8 ignore next -- @preserve CodexIntegratorPrivateRecord validates every stored result against its run correlation. */
     if (!runCorrelationEquals(run.result.correlation, run.correlation))
       return yield* Effect.fail(providerFailure("private result has a foreign run correlation"))
+    const freshThread = yield* observedThread(app, thread.id, record.candidatePath)
+    if (freshThread.ownedThreadToken !== record.threadToken)
+      return yield* Effect.fail(providerFailure("sealed result thread ownership changed before replay"))
+    const { turn } = yield* readOrRecoverTurn(app, census, store, record, run, freshThread)
+    if (!isTerminalTurn(turn)) return yield* Effect.fail(providerFailure("sealed provider turn is still active"))
+    yield* observeQuiescence(app, census, freshThread)
     return run.result
   }
   const current = yield* readOrRecoverTurn(app, census, store, record, run, thread)

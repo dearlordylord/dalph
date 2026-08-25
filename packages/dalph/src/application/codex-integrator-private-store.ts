@@ -124,6 +124,19 @@ export const CodexIntegratorPrivateRecord = Schema.Struct({
     ) {
       return "private record contains an unsupported provider run ordinal"
     }
+    if (runOrdinals.some((ordinal, index) => Number(ordinal) !== index + firstPrivateRunOrdinal)) {
+      return "private record provider runs must be contiguous from initial run one"
+    }
+    const runTokens = record.runs.map((run) => run.token)
+    if (new Set(runTokens).size !== runTokens.length) return "private record repeats a provider turn token"
+    const retry = record.runs.find((run) => Number(run.correlation.ordinal) === maximumPrivateRunOrdinal)
+    const initial = record.runs.find((run) => Number(run.correlation.ordinal) === firstPrivateRunOrdinal)
+    if (
+      retry !== undefined &&
+      (initial === undefined || initial.phase !== "Sealed" || initial.result === null || initial.turnId === null)
+    ) {
+      return "private retry run requires a sealed initial run"
+    }
     if (record.threadStartIntent && record.threadId !== null) {
       return "private record cannot retain a thread-start intent after recording a thread id"
     }
