@@ -169,7 +169,7 @@ const stateOf = (
       proposals
     },
     quiescence: { _tag: "TrackerReconfirmationAllowed" },
-    taskWork: { capacity: policy.taskExecutionCapacity, held: [] },
+    taskWork: { capacity: policy.taskExecutionCapacity, held: [], preStart: [] },
     cancellationApplied: false
   }
   return DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners })

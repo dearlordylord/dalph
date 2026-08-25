@@ -305,7 +305,7 @@ const evaluationOf = ({
     },
     proposedActions,
     quiescence: { _tag: "TrackerReconfirmationAllowed" },
-    taskWork: { capacity, held },
+    taskWork: { capacity, held, preStart: [] },
     cancellationApplied: false
   }
   return DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners })
