@@ -298,10 +298,11 @@ export const selectCleanupResponsibilitySet = (
  */
 export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(function* (
   runId: RunId,
-  proposals: DispositionCleanupProposals = { branch: [], candidate: [], worktree: [] }
+  proposals: DispositionCleanupProposals = { branch: [], candidate: [], worktree: [] },
+  readEvidenceRevision?: CandidateEvidenceRevisionReader
 ) {
   const journal = yield* InRunJournal
-  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "candidate"])
+  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "candidate"], readEvidenceRevision)
   const initialRecords = yield* journal.read(runId)
   let selectedSet = selectCleanupResponsibilitySet(initialRecords)
   const scopedProposals = {

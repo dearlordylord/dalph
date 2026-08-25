@@ -986,7 +986,9 @@ export const runDispositionCleanupCassette: (
       yield* appendCurrentQuarantineProvenance(issue69Predecessor)
     }
     const upstreamBeforeCleanup = yield* journal.read(issue69RunId)
-    const loop = yield* runDispositionCleanupLoop(issue69RunId)
+    const loop = yield* runDispositionCleanupLoop(issue69RunId, undefined, () =>
+      Effect.succeed(candidatePresent.revision)
+    )
     let terminalResult: string
     if (cassette.scenario === "SupersededWorktreeAndBranch") {
       if (loop.worktree?._tag !== "Settled" || loop.branch?._tag !== "Settled") {
