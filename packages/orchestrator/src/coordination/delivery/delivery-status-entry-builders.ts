@@ -19,6 +19,7 @@ import {
 import {
   addEntry,
   addDependencyEntry,
+  canonicalIdentity,
   integrationConfigurationStandingFor,
   integrationDependencyStandingFor,
   integrationTargetStandingFor,
@@ -311,7 +312,7 @@ const addEvidenceConflictEntryFor = (
   if (Option.isNone(decoded)) {
     return new DeliveryStatusProjectionConflict({
       subject,
-      entryIdentity: `evidence-conflict:${delivery.taskId}`,
+      entryIdentity: canonicalIdentity(["evidence-conflict", delivery.taskId]),
       detail: "an evidence conflict has an empty or malformed exact identity"
     })
   }

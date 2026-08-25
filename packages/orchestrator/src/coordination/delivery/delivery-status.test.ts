@@ -306,12 +306,9 @@ it.effect("explains eligible work waiting for exact capacity", () =>
   })
 )
 
-it.effect("explains dependency waits from the complete graph and does not call a tracker", () =>
+it.effect("explains graph-only dependency waits without workflow evidence", () =>
   Effect.gen(function* () {
-    const state = evaluationOf({
-      tasks: [{ id: "A" }, { id: "B" }, { id: "D", prerequisiteIds: ["A", "B"] }],
-      evidence: [taskClaimEvidenceOf(TaskId.make("D"))]
-    })
+    const state = evaluationOf({ tasks: [{ id: "A" }, { id: "B" }, { id: "D", prerequisiteIds: ["A", "B"] }] })
     const signal = yield* deliveryStatusSignalOf(currentSignalOf(state), { _tag: "Run", runId })
     const status = yield* signal.get
     expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
@@ -828,6 +825,53 @@ it.effect("localizes contradictory evidence without blocking an independent task
       liveOwners: []
     })
     expect(deliveryStatusOf({ _tag: "Run", runId }, malformed)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+
+    const duplicateIdentity = DeliveryRuntimeObservationState.Ready({
+      evaluation: {
+        ...ready.evaluation,
+        current: {
+          ...ready.evaluation.current,
+          ticketDeliveries: {
+            ...ready.evaluation.current.ticketDeliveries,
+            deliveries: [
+              {
+                ...delivery,
+                standings: [{ _tag: "ExactEvidenceConflict", evidenceIdentities: ["duplicate", "duplicate"] }]
+              }
+            ]
+          }
+        }
+      },
+      liveOwners: []
+    })
+    expect(deliveryStatusOf({ _tag: "Run", runId }, duplicateIdentity)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+
+    const separatorCollision = DeliveryRuntimeObservationState.Ready({
+      evaluation: {
+        ...ready.evaluation,
+        current: {
+          ...ready.evaluation.current,
+          ticketDeliveries: {
+            ...ready.evaluation.current.ticketDeliveries,
+            deliveries: [
+              {
+                ...delivery,
+                standings: [
+                  { _tag: "ExactEvidenceConflict", evidenceIdentities: ["a,b", "c"] },
+                  { _tag: "ExactEvidenceConflict", evidenceIdentities: ["a", "b,c"] }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      liveOwners: []
+    })
+    const separatorCollisionStatus = deliveryStatusOf({ _tag: "Run", runId }, separatorCollision)
+    expect(separatorCollisionStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    if (separatorCollisionStatus._tag === "DeliveryStatusAvailable") {
+      expect(separatorCollisionStatus.entries.filter(({ _tag }) => _tag === "EvidenceConflict")).toHaveLength(2)
+    }
   })
 )
 

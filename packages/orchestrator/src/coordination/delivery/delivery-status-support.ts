@@ -21,7 +21,7 @@ import {
   type DeliveryStatusWakeCondition
 } from "./delivery-status-model.js"
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
-import { addEntry } from "./delivery-status-order.js"
+import { addEntry, canonicalEncodingOf, canonicalIdentity } from "./delivery-status-order.js"
 import type { OrderedStatusEntry } from "./delivery-status-order.js"
 
 export {
@@ -32,7 +32,8 @@ export {
   obligationForEvidenceConflict,
   runWideTaskOrder,
   statusEntryIdentity,
-  statusEntryJson
+  statusEntryJson,
+  canonicalIdentity
 } from "./delivery-status-order.js"
 export type { OrderedStatusEntry } from "./delivery-status-order.js"
 export { trackerFactForDisposition, unavailableFromFacts } from "./delivery-status-responsibility-semantics.js"
@@ -150,30 +151,19 @@ export const ownerIsSettled = (
   { readonly _tag: "SettledBeforeMaterialization" | "SettledMaterializedDeliveryAction" }
 > => owner._tag === "SettledBeforeMaterialization" || owner._tag === "SettledMaterializedDeliveryAction"
 
-const canonicalJson = (value: unknown): string => {
-  const canonical = (current: unknown): unknown => {
-    if (Array.isArray(current)) return current.map(canonical)
-    if (current !== null && typeof current === "object") {
-      return Object.fromEntries(
-        Object.entries(current)
-          .toSorted(([left], [right]) => left.localeCompare(right))
-          .map(([key, nested]) => [key, canonical(nested)])
-      )
-    }
-    return current
-  }
-  return JSON.stringify(canonical(value))
-}
-
 const proposalEquals = (left: DeliveryActionProposal, right: DeliveryActionProposal): boolean =>
-  canonicalJson(left) === canonicalJson(right)
+  canonicalEncodingOf(left) === canonicalEncodingOf(right)
 
 const liveOwnerConflict = (
   subject: DeliveryStatusSubject,
   proposalId: string,
   detail: string
 ): DeliveryStatusProjectionConflict =>
-  new DeliveryStatusProjectionConflict({ subject, entryIdentity: `live-owner:${proposalId}`, detail })
+  new DeliveryStatusProjectionConflict({
+    subject,
+    entryIdentity: canonicalIdentity(["live-owner", proposalId]),
+    detail
+  })
 
 /** Live owners are valid only as one exact lifecycle snapshot of one current proposal. */
 export const validateLiveOwnersForStatus = (
@@ -257,7 +247,7 @@ const responsibilityProjectionConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: `responsibility:${delivery.taskId}`,
+    entryIdentity: canonicalIdentity(["responsibility", delivery.taskId]),
     detail: "a tracker or unavailable-fact standing has no matching exact responsibility obligation"
   })
 
@@ -285,7 +275,7 @@ const validateResponsibilityStandingForStatus = (
   ) {
     return new DeliveryStatusProjectionConflict({
       subject,
-      entryIdentity: `responsibility:${delivery.taskId}:DependencyWait`,
+      entryIdentity: canonicalIdentity(["responsibility", delivery.taskId, "DependencyWait"]),
       detail: "a dependency wait must retain at least one prerequisite task"
     })
   }
@@ -298,7 +288,7 @@ const integrationTargetProjectionConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: `integration-target:${delivery.taskId}`,
+    entryIdentity: canonicalIdentity(["integration-target", delivery.taskId]),
     detail: "an integration target wait has no matching queued integration responsibility"
   })
 
@@ -308,7 +298,7 @@ const integrationTrackerProjectionConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: `integration-tracker:${delivery.taskId}`,
+    entryIdentity: canonicalIdentity(["integration-tracker", delivery.taskId]),
     detail: "an integration tracker wait has no matching exact planned-attempt obligation"
   })
 
@@ -332,7 +322,7 @@ const integrationWaitProjectionConflict = (
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
-    entryIdentity: `integration-wait:${delivery.taskId}:${wait._tag}`,
+    entryIdentity: canonicalIdentity(["integration-wait", delivery.taskId, wait._tag]),
     detail: `the ${wait._tag} has no matching exact obligation or non-empty supporting facts`
   })
 
@@ -393,6 +383,23 @@ const validateIntegrationStandingForStatus = (
   return validateIntegrationTrackerStandingForStatus(subject, delivery, standing)
 }
 
+const validateEvidenceConflictForStatus = (
+  subject: DeliveryStatusSubject,
+  delivery: TicketDelivery,
+  standing: Extract<TicketDeliveryStanding, { readonly _tag: "ExactEvidenceConflict" }>
+): DeliveryStatusProjectionConflict | null => {
+  const duplicate = standing.evidenceIdentities.find(
+    (identity, index, identities) => identities.indexOf(identity) !== index
+  )
+  return duplicate === undefined
+    ? null
+    : new DeliveryStatusProjectionConflict({
+        subject,
+        entryIdentity: canonicalIdentity(["evidence-conflict", delivery.taskId]),
+        detail: "an exact evidence conflict repeats one evidence identity"
+      })
+}
+
 export const validateDeliveryEvidenceForStatus = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery
@@ -403,6 +410,9 @@ export const validateDeliveryEvidenceForStatus = (
         ? validateResponsibilityStandingForStatus(subject, delivery, standing)
         : null
     if (responsibilityConflict !== null) return responsibilityConflict
+    const evidenceConflict =
+      standing._tag === "ExactEvidenceConflict" ? validateEvidenceConflictForStatus(subject, delivery, standing) : null
+    if (evidenceConflict !== null) return evidenceConflict
     const integrationConflict =
       standing._tag === "IntegrationWait" ? validateIntegrationStandingForStatus(subject, delivery, standing) : null
     if (integrationConflict !== null) return integrationConflict

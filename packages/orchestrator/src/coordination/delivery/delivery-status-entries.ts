@@ -82,6 +82,19 @@ const deliveryEntriesFor = (
   return null
 }
 
+/** Graph-only prerequisite waits remain observable even when no workflow responsibility exists yet. */
+const graphDependencyEntriesFor = (
+  subject: DeliveryStatusSubject,
+  evaluation: DeliveryRuntimeEvaluation,
+  entries: Array<OrderedStatusEntry>
+): void => {
+  const retainedTaskIds = new Set(evaluation.current.ticketDeliveries.deliveries.map(({ taskId }) => taskId))
+  for (const [index, placement] of evaluation.current.ticketDeliveries.source.placements.entries()) {
+    if (retainedTaskIds.has(placement.taskId)) continue
+    dependencyEntriesFor(subject, placement.taskId, placement.placement, index, entries)
+  }
+}
+
 const issueEntriesFor = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
@@ -167,6 +180,7 @@ export const statusEntriesFor = (
   if (liveOwnerConflict !== null) return liveOwnerConflict
   const entries: Array<OrderedStatusEntry> = []
   const taskOrders = deliveryTaskOrder(evaluation)
+  graphDependencyEntriesFor(subject, evaluation, entries)
   for (const [index, delivery] of evaluation.current.ticketDeliveries.deliveries.entries()) {
     dependencyEntriesFor(subject, delivery.taskId, delivery.placement, index, entries)
   }

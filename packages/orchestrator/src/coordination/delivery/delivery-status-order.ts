@@ -20,22 +20,59 @@ import type {
 import { type DeliveryStatusEntry, type DeliveryStatusSubject } from "./delivery-status-model.js"
 import { workflowResponsibilityKey, type WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 
+type IdentityPart = string | number
+
+/** Injective identity encoding: every typed component carries its own length. */
+export const canonicalIdentity = (parts: ReadonlyArray<IdentityPart>): string =>
+  parts
+    .map((part) => {
+      const value =
+        typeof part === "number" ? (Object.is(part, -0) ? "-0" : Number.isNaN(part) ? "NaN" : String(part)) : part
+      return `${typeof part === "number" ? "n" : "s"}${value.length}:${value}`
+    })
+    .join("")
+
+const canonicalValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalValue(nested)])
+    )
+  }
+  return value
+}
+
+/** Stable structural encoding for values built from the same exact evidence. */
+export const canonicalEncodingOf = (value: unknown): string => JSON.stringify(canonicalValue(value))
+
 const subjectKey = (subject: DeliveryStatusSubject): string =>
-  subject._tag === "Run" ? `Run:${subject.runId}` : `Task:${subject.runId}:${subject.taskId}`
+  subject._tag === "Run"
+    ? canonicalIdentity(["Run", subject.runId])
+    : canonicalIdentity(["Task", subject.runId, subject.taskId])
 
 const obligationIdentity = (obligation: ExactWorkflowObligation): string => {
-  if (obligation._tag === "WorkflowResponsibility") return workflowResponsibilityKey(obligation.responsibility)
+  if (obligation._tag === "WorkflowResponsibility")
+    return canonicalIdentity(["workflow", workflowResponsibilityKey(obligation.responsibility)])
   if (obligation._tag === "AcceptedAwaitingIntegration") {
-    return `attempt:${plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(obligation.accepted.plannedAttempt))}`
+    return canonicalIdentity([
+      "attempt",
+      plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(obligation.accepted.plannedAttempt))
+    ])
   }
   if (obligation._tag === "QueuedIntegration") {
-    return `queued:${obligation.responsibility.queuedAt}:${plannedAttemptExecutorCorrelationKey(
-      plannedAttemptExecutorCorrelation(obligation.responsibility.plannedAttempt)
-    )}`
+    return canonicalIdentity([
+      "queued",
+      obligation.responsibility.queuedAt,
+      plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(obligation.responsibility.plannedAttempt))
+    ])
   }
-  return `started:${obligation.responsibility.startedAt}:${plannedAttemptExecutorCorrelationKey(
-    plannedAttemptExecutorCorrelation(obligation.responsibility.plannedAttempt)
-  )}`
+  return canonicalIdentity([
+    "started",
+    obligation.responsibility.startedAt,
+    plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(obligation.responsibility.plannedAttempt))
+  ])
 }
 
 const evidenceIdentityForObligation = (obligation: ExactWorkflowObligation): string => {
@@ -45,7 +82,7 @@ const evidenceIdentityForObligation = (obligation: ExactWorkflowObligation): str
     obligation._tag === "AcceptedAwaitingIntegration"
       ? obligation.accepted.plannedAttempt
       : obligation.responsibility.plannedAttempt
-  return JSON.stringify([
+  return canonicalEncodingOf([
     "integration",
     plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(plannedAttempt))
   ])
@@ -66,10 +103,11 @@ export const obligationForEvidenceConflict = (
 
 const proposalDerivationIssueIdentity = (issue: DeliveryProposalDerivationIssue): string =>
   issue._tag === "AcceptedOperationEvidenceMissing"
-    ? `${issue._tag}:${issue.operationId}:${issue.taskId}:${issue.transition}`
-    : `${issue._tag}:${issue.taskId}:${issue.transition}`
+    ? canonicalIdentity([issue._tag, issue.operationId, issue.taskId, issue.transition])
+    : canonicalIdentity([issue._tag, issue.taskId, issue.transition])
 
-const statusEntryPrefix = (entry: DeliveryStatusEntry): string => `${entry._tag}:${subjectKey(entry.subject)}`
+const statusEntryPrefix = (entry: DeliveryStatusEntry): string =>
+  canonicalIdentity([entry._tag, subjectKey(entry.subject)])
 
 const responsibilityPosition = (responsibility: WorkflowResponsibilityEntry): number => responsibility.beganAt
 
@@ -106,52 +144,71 @@ const statusEntryPosition = Match.typeTags<NonActionStatusEntry, number>()({
 const dependencyStandingIdentity = (
   standing: Extract<DeliveryStatusEntry, { readonly _tag: "DependencyWait" }>["standing"]
 ): string => {
-  if (standing._tag === "GraphExcluded") return `graph:${standing.reasons.map(({ _tag }) => _tag).join(",")}`
+  if (standing._tag === "GraphExcluded")
+    return canonicalIdentity(["graph", ...standing.reasons.map(({ _tag }) => _tag)])
   if (standing._tag === "PromotedPrerequisiteReleasePending") {
-    return `promoted:${standing.prerequisiteTaskIds.join(",")}`
+    return canonicalIdentity(["promoted", ...standing.prerequisiteTaskIds])
   }
   if (standing._tag === "IntegrationWait") {
-    return `integration:${standing.wait._tag}:${plannedAttemptExecutorCorrelationKey(
-      plannedAttemptExecutorCorrelation(standing.wait.plannedAttempt)
-    )}`
+    return canonicalIdentity([
+      "integration",
+      standing.wait._tag,
+      plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(standing.wait.plannedAttempt))
+    ])
   }
-  return `responsibility:${workflowResponsibilityKey(standing.facts.responsibility)}`
+  return canonicalIdentity(["responsibility", workflowResponsibilityKey(standing.facts.responsibility)])
 }
 
 const statusEntryIdentityFor = Match.typeTags<DeliveryStatusEntry, string>()({
   DependencyWait: (entry) =>
-    `${statusEntryPrefix(entry)}:${entry.taskId}:${entry.prerequisiteTaskIds.join(",")}:${dependencyStandingIdentity(
-      entry.standing
-    )}`,
+    canonicalIdentity([
+      statusEntryPrefix(entry),
+      entry.taskId,
+      ...entry.prerequisiteTaskIds,
+      dependencyStandingIdentity(entry.standing)
+    ]),
   TrackerFactWait: (entry) =>
-    `${statusEntryPrefix(entry)}:${entry.responsibility === null ? "subject" : obligationIdentity(entry.responsibility)}:${entry.fact._tag}`,
-  TaskWorkCapacityWait: (entry) => `${statusEntryPrefix(entry)}:${entry.taskId}`,
-  ProposedDeliveryAction: (entry) => `${statusEntryPrefix(entry)}:${entry.proposal.id}`,
-  LiveDeliveryAction: (entry) => `${statusEntryPrefix(entry)}:${entry.owner.proposal.id}`,
-  AcceptedFactPublicationWait: (entry) => `${statusEntryPrefix(entry)}:${entry.owner.proposal.id}`,
+    canonicalIdentity([
+      statusEntryPrefix(entry),
+      entry.responsibility === null ? "subject" : obligationIdentity(entry.responsibility),
+      entry.fact._tag
+    ]),
+  TaskWorkCapacityWait: (entry) => canonicalIdentity([statusEntryPrefix(entry), entry.taskId]),
+  ProposedDeliveryAction: (entry) => canonicalIdentity([statusEntryPrefix(entry), entry.proposal.id]),
+  LiveDeliveryAction: (entry) => canonicalIdentity([statusEntryPrefix(entry), entry.owner.proposal.id]),
+  AcceptedFactPublicationWait: (entry) => canonicalIdentity([statusEntryPrefix(entry), entry.owner.proposal.id]),
   IntegrationTargetWait: (entry) =>
-    `${statusEntryPrefix(entry)}:${plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(entry.plannedAttempt))}:${entry.wait._tag}`,
+    canonicalIdentity([
+      statusEntryPrefix(entry),
+      plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(entry.plannedAttempt)),
+      entry.wait._tag
+    ]),
   EvidenceUnavailable: (entry) =>
-    `${statusEntryPrefix(entry)}:${entry.evidence._tag}:${
+    canonicalIdentity([
+      statusEntryPrefix(entry),
+      entry.evidence._tag,
       entry.evidence._tag === "ProposalDerivationIssue"
         ? proposalDerivationIssueIdentity(entry.evidence.issue)
         : entry.evidence._tag === "ResponsibilityFacts"
           ? entry.responsibility === null
             ? "subject"
             : obligationIdentity(entry.responsibility)
-          : `${entry.evidence.wait._tag}:${plannedAttemptExecutorCorrelationKey(
-              plannedAttemptExecutorCorrelation(entry.evidence.wait.plannedAttempt)
-            )}`
-    }`,
-  EvidenceConflict: (entry) => `${statusEntryPrefix(entry)}:${entry.evidenceIdentities.join(",")}`,
-  Settlement: (entry) => `${statusEntryPrefix(entry)}:${entry.attemptId}`,
+          : canonicalIdentity([
+              entry.evidence.wait._tag,
+              plannedAttemptExecutorCorrelationKey(
+                plannedAttemptExecutorCorrelation(entry.evidence.wait.plannedAttempt)
+              )
+            ])
+    ]),
+  EvidenceConflict: (entry) => canonicalIdentity([statusEntryPrefix(entry), ...entry.evidenceIdentities]),
+  Settlement: (entry) => canonicalIdentity([statusEntryPrefix(entry), entry.attemptId]),
   Relinquishment: (entry) =>
-    `${statusEntryPrefix(entry)}:${workflowResponsibilityKey(entry.responsibility.responsibility)}`
+    canonicalIdentity([statusEntryPrefix(entry), workflowResponsibilityKey(entry.responsibility.responsibility)])
 })
 
 export const statusEntryIdentity = statusEntryIdentityFor
 
-export const statusEntryJson = (entry: DeliveryStatusEntry): string => JSON.stringify(entry)
+export const statusEntryJson: (entry: DeliveryStatusEntry) => string = canonicalEncodingOf
 
 export interface OrderedStatusEntry {
   readonly entry: DeliveryStatusEntry
