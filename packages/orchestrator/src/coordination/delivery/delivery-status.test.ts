@@ -695,7 +695,12 @@ it("maps responsibility dispositions by meaning without turning terminal or paus
 it("projects cancelled and stopped accepted standings as distinct public settlements", () => {
   const cases = [
     ["cancelled-status", ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })],
-    ["stopped-status", ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" })]
+    ["stopped-status", ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" })],
+    [
+      "cancelled-no-release-status",
+      ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "NoRelease" })
+    ],
+    ["stopped-no-release-status", ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "NoRelease" })]
   ] as const
   for (const [taskIdText, disposition] of cases) {
     const taskId = TaskId.make(taskIdText)
@@ -725,7 +730,7 @@ it("projects cancelled and stopped accepted standings as distinct public settlem
       _tag: "Settlement",
       settlement: {
         _tag: "AcceptedStandingSettlement",
-        standing: { _tag: disposition._tag, claimDisposition: "Released", responsibility }
+        standing: { _tag: disposition._tag, claimDisposition: disposition.claimDisposition, responsibility }
       }
     })
   }
@@ -811,6 +816,41 @@ it("projects cancelled and stopped accepted standings as distinct public settlem
   })
   expect(
     deliveryStatusOf({ _tag: "Task", runId: integrationFinalityFixture.runId, taskId: mismatchTaskId }, malformedState)
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+
+  const foreignRunResponsibility = {
+    ...mismatchResponsibility,
+    plannedAttempt: { ...mismatchResponsibility.plannedAttempt, runId: RunId.make("foreign-settled-run") }
+  }
+  const foreignRunState = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...mismatchState.evaluation,
+      current: {
+        ...mismatchState.evaluation.current,
+        ticketDeliveries: {
+          ...mismatchState.evaluation.current.ticketDeliveries,
+          deliveries: [
+            {
+              ...mismatchDelivery,
+              standings: [
+                {
+                  _tag: "ResponsibilitySituation" as const,
+                  facts: {
+                    _tag: "PlannedAttemptExecutorFreshFacts" as const,
+                    disposition: ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "NoRelease" }),
+                    responsibility: foreignRunResponsibility
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    liveOwners: []
+  })
+  expect(
+    deliveryStatusOf({ _tag: "Task", runId: integrationFinalityFixture.runId, taskId: mismatchTaskId }, foreignRunState)
   ).toBeInstanceOf(DeliveryStatusProjectionConflict)
 })
 

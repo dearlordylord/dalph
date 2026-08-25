@@ -30,6 +30,7 @@ import { workflowResponsibilityKey } from "../reconstruction/state.js"
 import { addEntry, canonicalEncodingOf, canonicalIdentity, taskOrderFor } from "./delivery-status-order.js"
 import type { OrderedStatusEntry, StatusTaskOrder, StatusTaskOrderLookup } from "./delivery-status-order.js"
 import { validateAcceptedStandingForStatus } from "./delivery-status-settlement.js"
+import { taskStatusSubject } from "./delivery-status-subject.js"
 
 export {
   addEntry,
@@ -43,12 +44,10 @@ export {
 } from "./delivery-status-order.js"
 export type { OrderedStatusEntry } from "./delivery-status-order.js"
 export { trackerFactForDisposition, unavailableFromFacts } from "./delivery-status-responsibility-semantics.js"
+export { taskStatusSubject } from "./delivery-status-subject.js"
 
 export const includeForSubject = (subject: DeliveryStatusSubject, taskId: TaskId | null): boolean =>
   subject._tag === "Run" || (taskId !== null && subject.taskId === taskId)
-
-export const taskStatusSubject = (subject: DeliveryStatusSubject, taskId: TaskId): DeliveryStatusSubject =>
-  subject._tag === "Task" ? subject : { _tag: "Task", runId: subject.runId, taskId }
 
 const missingTaskOrderConflictFor = (
   subject: DeliveryStatusSubject,

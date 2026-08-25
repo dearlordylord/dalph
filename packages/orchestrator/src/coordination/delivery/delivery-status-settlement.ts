@@ -7,6 +7,7 @@ import {
 } from "./delivery-status-model.js"
 import { acceptedStandingSettlementDispositionFor } from "./delivery-status-responsibility-semantics.js"
 import { addEntry, canonicalIdentity, type OrderedStatusEntry, type StatusTaskOrder } from "./delivery-status-order.js"
+import { taskStatusSubject } from "./delivery-status-subject.js"
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
 
 type ResponsibilityStanding = Extract<TicketDeliveryStanding, { readonly _tag: "ResponsibilitySituation" }>
@@ -73,12 +74,6 @@ const acceptedStandingSettlementResolutionFor = (
           }
   }
 }
-
-const taskStatusSubject = (
-  subject: DeliveryStatusSubject,
-  taskId: TicketDelivery["taskId"]
-): Extract<DeliveryStatusSubject, { readonly _tag: "Task" }> =>
-  subject._tag === "Task" ? subject : { _tag: "Task", runId: subject.runId, taskId }
 
 export const addAcceptedStandingSettlementEntryFor = (
   subject: DeliveryStatusSubject,
