@@ -233,6 +233,107 @@ it.effect(
       expect(storyTags).toContain("OperatorContinuesAttempt")
       expect(storyTags).toContain("OperatorAppliesIntegrationQuarantineDirection")
       expect(storyTags).toContain("CompletionClaimDeletionApplied")
+
+      // DS03/DS04: the first crash retains B's exact planned attempt, claim,
+      // worktree, and both task-revision facts. Activation 2 proves these are
+      // reconstructed values, not merely repeated story labels.
+      const activationOperation = (operationId: string, activationOrdinal: number): boolean =>
+        operationId.includes(`:activation:${activationOrdinal}:`)
+      const plannedB = exactlyOne(
+        recordsFor(run.records, "TaskAttemptPlanned").filter(
+          ({ event }) => event.operation.plannedAttempt.taskId === "B"
+        ),
+        "B planned attempt"
+      )
+      const acquiredB = exactlyOne(
+        recordsFor(run.records, "TaskClaimAcquired").filter(({ event }) => event.claim.taskId === "B"),
+        "B acquired claim"
+      )
+      const intendedB = exactlyOne(
+        recordsFor(run.records, "TaskClaimAcquisitionIntended").filter(
+          ({ event }) => event.operation.acquisition.taskId === "B"
+        ),
+        "B intended claim operation"
+      )
+      const preparedB = exactlyOne(
+        recordsFor(run.records, "TaskWorktreeReady").filter(
+          ({ event }) => event.proof.worktree === plannedB.event.operation.plannedAttempt.worktree
+        ),
+        "B prepared worktree"
+      )
+      const preCrashF2 = exactlyOne(
+        recordsFor(run.records, "TaskTrackerFactsObserved").filter(
+          ({ event }) =>
+            event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+            event.observation.factFamily.taskId === "B" &&
+            activationOperation(String(event.operationId), 1) &&
+            event.observation.factFamily.fingerprint !== plannedB.event.operation.plannedAttempt.taskRevision
+        ),
+        "B pre-crash F2 task facts"
+      )
+      const restartedF2 = exactlyOne(
+        recordsFor(run.records, "TaskTrackerFactsObserved").filter(
+          ({ event }) =>
+            event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+            event.observation.factFamily.taskId === "B" &&
+            activationOperation(String(event.operationId), 2) &&
+            event.observation.factFamily.fingerprint !== plannedB.event.operation.plannedAttempt.taskRevision
+        ),
+        "B restarted F2 task facts"
+      )
+      const restartedClaim = exactlyOne(
+        recordsFor(run.records, "TaskTrackerFactsObserved").filter(
+          ({ event }) =>
+            event.observation._tag === "FocusedTaskClaimFacts" &&
+            event.observation.observation._tag === "ActiveTaskClaim" &&
+            event.observation.observation.taskId === "B" &&
+            activationOperation(String(event.operationId), 2)
+        ),
+        "B restarted exact claim facts"
+      )
+      const restartedWorktree = exactlyOne(
+        recordsFor(run.records, "PlannedAttemptWorktreeObserved").filter(
+          ({ event }) =>
+            event.observation._tag === "PlannedWorktreeReady" &&
+            event.observation.worktree === plannedB.event.operation.plannedAttempt.worktree &&
+            activationOperation(String(event.operationId), 2)
+        ),
+        "B restarted exact worktree"
+      )
+      const restartedLineage = exactlyOne(
+        recordsFor(run.records, "TargetLineageObserved").filter(
+          ({ event }) => event.plannedAttempt.taskId === "B" && activationOperation(String(event.operationId), 2)
+        ),
+        "B restarted exact planned attempt"
+      )
+      if (
+        preCrashF2.event.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
+        restartedF2.event.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
+        restartedClaim.event.observation._tag !== "FocusedTaskClaimFacts" ||
+        restartedClaim.event.observation.observation._tag !== "ActiveTaskClaim" ||
+        restartedWorktree.event.observation._tag !== "PlannedWorktreeReady"
+      ) {
+        return yield* Effect.die("B restart evidence lost its focused typed facts")
+      }
+      const beforeCrashFingerprints = {
+        F1: plannedB.event.operation.plannedAttempt.taskRevision,
+        F2: preCrashF2.event.observation.factFamily.fingerprint
+      }
+      const restartedFingerprints = {
+        F1: restartedLineage.event.plannedAttempt.taskRevision,
+        F2: restartedF2.event.observation.factFamily.fingerprint
+      }
+      expect(restartedLineage.event.plannedAttempt).toEqual(plannedB.event.operation.plannedAttempt)
+      expect(restartedClaim.event.observation.observation.operationId).toBe(
+        intendedB.event.operation.acquisition.operationId
+      )
+      expect(restartedClaim.event.observation.observation).toEqual(acquiredB.event.claim)
+      expect(restartedWorktree.event.observation).toEqual(preparedB.event.proof)
+      expect(restartedFingerprints).toEqual(beforeCrashFingerprints)
+      expect(restartedLineage.event.plannedAttempt.runId).toBe(run.runId)
+      expect(restartedLineage.event.plannedAttempt.attemptId).toBe(plannedB.event.operation.plannedAttempt.attemptId)
+      expect(restartedLineage.event.plannedAttempt.baseSha).toBe(plannedB.event.operation.plannedAttempt.baseSha)
+      expect(restartedLineage.event.plannedAttempt.worktree).toBe(plannedB.event.operation.plannedAttempt.worktree)
     }),
   capstoneTimeout
 )

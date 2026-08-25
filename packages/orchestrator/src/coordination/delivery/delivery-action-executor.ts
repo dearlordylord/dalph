@@ -8,7 +8,7 @@ import { Context, Effect, Schema } from "effect"
 import type { InRunJournalService } from "../../workflow-journal/store.js"
 import type {
   InterruptibleWorkflowBoundaryExecution,
-  WorkflowInterpreterService,
+  WorkflowInterpreterServiceFailure,
   WorkflowTraceService
 } from "../../workflow/interpretation/interpreter.js"
 import type { TaskClaimAcquisitionPlannerService } from "../../workflow/protocols/task-claim-acquisition/plan.js"
@@ -251,7 +251,7 @@ export type DeliveryActionExecutionError =
   | ServiceFailure<InRunJournalService>
   | ServiceFailure<PlannedAttemptExecutorService>
   | ServiceFailure<TaskClaimAcquisitionPlannerService>
-  | ServiceFailure<WorkflowInterpreterService>
+  | WorkflowInterpreterServiceFailure
   | ServiceFailure<WorkflowTraceService>
 
 export interface DeliveryActionExecutorService {

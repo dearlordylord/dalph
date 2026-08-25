@@ -30,9 +30,9 @@ export const workflowInterpreterLayer = Layer.effect(
     const gitWorktree = yield* GitWorktree
     const gitTargetLineage = yield* GitTargetLineage
     return WorkflowInterpreter.of({
-      acquireTaskClaim: (
+      acquireTaskClaim: <IntentError = never>(
         operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
-        onIntentRecorded: Effect.Effect<void> = Effect.void
+        onIntentRecorded: Effect.Effect<void, IntentError> = Effect.void
       ) => onIntentRecorded.pipe(Effect.andThen(acquireTaskClaimThrough(tracker, operation))),
       readTaskClaim: (operation) => observeTaskClaimThrough(tracker, operation),
       readTaskWorktree: (operation) => observePlannedAttemptWorktreeThrough(gitWorktree, operation),

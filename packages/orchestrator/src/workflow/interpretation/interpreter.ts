@@ -64,22 +64,22 @@ export type {
 
 type TaskAttemptPlanRecordingError = JournalAppendError | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
+type TaskClaimAcquisitionError =
+  | CoordinatorOwnershipError
+  | JournalAppendError
+  | TaskClaimAcquisitionDidNotConverge
+  | TaskClaimConflict
+  | TaskClaimOwnershipConflict
+  | TaskClaimReadFailure
+  | TaskClaimRequestFailure
+
 /** The generic operation handlers used before complete-attempt executor work. */
 export interface WorkflowInterpreterService {
-  readonly acquireTaskClaim: (
+  readonly acquireTaskClaim: <IntentError = never>(
     operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
-    onIntentRecorded?: Effect.Effect<void>,
+    onIntentRecorded?: Effect.Effect<void, IntentError>,
     interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
-  ) => Effect.Effect<
-    TaskClaimAcquisitionResult,
-    | CoordinatorOwnershipError
-    | JournalAppendError
-    | TaskClaimAcquisitionDidNotConverge
-    | TaskClaimConflict
-    | TaskClaimOwnershipConflict
-    | TaskClaimReadFailure
-    | TaskClaimRequestFailure
-  >
+  ) => Effect.Effect<TaskClaimAcquisitionResult, TaskClaimAcquisitionError | IntentError>
   readonly readTrackerGraph: (
     operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
     onIntentRecorded?: Effect.Effect<void>,
@@ -148,6 +148,22 @@ export interface WorkflowInterpreterService {
     operation: typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
   ) => Effect.Effect<TaskAttemptPlan.TaskAttemptPlanRecordingResult, TaskAttemptPlanRecordingError>
 }
+
+type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effect<infer _A, infer E, infer _R>
+  ? E
+  : never
+
+/** All failures exposed by the interpreter's concrete handlers; claim intent hooks add their own caller error. */
+export type WorkflowInterpreterServiceFailure =
+  | TaskClaimAcquisitionError
+  | EffectFunctionFailure<WorkflowInterpreterService["readTrackerGraph"]>
+  | EffectFunctionFailure<WorkflowInterpreterService["readTaskClaim"]>
+  | EffectFunctionFailure<WorkflowInterpreterService["readTaskWorktree"]>
+  | EffectFunctionFailure<WorkflowInterpreterService["readTargetLineage"]>
+  | EffectFunctionFailure<WorkflowInterpreterService["releaseTaskClaim"]>
+  | EffectFunctionFailure<WorkflowInterpreterService["readTaskWorkSpecification"]>
+  | EffectFunctionFailure<WorkflowInterpreterService["reconcileTaskWorktree"]>
+  | EffectFunctionFailure<WorkflowInterpreterService["recordTaskAttemptPlan"]>
 
 export class WorkflowInterpreter extends Context.Service<WorkflowInterpreter, WorkflowInterpreterService>()(
   "@dalph/WorkflowInterpreter"
