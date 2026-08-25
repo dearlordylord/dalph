@@ -85,7 +85,7 @@ const extractDs16PromotionEvidence = (
       record.event.attemptOrdinal === staleBasis.attemptOrdinal &&
       record.event.correlation.requestId === stale.event.correlation.requestId
   )
-  if (attempt === undefined || attempt.event.reason._tag !== "Initial") return undefined
+  if (attempt === undefined) return undefined
 
   const rejectedCompareAndSets = capturedOccurrencesFor(captures, "TargetPromotionCompareAndSetReturned").filter(
     (capture) =>
@@ -228,7 +228,8 @@ it.effect(
       const storyTags = run.cassette.story.map(({ _tag }) => _tag)
       expect(storyTags).toContain("InitialControlPolicy")
       expect(storyTags).toContain("SetTaskExecutionCapacity")
-      expect(storyTags.filter((tag) => tag === "CoordinatorProcessDies").length).toBeGreaterThanOrEqual(2)
+      expect(storyTags.filter((tag) => tag === "CoordinatorProcessDies")).toHaveLength(1)
+      expect(storyTags).toContain("CassetteKillsCoordinatorWithTargetLineageReadHeld")
       expect(storyTags).toContain("OperatorContinuesAttempt")
       expect(storyTags).toContain("OperatorAppliesIntegrationQuarantineDirection")
       expect(storyTags).toContain("CompletionClaimDeletionApplied")
@@ -249,7 +250,25 @@ it.effect(
       const initialCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
       const successorCandidateCommit = "dddddddddddddddddddddddddddddddddddddddd"
       const trackerTarget = "ds-probe-target"
-      expect(recordsFor(records, "TargetPromotionAttemptIntended")).toHaveLength(2)
+      // DS17's G2 fact is the sole post-quiescence complete graph read. The later
+      // phase uses focused A facts and must not append a synthetic G3 graph read.
+      const g2Facts = exactlyOne(
+        recordsFor(records, "TaskTrackerFactsObserved").filter(
+          ({ event, position }) =>
+            position >= 200 &&
+            event.observation._tag === "CompleteTaskTrackerFacts" &&
+            event.observation.factFamilies.some(({ contentIdentity }) => contentIdentity === "ds-probe-G2")
+        ),
+        "post-quiescence G2 tracker facts"
+      )
+      const g2GraphRead = exactlyOne(
+        recordsFor(records, "TaskTrackerReadIntentRecorded").filter(
+          ({ event }) =>
+            event.operation._tag === "ReadTrackerGraph" && event.operation.operationId === g2Facts.event.operationId
+        ),
+        "post-quiescence G2 tracker graph read"
+      )
+      expect(recordsFor(records, "TargetPromotionAttemptIntended")).toHaveLength(3)
       expect(recordsFor(records, "TargetPromotionStale")).toHaveLength(1)
       expect(capturedOccurrencesFor(captures, "TargetPromotionCompareAndSetReturned")).toHaveLength(2)
 
@@ -337,7 +356,9 @@ it.effect(
       )
       const predecessorPromotionAttempt = exactlyOne(
         recordsFor(records, "TargetPromotionAttemptIntended").filter(
-          ({ event }) => event.correlation.requestId === predecessorPromotionIntent.event.correlation.requestId
+          ({ event }) =>
+            event.correlation.requestId === predecessorPromotionIntent.event.correlation.requestId &&
+            event.reason._tag === "ReconciledExpectedHead"
         ),
         "predecessor promotion attempt intent"
       )
@@ -345,8 +366,12 @@ it.effect(
         initialHead,
         acceptedCommit
       ])
-      expect(predecessorPromotionAttempt.event.attemptOrdinal).toBe(1)
-      expect(predecessorPromotionAttempt.event.reason).toEqual({ _tag: "Initial", observedHeadSha: initialHead })
+      expect(predecessorPromotionAttempt.event.attemptOrdinal).toBe(2)
+      expect(predecessorPromotionAttempt.event.reason).toEqual({
+        _tag: "ReconciledExpectedHead",
+        observedHeadSha: initialHead,
+        previousAttemptOrdinal: 1
+      })
       expect(predecessorPromotionIntent.position).toBeLessThan(predecessorPromotionAttempt.position)
       expect(predecessorEvidence.run.position).toBeLessThan(predecessorEvidence.result.position)
       expect(predecessorEvidence.result.position).toBeLessThan(predecessorEvidence.candidateGit.position)
@@ -357,7 +382,7 @@ it.effect(
       if (ds16 === undefined) return
       expect(ds16.attempt.position).toBe(predecessorPromotionAttempt.position)
       expect(ds16.stale.event.correlation.requestId).toBe(predecessorPromotionIntent.event.correlation.requestId)
-      expect(ds16.stale.event.basis).toEqual({ _tag: "AfterAttempt", attemptOrdinal: 1 })
+      expect(ds16.stale.event.basis).toEqual({ _tag: "AfterAttempt", attemptOrdinal: 2 })
       expect(ds16.stale.event.observation).toEqual({ _tag: "CompareAndSetRejected", observedHeadSha: changedHead })
       expect(ds16.attempt.position).toBeLessThan(ds16.stale.position)
       expect(ds16.rejectedCompareAndSet.occurrence.result).toEqual({
@@ -463,10 +488,16 @@ it.effect(
       expect(successorRequest.occurrence.correlation.startedAt).toBe(predecessor.startedAt)
       expect(successorRequest.captureOrder).toBeGreaterThan(directionCapture.captureOrder)
 
+      const releaseHeldLineage = exactlyOne(
+        capturedOccurrencesFor(captures, "CassetteReleasesHeldTargetLineageRead").filter(
+          ({ occurrence }) => occurrence.attemptId === "attempt:A:0"
+        ),
+        "captured release of the held A target-lineage read"
+      )
       const freshLineageSelection = exactlyOne(
         capturedOccurrencesFor(captures, "DalphSelects").filter(
           ({ captureOrder, occurrence }) =>
-            captureOrder > directionCapture.captureOrder &&
+            captureOrder > releaseHeldLineage.captureOrder &&
             captureOrder < successorRequest.captureOrder &&
             occurrence.operation._tag === "ReadTargetLineage" &&
             occurrence.operation.attemptId === "attempt:A:0"
@@ -659,6 +690,25 @@ it.effect(
       expect(settled.event.successObservation).toEqual(deletion.event.successObservation)
       expect(settled.event.replacementOperationId).toBe(replacementIntent.event.operationId)
       expect(settled.event.deletionOperationId).toBe(deletionIntent.event.operationId)
+      expect(g2GraphRead.position).toBe(224)
+      expect(g2Facts.position).toBe(225)
+      expect(g2Facts.position).toBeLessThan(focusedCompleted.position)
+      const postQuiescenceGraphReadsThroughSettlement = recordsFor(records, "TaskTrackerReadIntentRecorded").filter(
+        ({ event, position }) =>
+          event.operation._tag === "ReadTrackerGraph" &&
+          position >= g2GraphRead.position &&
+          position <= settled.position
+      )
+      expect(postQuiescenceGraphReadsThroughSettlement).toHaveLength(1)
+      expect(
+        recordsFor(records, "TaskTrackerFactsObserved").filter(
+          ({ event, position }) =>
+            position >= g2GraphRead.position &&
+            position <= settled.position &&
+            event.observation._tag === "CompleteTaskTrackerFacts" &&
+            event.observation.factFamilies.some(({ contentIdentity }) => contentIdentity === "ds-probe-G3")
+        )
+      ).toHaveLength(0)
 
       const orderedPositions = [
         successor.position,
@@ -699,7 +749,9 @@ it.effect(
       const stale = exactlyOne(recordsFor(run.records, "TargetPromotionStale"), "capstone stale promotion")
       const retainedAttempt = exactlyOne(
         recordsFor(run.records, "TargetPromotionAttemptIntended").filter(
-          ({ event }) => event.correlation.requestId === stale.event.correlation.requestId
+          ({ event }) =>
+            event.correlation.requestId === stale.event.correlation.requestId &&
+            event.reason._tag === "ReconciledExpectedHead"
         ),
         "retained predecessor promotion attempt"
       )
