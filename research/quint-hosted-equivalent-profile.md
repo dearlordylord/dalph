@@ -4,6 +4,10 @@ This record supports issue #153's hosted formal-model timeout decision. It is
 tooling evidence only: it changes no Dalph runtime behavior, provider call,
 workflow occurrence, journal fact, or operator-visible Run result, so no
 runtime operational scenario applies.
+The negative-control contract test uses a 60s child bound: this exceeds the
+retained stressed 36.26s prefix before mutation detection by 23.74s. Its 90s
+Vitest budget leaves a further 30s for child termination, temporary-copy
+cleanup, and runner overhead.
 
 ## What was measured
 

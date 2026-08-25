@@ -18,6 +18,14 @@ const quintGate = readFileSync(new URL("./check-quint-models.mjs", import.meta.u
 const profileEvidence = readFileSync(new URL("../research/quint-hosted-equivalent-profile.md", import.meta.url), "utf8")
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url))
 
+// The retained stressed profile measured 36.26s through the three commands
+// preceding mutation detection. The nested bound leaves 23.74s beyond that
+// prefix; the enclosing Vitest budget leaves another 30s for termination,
+// temporary-copy cleanup, and runner overhead.
+const negativeControlMeasuredPrefixMilliseconds = 36_260
+const negativeControlChildTimeoutMilliseconds = 60_000
+const negativeControlTestTimeoutMilliseconds = 90_000
+
 const parseWorkflowJobs = (source: string) => {
   const lines = source.split("\n")
   const jobsLine = lines.findIndex((line) => line === "jobs:")
@@ -78,53 +86,62 @@ describe("hosted formal-model contract", () => {
     expect(quintPolicy).not.toContain("quintGateSafetyTimeoutMilliseconds")
   })
 
-  it("fails the formal command when a selected model obligation is deliberately broken", async () => {
-    const pnpmEntryPoint = process.env["npm_execpath"] ?? "pnpm"
-    const directory = await mkdtemp(join(tmpdir(), "dalph-broken-quint-model-"))
-    const selectedModel = join(directory, "specs", "plannedAttemptExecutor.qnt")
-    const repositorySelectedModel = join(repositoryRoot, "specs", "plannedAttemptExecutor.qnt")
+  it(
+    "fails the formal command when a selected model obligation is deliberately broken",
+    async () => {
+      expect(negativeControlChildTimeoutMilliseconds - negativeControlMeasuredPrefixMilliseconds).toBe(23_740)
+      expect(negativeControlTestTimeoutMilliseconds - negativeControlChildTimeoutMilliseconds).toBe(30_000)
+      expect(negativeControlChildTimeoutMilliseconds).toBeGreaterThan(negativeControlMeasuredPrefixMilliseconds)
+      expect(negativeControlTestTimeoutMilliseconds).toBeGreaterThan(negativeControlChildTimeoutMilliseconds)
 
-    try {
-      await cp(join(repositoryRoot, "package.json"), join(directory, "package.json"))
-      await cp(join(repositoryRoot, "pnpm-lock.yaml"), join(directory, "pnpm-lock.yaml"))
-      await cp(join(repositoryRoot, "scripts"), join(directory, "scripts"), { recursive: true })
-      await cp(join(repositoryRoot, "specs"), join(directory, "specs"), { recursive: true })
-      await symlink(join(repositoryRoot, "node_modules"), join(directory, "node_modules"), "dir")
+      const pnpmEntryPoint = process.env["npm_execpath"] ?? "pnpm"
+      const directory = await mkdtemp(join(tmpdir(), "dalph-broken-quint-model-"))
+      const selectedModel = join(directory, "specs", "plannedAttemptExecutor.qnt")
+      const repositorySelectedModel = join(repositoryRoot, "specs", "plannedAttemptExecutor.qnt")
 
-      const originalSelectedModel = await readFile(selectedModel, "utf8")
-      const selectedObligation = "not(isCommandProjectionEvidence(state.evidence)) or and {"
-      expect(originalSelectedModel).toContain(selectedObligation)
-      await writeFile(
-        selectedModel,
-        originalSelectedModel.replace(selectedObligation, "isCommandProjectionEvidence(state.evidence) or and {")
-      )
-
-      let failure: unknown
       try {
-        await runBoundedCommand({
-          args:
-            process.env["npm_execpath"] === undefined
-              ? ["--dir", directory, "check:ci:formal"]
-              : [pnpmEntryPoint, "--dir", directory, "check:ci:formal"],
-          executable: process.env["npm_execpath"] === undefined ? pnpmEntryPoint : process.execPath,
-          captureOutput: true,
-          forwardOutput: false,
-          name: "hosted formal model gate with broken selected obligation",
-          timeoutMilliseconds: 30_000
+        await cp(join(repositoryRoot, "package.json"), join(directory, "package.json"))
+        await cp(join(repositoryRoot, "pnpm-lock.yaml"), join(directory, "pnpm-lock.yaml"))
+        await cp(join(repositoryRoot, "scripts"), join(directory, "scripts"), { recursive: true })
+        await cp(join(repositoryRoot, "specs"), join(directory, "specs"), { recursive: true })
+        await symlink(join(repositoryRoot, "node_modules"), join(directory, "node_modules"), "dir")
+
+        const originalSelectedModel = await readFile(selectedModel, "utf8")
+        const selectedObligation = "not(isCommandProjectionEvidence(state.evidence)) or and {"
+        expect(originalSelectedModel).toContain(selectedObligation)
+        await writeFile(
+          selectedModel,
+          originalSelectedModel.replace(selectedObligation, "isCommandProjectionEvidence(state.evidence) or and {")
+        )
+
+        let failure: unknown
+        try {
+          await runBoundedCommand({
+            args:
+              process.env["npm_execpath"] === undefined
+                ? ["--dir", directory, "check:ci:formal"]
+                : [pnpmEntryPoint, "--dir", directory, "check:ci:formal"],
+            executable: process.env["npm_execpath"] === undefined ? pnpmEntryPoint : process.execPath,
+            captureOutput: true,
+            forwardOutput: false,
+            name: "hosted formal model gate with broken selected obligation",
+            timeoutMilliseconds: negativeControlChildTimeoutMilliseconds
+          })
+        } catch (error) {
+          failure = error
+        }
+
+        expect(failure).toMatchObject({
+          message: "hosted formal model gate with broken selected obligation failed with exit 1",
+          output: expect.stringContaining("commandProjectionBelongsToCalledCommand"),
+          outputLineCount: expect.any(Number)
         })
-      } catch (error) {
-        failure = error
+
+        expect(await readFile(repositorySelectedModel, "utf8")).toBe(originalSelectedModel)
+      } finally {
+        await rm(directory, { force: true, recursive: true })
       }
-
-      expect(failure).toMatchObject({
-        message: "hosted formal model gate with broken selected obligation failed with exit 1",
-        output: expect.stringContaining("commandProjectionBelongsToCalledCommand"),
-        outputLineCount: expect.any(Number)
-      })
-
-      expect(await readFile(repositorySelectedModel, "utf8")).toBe(originalSelectedModel)
-    } finally {
-      await rm(directory, { force: true, recursive: true })
-    }
-  }, 45_000)
+    },
+    negativeControlTestTimeoutMilliseconds
+  )
 })
