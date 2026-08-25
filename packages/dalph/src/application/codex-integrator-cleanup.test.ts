@@ -580,6 +580,23 @@ describe("Codex Integrator cleanup boundary", () => {
     expect(ownershipFailure._tag).toBe("Unknown")
   })
 
+  it("refuses a same-revision private predecessor replacement before Git removal", async () => {
+    const result = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        readSequence: [
+          recordFor("/tmp/unused"),
+          recordFor("/tmp/unused"),
+          recordFor("/tmp/unused", { correlation: sessionFor("replacement", predecessor.candidateResource) })
+        ]
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(result._tag).toBe("Unknown")
+  })
+
   it("keeps cleanup retryable when the post-removal private tombstone disappears", async () => {
     const result = await runCase(
       {

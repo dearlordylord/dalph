@@ -1,4 +1,4 @@
-import { Context, Effect, Option, Schema } from "effect"
+import { Context, Effect, Schema } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import type { OperationId } from "../../identity.js"
@@ -7,7 +7,7 @@ import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import {
   isCleanupEligibleDisposition,
   type BranchCleanupAuthorization,
-  type IntegratorCandidateCleanupEvidenceSubject,
+  IntegratorCandidateCleanupEvidenceSubject,
   type IntegratorCandidateCleanupEvidenceRevision,
   type IntegratorCandidateCleanupAuthorization,
   type WorktreeCleanupAuthorization,
@@ -25,6 +25,7 @@ import {
 import {
   IntegratorCandidateCleanupAuthorizedEvent,
   IntegratorCandidateCleanupBoundary,
+  IntegratorCandidateCleanupEvidenceReadFailure,
   IntegratorCandidateCleanupOutcome,
   runIntegratorCandidateCleanup
 } from "./integrator-candidate.js"
@@ -55,8 +56,7 @@ type CandidateEvidenceRevisionReader = (
   subject: IntegratorCandidateCleanupEvidenceSubject
 ) => Effect.Effect<IntegratorCandidateCleanupEvidenceRevision, unknown>
 
-const candidateEvidenceKey = (subject: IntegratorCandidateCleanupEvidenceSubject): string =>
-  `${subject.predecessor.sessionId}:${subject.locator}`
+const candidateEvidenceSubjectEquivalence = Schema.toEquivalence(IntegratorCandidateCleanupEvidenceSubject)
 
 /** The three independent cleanup responsibilities reconstructed for one Run. */
 export type DispositionCleanupResponsibilities = {
@@ -103,7 +103,7 @@ export interface DispositionCleanupActivationService {
   /** Executes the same bounded protocol loop used by controlled compositions. */
   readonly run: Effect.Effect<
     DispositionCleanupLoopResult,
-    JournalAppendError | JournalReadError | CoordinatorOwnershipError
+    JournalAppendError | JournalReadError | CoordinatorOwnershipError | IntegratorCandidateCleanupEvidenceReadFailure
   >
 }
 
@@ -426,24 +426,26 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
       families.includes("candidate") && readEvidenceRevision !== undefined
         ? candidateCleanupEvidenceSubjects(records)
         : []
-    const evidencePairs =
+    const evidencePairs: ReadonlyArray<
+      readonly [IntegratorCandidateCleanupEvidenceSubject, IntegratorCandidateCleanupEvidenceRevision]
+    > =
       readEvidenceRevision === undefined
         ? []
         : yield* Effect.forEach(evidenceSubjects, (subject) =>
             readEvidenceRevision(subject).pipe(
-              Effect.option,
-              Effect.map((revision) =>
-                Option.isSome(revision) ? ([candidateEvidenceKey(subject), revision.value] as const) : undefined
-              )
+              Effect.mapError(
+                () =>
+                  new IntegratorCandidateCleanupEvidenceReadFailure({
+                    detail: "provider-private evidence revision could not be reread"
+                  })
+              ),
+              Effect.map((revision) => [subject, revision] as const)
             )
           )
-    const evidenceRevisions = new Map(
-      evidencePairs.filter(
-        (pair): pair is readonly [string, IntegratorCandidateCleanupEvidenceRevision] => pair !== undefined
-      )
-    )
     const evidenceRevisionFor: CandidateCleanupEvidenceRevisionFor | undefined =
-      readEvidenceRevision === undefined ? undefined : (subject) => evidenceRevisions.get(candidateEvidenceKey(subject))
+      readEvidenceRevision === undefined
+        ? undefined
+        : (subject) => evidencePairs.find(([candidate]) => candidateEvidenceSubjectEquivalence(candidate, subject))?.[1]
     const derived = deriveCleanupAuthorizations(records, evidenceRevisionFor)
     const appendOne = Effect.fn("DispositionCleanup.appendOne")(function* (
       authorization: WorktreeCleanupAuthorization | BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization

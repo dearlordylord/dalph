@@ -76,6 +76,7 @@ import {
 } from "../../workflow/protocols/run-cancellation/events.js"
 import { runCancellationAppliedRecordKey } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import type { IntegratorCandidateCleanupEvidenceReadFailure } from "../../workflow/protocols/disposition-cleanup/integrator-candidate.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -83,7 +84,11 @@ export interface JournaledRuntimeLayerInput {
 
 export type JournaledRuntimeLayer = Layer.Layer<
   Exclude<JournaledRunServices, Journal | JournaledRunProcessServices>,
-  InvalidWorkflowJournalHistory | JournalAppendError | JournalReadError | StartupRecoveryBlocked,
+  | InvalidWorkflowJournalHistory
+  | JournalAppendError
+  | JournalReadError
+  | StartupRecoveryBlocked
+  | IntegratorCandidateCleanupEvidenceReadFailure,
   ApplicationExitAdmission | CoordinatorOwnership | InRunJournal
 >
 

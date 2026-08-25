@@ -45,6 +45,7 @@ import {
   JournaledRunBootstrap,
   JournalStore,
   InitialControlPolicy,
+  IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupMutationResult,
   IntegratorCandidateCleanupObservation,
   type IntegratorCandidateProviderAuthorityService,
@@ -399,7 +400,26 @@ it.effect("ordinary production Run activation sends FullRerun cleanup through th
       const active = yield* Ref.make<ReadonlyMap<IntegratorCandidateResourceLocator, IntegratorSessionId>>(new Map())
       const observed = yield* Ref.make<ReadonlyArray<IntegratorCandidateResourceLocator>>([])
       const removed = yield* Ref.make<ReadonlyArray<IntegratorCandidateResourceLocator>>([])
+      const privateEvidence = yield* Ref.make<
+        ReadonlyMap<
+          IntegratorSessionId,
+          {
+            readonly locator: IntegratorCandidateResourceLocator
+            readonly revision: IntegratorCandidateCleanupEvidenceRevision
+          }
+        >
+      >(new Map())
       const provider = {
+        readEvidenceRevision: (
+          subject: Parameters<NonNullable<IntegratorCandidateProviderAuthorityService["readEvidenceRevision"]>>[0]
+        ) =>
+          Effect.gen(function* () {
+            const evidence = (yield* Ref.get(privateEvidence)).get(subject.predecessor.sessionId)
+            if (evidence === undefined || evidence.locator !== subject.locator) {
+              return yield* Effect.fail("production fixture private evidence is foreign")
+            }
+            return evidence.revision
+          }),
         observe: (authorization: Parameters<IntegratorCandidateProviderAuthorityService["observe"]>[0]) =>
           Effect.gen(function* () {
             yield* Ref.update(observed, (values) => [...values, authorization.locator])
@@ -476,6 +496,15 @@ it.effect("ordinary production Run activation sends FullRerun cleanup through th
         new Map([
           [predecessor.candidateResource, predecessor.sessionId],
           [successor.candidateResource, successor.sessionId]
+        ])
+      )
+      yield* Ref.set(
+        privateEvidence,
+        new Map([
+          [
+            predecessor.sessionId,
+            { locator: predecessor.candidateResource, revision: IntegratorCandidateCleanupEvidenceRevision.make(1) }
+          ]
         ])
       )
 

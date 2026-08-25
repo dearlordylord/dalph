@@ -264,6 +264,17 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
       sessionId: authorization.owner.sessionId
     })
   }
+  const candidatePath = candidateWorktreePathFor(config, authorization.locator)
+  if (
+    !sameSession(found.value.correlation, authorization.disposition.predecessor) ||
+    found.value.candidatePath !== candidatePath
+  ) {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "private predecessor correlation or path changed before removal intent",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
   if (privateRevision(found.value) !== authorization.evidenceRevision) {
     return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
       detail: "private predecessor revision changed before removal intent",
@@ -272,14 +283,28 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
     })
   }
   yield* boundary(store.write(preserveRevision(found.value, { removalIntent: true, removed: false })))
+  const intent = yield* boundary(store.read(authorization.owner.sessionId))
+  if (Option.isNone(intent)) {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "private predecessor record disappeared after removal intent",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
+  if (
+    !sameSession(intent.value.correlation, authorization.disposition.predecessor) ||
+    intent.value.candidatePath !== candidatePath ||
+    privateRevision(intent.value) !== authorization.evidenceRevision ||
+    intent.value.removalIntent !== true
+  ) {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "private predecessor correlation or path changed before Git removal",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
   const mutation = boundary(
-    commands.run(config.commonDirectory, [
-      "worktree",
-      "remove",
-      "--force",
-      "--",
-      candidateWorktreePathFor(config, authorization.locator)
-    ])
+    commands.run(config.commonDirectory, ["worktree", "remove", "--force", "--", candidatePath])
   )
   const result = yield* ownership.runMutation(mutation)
   if (result.exitCode !== 0) return reconcileFailedRemoval(authorization, result, yield* observe(authorization))
@@ -299,7 +324,6 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
       sessionId: authorization.owner.sessionId
     })
   }
-  const candidatePath = candidateWorktreePathFor(config, authorization.locator)
   if (
     !sameSession(foundAfter.value.correlation, authorization.disposition.predecessor) ||
     foundAfter.value.candidatePath !== candidatePath

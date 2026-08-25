@@ -204,6 +204,13 @@ export interface IntegratorCandidateCleanupBoundaryService {
     attempt: CleanupMutationOrdinal
   ) => Effect.Effect<IntegratorCandidateCleanupMutationResult, CoordinatorOwnershipError>
 }
+
+/** The provider-private revision could not be reread before authorization. */
+export class IntegratorCandidateCleanupEvidenceReadFailure extends Schema.TaggedError<IntegratorCandidateCleanupEvidenceReadFailure>()(
+  "IntegratorCandidateCleanupEvidenceReadFailure",
+  { detail: Schema.String }
+) {}
+
 export class IntegratorCandidateCleanupBoundary extends Context.Service<
   IntegratorCandidateCleanupBoundary,
   IntegratorCandidateCleanupBoundaryService
@@ -388,6 +395,19 @@ const observationHasAuthorizedLocator = (
   observation: IntegratorCandidateCleanupObservation,
   authorization: IntegratorCandidateCleanupAuthorization
 ): boolean => observation.locator === authorization.locator
+
+/**
+ * A cleanup observation is terminally contradictory only when it proves a
+ * different owner/resource or a stale private revision. Provider read
+ * failures and an exact resource that is still present remain retryable.
+ */
+const observationProvesContradiction = (
+  observation: IntegratorCandidateCleanupObservation,
+  authorization: IntegratorCandidateCleanupAuthorization
+): boolean =>
+  !observationHasAuthorizedLocator(observation, authorization) ||
+  observation._tag === "Foreign" ||
+  (observation._tag === "Present" && observation.revision !== authorization.evidenceRevision)
 
 /** Every candidate result must identify the exact predecessor resource and session. */
 export const integratorCandidateCleanupMutationResultMatchesAuthorization = (
@@ -640,6 +660,7 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
   const firstObservation = yield* observeFresh(authorization, records)
   records = firstObservation.records
   const observation = firstObservation.observed
+  const count = recordsWith(records, "IntegratorCandidateCleanupMutationIntended", authorization.operationId).length
   if (observation._tag === "Absent" && observationHasAuthorizedLocator(observation, authorization)) {
     const result = IntegratorCandidateCleanupMutationResult.cases.AlreadyAbsent.make({
       locator: authorization.locator,
@@ -655,12 +676,19 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
       records
     )
   }
-  if (!observationHasAuthorizedLocator(observation, authorization) || !exactPresent(observation, authorization)) {
+  if (observation._tag === "Unreadable") {
+    return IntegratorCandidateCleanupOutcome.cases.Pending.make({
+      authorization,
+      attempts: count,
+      reason: observation.detail
+    })
+  }
+  if (observationProvesContradiction(observation, authorization)) {
     yield* appendContradiction(
       authorization,
       observation,
       firstObservation.operationId,
-      observation._tag === "Unreadable" ? observation.detail : "candidate ownership or revision changed",
+      "candidate ownership or revision changed",
       records
     )
     return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
@@ -668,7 +696,13 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
       reason: "fresh candidate facts contradicted authorization"
     })
   }
-  const count = recordsWith(records, "IntegratorCandidateCleanupMutationIntended", authorization.operationId).length
+  if (!exactPresent(observation, authorization)) {
+    return IntegratorCandidateCleanupOutcome.cases.Pending.make({
+      authorization,
+      attempts: count,
+      reason: "exact candidate remains owned but is not yet quiescent"
+    })
+  }
   if (count >= cleanupMutationRequestLimit)
     return IntegratorCandidateCleanupOutcome.cases.Pending.make({
       authorization,
@@ -732,16 +766,30 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
         records
       )
     }
-    yield* appendContradiction(
+    if (postMutationObservation.observed._tag === "Unreadable") {
+      return IntegratorCandidateCleanupOutcome.cases.Pending.make({
+        authorization,
+        attempts: attempt,
+        reason: postMutationObservation.observed.detail
+      })
+    }
+    if (observationProvesContradiction(postMutationObservation.observed, authorization)) {
+      yield* appendContradiction(
+        authorization,
+        postMutationObservation.observed,
+        postMutationObservation.operationId,
+        "candidate mutation did not receive a fresh authorized absence proof",
+        records
+      )
+      return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
+        authorization,
+        reason: "candidate mutation was contradicted by fresh foreign or stale evidence"
+      })
+    }
+    return IntegratorCandidateCleanupOutcome.cases.Pending.make({
       authorization,
-      postMutationObservation.observed,
-      postMutationObservation.operationId,
-      "candidate mutation did not receive a fresh authorized absence proof",
-      records
-    )
-    return IntegratorCandidateCleanupOutcome.cases.Preserved.make({
-      authorization,
-      reason: "candidate mutation was not followed by a fresh authorized absence"
+      attempts: attempt,
+      reason: "candidate mutation remains unresolved while the exact resource is still present"
     })
   }
   return IntegratorCandidateCleanupOutcome.cases.Pending.make({

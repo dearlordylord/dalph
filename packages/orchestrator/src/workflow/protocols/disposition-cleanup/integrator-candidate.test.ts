@@ -166,13 +166,17 @@ it.effect("table-reconciles changed candidate owner, locator, and revision witho
         yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
         const outcome = yield* runIntegratorCandidateCleanup(authorization)
         const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
-        return { calls, outcome }
+        const records = yield* journal.read(runId)
+        return { calls, outcome, records }
       }).pipe(
         Effect.provide(integratorCandidateCleanupTestLayer({ observations: [observation] })),
         Effect.provide(memoryJournalTestLayer)
       )
-      expect(result.outcome._tag).toBe("Preserved")
+      expect(result.outcome._tag).toBe(observation._tag === "Unreadable" ? "Pending" : "Preserved")
       expect(result.calls.map(({ _tag }) => _tag)).toEqual(["Observe"])
+      if (observation._tag === "Unreadable") {
+        expect(result.records.map(({ event }) => event._tag)).not.toContain("IntegratorCandidateCleanupContradicted")
+      }
     }
   })
 )
@@ -338,7 +342,7 @@ it.effect("uses the explicit unreadable fallback when the candidate mutation scr
   )
 )
 
-it.effect("preserves a candidate when the observation script is exhausted", () =>
+it.effect("keeps an unreadable candidate pending without a terminal contradiction", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
     yield* journal.beginRun(
@@ -349,10 +353,53 @@ it.effect("preserves a candidate when the observation script is exhausted", () =
     yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
-    expect(result._tag).toBe("Preserved")
+    const records = yield* journal.read(runId)
+    expect(result._tag).toBe("Pending")
+    expect(records.map(({ event }) => event._tag)).not.toContain("IntegratorCandidateCleanupContradicted")
     expect(calls.map((call) => call._tag)).toEqual(["Observe"])
   }).pipe(
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("keeps an unreadable post-removal observation retryable", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-candidate-post-mutation-unreadable"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const result = yield* runIntegratorCandidateCleanup(authorization)
+    const records = yield* journal.read(runId)
+    expect(result._tag).toBe("Pending")
+    expect(records.map(({ event }) => event._tag)).not.toContain("IntegratorCandidateCleanupContradicted")
+    expect((yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()).map((call) => call._tag)).toEqual([
+      "Observe",
+      "Remove",
+      "Observe"
+    ])
+  }).pipe(
+    Effect.provide(
+      integratorCandidateCleanupTestLayer({
+        observations: [
+          present,
+          IntegratorCandidateCleanupObservation.cases.Unreadable.make({
+            detail: "provider read failed",
+            locator: authorization.locator
+          })
+        ],
+        mutations: [
+          IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+            locator: authorization.locator,
+            revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+            sessionId: authorization.owner.sessionId
+          })
+        ]
+      })
+    ),
     Effect.provide(memoryJournalTestLayer)
   )
 )
@@ -829,6 +876,25 @@ it.effect("carries the exact provider-private revision into candidate cleanup au
     const expected = IntegratorCandidateCleanupEvidenceRevision.make(9)
     const activation = yield* activateDispositionCleanup(runId, () => Effect.succeed(expected))
     expect(activation.candidate[0]?.evidenceRevision).toBe(expected)
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("does not silently omit candidate authorization when evidence reread fails", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-provider-revision-reader-failure"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const activation = yield* Effect.exit(
+      activateDispositionCleanup(runId, () => Effect.fail("provider private revision is unreadable"))
+    )
+    expect(activation._tag).toBe("Failure")
+    expect(
+      (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
+    ).toHaveLength(0)
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
