@@ -63,6 +63,21 @@ export const trackerFactForDisposition = (facts: ResponsibilityFreshFacts): Trac
   return directTrackerFactForDisposition(facts)
 }
 
+const dependencyWaitHasPrerequisites = (facts: ResponsibilityFreshFacts): boolean =>
+  facts.disposition._tag === "DependencyWait" && facts.disposition.prerequisiteTaskIds.length > 0
+
+export const dependencyWaitIsEmpty = (facts: ResponsibilityFreshFacts): boolean =>
+  facts.disposition._tag === "DependencyWait" && facts.disposition.prerequisiteTaskIds.length === 0
+
+export const responsibilityHasStatusProjection = (
+  facts: ResponsibilityFreshFacts,
+  acceptedStanding: boolean
+): boolean =>
+  trackerFactForDisposition(facts) !== null ||
+  unavailableFromFacts(facts)?._tag === "ResponsibilityFacts" ||
+  dependencyWaitHasPrerequisites(facts) ||
+  acceptedStanding
+
 type ResponsibilityStatusMeaning =
   | "DependencyWait"
   | "Relinquishment"

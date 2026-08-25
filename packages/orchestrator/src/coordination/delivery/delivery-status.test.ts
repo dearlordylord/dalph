@@ -1633,6 +1633,61 @@ it.effect("keeps settlement and relinquishment distinct with exact supporting fa
   })
 )
 
+it("fails closed for relinquishments with cross-task or foreign-run responsibility identity", () => {
+  const fixture = integrationFinalityFixture
+  const deliveryTaskId = TaskId.make("relinquishment-delivery-task")
+  const foreignTaskId = TaskId.make("relinquishment-foreign-task")
+  const disposition = ResponsibilityDisposition.Relinquished({ reason: "AuthorizedHandoff" })
+  type ExecutorResponsibility = Extract<
+    WorkflowResponsibilityEntry,
+    { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
+  >
+  const standingOf = (
+    responsibility: ExecutorResponsibility,
+    standingDisposition: PlannedAttemptExecutorDisposition
+  ): TicketDelivery["standings"][number] => ({
+    _tag: "ResponsibilitySituation",
+    facts: { _tag: "PlannedAttemptExecutorFreshFacts", disposition: standingDisposition, responsibility }
+  })
+  const responsibilityOf = (taskId: TaskId, responsibilityRunId: RunId) =>
+    WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+      beganAt: JournalPosition.make(2),
+      plannedAttempt: { ...fixture.plannedAttempt, taskId, runId: responsibilityRunId }
+    })
+  const state = evaluationOf({ runtimeRunId: fixture.runId, tasks: [{ id: String(deliveryTaskId) }] })
+  if (state._tag !== "Ready") return expect.fail("relinquishment identity fixture must be ready")
+  const subject = Schema.decodeUnknownSync(DeliveryStatusSubject)({
+    _tag: "Task",
+    runId: fixture.runId,
+    taskId: deliveryTaskId
+  })
+  const statusForResponsibility = (
+    responsibility: ExecutorResponsibility,
+    obligations: TicketDelivery["obligations"] = []
+  ) =>
+    deliveryStatusOf(subject, readyWithFirstDeliveryOf(state, [standingOf(responsibility, disposition)], obligations))
+
+  expect(statusForResponsibility(responsibilityOf(foreignTaskId, fixture.runId))).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  expect(
+    statusForResponsibility(responsibilityOf(deliveryTaskId, RunId.make("foreign-relinquishment-run")))
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+
+  const nonTerminalResponsibility = responsibilityOf(foreignTaskId, fixture.runId)
+  const nonTerminalStanding = standingOf(
+    nonTerminalResponsibility,
+    ResponsibilityDisposition.TaskClaimMissingConstraint()
+  )
+  const matchingKeyObligation: TicketDelivery["obligations"][number] = {
+    _tag: "WorkflowResponsibility",
+    responsibility: nonTerminalResponsibility
+  }
+  expect(
+    deliveryStatusOf(subject, readyWithFirstDeliveryOf(state, [nonTerminalStanding], [matchingKeyObligation]))
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+})
+
 it.effect("reconnects current-first and distinguishes not-ready, absent, wrong-Run, and closed", () =>
   Effect.gen(function* () {
     const notReady = DeliveryRuntimeObservationState.NotReady()

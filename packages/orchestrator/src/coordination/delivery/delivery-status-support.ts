@@ -12,9 +12,9 @@ import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
 import {
   acceptedStandingSettlementTagFor,
-  trackerFactForClaimState,
-  trackerFactForDisposition,
-  unavailableFromFacts
+  dependencyWaitIsEmpty,
+  responsibilityHasStatusProjection,
+  trackerFactForClaimState
 } from "./delivery-status-responsibility-semantics.js"
 import {
   DeliveryStatusProjectionConflict,
@@ -31,6 +31,7 @@ import { addEntry, canonicalEncodingOf, canonicalIdentity, taskOrderFor } from "
 import type { OrderedStatusEntry, StatusTaskOrder, StatusTaskOrderLookup } from "./delivery-status-order.js"
 import * as deliveryStatusSettlement from "./delivery-status-settlement.js"
 import { taskStatusSubject } from "./delivery-status-subject.js"
+import { validateResponsibilityIdentityForStatus } from "./delivery-status-responsibility-identity.js"
 
 export {
   addEntry,
@@ -270,18 +271,6 @@ const responsibilityProjectionConflict = (
     detail: "a tracker or unavailable-fact standing has no matching exact responsibility obligation"
   })
 
-const dependencyWaitHasPrerequisites = (facts: ResponsibilityFreshFacts): boolean =>
-  facts.disposition._tag === "DependencyWait" && facts.disposition.prerequisiteTaskIds.length > 0
-
-const dependencyWaitIsEmpty = (facts: ResponsibilityFreshFacts): boolean =>
-  facts.disposition._tag === "DependencyWait" && facts.disposition.prerequisiteTaskIds.length === 0
-
-const responsibilityHasStatusProjection = (facts: ResponsibilityFreshFacts, acceptedStanding: boolean): boolean =>
-  trackerFactForDisposition(facts) !== null ||
-  unavailableFromFacts(facts)?._tag === "ResponsibilityFacts" ||
-  dependencyWaitHasPrerequisites(facts) ||
-  acceptedStanding
-
 const validateResponsibilityStandingForStatus = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
@@ -289,6 +278,8 @@ const validateResponsibilityStandingForStatus = (
 ): DeliveryStatusProjectionConflict | null => {
   const acceptedConflict = deliveryStatusSettlement.validateAcceptedStandingForStatus(subject, delivery, standing)
   if (acceptedConflict !== null) return acceptedConflict
+  const identityConflict = validateResponsibilityIdentityForStatus(subject, delivery, standing.facts.responsibility)
+  if (identityConflict !== null) return identityConflict
   const responsibility = obligationForResponsibility(delivery, standing.facts)
   if (standing.facts.disposition._tag === "Relinquished") return null
   const acceptedStanding = acceptedStandingSettlementTagFor(standing.facts) !== null
