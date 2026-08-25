@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import {
   AttemptId,
+  makeTaskWorkSpecification,
+  PlannedTaskAttempt,
   PlannedAttemptExecutorReport,
   RunId,
   TaskId,
@@ -12,9 +14,13 @@ import { it } from "@effect/vitest"
 import { Context, Effect, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
-import { TaskClaimAcquisition, TrackerMutation } from "../../authorities/task-tracker/claim-mutation.js"
+import {
+  ActiveTaskClaim,
+  TaskClaimAcquisition,
+  TrackerMutation
+} from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { TaskLifecycle, TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
+import { TaskLifecycle, TrackerRevision, TrackerSnapshot, type Task } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import {
@@ -25,7 +31,13 @@ import {
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
-import { makeTaskClaimObservationOperation, WorkflowOperation } from "../../workflow/registry/operation.js"
+import {
+  makeTargetLineageObservationOperation,
+  makeTaskClaimReleaseOperation,
+  makeTaskClaimObservationOperation,
+  TaskClaimReleaseAuthority,
+  WorkflowOperation
+} from "../../workflow/registry/operation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import {
   DeliveryProposalId,
@@ -63,6 +75,7 @@ import {
   UnqueuedAcceptedResult
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/responsibility.js"
+import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
 import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"
@@ -98,6 +111,9 @@ import {
   type CurrentDeliveryStatus,
   type DeliveryStatusEntry
 } from "./delivery-status.js"
+import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
+import { FreshWorkflowStep } from "./fresh-workflow-step.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
 
 type StatusProjectionHasOnlyObservationInputs =
   Parameters<typeof deliveryStatusOf> extends [DeliveryStatusSubject, DeliveryRuntimeObservationState] ? true : false
@@ -2030,3 +2046,248 @@ it.effect("does not append a status value or cursor to the workflow Journal", ()
     expect(after).toEqual(before)
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
+
+it("keeps every exact obligation identity distinct when evidence conflicts", () => {
+  const { accepted, fixture, queued, started } = integrationFactsOf()
+  const taskEvidence = taskClaimEvidenceOf(fixture.taskId)
+  const evidence: ReadonlyArray<TicketDeliveryEvidence> = [
+    taskEvidence,
+    taskEvidence,
+    { _tag: "AcceptedAwaitingIntegration", accepted },
+    { _tag: "AcceptedAwaitingIntegration", accepted },
+    { _tag: "QueuedIntegration", responsibility: queued },
+    { _tag: "QueuedIntegration", responsibility: queued },
+    { _tag: "StartedIntegration", responsibility: started },
+    { _tag: "StartedIntegration", responsibility: started }
+  ]
+  const status = statusFor(
+    evaluationOf({ runtimeRunId: fixture.runId, tasks: [{ id: String(fixture.taskId) }], evidence }),
+    { _tag: "Task", runId: fixture.runId, taskId: fixture.taskId }
+  )
+  expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (status._tag !== "DeliveryStatusAvailable") return
+  expect(status.entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        _tag: "EvidenceConflict",
+        responsibility: null,
+        evidenceIdentities: expect.arrayContaining([expect.any(String)])
+      })
+    ])
+  )
+})
+
+it("deduplicates equal integration waits through the public status projection", () => {
+  const { fixture, queued } = integrationFactsOf()
+  const wait = { _tag: "IntegrationTargetWait" as const, plannedAttempt: fixture.plannedAttempt }
+  const status = statusFor(
+    evaluationOf({
+      runtimeRunId: fixture.runId,
+      tasks: [{ id: String(fixture.taskId) }],
+      evidence: [
+        { _tag: "QueuedIntegration", responsibility: queued },
+        { _tag: "IntegrationWait", wait },
+        { _tag: "IntegrationWait", wait }
+      ]
+    }),
+    { _tag: "Task", runId: fixture.runId, taskId: fixture.taskId }
+  )
+  expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (status._tag !== "DeliveryStatusAvailable") return
+  expect(status.entries.filter(({ _tag }) => _tag === "IntegrationTargetWait")).toHaveLength(1)
+})
+
+it("filters run-wide and task-scoped action status by the passive subject", () => {
+  const taskId = TaskId.make("status-subject-task")
+  const runWide = proposalOf("status-run-wide-subject")
+  const task = taskProposalOf("status-task-subject", taskId)
+  const state = evaluationOf({ tasks: [{ id: String(taskId) }], proposals: [runWide, task] })
+  const runStatus = statusFor(state, { _tag: "Run", runId })
+  const taskStatus = statusFor(state, { _tag: "Task", runId, taskId })
+  expect(runStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  expect(taskStatus).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (runStatus._tag !== "DeliveryStatusAvailable" || taskStatus._tag !== "DeliveryStatusAvailable") return
+  expect(runStatus.entries.filter(({ _tag }) => _tag === "ProposedDeliveryAction")).toHaveLength(2)
+  expect(taskStatus.entries.filter(({ _tag }) => _tag === "ProposedDeliveryAction")).toEqual([
+    expect.objectContaining({ subject: { _tag: "Task", runId, taskId }, proposal: task })
+  ])
+  const publication = statusFor(evaluationOf({ proposals: [runWide], liveOwners: [ownerOf(runWide, true)] }), {
+    _tag: "Run",
+    runId
+  })
+  expect(publication).toMatchObject({
+    _tag: "DeliveryStatusAvailable",
+    entries: [{ _tag: "AcceptedFactPublicationWait" }]
+  })
+})
+
+it("orders all public proposal route and admission families deterministically", () => {
+  const { accepted, fixture, queued, started } = integrationFactsOf()
+  const task: Task = {
+    id: fixture.taskId,
+    lifecycle: TaskLifecycle.cases.Open.make({}),
+    parentTaskId: null,
+    prerequisiteIds: []
+  }
+  const specification = makeTaskWorkSpecification({
+    body: "status proposal route matrix",
+    taskId: fixture.taskId,
+    title: "status proposal route matrix"
+  })
+  const freshStart = RunnableFrontierTransition.StartPlannedAttemptExecutorWork({
+    plannedAttempt: fixture.plannedAttempt
+  })
+  const freshStartStep = FreshWorkflowStep.StartPlannedAttemptExecutorWork({
+    plannedAttempt: fixture.plannedAttempt,
+    specification,
+    task
+  })
+  const freshPlan = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+    operationId: OperationId.make("status-route-fresh-plan"),
+    taskId: fixture.taskId
+  })
+  const freshPlanStep = FreshWorkflowStep.RecordTaskAttemptPlan({
+    predecessorOperationId: OperationId.make("status-route-fresh-plan-predecessor"),
+    specification,
+    task
+  })
+  const continuationAttempt = PlannedTaskAttempt.make({
+    ...fixture.plannedAttempt,
+    attemptId: AttemptId.make("status-route-continuation-attempt")
+  })
+  const continuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+    acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(6) },
+    plannedAttempt: continuationAttempt
+  })
+  const acceptedClaimOperationId = OperationId.make("status-route-accepted-claim")
+  const acceptedClaim = RunnableFrontierTransition.ReconcileTaskClaim({
+    operationId: acceptedClaimOperationId,
+    taskId: fixture.taskId
+  })
+  const acceptedLineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: fixture.integrationTarget,
+    operationId: OperationId.make("status-route-accepted-lineage"),
+    plannedAttempt: fixture.plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const acceptedLineage = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+    operation: acceptedLineageOperation,
+    plannedAttempt: fixture.plannedAttempt
+  })
+  const recoveredLineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: fixture.integrationTarget,
+    operationId: OperationId.make("status-route-recovered-lineage"),
+    plannedAttempt: fixture.plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const recoveredLineage = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+    operation: recoveredLineageOperation,
+    plannedAttempt: fixture.plannedAttempt
+  })
+  const reacquisition = RunnableFrontierTransition.CommitTaskClaimReacquisitionIntent({
+    plannedAttempt: fixture.plannedAttempt,
+    requestId: TaskClaimReacquisitionRequestId.make("status-route-reacquisition"),
+    taskId: fixture.taskId
+  })
+  const activeClaim = ActiveTaskClaim.make({
+    operationId: OperationId.make("status-route-active-claim"),
+    owner: ClaimOwner.make("dalph:status-route"),
+    taskId: fixture.taskId,
+    token: ClaimToken.make("status-route-token")
+  })
+  const externalRelease = RunnableFrontierTransition.ReleaseExternallyCompletedTaskClaim({
+    operation: makeTaskClaimReleaseOperation({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+      predecessorOperationIds: [activeClaim.operationId],
+      release: { claim: activeClaim, operationId: OperationId.make("status-route-release") }
+    }),
+    plannedAttempt: fixture.plannedAttempt
+  })
+  const queueAccepted = RunnableFrontierTransition.QueueAcceptedResultIntegrationResponsibility({
+    accepted,
+    integrationTarget: fixture.integrationTarget
+  })
+  const startQueued = RunnableFrontierTransition.StartQueuedIntegration({ responsibility: queued })
+  const acquireStartedTarget = RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started })
+  const contributions = deliveryProposalsOf({
+    acceptedAt: JournalPosition.make(5),
+    acceptedOperationIds: new Set([acceptedClaimOperationId, acceptedLineageOperation.operationId]),
+    fresh: [
+      { step: freshStartStep, transition: freshStart },
+      { step: freshPlanStep, transition: freshPlan }
+    ],
+    integrationResponsibilities: [started],
+    runId: fixture.runId,
+    transitions: [
+      freshStart,
+      freshPlan,
+      continuation,
+      acceptedClaim,
+      acceptedLineage,
+      recoveredLineage,
+      reacquisition,
+      externalRelease,
+      queueAccepted,
+      startQueued,
+      acquireStartedTarget
+    ]
+  })
+  expect(contributions.issues).toEqual([])
+  const trackerGraph = {
+    ...trackerGraphReadProposalOf({
+      acceptedAt: null,
+      purpose: "EstablishCurrentGraph" as const,
+      runId: fixture.runId,
+      target
+    }),
+    id: DeliveryProposalId.make("status-route-tracker-graph")
+  }
+  const state = evaluationOf({
+    runtimeRunId: fixture.runId,
+    tasks: [{ id: String(fixture.taskId) }],
+    proposals: [trackerGraph, ...contributions.ticketDelivery, ...contributions.deliverySettlement]
+  })
+  const status = statusFor(state, { _tag: "Run", runId: fixture.runId })
+  expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (status._tag !== "DeliveryStatusAvailable") return
+  const proposals = status.entries.filter(
+    (entry): entry is Extract<DeliveryStatusEntry, { readonly _tag: "ProposedDeliveryAction" }> =>
+      entry._tag === "ProposedDeliveryAction"
+  )
+  expect(proposals).toHaveLength(12)
+  expect(proposals.map(({ proposal }) => proposal.order._tag)).toEqual([
+    "TrackerGraphOrder",
+    "FreshWorkflowOrder",
+    "FreshWorkflowOrder",
+    "RecoveredWorkflowOrder",
+    "RecoveredWorkflowOrder",
+    "RecoveredWorkflowOrder",
+    "RecoveredWorkflowOrder",
+    "IntegrationOrder",
+    "IntegrationOrder",
+    "IntegrationOrder",
+    "IntegrationOrder",
+    "UnqueuedAcceptedResultOrder"
+  ])
+})
+
+it.effect("fails the passive status signal when its current projection has a run mismatch", () =>
+  Effect.gen(function* () {
+    const signal = yield* deliveryStatusSignalOf(currentSignalOf(evaluationOf({ tasks: [{ id: "A" }] })), {
+      _tag: "Run",
+      runId: RunId.make("status-signal-foreign-run")
+    })
+    const failure = yield* signal.get.pipe(Effect.flip)
+    expect(failure).toBeInstanceOf(DeliveryStatusRunMismatch)
+  })
+)
+
+it("retains projection errors when a closed status carries a final ready snapshot", () => {
+  const ready = evaluationOf({ tasks: [{ id: "A" }] })
+  if (ready._tag !== "Ready") return expect.fail("closed status fixture must be ready")
+  const closed = DeliveryRuntimeObservationState.Closed({
+    final: ready as Extract<DeliveryRuntimeObservationState, { readonly _tag: "Ready" }>
+  })
+  const result = deliveryStatusOf({ _tag: "Run", runId: RunId.make("status-closed-foreign-run") }, closed)
+  expect(result).toBeInstanceOf(DeliveryStatusRunMismatch)
+})
