@@ -1,5 +1,10 @@
 /* eslint-disable functional/immutable-data -- local projection scratch state never escapes the read. */
-import type { RunId, TaskId } from "@dalph/contracts"
+import {
+  plannedAttemptExecutorCorrelationKey,
+  type PlannedAttemptExecutorCorrelation,
+  type RunId,
+  type TaskId
+} from "@dalph/contracts"
 import { deliveryProposalOrderTaskId } from "./delivery-action-proposal.js"
 import type { DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
 import type { DeliveryRuntimeEvaluation, TicketDelivery } from "./relations.js"
@@ -12,7 +17,6 @@ import {
 import {
   addEntry,
   compareOrderedEntries,
-  deliveryHolderOrder,
   deliveryTaskOrder,
   includeForSubject,
   taskStatusSubject,
@@ -29,6 +33,17 @@ import {
   dependencyEntriesFor,
   trackerAndEvidenceEntriesFor
 } from "./delivery-status-entry-builders.js"
+
+const deliveryHolderOrder = (
+  holders: ReadonlyArray<{ readonly taskId: TaskId; readonly correlation: PlannedAttemptExecutorCorrelation }>
+): ReadonlyArray<{ readonly taskId: TaskId; readonly correlation: PlannedAttemptExecutorCorrelation }> =>
+  holders.toSorted(
+    (left, right) =>
+      left.taskId.localeCompare(right.taskId) ||
+      plannedAttemptExecutorCorrelationKey(left.correlation).localeCompare(
+        plannedAttemptExecutorCorrelationKey(right.correlation)
+      )
+  )
 
 const ownershipConflictFor = (
   subject: DeliveryStatusSubject,

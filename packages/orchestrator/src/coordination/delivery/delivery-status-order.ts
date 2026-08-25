@@ -1,10 +1,5 @@
 /* eslint-disable functional/immutable-data -- local projection scratch state never escapes the read. */
-import {
-  plannedAttemptExecutorCorrelation,
-  plannedAttemptExecutorCorrelationKey,
-  type PlannedAttemptExecutorCorrelation,
-  type TaskId
-} from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey, type TaskId } from "@dalph/contracts"
 import { Match, Schema } from "effect"
 import type {
   DeliveryActionProposal,
@@ -65,6 +60,7 @@ const canonicalValue = (value: unknown): unknown => {
   return value
 }
 
+/** Encodes a status value canonically so object insertion order cannot affect equality. */
 export const canonicalEncodingOf = (value: unknown): string => JSON.stringify(canonicalValue(value))
 
 const subjectKey = (subject: DeliveryStatusSubject): string =>
@@ -108,6 +104,7 @@ const evidenceIdentityForObligation = (obligation: ExactWorkflowObligation): str
   ])
 }
 
+/** Correlates an evidence conflict to one exact obligation only when every matching identity agrees. */
 export const obligationForEvidenceConflict = (
   delivery: TicketDelivery,
   standing: Extract<TicketDeliveryStanding, { readonly _tag: "ExactEvidenceConflict" }>
@@ -128,6 +125,7 @@ const proposalDerivationIssueIdentity = (issue: DeliveryProposalDerivationIssue)
 const statusEntryPrefix = (entry: DeliveryStatusEntry): string =>
   canonicalIdentity([entry._tag, subjectKey(entry.subject)])
 
+/** Internal total-order rank for one status phenomenon; it is not journal authority or a domain ordinal. */
 const StatusComparisonRank = Schema.Int.pipe(Schema.brand("StatusComparisonRank"))
 type StatusComparisonRank = typeof StatusComparisonRank.Type
 
@@ -249,7 +247,7 @@ export const statusEntryIdentity = Match.typeTags<DeliveryStatusEntry, string>()
   EvidenceConflict: (entry) => canonicalIdentity([statusEntryPrefix(entry), ...entry.evidenceIdentities]),
   Settlement: (entry) =>
     entry.settlement._tag === "DeliverySettlement"
-      ? canonicalIdentity([statusEntryPrefix(entry), "DeliverySettlement", entry.attemptId])
+      ? canonicalIdentity([statusEntryPrefix(entry), "DeliverySettlement", entry.settlement.attemptId])
       : canonicalIdentity([
           statusEntryPrefix(entry),
           "AcceptedStandingSettlement",
@@ -420,26 +418,23 @@ const compareStructuralOrder = (
   left: ReadonlyArray<StructuralOrderToken>,
   right: ReadonlyArray<StructuralOrderToken>
 ): number => {
-  const length = Math.max(left.length, right.length)
-  for (let index = 0; index < length; index += 1) {
-    const leftToken = left[index]
+  for (const [index, leftToken] of left.entries()) {
     const rightToken = right[index]
-    if (leftToken === undefined) return structuralOrderBefore
     if (rightToken === undefined) return structuralOrderAfter
     const compared = compareStructuralToken(leftToken, rightToken)
     if (compared !== 0) return compared
   }
-  return 0
+  return left.length === right.length ? 0 : structuralOrderBefore
 }
 
-const compareTaskOrder = (left: StatusTaskOrder, right: StatusTaskOrder): number =>
-  left._tag === "RunWideTaskOrder"
+const compareTaskOrder = (left: StatusTaskOrder, right: StatusTaskOrder): number => {
+  if (left._tag === "TaskOrder" && right._tag === "TaskOrder") return left.position - right.position
+  return left._tag === "RunWideTaskOrder"
     ? right._tag === "RunWideTaskOrder"
       ? 0
       : structuralOrderBefore
-    : right._tag === "RunWideTaskOrder"
-      ? structuralOrderAfter
-      : left.position - right.position
+    : structuralOrderAfter
+}
 
 export const compareOrderedEntries = (left: OrderedStatusEntry, right: OrderedStatusEntry): number => {
   const taskOrder = compareTaskOrder(left.taskOrder, right.taskOrder)
@@ -457,18 +452,6 @@ export const deliveryTaskOrder = (evaluation: DeliveryRuntimeEvaluation): Readon
 
 export const taskOrderFor = (taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>, taskId: TaskId): StatusTaskOrderLookup =>
   taskOrders.get(taskId) ?? { _tag: "MissingTaskOrder", taskId }
-
-export const deliveryHolderOrder = (
-  holders: ReadonlyArray<{ readonly taskId: TaskId; readonly correlation: PlannedAttemptExecutorCorrelation }>
-): ReadonlyArray<{ readonly taskId: TaskId; readonly correlation: PlannedAttemptExecutorCorrelation }> =>
-  holders.toSorted((left, right) => {
-    const task = left.taskId.localeCompare(right.taskId)
-    return task !== 0
-      ? task
-      : plannedAttemptExecutorCorrelationKey(left.correlation).localeCompare(
-          plannedAttemptExecutorCorrelationKey(right.correlation)
-        )
-  })
 
 export const addEntry = (
   entries: Array<OrderedStatusEntry>,

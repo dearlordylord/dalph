@@ -73,11 +73,24 @@ type ResponsibilityStatusMeaning =
 
 type AcceptedStandingSettlementTag = "CancelledAttemptSettled" | "StoppedAttemptSettled"
 
+type AcceptedStandingSettlementDisposition = Extract<
+  ResponsibilityDisposition,
+  { readonly _tag: AcceptedStandingSettlementTag }
+>
+
+export const acceptedStandingSettlementDispositionFor = (
+  facts: ResponsibilityFreshFacts
+): AcceptedStandingSettlementDisposition | null => {
+  const disposition = facts.disposition
+  return disposition._tag === "CancelledAttemptSettled" || disposition._tag === "StoppedAttemptSettled"
+    ? disposition
+    : null
+}
+
 export const acceptedStandingSettlementTagFor = (
   facts: ResponsibilityFreshFacts
 ): AcceptedStandingSettlementTag | null => {
-  const tag = facts.disposition._tag
-  return tag === "CancelledAttemptSettled" || tag === "StoppedAttemptSettled" ? tag : null
+  return acceptedStandingSettlementDispositionFor(facts)?._tag ?? null
 }
 
 /** Every fresh responsibility disposition has one explicit passive-status meaning. */

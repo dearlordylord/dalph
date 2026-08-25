@@ -34,7 +34,6 @@ import { validateAcceptedStandingForStatus } from "./delivery-status-settlement.
 export {
   addEntry,
   compareOrderedEntries,
-  deliveryHolderOrder,
   deliveryTaskOrder,
   obligationForEvidenceConflict,
   runWideTaskOrder,
@@ -273,6 +272,18 @@ const responsibilityProjectionConflict = (
     detail: "a tracker or unavailable-fact standing has no matching exact responsibility obligation"
   })
 
+const dependencyWaitHasPrerequisites = (facts: ResponsibilityFreshFacts): boolean =>
+  facts.disposition._tag === "DependencyWait" && facts.disposition.prerequisiteTaskIds.length > 0
+
+const dependencyWaitIsEmpty = (facts: ResponsibilityFreshFacts): boolean =>
+  facts.disposition._tag === "DependencyWait" && facts.disposition.prerequisiteTaskIds.length === 0
+
+const responsibilityHasStatusProjection = (facts: ResponsibilityFreshFacts, acceptedStanding: boolean): boolean =>
+  trackerFactForDisposition(facts) !== null ||
+  unavailableFromFacts(facts)?._tag === "ResponsibilityFacts" ||
+  dependencyWaitHasPrerequisites(facts) ||
+  acceptedStanding
+
 const validateResponsibilityStandingForStatus = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
@@ -283,20 +294,11 @@ const validateResponsibilityStandingForStatus = (
   const responsibility = obligationForResponsibility(delivery, standing.facts)
   if (standing.facts.disposition._tag === "Relinquished") return null
   const acceptedStanding = acceptedStandingSettlementTagFor(standing.facts) !== null
-  const dependency =
-    standing.facts.disposition._tag === "DependencyWait" && standing.facts.disposition.prerequisiteTaskIds.length > 0
-  const hasStatusProjection =
-    trackerFactForDisposition(standing.facts) !== null ||
-    unavailableFromFacts(standing.facts)?._tag === "ResponsibilityFacts" ||
-    dependency ||
-    acceptedStanding
+  const hasStatusProjection = responsibilityHasStatusProjection(standing.facts, acceptedStanding)
   if (responsibility === null && hasStatusProjection && !acceptedStanding) {
     return responsibilityProjectionConflict(subject, delivery)
   }
-  if (
-    standing.facts.disposition._tag === "DependencyWait" &&
-    standing.facts.disposition.prerequisiteTaskIds.length === 0
-  ) {
+  if (dependencyWaitIsEmpty(standing.facts)) {
     return new DeliveryStatusProjectionConflict({
       subject,
       entryIdentity: makeDeliveryStatusEntryIdentity(
@@ -441,10 +443,7 @@ const validateStandingForStatus = (
   if (standing._tag === "PromotedPrerequisiteReleasePending" && standing.prerequisiteTaskIds.length === 0) {
     return emptyDependencyConflictFor(subject, delivery.taskId, standing._tag)
   }
-  if (standing._tag === "IntegrationWait") {
-    return validateIntegrationStandingForStatus(subject, delivery, standing)
-  }
-  return null
+  return standing._tag === "IntegrationWait" ? validateIntegrationStandingForStatus(subject, delivery, standing) : null
 }
 
 export const validateDeliveryEvidenceForStatus = (

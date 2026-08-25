@@ -723,7 +723,6 @@ it("projects cancelled and stopped accepted standings as distinct public settlem
     const settlement = status.entries.find(({ _tag }) => _tag === "Settlement")
     expect(settlement).toMatchObject({
       _tag: "Settlement",
-      taskId,
       settlement: {
         _tag: "AcceptedStandingSettlement",
         standing: { _tag: disposition._tag, claimDisposition: "Released", responsibility }
@@ -732,6 +731,11 @@ it("projects cancelled and stopped accepted standings as distinct public settlem
   }
 
   const mismatchTaskId = TaskId.make("settled-mismatch")
+  const mismatchResponsibility = {
+    _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+    beganAt: JournalPosition.make(2),
+    plannedAttempt: { ...integrationFinalityFixture.plannedAttempt, taskId: mismatchTaskId }
+  }
   const mismatchState = evaluationOf({
     runtimeRunId: integrationFinalityFixture.runId,
     tasks: [{ id: String(mismatchTaskId) }],
@@ -741,11 +745,7 @@ it("projects cancelled and stopped accepted standings as distinct public settlem
         facts: {
           _tag: "PlannedAttemptExecutorFreshFacts",
           disposition: ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" }),
-          responsibility: {
-            _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
-            beganAt: JournalPosition.make(2),
-            plannedAttempt: { ...integrationFinalityFixture.plannedAttempt, taskId: mismatchTaskId }
-          }
+          responsibility: mismatchResponsibility
         }
       }
     ]
@@ -758,6 +758,30 @@ it("projects cancelled and stopped accepted standings as distinct public settlem
     beganAt: JournalPosition.make(2),
     plannedAttempt: { ...integrationFinalityFixture.plannedAttempt, taskId: TaskId.make("foreign-settled") }
   }
+  const retainedObligationState = DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...mismatchState.evaluation,
+      current: {
+        ...mismatchState.evaluation.current,
+        ticketDeliveries: {
+          ...mismatchState.evaluation.current.ticketDeliveries,
+          deliveries: [
+            {
+              ...mismatchDelivery,
+              obligations: [{ _tag: "WorkflowResponsibility" as const, responsibility: mismatchResponsibility }]
+            }
+          ]
+        }
+      }
+    },
+    liveOwners: []
+  })
+  expect(
+    deliveryStatusOf(
+      { _tag: "Task", runId: integrationFinalityFixture.runId, taskId: mismatchTaskId },
+      retainedObligationState
+    )
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
   const malformedState = DeliveryRuntimeObservationState.Ready({
     evaluation: {
       ...mismatchState.evaluation,

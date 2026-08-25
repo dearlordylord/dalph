@@ -162,8 +162,8 @@ type AcceptedStandingResponsibility = Extract<
  * An accepted terminal executor standing that remains visible after the
  * cancellation/stop disposition is settled. The two variants are separate so
  * a cancelled standing cannot be represented as a stopped standing (or vice
- * versa); the exact workflow responsibility and executor correlation remain
- * attached to both.
+ * versa); the exact workflow responsibility and planned-attempt correlation
+ * remain attached to both.
  */
 export type DeliveryStatusAcceptedStandingSettlement =
   | {
@@ -267,9 +267,17 @@ export type DeliveryStatusEntry =
       readonly _tag: "Settlement"
       readonly classification: "Settled"
       readonly subject: DeliveryStatusSubject
+      /** Established settlement keeps its historical task/attempt fields for API compatibility. */
       readonly taskId: TaskId
       readonly attemptId: DeliverySettlement["attemptId"]
-      readonly settlement: DeliverySettlement | DeliveryStatusAcceptedStandingSettlement
+      readonly settlement: DeliverySettlement
+    }
+  | {
+      readonly _tag: "Settlement"
+      readonly classification: "Settled"
+      readonly subject: Extract<DeliveryStatusSubject, { readonly _tag: "Task" }>
+      /** Accepted standing settlement derives task and attempt identity from its exact responsibility. */
+      readonly settlement: DeliveryStatusAcceptedStandingSettlement
     }
   | {
       readonly _tag: "Relinquishment"

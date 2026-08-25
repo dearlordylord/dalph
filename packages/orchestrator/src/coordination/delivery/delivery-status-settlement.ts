@@ -5,49 +5,79 @@ import {
   type DeliveryStatusAcceptedStandingSettlement,
   type DeliveryStatusSubject
 } from "./delivery-status-model.js"
-import { acceptedStandingSettlementTagFor } from "./delivery-status-responsibility-semantics.js"
+import { acceptedStandingSettlementDispositionFor } from "./delivery-status-responsibility-semantics.js"
 import { addEntry, canonicalIdentity, type OrderedStatusEntry, type StatusTaskOrder } from "./delivery-status-order.js"
+import { workflowResponsibilityKey } from "../reconstruction/state.js"
 
 type ResponsibilityStanding = Extract<TicketDeliveryStanding, { readonly _tag: "ResponsibilitySituation" }>
 
-/** Builds the accepted terminal standing without recreating an outstanding obligation. */
-const acceptedStandingSettlementFor = (
+type AcceptedStandingSettlementResolution =
+  | { readonly _tag: "NotAccepted" }
+  | { readonly _tag: "Accepted"; readonly settlement: DeliveryStatusAcceptedStandingSettlement }
+  | {
+      readonly _tag: "ProjectionConflict"
+      readonly reason: "MismatchedPlannedAttemptIdentity" | "OutstandingWorkflowResponsibility"
+    }
+type AcceptedStandingSettlementConflictReason = Extract<
+  AcceptedStandingSettlementResolution,
+  { readonly _tag: "ProjectionConflict" }
+>["reason"]
+
+/** Classifies and validates one accepted terminal standing for both entry building and conflict validation. */
+const acceptedStandingSettlementResolutionFor = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
   standing: ResponsibilityStanding
-): DeliveryStatusAcceptedStandingSettlement | null => {
-  const tag = acceptedStandingSettlementTagFor(standing.facts)
-  if (tag === null || standing.facts._tag !== "PlannedAttemptExecutorFreshFacts") return null
-  const disposition = standing.facts.disposition
-  if (disposition._tag !== "CancelledAttemptSettled" && disposition._tag !== "StoppedAttemptSettled") return null
+): AcceptedStandingSettlementResolution => {
+  const disposition = acceptedStandingSettlementDispositionFor(standing.facts)
+  if (disposition === null) return { _tag: "NotAccepted" }
+  if (standing.facts._tag !== "PlannedAttemptExecutorFreshFacts") {
+    return { _tag: "ProjectionConflict", reason: "MismatchedPlannedAttemptIdentity" }
+  }
   const responsibility = standing.facts.responsibility
   if (
     responsibility.plannedAttempt.taskId !== delivery.taskId ||
     responsibility.plannedAttempt.runId !== subject.runId
   ) {
-    return null
+    return { _tag: "ProjectionConflict", reason: "MismatchedPlannedAttemptIdentity" }
+  }
+  if (
+    delivery.obligations.some(
+      (obligation) =>
+        obligation._tag === "WorkflowResponsibility" &&
+        workflowResponsibilityKey(obligation.responsibility) === workflowResponsibilityKey(responsibility)
+    )
+  ) {
+    return { _tag: "ProjectionConflict", reason: "OutstandingWorkflowResponsibility" }
   }
   const base = { _tag: "AcceptedStandingSettlement" as const }
-  return tag === "CancelledAttemptSettled"
-    ? {
-        ...base,
-        standing: {
-          _tag: "CancelledAttemptSettled" as const,
-          claimDisposition: disposition.claimDisposition,
-          responsibility
-        }
-      }
-    : {
-        ...base,
-        standing: {
-          _tag: "StoppedAttemptSettled" as const,
-          claimDisposition: disposition.claimDisposition,
-          responsibility
-        }
-      }
+  return {
+    _tag: "Accepted",
+    settlement:
+      disposition._tag === "CancelledAttemptSettled"
+        ? {
+            ...base,
+            standing: {
+              _tag: "CancelledAttemptSettled" as const,
+              claimDisposition: disposition.claimDisposition,
+              responsibility
+            }
+          }
+        : {
+            ...base,
+            standing: {
+              _tag: "StoppedAttemptSettled" as const,
+              claimDisposition: disposition.claimDisposition,
+              responsibility
+            }
+          }
+  }
 }
 
-const taskStatusSubject = (subject: DeliveryStatusSubject, taskId: TicketDelivery["taskId"]): DeliveryStatusSubject =>
+const taskStatusSubject = (
+  subject: DeliveryStatusSubject,
+  taskId: TicketDelivery["taskId"]
+): Extract<DeliveryStatusSubject, { readonly _tag: "Task" }> =>
   subject._tag === "Task" ? subject : { _tag: "Task", runId: subject.runId, taskId }
 
 export const addAcceptedStandingSettlementEntryFor = (
@@ -57,17 +87,15 @@ export const addAcceptedStandingSettlementEntryFor = (
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const settlement = acceptedStandingSettlementFor(subject, delivery, standing)
-  if (settlement === null) return
+  const resolution = acceptedStandingSettlementResolutionFor(subject, delivery, standing)
+  if (resolution._tag !== "Accepted") return
   addEntry(
     entries,
     {
       _tag: "Settlement",
       classification: "Settled",
       subject: taskStatusSubject(subject, delivery.taskId),
-      taskId: delivery.taskId,
-      attemptId: settlement.standing.responsibility.plannedAttempt.attemptId,
-      settlement
+      settlement: resolution.settlement
     },
     taskOrder
   )
@@ -76,14 +104,18 @@ export const addAcceptedStandingSettlementEntryFor = (
 const acceptedStandingProjectionConflict = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
-  standing: ResponsibilityStanding
+  standing: ResponsibilityStanding,
+  reason: AcceptedStandingSettlementConflictReason
 ): DeliveryStatusProjectionConflict =>
   new DeliveryStatusProjectionConflict({
     subject,
     entryIdentity: makeDeliveryStatusEntryIdentity(
       canonicalIdentity(["accepted-standing-settlement", delivery.taskId, standing.facts.disposition._tag])
     ),
-    detail: "an accepted settled standing has a mismatched planned-attempt task or Run identity"
+    detail:
+      reason === "OutstandingWorkflowResponsibility"
+        ? "an accepted settled standing still has a matching outstanding workflow responsibility"
+        : "an accepted settled standing has a mismatched planned-attempt task or Run identity"
   })
 
 export const validateAcceptedStandingForStatus = (
@@ -91,13 +123,8 @@ export const validateAcceptedStandingForStatus = (
   delivery: TicketDelivery,
   standing: ResponsibilityStanding
 ): DeliveryStatusProjectionConflict | null => {
-  if (acceptedStandingSettlementTagFor(standing.facts) === null) return null
-  if (standing.facts._tag !== "PlannedAttemptExecutorFreshFacts") {
-    return acceptedStandingProjectionConflict(subject, delivery, standing)
-  }
-  const responsibility = standing.facts.responsibility
-  return responsibility.plannedAttempt.taskId !== delivery.taskId ||
-    responsibility.plannedAttempt.runId !== subject.runId
-    ? acceptedStandingProjectionConflict(subject, delivery, standing)
+  const resolution = acceptedStandingSettlementResolutionFor(subject, delivery, standing)
+  return resolution._tag === "ProjectionConflict"
+    ? acceptedStandingProjectionConflict(subject, delivery, standing, resolution.reason)
     : null
 }
