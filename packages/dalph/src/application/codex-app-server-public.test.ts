@@ -385,6 +385,35 @@ it.effect("keeps two independent session threads scoped to their own activity", 
   }).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
 )
 
+it.effect("keeps app-server token descendants out of Integrator sessions but in planned-attempt scope", () =>
+  withFakeProcFiles(
+    ["501", "502"],
+    new Map([
+      ["/proc/501/stat", { _tag: "Read", text: linuxProcessStat(501, 0, 501, "linux:leader") }],
+      ["/proc/501/cmdline", { _tag: "Read", text: "codex\u0000app-server\u0000" }],
+      ["/proc/501/environ", { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000" }],
+      ["/proc/502/stat", { _tag: "Read", text: linuxProcessStat(502, 501, 502, "linux:child") }],
+      ["/proc/502/cmdline", { _tag: "Read", text: "/bin/sh\u0000" }],
+      ["/proc/502/environ", { _tag: "Read", text: "DALPH_CODEX_SERVER_INCARNATION=scope-token\u0000" }]
+    ]),
+    (native) => {
+      const census = makeNodeCodexOwnedActivityCensusService(
+        native,
+        501,
+        CodexServerIncarnation.make("scope-token|linux%3Aleader")
+      )
+      return Effect.gen(function* () {
+        expect(yield* census.observe(thread("idle", []), [])).toEqual({ _tag: "Absent" })
+        const planned = yield* census.observe(thread("idle", []), [], "PlannedAttempt")
+        expect(planned).toMatchObject({
+          _tag: "ExactLive",
+          activities: [{ _tag: "ProcessGroupDescendant", identity: { pid: 502 } }]
+        })
+      })
+    }
+  )
+)
+
 it.effect("classifies controlled Linux process census observations at the public activity boundary", () => {
   const liveKill = (() => true) as typeof nodeProcess.kill
   const valid = (pid: number, parentPid: number, processGroupId: number, startIdentity = "start") => ({

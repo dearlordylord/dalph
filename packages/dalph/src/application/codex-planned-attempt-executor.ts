@@ -925,7 +925,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       thread: CodexThreadSnapshot
     ) {
       const backgroundTerminals = yield* app.listBackgroundTerminals(thread.id)
-      return yield* activityCensus.observe(thread, backgroundTerminals)
+      return yield* activityCensus.observe(thread, backgroundTerminals, "PlannedAttempt")
     })
 
     const observeOwnedActivityByThreadId = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivityByThreadId")(
@@ -957,7 +957,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       const uniqueDescendants = [
         ...new Map(descendants.map((identity) => [`${identity.pid}:${identity.startIdentity}`, identity])).values()
       ]
-      return activityCensus.terminateDescendants(uniqueDescendants)
+      return activityCensus.terminateDescendants(uniqueDescendants, "PlannedAttempt")
     }
 
     const quiescePass = Effect.fn("CodexPlannedAttemptExecutor.quiescePass")(function* (
@@ -2092,7 +2092,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       allowMatchingReplacementTurn: boolean
     ) {
       const census = yield* app.listBackgroundTerminals(thread.id).pipe(
-        Effect.flatMap((terminals) => activityCensus.observe(thread, terminals)),
+        Effect.flatMap((terminals) => activityCensus.observe(thread, terminals, "PlannedAttempt")),
         Effect.result
       )
       if (Result.isFailure(census)) {

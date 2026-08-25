@@ -155,17 +155,30 @@ export type CodexOwnedActivityCensusProjection =
   | { readonly _tag: "Contradictory"; readonly detail: string }
 
 /**
- * Attempt-scoped activity authority. It accepts a thread and its fresh
- * app-server activity list, then observes execution-substrate descendants
- * without accepting the app-server launch record as an attempt activity.
+ * Selects which process facts one activity observation may own.
+ *
+ * An Integrator session owns only the exact thread and its reported terminal
+ * processes. A planned task attempt additionally owns descendants carrying
+ * the app-server's exact launch token, which is required to recover escaped
+ * task processes after the app-server leader disappears.
+ */
+type CodexOwnedActivityScope = "IntegratorSession" | "PlannedAttempt"
+
+/**
+ * Activity authority. It accepts a thread and its fresh app-server activity
+ * list, then observes execution-substrate descendants under the requested
+ * ownership scope without accepting the app-server launch record itself as an
+ * activity.
  */
 interface CodexOwnedActivityCensusService {
   readonly observe: (
     thread: CodexThreadSnapshot,
-    backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
+    backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>,
+    scope?: CodexOwnedActivityScope
   ) => Effect.Effect<CodexOwnedActivityCensusProjection, CodexAppServerFailure>
   readonly terminateDescendants: (
-    descendants: ReadonlyArray<CodexOwnedProcessIdentity>
+    descendants: ReadonlyArray<CodexOwnedProcessIdentity>,
+    scope?: CodexOwnedActivityScope
   ) => Effect.Effect<void, CodexAppServerFailure>
 }
 
@@ -954,7 +967,7 @@ export const makeNodeCodexOwnedActivityCensusService = (
   appServerPid?: number,
   incarnation?: CodexServerIncarnation
 ): CodexOwnedActivityCensusService => ({
-  observe: (thread, backgroundTerminals) =>
+  observe: (thread, backgroundTerminals, scope = "IntegratorSession") =>
     Effect.tryPromise({
       try: async (): Promise<CodexOwnedActivityCensusProjection> => {
         const activeTurns = thread.turns.filter((turn) => turn.status === "inProgress")
@@ -969,7 +982,7 @@ export const makeNodeCodexOwnedActivityCensusService = (
             terminal.osPid === null || terminal.osPid === undefined ? [] : [terminal.osPid]
           ),
           native,
-          incarnation,
+          scope === "PlannedAttempt" ? incarnation : undefined,
           appServerPid
         )
         if (processProjection._tag === "Unreadable" || processProjection._tag === "Contradictory") {
@@ -988,9 +1001,10 @@ export const makeNodeCodexOwnedActivityCensusService = (
       },
       catch: preserveAppServerFailure("thread/ownedActivity/census", "Ownership")
     }),
-  terminateDescendants: (descendants) =>
+  terminateDescendants: (descendants, scope = "IntegratorSession") =>
     Effect.tryPromise({
-      try: () => terminateExactOwnedActivityProcesses(descendants, native, incarnation),
+      try: () =>
+        terminateExactOwnedActivityProcesses(descendants, native, scope === "PlannedAttempt" ? incarnation : undefined),
       catch: preserveAppServerFailure("thread/ownedActivity/terminate", "Ownership")
     }).pipe(
       Effect.flatMap((failure) =>
@@ -2700,12 +2714,9 @@ export const nodeCodexOwnedActivityCensusLayer: Layer.Layer<CodexOwnedActivityCe
     CodexOwnedActivityCensus,
     /* v8 ignore next -- @preserve Production composition is exercised by the separate built-host qualification runner. */
     Effect.map(CodexAppServer, (app) =>
-      // The app-server incarnation proves ownership of the app process, not
-      // of every Integrator session.  Session-specific activity is already
-      // scoped by the exact thread/background-terminal boundary below; an
-      // unrelated session's app-incarnation descendant must not block this
-      // session's cleanup census.
-      makeNodeCodexOwnedActivityCensusService(nodeCodexProcessNativeService, app.serverPid)
+      // The app-server incarnation is available to the planned-attempt scope,
+      // while the default Integrator-session scope remains exact-thread-only.
+      makeNodeCodexOwnedActivityCensusService(nodeCodexProcessNativeService, app.serverPid, app.incarnation)
     )
   )
 
