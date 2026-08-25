@@ -66,6 +66,45 @@ const CodexIntegratorPrivateRevision = Schema.Int.check(Schema.isGreaterThanOrEq
 type CodexIntegratorPrivateRevision = typeof CodexIntegratorPrivateRevision.Type
 
 /** One exact private run; the token is allocated before the provider turn boundary. */
+type CodexIntegratorPrivateRunShape = {
+  readonly correlation: IntegratorRunCorrelation
+  readonly phase: "IntentRecorded" | "TurnBoundaryCrossing" | "TurnObserved" | "Sealed"
+  readonly result: IntegratorResult | null
+  readonly terminalStatus: "completed" | "failed" | null
+  readonly token: CodexOwnedTurnToken
+  readonly turnId: CodexTurnId | null
+}
+
+const validateUnobservedPrivateRun = (run: CodexIntegratorPrivateRunShape): string | undefined =>
+  run.result !== null || run.terminalStatus !== null || run.turnId !== null
+    ? "an unobserved provider turn cannot retain a result, terminal status, or turn id"
+    : undefined
+
+const validateObservedPrivateRun = (run: CodexIntegratorPrivateRunShape): string | undefined =>
+  run.result !== null || run.terminalStatus !== null || run.turnId === null
+    ? "an observed provider turn must retain only its exact turn id"
+    : undefined
+
+const validateSealedPrivateRun = (run: CodexIntegratorPrivateRunShape): string | undefined => {
+  if (run.result === null || run.terminalStatus === null || run.turnId === null) {
+    return "a sealed provider turn must retain its exact turn, terminal status, and terminal result"
+  }
+  if (run.terminalStatus === "failed" && run.result._tag !== "NotPrepared") {
+    return "a failed provider turn may retain only a sanitized NotPrepared result"
+  }
+  return run.result._tag === "PreparedCandidate" && run.terminalStatus !== "completed"
+    ? "a PreparedCandidate result requires a completed provider turn"
+    : undefined
+}
+
+const validatePrivateRun = (run: CodexIntegratorPrivateRunShape): string | undefined => {
+  if (run.phase === "IntentRecorded" || run.phase === "TurnBoundaryCrossing") {
+    return validateUnobservedPrivateRun(run)
+  }
+  if (run.phase === "TurnObserved") return validateObservedPrivateRun(run)
+  return validateSealedPrivateRun(run)
+}
+
 export const CodexIntegratorPrivateRun = Schema.Struct({
   correlation: IntegratorRunCorrelation,
   phase: Schema.Literals(["IntentRecorded", "TurnBoundaryCrossing", "TurnObserved", "Sealed"]),
@@ -74,32 +113,99 @@ export const CodexIntegratorPrivateRun = Schema.Struct({
   terminalStatus: Schema.NullOr(Schema.Literals(["completed", "failed"])),
   token: CodexOwnedTurnToken,
   turnId: Schema.NullOr(CodexTurnId)
-}).check(
-  Schema.makeFilter((run) => {
-    if (run.phase === "IntentRecorded" || run.phase === "TurnBoundaryCrossing") {
-      return run.result !== null || run.terminalStatus !== null || run.turnId !== null
-        ? "an unobserved provider turn cannot retain a result, terminal status, or turn id"
-        : undefined
-    }
-    if (run.phase === "TurnObserved") {
-      return run.result !== null || run.terminalStatus !== null || run.turnId === null
-        ? "an observed provider turn must retain only its exact turn id"
-        : undefined
-    }
-    if (run.result === null || run.terminalStatus === null || run.turnId === null) {
-      return "a sealed provider turn must retain its exact turn, terminal status, and terminal result"
-    }
-    if (run.terminalStatus === "failed" && run.result._tag !== "NotPrepared") {
-      return "a failed provider turn may retain only a sanitized NotPrepared result"
-    }
-    return run.result._tag === "PreparedCandidate" && run.terminalStatus !== "completed"
-      ? "a PreparedCandidate result requires a completed provider turn"
-      : undefined
-  })
-)
+}).check(Schema.makeFilter(validatePrivateRun))
 export type CodexIntegratorPrivateRun = typeof CodexIntegratorPrivateRun.Type
 
 /** Private durable ownership and recovery facts. Transcript and prompt bytes are intentionally absent. */
+type CodexIntegratorPrivateRecordShape = {
+  readonly correlation: IntegratorSessionCorrelation
+  readonly revision: CodexIntegratorPrivateRevision
+  readonly runs: ReadonlyArray<CodexIntegratorPrivateRun>
+  readonly removed?: boolean
+  readonly removalIntent?: boolean
+  readonly threadId: CodexThreadId | null
+  readonly threadStartIntent: boolean
+  readonly worktreeMaterializationIntent?: boolean
+  readonly worktreeReady: boolean
+}
+
+const validatePrivateRunOrdinals = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
+  const runOrdinals = record.runs.map((run) => run.correlation.ordinal)
+  if (new Set(runOrdinals).size !== runOrdinals.length) return "private record repeats a provider run ordinal"
+  if (record.runs.length > maximumPrivateRunOrdinal) {
+    return "private record contains more than the initial and retry provider runs"
+  }
+  /* v8 ignore next -- @preserve CodexIntegratorPrivateRun validates every ordinal before this record-level defensive check. */
+  if (
+    record.runs.some(
+      (run) =>
+        Number(run.correlation.ordinal) < firstPrivateRunOrdinal ||
+        Number(run.correlation.ordinal) > maximumPrivateRunOrdinal
+    )
+  ) {
+    return "private record contains an unsupported provider run ordinal"
+  }
+  return runOrdinals.some((ordinal, index) => Number(ordinal) !== index + firstPrivateRunOrdinal)
+    ? "private record provider runs must be contiguous from initial run one"
+    : undefined
+}
+
+const validatePrivateRunTokens = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
+  const runTokens = record.runs.map((run) => run.token)
+  if (new Set(runTokens).size !== runTokens.length) return "private record repeats a provider turn token"
+  const retry = record.runs.find((run) => Number(run.correlation.ordinal) === maximumPrivateRunOrdinal)
+  const initial = record.runs.find((run) => Number(run.correlation.ordinal) === firstPrivateRunOrdinal)
+  return retry !== undefined &&
+    (initial === undefined || initial.phase !== "Sealed" || initial.result === null || initial.turnId === null)
+    ? "private retry run requires a sealed initial run"
+    : undefined
+}
+
+const hasThreadStartAfterThreadId = (record: CodexIntegratorPrivateRecordShape): boolean =>
+  record.threadStartIntent && record.threadId !== null
+
+const hasRemovalIntentAfterRemoval = (record: CodexIntegratorPrivateRecordShape): boolean =>
+  record.removalIntent === true && record.removed === true
+
+const hasMaterializationIntentAfterReadiness = (record: CodexIntegratorPrivateRecordShape): boolean =>
+  record.worktreeMaterializationIntent === true && record.worktreeReady
+
+const removedRecordRetainsOwnership = (record: CodexIntegratorPrivateRecordShape): boolean =>
+  record.removed === true && (record.worktreeReady || record.threadStartIntent || record.threadId !== null)
+
+const validatePrivateRecordFlags = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
+  if (hasThreadStartAfterThreadId(record)) {
+    return "private record cannot retain a thread-start intent after recording a thread id"
+  }
+  if (hasRemovalIntentAfterRemoval(record)) {
+    return "private record cannot retain removal intent after recording removal"
+  }
+  if (hasMaterializationIntentAfterReadiness(record)) {
+    return "private record cannot retain worktree materialization intent after readiness"
+  }
+  return removedRecordRetainsOwnership(record)
+    ? "a removed private record cannot retain live candidate ownership"
+    : undefined
+}
+
+const validatePrivateRecordCorrelations = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
+  const sessions = record.runs.filter((run) => !sameSessionValue(record.correlation, run.correlation.session))
+  if (sessions.length > 0) return "private run correlation belongs to another Integrator session"
+  return record.runs.some((run) => run.result !== null && !sameRunValue(run.result.correlation, run.correlation))
+    ? "private terminal result correlation does not match its provider run"
+    : undefined
+}
+
+const validatePrivateRecord = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
+  const ordinalError = validatePrivateRunOrdinals(record)
+  if (ordinalError !== undefined) return ordinalError
+  const tokenError = validatePrivateRunTokens(record)
+  if (tokenError !== undefined) return tokenError
+  const flagError = validatePrivateRecordFlags(record)
+  if (flagError !== undefined) return flagError
+  return validatePrivateRecordCorrelations(record)
+}
+
 export const CodexIntegratorPrivateRecord = Schema.Struct({
   appServerIncarnation: CodexServerIncarnation,
   candidatePath: IntegratorCandidateWorktreePath,
@@ -116,54 +222,7 @@ export const CodexIntegratorPrivateRecord = Schema.Struct({
   /** A durable candidate-materialization request preceding any Git add. */
   worktreeMaterializationIntent: Schema.optionalKey(Schema.Boolean),
   worktreeReady: Schema.Boolean
-}).check(
-  Schema.makeFilter((record) => {
-    const runOrdinals = record.runs.map((run) => run.correlation.ordinal)
-    if (new Set(runOrdinals).size !== runOrdinals.length) return "private record repeats a provider run ordinal"
-    if (record.runs.length > maximumPrivateRunOrdinal)
-      return "private record contains more than the initial and retry provider runs"
-    /* v8 ignore next -- @preserve CodexIntegratorPrivateRun validates every ordinal before this record-level defensive check. */
-    if (
-      record.runs.some(
-        (run) =>
-          Number(run.correlation.ordinal) < firstPrivateRunOrdinal ||
-          Number(run.correlation.ordinal) > maximumPrivateRunOrdinal
-      )
-    ) {
-      return "private record contains an unsupported provider run ordinal"
-    }
-    if (runOrdinals.some((ordinal, index) => Number(ordinal) !== index + firstPrivateRunOrdinal)) {
-      return "private record provider runs must be contiguous from initial run one"
-    }
-    const runTokens = record.runs.map((run) => run.token)
-    if (new Set(runTokens).size !== runTokens.length) return "private record repeats a provider turn token"
-    const retry = record.runs.find((run) => Number(run.correlation.ordinal) === maximumPrivateRunOrdinal)
-    const initial = record.runs.find((run) => Number(run.correlation.ordinal) === firstPrivateRunOrdinal)
-    if (
-      retry !== undefined &&
-      (initial === undefined || initial.phase !== "Sealed" || initial.result === null || initial.turnId === null)
-    ) {
-      return "private retry run requires a sealed initial run"
-    }
-    if (record.threadStartIntent && record.threadId !== null) {
-      return "private record cannot retain a thread-start intent after recording a thread id"
-    }
-    if (record.removalIntent === true && record.removed === true) {
-      return "private record cannot retain removal intent after recording removal"
-    }
-    if (record.worktreeMaterializationIntent === true && record.worktreeReady) {
-      return "private record cannot retain worktree materialization intent after readiness"
-    }
-    if (record.removed === true && (record.worktreeReady || record.threadStartIntent || record.threadId !== null)) {
-      return "a removed private record cannot retain live candidate ownership"
-    }
-    const sessions = record.runs.filter((run) => !sameSessionValue(record.correlation, run.correlation.session))
-    if (sessions.length > 0) return "private run correlation belongs to another Integrator session"
-    return record.runs.some((run) => run.result !== null && !sameRunValue(run.result.correlation, run.correlation))
-      ? "private terminal result correlation does not match its provider run"
-      : undefined
-  })
-)
+}).check(Schema.makeFilter(validatePrivateRecord))
 export type CodexIntegratorPrivateRecord = typeof CodexIntegratorPrivateRecord.Type
 
 export class CodexIntegratorStoreFailure extends Schema.TaggedError<CodexIntegratorStoreFailure>()(

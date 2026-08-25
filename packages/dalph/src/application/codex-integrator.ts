@@ -34,6 +34,7 @@ import {
   providerFailure
 } from "./codex-integrator-runtime.js"
 import { ensureCandidateWorktree } from "./codex-integrator-worktree.js"
+import { ensureThread } from "./codex-integrator-thread.js"
 import { providerAuthorityFor } from "./codex-integrator-cleanup.js"
 import { exactEnvelope } from "./codex-integrator-envelope.js"
 import {
@@ -89,91 +90,37 @@ const configError = (config: CodexIntegratorConfiguration): string | undefined =
   /* v8 ignore next -- @preserve The branded configuration admits only an absolute, normalized candidate root. */
   return nodePath.isAbsolute(root) && nodePath.normalize(root) === root ? undefined : "candidate root is not canonical"
 }
-const adoptListedThread = Effect.fn("CodexIntegrator.adoptListedThread")(function* (
-  app: CodexAppServer["Service"],
-  record: CodexIntegratorPrivateRecord,
-  store: CodexIntegratorPrivateStoreService,
-  matching: CodexThreadSnapshot
-) {
-  if (!record.threadStartIntent) return yield* Effect.fail(providerFailure("persistent candidate thread is unowned"))
-  const thread = yield* observedThread(app, matching.id, record.candidatePath)
-  if (thread.ownedThreadToken !== record.threadToken) {
-    return yield* Effect.fail(providerFailure("listed thread does not carry the exact recorded ownership token"))
-  }
-  const attached = bump(record, {
-    appServerIncarnation: app.incarnation,
-    threadId: thread.id,
-    threadStartIntent: false
-  })
-  yield* boundary(store.write(attached))
-  return { record: attached, thread }
-})
-const startOwnedThread = Effect.fn("CodexIntegrator.startOwnedThread")(function* (
-  app: CodexAppServer["Service"],
-  record: CodexIntegratorPrivateRecord,
-  store: CodexIntegratorPrivateStoreService
-) {
-  const intent =
-    record.threadStartIntent && record.appServerIncarnation === app.incarnation
-      ? record
-      : bump(record, { threadStartIntent: true, appServerIncarnation: app.incarnation })
-  if (intent !== record) yield* boundary(store.write(intent))
-  const started = yield* boundary(app.startThread(record.candidatePath, record.threadToken))
-  if (
-    started.cwd !== record.candidatePath ||
-    started.correlation !== undefined ||
-    started.ownedThreadToken !== record.threadToken
-  ) {
-    return yield* Effect.fail(providerFailure("thread/start returned a foreign candidate cwd"))
-  }
-  const next = bump(intent, { threadId: started.id, threadStartIntent: false })
-  yield* boundary(store.write(next))
-  return { record: next, thread: started }
-})
-const ensureThread = Effect.fn("CodexIntegrator.ensureThread")(function* (
-  app: CodexAppServer["Service"],
-  record: CodexIntegratorPrivateRecord,
-  store: CodexIntegratorPrivateStoreService
-) {
-  if (record.threadId !== null) {
-    const thread = yield* observedThread(app, record.threadId, record.candidatePath)
-    if (thread.ownedThreadToken !== record.threadToken) {
-      return yield* Effect.fail(providerFailure("Codex thread ownership token is foreign"))
-    }
-    return { record, thread }
-  }
-  if (app.listThreads === undefined || app.listThreadsComplete !== true) {
-    return yield* Effect.fail(providerFailure("persistent thread list is unavailable or incomplete"))
-  }
-  const listed = yield* boundary(app.listThreads())
-  {
-    const matches = listed.filter((thread) => thread.cwd === record.candidatePath)
-    if (matches.length > 1)
-      return yield* Effect.fail(providerFailure("persistent thread list has duplicate candidate cwd"))
-    const matching = matches[0]
-    if (matching !== undefined) return yield* adoptListedThread(app, record, store, matching)
-  }
-  return yield* startOwnedThread(app, record, store)
-})
 const runFor = (
   record: CodexIntegratorPrivateRecord,
   run: IntegratorRunCorrelation
 ): CodexIntegratorPrivateRun | undefined => record.runs.find((item) => runCorrelationEquals(item.correlation, run))
 
 const newToken = (): CodexOwnedTurnToken => CodexOwnedTurnToken.make(`dalph-integrator-${randomUUID()}`)
+
+const ensureRunPreconditionError = (
+  record: CodexIntegratorPrivateRecord,
+  run: IntegratorRunCorrelation
+): string | undefined => {
+  if (Number(run.ordinal) < firstProviderRunOrdinal || Number(run.ordinal) > maximumProviderRunOrdinal) {
+    return "provider run ordinal exceeds Retry"
+  }
+  if (run.ordinal === maximumProviderRunOrdinal) {
+    const first = record.runs.find((item) => item.correlation.ordinal === firstProviderRunOrdinal)
+    if (first === undefined || first.phase !== "Sealed" || first.result === null || first.turnId === null) {
+      return "Retry run two has no sealed run-one result"
+    }
+  }
+  return undefined
+}
+
 const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
   store: CodexIntegratorPrivateStoreService,
   record: CodexIntegratorPrivateRecord,
   run: IntegratorRunCorrelation,
   app: CodexAppServer["Service"]
 ) {
-  if (Number(run.ordinal) < firstProviderRunOrdinal || Number(run.ordinal) > maximumProviderRunOrdinal)
-    return yield* Effect.fail(providerFailure("provider run ordinal exceeds Retry"))
-  if (run.ordinal === maximumProviderRunOrdinal) {
-    const first = record.runs.find((item) => item.correlation.ordinal === firstProviderRunOrdinal)
-    if (first === undefined || first.phase !== "Sealed" || first.result === null || first.turnId === null)
-      return yield* Effect.fail(providerFailure("Retry run two has no sealed run-one result"))
-  }
+  const preconditionError = ensureRunPreconditionError(record, run)
+  if (preconditionError !== undefined) return yield* Effect.fail(providerFailure(preconditionError))
   const existing = runFor(record, run)
   if (existing !== undefined) return { record, run: existing }
   const ordinalCollision = record.runs.find((item) => item.correlation.ordinal === run.ordinal)
@@ -225,6 +172,34 @@ const startObservedTurn = Effect.fn("CodexIntegrator.startObservedTurn")(functio
   yield* boundary(store.write(observed))
   return { record: observed, run: observedRun, turn: started }
 })
+
+const contradictoryProviderTurn = (
+  thread: CodexThreadSnapshot,
+  record: CodexIntegratorPrivateRecord,
+  token: CodexOwnedTurnToken
+): CodexThreadSnapshot["turns"][number] | undefined => {
+  const knownTokens = new Set(record.runs.map((item) => item.token))
+  return thread.turns.find((item) => {
+    if (item.ownedTurnToken === token) return false
+    if (item.ownedTurnToken === undefined) return true
+    const known = record.runs.find((candidate) => candidate.token === item.ownedTurnToken)
+    return !knownTokens.has(item.ownedTurnToken) || known?.phase !== "Sealed"
+  })
+}
+
+const matchingProviderTurnError = (
+  run: CodexIntegratorPrivateRun,
+  matchingTurn: CodexThreadSnapshot["turns"][number]
+): string | undefined => {
+  if (run.turnId !== null && matchingTurn.id !== run.turnId) {
+    return "owned turn id does not match the exact durable turn"
+  }
+  return matchingTurn.correlation !== undefined ? "owned provider turn carries a foreign correlation" : undefined
+}
+
+const canRecoverMissingProviderTurn = (run: CodexIntegratorPrivateRun): boolean =>
+  run.phase === "IntentRecorded" || run.phase === "TurnBoundaryCrossing"
+
 const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(function* (
   app: CodexAppServer["Service"],
   census: CodexOwnedActivityCensus["Service"],
@@ -235,26 +210,17 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
 ) {
   const matchingTurns = thread.turns.filter((item) => item.ownedTurnToken === run.token)
   if (matchingTurns.length > 1) return yield* Effect.fail(providerFailure("owned turn token is duplicated"))
-  const knownTokens = new Set(record.runs.map((item) => item.token))
-  const contradictoryTurn = thread.turns.find((item) => {
-    if (item.ownedTurnToken === run.token) return false
-    if (item.ownedTurnToken === undefined) return true
-    const known = record.runs.find((candidate) => candidate.token === item.ownedTurnToken)
-    return !knownTokens.has(item.ownedTurnToken) || known?.phase !== "Sealed"
-  })
+  const contradictoryTurn = contradictoryProviderTurn(thread, record, run.token)
   if (contradictoryTurn !== undefined) {
     return yield* Effect.fail(providerFailure("thread contains a tokenless or foreign provider turn"))
   }
   const matchingTurn = matchingTurns[0]
   if (matchingTurn !== undefined) {
-    if (run.turnId !== null && matchingTurn.id !== run.turnId)
-      return yield* Effect.fail(providerFailure("owned turn id does not match the exact durable turn"))
-    if (matchingTurn.correlation !== undefined) {
-      return yield* Effect.fail(providerFailure("owned provider turn carries a foreign correlation"))
-    }
+    const matchingError = matchingProviderTurnError(run, matchingTurn)
+    if (matchingError !== undefined) return yield* Effect.fail(providerFailure(matchingError))
     return { record, run, turn: matchingTurn }
   }
-  if (run.phase !== "IntentRecorded" && run.phase !== "TurnBoundaryCrossing") {
+  if (!canRecoverMissingProviderTurn(run)) {
     return yield* Effect.fail(providerFailure("owned turn token is not readable after a sealed turn"))
   }
   // A missing token is retryable only after a complete census proves quiescence.
@@ -268,7 +234,35 @@ const readOrRecoverTurn = Effect.fn("CodexIntegrator.readOrRecoverTurn")(functio
   }
   return yield* startObservedTurn(app, store, currentRecord, currentRun, thread)
 })
-const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
+
+const replaySealedRun = Effect.fn("CodexIntegrator.replaySealedRun")(function* (
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"],
+  store: CodexIntegratorPrivateStoreService,
+  record: CodexIntegratorPrivateRecord,
+  run: CodexIntegratorPrivateRun,
+  thread: CodexThreadSnapshot,
+  result: IntegratorResult
+) {
+  /* v8 ignore next -- @preserve CodexIntegratorPrivateRecord validates every stored result against its run correlation. */
+  if (!runCorrelationEquals(result.correlation, run.correlation)) {
+    return yield* Effect.fail(providerFailure("private result has a foreign run correlation"))
+  }
+  const freshThread = yield* observedThread(app, thread.id, record.candidatePath)
+  if (freshThread.ownedThreadToken !== record.threadToken) {
+    return yield* Effect.fail(providerFailure("sealed result thread ownership changed before replay"))
+  }
+  const recovered = yield* readOrRecoverTurn(app, census, store, record, run, freshThread)
+  if (!isTerminalTurn(recovered.turn))
+    return yield* Effect.fail(providerFailure("sealed provider turn is still active"))
+  if (run.terminalStatus === null || recovered.turn.status !== run.terminalStatus) {
+    return yield* Effect.fail(providerFailure("fresh terminal turn status contradicts the sealed private result"))
+  }
+  yield* observeQuiescence(app, census, freshThread)
+  return result
+})
+
+const sealObservedRun = Effect.fn("CodexIntegrator.sealObservedRun")(function* (
   app: CodexAppServer["Service"],
   census: CodexOwnedActivityCensus["Service"],
   store: CodexIntegratorPrivateStoreService,
@@ -276,26 +270,12 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
   run: CodexIntegratorPrivateRun,
   thread: CodexThreadSnapshot
 ) {
-  if (run.result !== null) {
-    /* v8 ignore next -- @preserve CodexIntegratorPrivateRecord validates every stored result against its run correlation. */
-    if (!runCorrelationEquals(run.result.correlation, run.correlation))
-      return yield* Effect.fail(providerFailure("private result has a foreign run correlation"))
-    const freshThread = yield* observedThread(app, thread.id, record.candidatePath)
-    if (freshThread.ownedThreadToken !== record.threadToken)
-      return yield* Effect.fail(providerFailure("sealed result thread ownership changed before replay"))
-    const { turn } = yield* readOrRecoverTurn(app, census, store, record, run, freshThread)
-    if (!isTerminalTurn(turn)) return yield* Effect.fail(providerFailure("sealed provider turn is still active"))
-    if (run.terminalStatus === null || turn.status !== run.terminalStatus) {
-      return yield* Effect.fail(providerFailure("fresh terminal turn status contradicts the sealed private result"))
-    }
-    yield* observeQuiescence(app, census, freshThread)
-    return run.result
-  }
   const current = yield* readOrRecoverTurn(app, census, store, record, run, thread)
   const { record: currentRecord, run: currentRun, turn } = current
   /* v8 ignore next -- @preserve readOrRecoverTurn selects only the exact durable turn token and rejects contradictions. */
-  if (turn.ownedTurnToken !== currentRun.token || turn.correlation !== undefined)
+  if (turn.ownedTurnToken !== currentRun.token || turn.correlation !== undefined) {
     return yield* Effect.fail(providerFailure("terminal turn does not carry the exact owned token and correlation"))
+  }
   if (!isTerminalTurn(turn)) return yield* Effect.fail(providerFailure("exact provider turn remains active"))
   yield* observeQuiescence(app, census, thread)
   const result =
@@ -309,6 +289,20 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
   const sealed = updateRun(currentRecord, currentRun, { phase: "Sealed", result, terminalStatus, turnId: turn.id })
   yield* boundary(store.write(sealed))
   return result
+})
+
+const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"],
+  store: CodexIntegratorPrivateStoreService,
+  record: CodexIntegratorPrivateRecord,
+  run: CodexIntegratorPrivateRun,
+  thread: CodexThreadSnapshot
+) {
+  if (run.result !== null) {
+    return yield* replaySealedRun(app, census, store, record, run, thread, run.result)
+  }
+  return yield* sealObservedRun(app, census, store, record, run, thread)
 })
 const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord")(function* (
   found: CodexIntegratorPrivateRecord,

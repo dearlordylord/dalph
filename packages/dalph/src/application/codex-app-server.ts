@@ -1259,6 +1259,19 @@ const normalizedThreadIdentity = (
     : { source: value, id, cwd, status }
 }
 
+const normalizeOwnedThreadToken = (
+  source: JsonObject,
+  operation: CodexAppServerOperation
+): CodexThreadOwnershipToken | CodexAppServerFailure | undefined => {
+  const rawToken =
+    source["ownedThreadToken"] ??
+    (isJsonObject(source["metadata"]) ? source["metadata"]["dalphOwnedThreadToken"] : undefined)
+  if (rawToken === undefined || rawToken === null) return undefined
+  return typeof rawToken === "string" && rawToken.length > 0
+    ? CodexThreadOwnershipToken.make(rawToken)
+    : operationFailure(operation, "Malformed", "thread ownership token is invalid")
+}
+
 const normalizeThread = (
   value: unknown,
   operation: CodexAppServerOperation
@@ -1270,15 +1283,7 @@ const normalizeThread = (
   if (normalizedTurns instanceof CodexAppServerFailure) return normalizedTurns
   const correlation = normalizeCorrelation(identity.source["correlation"], operation, "thread")
   if (correlation instanceof CodexAppServerFailure) return correlation
-  const rawOwnedThreadToken =
-    identity.source["ownedThreadToken"] ??
-    (isJsonObject(identity.source["metadata"]) ? identity.source["metadata"]["dalphOwnedThreadToken"] : undefined)
-  const ownedThreadToken =
-    rawOwnedThreadToken === undefined || rawOwnedThreadToken === null
-      ? undefined
-      : typeof rawOwnedThreadToken === "string" && rawOwnedThreadToken.length > 0
-        ? CodexThreadOwnershipToken.make(rawOwnedThreadToken)
-        : operationFailure(operation, "Malformed", "thread ownership token is invalid")
+  const ownedThreadToken = normalizeOwnedThreadToken(identity.source, operation)
   if (ownedThreadToken instanceof CodexAppServerFailure) return ownedThreadToken
   return {
     id: CodexThreadId.make(identity.id),
@@ -1297,26 +1302,37 @@ const normalizedThreadEffect = (
 
 const maximumThreadListPages = 100
 
-const threadListPage = (
-  response: Record<string, unknown>
-):
-  | { readonly threads: ReadonlyArray<CodexThreadSnapshot>; readonly nextCursor: string | null | undefined }
-  | CodexAppServerFailure => {
-  const rawThreads = response["data"] ?? response["threads"]
+const normalizeThreadListThreads = (
+  rawThreads: unknown
+): ReadonlyArray<CodexThreadSnapshot> | CodexAppServerFailure => {
   if (!Array.isArray(rawThreads)) return operationFailure("thread/list", "Malformed", "thread list is invalid")
   const normalizedThreads = rawThreads.map((thread) => normalizeThread(thread, "thread/list"))
   const failure = normalizedThreads.find(
     (thread): thread is CodexAppServerFailure => thread instanceof CodexAppServerFailure
   )
   if (failure !== undefined) return failure
-  const threads = normalizedThreads.filter(
-    (thread): thread is CodexThreadSnapshot => !(thread instanceof CodexAppServerFailure)
-  )
+  return normalizedThreads.filter((thread): thread is CodexThreadSnapshot => !(thread instanceof CodexAppServerFailure))
+}
+
+const normalizeThreadListCursor = (
+  response: Record<string, unknown>
+): string | null | undefined | CodexAppServerFailure => {
   const nextCursor = response["nextCursor"] ?? response["next_cursor"]
-  if (nextCursor === undefined || nextCursor === null) return { threads, nextCursor }
-  if (typeof nextCursor !== "string" || nextCursor.length === 0) {
-    return operationFailure("thread/list", "Malformed", "thread list cursor is invalid")
-  }
+  if (nextCursor === undefined || nextCursor === null) return nextCursor
+  return typeof nextCursor === "string" && nextCursor.length > 0
+    ? nextCursor
+    : operationFailure("thread/list", "Malformed", "thread list cursor is invalid")
+}
+
+const threadListPage = (
+  response: Record<string, unknown>
+):
+  | { readonly threads: ReadonlyArray<CodexThreadSnapshot>; readonly nextCursor: string | null | undefined }
+  | CodexAppServerFailure => {
+  const threads = normalizeThreadListThreads(response["data"] ?? response["threads"])
+  if (threads instanceof CodexAppServerFailure) return threads
+  const nextCursor = normalizeThreadListCursor(response)
+  if (nextCursor instanceof CodexAppServerFailure) return nextCursor
   return { threads, nextCursor }
 }
 

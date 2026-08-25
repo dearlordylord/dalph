@@ -25,6 +25,54 @@ export type GitWorktreeRecord = {
   readonly prunable: boolean
 }
 
+const parseWorktreeFields = (block: string): Map<string, string> | undefined => {
+  const fields = block.split("\n").map((line) => {
+    const separator = line.indexOf(" ")
+    const name = separator < 0 ? line : line.slice(0, separator)
+    const value = separator < 0 ? "" : line.slice(separator + 1)
+    return [name, value] as const
+  })
+  const names = fields.map(([name]) => name)
+  if (
+    names.some((name) => !["worktree", "HEAD", "branch", "bare", "detached", "locked", "prunable"].includes(name)) ||
+    new Set(names).size !== names.length
+  )
+    return undefined
+  return new Map(fields)
+}
+
+const worktreeRecordFromFields = (values: ReadonlyMap<string, string>): GitWorktreeRecord | undefined => {
+  const worktree = Option.flatMap(
+    Option.fromUndefinedOr(values.get("worktree")),
+    Schema.decodeUnknownOption(WorktreeLocator)
+  )
+  const head = Option.flatMap(Option.fromUndefinedOr(values.get("HEAD")), Schema.decodeUnknownOption(GitCommitSha))
+  const branchValue = values.get("branch")
+  const branch = Option.flatMap(Option.fromUndefinedOr(branchValue), Schema.decodeUnknownOption(TaskBranchRef))
+  const detached = values.has("detached")
+  const prunable = values.has("prunable")
+  return Option.isSome(worktree) &&
+    Option.isSome(head) &&
+    (branchValue === undefined || Option.isSome(branch)) &&
+    (Option.isSome(branch) || detached)
+    ? Option.isNone(branch)
+      ? { worktree: worktree.value, head: head.value, detached, prunable }
+      : { worktree: worktree.value, head: head.value, branch: branch.value, detached, prunable }
+    : undefined
+}
+
+const parseWorktreeBlock = (block: string): GitWorktreeRecord | undefined => {
+  const fields = parseWorktreeFields(block)
+  return fields === undefined ? undefined : worktreeRecordFromFields(fields)
+}
+
+const hasAmbiguousWorktreeRegistration = (records: ReadonlyArray<GitWorktreeRecord>): boolean =>
+  records.some(
+    (record, index) =>
+      records.findIndex((candidate) => candidate.worktree === record.worktree) !== index ||
+      (record.branch !== undefined && records.findIndex((candidate) => candidate.branch === record.branch) !== index)
+  )
+
 const parseWorktreeList = (
   stdout: string
 ):
@@ -34,50 +82,12 @@ const parseWorktreeList = (
     .split(/\n\s*\n/u)
     .map((block) => block.trim())
     .filter((block) => block.length > 0)
-  const records = blocks.map((block) => {
-    const fields = block.split("\n").map((line) => {
-      const separator = line.indexOf(" ")
-      const name = separator < 0 ? line : line.slice(0, separator)
-      const value = separator < 0 ? "" : line.slice(separator + 1)
-      return [name, value] as const
-    })
-    const names = fields.map(([name]) => name)
-    if (
-      names.some((name) => !["worktree", "HEAD", "branch", "bare", "detached", "locked", "prunable"].includes(name)) ||
-      new Set(names).size !== names.length
-    )
-      return undefined
-    const values = new Map(fields)
-    const worktree = Option.flatMap(
-      Option.fromUndefinedOr(values.get("worktree")),
-      Schema.decodeUnknownOption(WorktreeLocator)
-    )
-    const head = Option.flatMap(Option.fromUndefinedOr(values.get("HEAD")), Schema.decodeUnknownOption(GitCommitSha))
-    const branchValue = values.get("branch")
-    const branch = Option.flatMap(Option.fromUndefinedOr(branchValue), Schema.decodeUnknownOption(TaskBranchRef))
-    const detached = values.has("detached")
-    const prunable = values.has("prunable")
-    return Option.isSome(worktree) &&
-      Option.isSome(head) &&
-      (branchValue === undefined || Option.isSome(branch)) &&
-      (Option.isSome(branch) || detached)
-      ? Option.isNone(branch)
-        ? { worktree: worktree.value, head: head.value, detached, prunable }
-        : { worktree: worktree.value, head: head.value, branch: branch.value, detached, prunable }
-      : undefined
-  })
+  const records = blocks.map(parseWorktreeBlock)
   if (records.some((record) => record === undefined)) {
     return { _tag: "Malformed", detail: "git worktree list contained a malformed porcelain block" }
   }
   const validRecords = records.filter((record): record is NonNullable<typeof record> => record !== undefined)
-  if (
-    validRecords.some(
-      (record, index) =>
-        validRecords.findIndex((candidate) => candidate.worktree === record.worktree) !== index ||
-        (record.branch !== undefined &&
-          validRecords.findIndex((candidate) => candidate.branch === record.branch) !== index)
-    )
-  ) {
+  if (hasAmbiguousWorktreeRegistration(validRecords)) {
     return { _tag: "Malformed", detail: "git worktree list contained an ambiguous duplicate registration" }
   }
   return { _tag: "Valid", records: validRecords }
