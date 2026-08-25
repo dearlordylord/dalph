@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs"
 
 import { describe, expect, it } from "vitest"
 
+import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
+import { parseProfileLog } from "./generate-quint-profile-evidence.mjs"
+
 type Command = { kind: string; name: string; durationSeconds: number }
 type Profile = {
   id: string
@@ -20,6 +23,38 @@ const evidence = JSON.parse(
   readFileSync(new URL("../research/quint-hosted-equivalent-profile.raw.json", import.meta.url), "utf8")
 ) as { schemaVersion: number; generatedBy: string; profiles: Array<Profile> }
 const report = readFileSync(new URL("../research/quint-hosted-equivalent-profile.md", import.meta.url), "utf8")
+
+const fixtureLog = (commands: Array<{ kind: string; name: string }>) => {
+  const phaseCounts = Object.fromEntries(
+    ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
+      kind,
+      commands.filter((command) => command.kind === kind).length
+    ])
+  )
+  return [
+    ...commands.map((command) => `Quint command timing: ${command.kind} ${command.name} 1.00s`),
+    ...Object.entries(phaseCounts).map(
+      ([kind, count]) => `Quint phase timing: ${kind} ${count} command(s), ${count}.00s`
+    ),
+    "Complete Quint model gate: 92.00s (budget 600s)"
+  ].join("\n")
+}
+
+const parseFixture = (commands: Array<{ kind: string; name: string }>) =>
+  parseProfileLog({
+    id: "fixture",
+    node: "fixture",
+    repeat: "1",
+    installSeconds: "-",
+    log: fixtureLog(commands),
+    sourcePath: "fixture.log"
+  })
+
+const commandAt = (commands: Array<{ kind: string; name: string }>, index: number) => {
+  const command = commands[index]
+  if (command === undefined) throw new Error(`missing fixture command ${index}`)
+  return command
+}
 
 describe("Quint profile evidence artifact", () => {
   it("retains every profile command and the gate-reported phase totals", () => {
@@ -56,5 +91,40 @@ describe("Quint profile evidence artifact", () => {
     expect(report).toContain("generate-quint-profile-evidence.mjs")
     expect(report).toContain("SHA-256")
     expect(report).toContain("The source logs are not claimed to be")
+  })
+
+  it.each([
+    [
+      "duplicate",
+      (commands: Array<{ kind: string; name: string }>) =>
+        commands.map((command, index) => (index === 2 ? commandAt(commands, 1) : command))
+    ],
+    ["missing", (commands: Array<{ kind: string; name: string }>) => commands.slice(0, -1)],
+    [
+      "reordered",
+      (commands: Array<{ kind: string; name: string }>) =>
+        commands.map((command, index) =>
+          index === 0 ? commandAt(commands, 1) : index === 1 ? commandAt(commands, 0) : command
+        )
+    ],
+    [
+      "wrong kind",
+      (commands: Array<{ kind: string; name: string }>) =>
+        commands.map((command, index) => (index === 0 ? { ...commandAt(commands, 0), kind: "test" } : command))
+    ]
+  ])("rejects a %s command sequence", (_label, mutate) => {
+    const commands = quintGateCommandManifest.map((command) => ({ ...command }))
+    expect(() => parseFixture(mutate(commands))).toThrow(/manifest|Expected 92 commands/)
+  })
+
+  it("rejects phase totals outside emitted per-command rounding tolerance", () => {
+    const commands = quintGateCommandManifest.map((command) => ({ ...command }))
+    const log = fixtureLog(commands).replace(
+      "Quint phase timing: test 40 command(s), 40.00s",
+      "Quint phase timing: test 40 command(s), 41.00s"
+    )
+    expect(() => parseProfileLog({ id: "fixture", node: "fixture", repeat: "1", installSeconds: "-", log })).toThrow(
+      "Phase total mismatch for test"
+    )
   })
 })

@@ -10,6 +10,7 @@ import {
   taskFactReconciliationObligations
 } from "./quint-model-obligations.mjs"
 import { quintGateRegressionBudgetMilliseconds } from "./quint-gate-policy.mjs"
+import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import {
   apalacheVersion,
   assertCleanTemporalVerdict,
@@ -28,14 +29,26 @@ if (pnpmEntryPoint === undefined) {
 
 const startedAt = performance.now()
 const timing = createQuintGateTiming()
+let manifestPosition = 0
 
 const remainingBudgetMilliseconds = () =>
   Math.max(1, quintGateRegressionBudgetMilliseconds - (performance.now() - startedAt))
 
 const run = async (name, args, options = {}) => {
   process.stdout.write(`\n== ${name} ==\n`)
+  const kind = quintCommandKindForArgs(args)
+  if (manifestPosition >= quintGateCommandManifest.length) {
+    throw new Error(`Quint gate command manifest has no entry at ${manifestPosition}; received ${kind} ${name}`)
+  }
+  const expected = quintGateCommandManifest[manifestPosition]
+  if (expected.kind !== kind || expected.name !== name) {
+    throw new Error(
+      `Quint gate command manifest mismatch at ${manifestPosition}: expected ${expected.kind} ${expected.name}, received ${kind} ${name}`
+    )
+  }
+  manifestPosition += 1
   return timing.measure({
-    kind: quintCommandKindForArgs(args),
+    kind,
     name,
     run: () =>
       runBoundedCommand({
@@ -975,6 +988,12 @@ await runWithQuintGateTiming({
   },
   write: (report) => process.stdout.write(report)
 })
+
+if (manifestPosition !== quintGateCommandManifest.length) {
+  throw new Error(
+    `Quint gate executed ${manifestPosition} commands, expected ${quintGateCommandManifest.length} from its manifest`
+  )
+}
 
 const elapsedMilliseconds = performance.now() - startedAt
 process.stdout.write(
