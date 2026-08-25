@@ -28,7 +28,12 @@ import {
   type TicketDeliveries,
   type TicketDeliveryStanding
 } from "./relations.js"
-import { deliveryStatusOf, DeliveryStatusSubject, type CurrentDeliveryStatus } from "./delivery-status.js"
+import {
+  deliveryStatusOf,
+  DeliveryStatusSubject,
+  type CurrentDeliveryStatus,
+  type DeliveryStatusEntry
+} from "./delivery-status.js"
 
 const runId = RunId.make("delivery-status-property-run")
 const target = FixtureTarget.make("delivery-status-property-target")
@@ -65,7 +70,11 @@ const standingPair = (
 ): readonly [TicketDeliveryStanding, ...Array<TicketDeliveryStanding>] => {
   const conflict = { _tag: "ExactEvidenceConflict" as const, evidenceIdentities: [`evidence:${taskId}`] as const }
   const proposed = { _tag: "ProposedDelivery" as const }
-  return reversed ? [conflict, proposed] : [proposed, conflict]
+  const promoted = {
+    _tag: "PromotedPrerequisiteReleasePending" as const,
+    prerequisiteTaskIds: [TaskId.make("prerequisite")] as const
+  }
+  return reversed ? [conflict, promoted, proposed] : [proposed, promoted, conflict]
 }
 
 const deliveryOf = (taskId: TaskId, rank: number, reversed: boolean): TicketDelivery => ({
@@ -98,15 +107,22 @@ const ticketDeliveriesOf = (reverseA: boolean, reverseB: boolean): TicketDeliver
 }
 
 const stateOf = (
-  proposalOrder: readonly ["A", "B"] | readonly ["B", "A"],
+  proposalOrder:
+    | readonly ["A", "A2", "B"]
+    | readonly ["A", "B", "A2"]
+    | readonly ["A2", "A", "B"]
+    | readonly ["A2", "B", "A"]
+    | readonly ["B", "A", "A2"]
+    | readonly ["B", "A2", "A"],
   ownerOrder: readonly ["A", "B"] | readonly ["B", "A"],
   reverseA: boolean,
   reverseB: boolean,
   reverseIssues: boolean
 ): DeliveryRuntimeObservationState => {
   const proposalA = proposalOf("property-A", TaskId.make("A"), 0)
+  const proposalA2 = proposalOf("property-A-unowned", TaskId.make("A"), 2)
   const proposalB = proposalOf("property-B", TaskId.make("B"), 1)
-  const proposals = proposalOrder.map((taskId) => (taskId === "A" ? proposalA : proposalB))
+  const proposals = proposalOrder.map((label) => (label === "A" ? proposalA : label === "A2" ? proposalA2 : proposalB))
   const ownerForTask = (taskId: "A" | "B"): DeliveryRuntimeLiveOwnerSnapshot =>
     taskId === "A"
       ? { _tag: "AdmittedDeliveryAction", proposal: proposalA }
@@ -167,18 +183,42 @@ const statusFor = (state: DeliveryRuntimeObservationState): CurrentDeliveryStatu
 const SchemaSubject = DeliveryStatusSubject.cases.Run.make({ runId })
 
 it("keeps simultaneous status entries deterministic when proposal, owner, and standing arrays are permuted", () => {
-  const canonical = statusFor(stateOf(["A", "B"], ["A", "B"], false, false, false))
+  const canonical = statusFor(stateOf(["A", "A2", "B"], ["A", "B"], false, false, false))
+  if (canonical._tag !== "DeliveryStatusAvailable") return expect.fail("property fixture must be available")
+  const phenomenonCounts = canonical.entries.reduce<Partial<Record<DeliveryStatusEntry["_tag"], number>>>(
+    (counts, entry) => ({ ...counts, [entry._tag]: (counts[entry._tag] ?? 0) + 1 }),
+    {}
+  )
+  expect(phenomenonCounts).toMatchObject({
+    DependencyWait: 2,
+    EvidenceConflict: 2,
+    ProposedDeliveryAction: 1,
+    LiveDeliveryAction: 2,
+    EvidenceUnavailable: 2
+  })
   fc.assert(
     fc.property(
+      fc.constantFrom(
+        ["A", "A2", "B"] as const,
+        ["A", "B", "A2"] as const,
+        ["A2", "A", "B"] as const,
+        ["A2", "B", "A"] as const,
+        ["B", "A", "A2"] as const,
+        ["B", "A2", "A"] as const
+      ),
+      fc.constantFrom(["A", "B"] as const, ["B", "A"] as const),
       fc.boolean(),
       fc.boolean(),
       fc.boolean(),
-      fc.boolean(),
-      fc.boolean(),
-      (reverseProposals, reverseOwners, reverseA, reverseB, reverseIssues) => {
-        const proposalOrder = reverseProposals ? (["B", "A"] as const) : (["A", "B"] as const)
-        const ownerOrder = reverseOwners ? (["B", "A"] as const) : (["A", "B"] as const)
-        expect(statusFor(stateOf(proposalOrder, ownerOrder, reverseA, reverseB, reverseIssues))).toEqual(canonical)
+      (proposalOrder, ownerOrder, reverseA, reverseB, reverseIssues) => {
+        const permutation = statusFor(stateOf(proposalOrder, ownerOrder, reverseA, reverseB, reverseIssues))
+        expect(permutation).toEqual(canonical)
+        if (permutation._tag !== "DeliveryStatusAvailable") return
+        const counts = permutation.entries.reduce<Partial<Record<DeliveryStatusEntry["_tag"], number>>>(
+          (current, entry) => ({ ...current, [entry._tag]: (current[entry._tag] ?? 0) + 1 }),
+          {}
+        )
+        expect(counts).toEqual(phenomenonCounts)
       }
     ),
     { numRuns: 50 }

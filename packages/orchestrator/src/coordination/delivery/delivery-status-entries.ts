@@ -17,6 +17,7 @@ import {
   taskStatusSubject,
   statusEntryIdentity,
   statusEntryJson,
+  validateLiveOwnersForStatus,
   validateDeliveryEvidenceForStatus,
   type OrderedStatusEntry
 } from "./delivery-status-support.js"
@@ -75,7 +76,8 @@ const deliveryEntriesFor = (
     if (evidenceConflict !== null) return evidenceConflict
     const capacityEntry = capacityWaitFor(subject, evaluation, runId, delivery)
     if (capacityEntry !== null) addEntry(entries, capacityEntry, index)
-    trackerAndEvidenceEntriesFor(subject, delivery, index, entries)
+    const builderConflict = trackerAndEvidenceEntriesFor(subject, delivery, index, entries)
+    if (builderConflict !== null) return builderConflict
   }
   return null
 }
@@ -161,6 +163,8 @@ export const statusEntriesFor = (
 ): Array<DeliveryStatusEntry> | DeliveryStatusProjectionConflict => {
   const ownershipConflict = ownershipConflictFor(subject, evaluation)
   if (ownershipConflict !== null) return ownershipConflict
+  const liveOwnerConflict = validateLiveOwnersForStatus(subject, evaluation, liveOwners)
+  if (liveOwnerConflict !== null) return liveOwnerConflict
   const entries: Array<OrderedStatusEntry> = []
   const taskOrders = deliveryTaskOrder(evaluation)
   for (const [index, delivery] of evaluation.current.ticketDeliveries.deliveries.entries()) {

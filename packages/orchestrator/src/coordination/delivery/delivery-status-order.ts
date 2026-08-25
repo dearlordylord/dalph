@@ -6,7 +6,11 @@ import {
   type TaskId
 } from "@dalph/contracts"
 import { Match } from "effect"
-import type { DeliveryProposalDerivationIssue, DeliveryProposalOrderEvidence } from "./delivery-action-proposal.js"
+import type {
+  DeliveryActionProposal,
+  DeliveryProposalDerivationIssue,
+  DeliveryProposalOrderEvidence
+} from "./delivery-action-proposal.js"
 import type {
   DeliveryRuntimeEvaluation,
   ExactWorkflowObligation,
@@ -14,7 +18,7 @@ import type {
   TicketDeliveryStanding
 } from "./relations.js"
 import { type DeliveryStatusEntry, type DeliveryStatusSubject } from "./delivery-status-model.js"
-import { workflowResponsibilityKey } from "../reconstruction/state.js"
+import { workflowResponsibilityKey, type WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 
 const subjectKey = (subject: DeliveryStatusSubject): string =>
   subject._tag === "Run" ? `Run:${subject.runId}` : `Task:${subject.runId}:${subject.taskId}`
@@ -67,6 +71,38 @@ const proposalDerivationIssueIdentity = (issue: DeliveryProposalDerivationIssue)
 
 const statusEntryPrefix = (entry: DeliveryStatusEntry): string => `${entry._tag}:${subjectKey(entry.subject)}`
 
+const responsibilityPosition = (responsibility: WorkflowResponsibilityEntry): number => responsibility.beganAt
+
+const obligationPosition = (obligation: ExactWorkflowObligation): number => {
+  if (obligation._tag === "WorkflowResponsibility") return responsibilityPosition(obligation.responsibility)
+  if (obligation._tag === "AcceptedAwaitingIntegration") return obligation.accepted.terminalAt
+  if (obligation._tag === "QueuedIntegration") return obligation.responsibility.queuedAt
+  return obligation.responsibility.startedAt
+}
+
+const dependencyEntryPosition = (
+  standing: Extract<DeliveryStatusEntry, { readonly _tag: "DependencyWait" }>["standing"]
+): number => (standing._tag === "ResponsibilitySituation" ? standing.facts.responsibility.beganAt : 0)
+
+const optionalObligationPosition = (obligation: ExactWorkflowObligation | null): number =>
+  obligation === null ? 0 : obligationPosition(obligation)
+
+type NonActionStatusEntry = Exclude<
+  DeliveryStatusEntry,
+  { readonly _tag: "ProposedDeliveryAction" | "LiveDeliveryAction" | "AcceptedFactPublicationWait" }
+>
+
+const statusEntryPosition = Match.typeTags<NonActionStatusEntry, number>()({
+  DependencyWait: (entry) => dependencyEntryPosition(entry.standing),
+  TrackerFactWait: (entry) => optionalObligationPosition(entry.responsibility),
+  TaskWorkCapacityWait: (entry) => entry.placement.rank,
+  IntegrationTargetWait: (entry) => obligationPosition(entry.responsibility),
+  EvidenceUnavailable: (entry) => optionalObligationPosition(entry.responsibility),
+  EvidenceConflict: (entry) => optionalObligationPosition(entry.responsibility),
+  Settlement: () => 0,
+  Relinquishment: (entry) => entry.responsibility.responsibility.beganAt
+})
+
 const dependencyStandingIdentity = (
   standing: Extract<DeliveryStatusEntry, { readonly _tag: "DependencyWait" }>["standing"]
 ): string => {
@@ -91,8 +127,8 @@ const statusEntryIdentityFor = Match.typeTags<DeliveryStatusEntry, string>()({
     `${statusEntryPrefix(entry)}:${entry.responsibility === null ? "subject" : obligationIdentity(entry.responsibility)}:${entry.fact._tag}`,
   TaskWorkCapacityWait: (entry) => `${statusEntryPrefix(entry)}:${entry.taskId}`,
   ProposedDeliveryAction: (entry) => `${statusEntryPrefix(entry)}:${entry.proposal.id}`,
-  LiveDeliveryAction: (entry) => `${statusEntryPrefix(entry)}:${entry.proposal.id}`,
-  AcceptedFactPublicationWait: (entry) => `${statusEntryPrefix(entry)}:${entry.proposal.id}`,
+  LiveDeliveryAction: (entry) => `${statusEntryPrefix(entry)}:${entry.owner.proposal.id}`,
+  AcceptedFactPublicationWait: (entry) => `${statusEntryPrefix(entry)}:${entry.owner.proposal.id}`,
   IntegrationTargetWait: (entry) =>
     `${statusEntryPrefix(entry)}:${plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(entry.plannedAttempt))}:${entry.wait._tag}`,
   EvidenceUnavailable: (entry) =>
@@ -138,27 +174,63 @@ const proposalOrderStructuralOrder = (order: DeliveryProposalOrderEvidence): Rea
     RecoveredWorkflowOrder: ({ acceptedAt, frontierOrdinal, responsibilityBeganAt, taskId, transition }) => [
       recoveredOrderKind,
       acceptedAt ?? noJournalPosition,
-      frontierOrdinal,
       responsibilityBeganAt ?? noJournalPosition,
+      frontierOrdinal,
       taskId,
       transition
     ],
     IntegrationOrder: ({ frontierOrdinal, queuedAt, startedAt, taskId }) => [
       integrationOrderKind,
-      frontierOrdinal,
       queuedAt,
       startedAt ?? noJournalPosition,
+      frontierOrdinal,
       taskId
     ],
     UnqueuedAcceptedResultOrder: ({ frontierOrdinal, taskId, terminalAt }) => [
       unqueuedAcceptedOrderKind,
+      terminalAt,
       frontierOrdinal,
-      taskId,
-      terminalAt
+      taskId
     ],
     TrackerGraphOrder: ({ acceptedAt }) => [trackerGraphOrderKind, acceptedAt ?? noJournalPosition]
   })
 }
+
+const proposalRouteTieBreaker = (proposal: DeliveryActionProposal): string =>
+  Match.valueTags(proposal.route, {
+    FreshWorkflowRoute: ({ step }) => `fresh:${step._tag}`,
+    RecoveredNewActionRoute: ({ action }) => `recovered:${action._tag}`,
+    TrackerGraphReadRoute: ({ purpose }) => `tracker:${purpose}`,
+    FreshExecutorWorkflowRoute: ({ step }) => `executor:${step._tag}`,
+    IdentityFreeWorkflowRoute: ({ transition }) => `identity-free:${transition._tag}`,
+    AcceptedWorkflowRoute: ({ transition }) =>
+      "operationId" in transition
+        ? `accepted:${transition._tag}:${transition.operationId}`
+        : `accepted:${transition._tag}`
+  })
+
+const proposalActionIdentityTieBreaker = (proposal: DeliveryActionProposal): string =>
+  Match.valueTags(proposal.actionIdentity, {
+    FreshOperationAndAttemptIdsRequired: () => "fresh-attempt",
+    FreshOperationIdRequired: ({ source }) =>
+      Match.valueTags(source, {
+        Allocate: () => "fresh-operation:allocate",
+        ExternalSuccessReleaseClaim: ({ claimOperationId }) => `fresh-operation:external:${claimOperationId}`,
+        TaskClaimReacquisitionRequest: ({ requestId }) => `fresh-operation:reacquisition:${requestId}`
+      }),
+    ExistingOperationId: () => "existing-operation",
+    NoWorkflowOperationIdentity: () => "identity-free"
+  })
+
+const proposalOperationTieBreaker = (proposal: DeliveryActionProposal): string =>
+  `${proposalActionIdentityTieBreaker(proposal)}:${proposalRouteTieBreaker(proposal)}`
+
+const proposalCorrelationTieBreaker = (proposal: DeliveryActionProposal): string =>
+  Match.valueTags(proposal.admission.plannedAttemptProtocol, {
+    NoPlannedAttemptProtocol: () => "no-planned-attempt-protocol",
+    PlannedAttemptProtocolRequired: ({ correlation }) =>
+      `planned-attempt-protocol:${plannedAttemptExecutorCorrelationKey(correlation)}`
+  })
 
 const statusEntryStructuralOrder = (entry: DeliveryStatusEntry): ReadonlyArray<number | string> => {
   if (
@@ -166,9 +238,15 @@ const statusEntryStructuralOrder = (entry: DeliveryStatusEntry): ReadonlyArray<n
     entry._tag === "LiveDeliveryAction" ||
     entry._tag === "AcceptedFactPublicationWait"
   ) {
-    return [...proposalOrderStructuralOrder(entry.proposal.order), entry.proposal.id]
+    const proposal = entry._tag === "ProposedDeliveryAction" ? entry.proposal : entry.owner.proposal
+    return [
+      ...proposalOrderStructuralOrder(proposal.order),
+      proposalOperationTieBreaker(proposal),
+      proposalCorrelationTieBreaker(proposal),
+      proposal.id
+    ]
   }
-  return [statusEntryIdentity(entry)]
+  return [statusEntryPosition(entry), statusEntryIdentity(entry)]
 }
 
 const phenomenonOrder: Readonly<Record<DeliveryStatusEntry["_tag"], number>> = {

@@ -861,6 +861,9 @@ const executorDecisionFor = (
           wakeCondition: "TaskTrackerFactsObserved"
         })
       }),
+      // A relinquished executor responsibility has no further frontier action;
+      // the accepted disposition is terminal and remains available to passive status.
+      Relinquished: () => ({}),
       Ready: ({ acceptedProgress }) => ({
         transition: RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
           acceptedProgress,

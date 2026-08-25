@@ -1,24 +1,28 @@
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey, type TaskId } from "@dalph/contracts"
-import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
+import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type {
   DeliveryRuntimeSnapshot,
+  DeliveryRuntimeEvaluation,
   ExactWorkflowObligation,
   TicketDelivery,
   TicketDeliveryStanding
 } from "./relations.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
+import { trackerFactForDisposition, unavailableFromFacts } from "./delivery-status-responsibility-semantics.js"
 import {
   DeliveryStatusProjectionConflict,
   type DeliveryStatusGraphSource,
+  type DeliveryStatusIntegrationStanding,
+  type DeliveryStatusEntry,
   type DeliveryStatusSubject,
   type DeliveryStatusTrackerFact,
-  type DeliveryStatusUnavailableEvidence,
-  type DeliveryStatusWakeCondition,
-  type DeliveryStatusIntegrationStanding
+  type DeliveryStatusWakeCondition
 } from "./delivery-status-model.js"
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
+import { addEntry } from "./delivery-status-order.js"
+import type { OrderedStatusEntry } from "./delivery-status-order.js"
 
 export {
   addEntry,
@@ -31,12 +35,67 @@ export {
   statusEntryJson
 } from "./delivery-status-order.js"
 export type { OrderedStatusEntry } from "./delivery-status-order.js"
+export { trackerFactForDisposition, unavailableFromFacts } from "./delivery-status-responsibility-semantics.js"
 
 export const includeForSubject = (subject: DeliveryStatusSubject, taskId: TaskId | null): boolean =>
   subject._tag === "Run" || (taskId !== null && subject.taskId === taskId)
 
 export const taskStatusSubject = (subject: DeliveryStatusSubject, taskId: TaskId): DeliveryStatusSubject =>
   subject._tag === "Task" ? subject : { _tag: "Task", runId: subject.runId, taskId }
+
+export const addDependencyEntry = (
+  subject: DeliveryStatusSubject,
+  taskId: TaskId,
+  prerequisiteTaskIds: ReadonlyArray<TaskId>,
+  standing: Extract<DeliveryStatusEntry, { readonly _tag: "DependencyWait" }>["standing"],
+  taskOrder: number,
+  entries: Array<OrderedStatusEntry>
+): void => {
+  const [first, ...rest] = prerequisiteTaskIds
+  if (first === undefined) return
+  addEntry(
+    entries,
+    {
+      _tag: "DependencyWait",
+      classification: "Waiting",
+      subject: taskStatusSubject(subject, taskId),
+      taskId,
+      prerequisiteTaskIds: [first, ...rest],
+      standing
+    },
+    taskOrder
+  )
+}
+
+type IntegrationWaitStanding = Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>
+
+export const integrationConfigurationStandingFor = (
+  standing: IntegrationWaitStanding
+): DeliveryStatusIntegrationStanding<"IntegrationConfigurationWait"> | null =>
+  standing.wait._tag === "IntegrationConfigurationWait" ? { ...standing, wait: standing.wait } : null
+
+export const targetPromotionConfigurationStandingFor = (
+  standing: IntegrationWaitStanding
+): DeliveryStatusIntegrationStanding<"TargetPromotionConfigurationWait"> | null =>
+  standing.wait._tag === "TargetPromotionConfigurationWait" ? { ...standing, wait: standing.wait } : null
+
+export const integrationDependencyStandingFor = (
+  standing: IntegrationWaitStanding
+): DeliveryStatusIntegrationStanding<"IntegrationDependencyWait"> | null =>
+  standing.wait._tag === "IntegrationDependencyWait" ? { ...standing, wait: standing.wait } : null
+
+export const integrationTrackerStandingFor = (
+  standing: IntegrationWaitStanding
+): DeliveryStatusIntegrationStanding<"IntegrationTrackerFactsWait" | "IntegrationTaskClaimConstraint"> | null => {
+  if (standing.wait._tag === "IntegrationTrackerFactsWait") return { ...standing, wait: standing.wait }
+  if (standing.wait._tag === "IntegrationTaskClaimConstraint") return { ...standing, wait: standing.wait }
+  return null
+}
+
+export const integrationTargetStandingFor = (
+  standing: IntegrationWaitStanding
+): DeliveryStatusIntegrationStanding<"IntegrationTargetWait"> | null =>
+  standing.wait._tag === "IntegrationTargetWait" ? { ...standing, wait: standing.wait } : null
 
 export const obligationForResponsibility = (
   delivery: TicketDelivery,
@@ -91,76 +150,65 @@ export const ownerIsSettled = (
   { readonly _tag: "SettledBeforeMaterialization" | "SettledMaterializedDeliveryAction" }
 > => owner._tag === "SettledBeforeMaterialization" || owner._tag === "SettledMaterializedDeliveryAction"
 
-export const ownerOperationId = (owner: DeliveryRuntimeLiveOwnerSnapshot): OperationId | null =>
-  owner._tag === "MaterializedDeliveryAction" || owner._tag === "SettledMaterializedDeliveryAction"
-    ? owner.operationId
-    : null
-
-type TrackerFactProjection = {
-  readonly fact: DeliveryStatusTrackerFact
-  readonly wakeCondition: DeliveryStatusWakeCondition
-}
-
-const missingTrackerFact: TrackerFactProjection = {
-  fact: { _tag: "Missing", boundary: "TaskTracker" },
-  wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
-}
-const unreadableTrackerFact: TrackerFactProjection = {
-  fact: { _tag: "Unreadable", boundary: "TaskTracker" },
-  wakeCondition: "TaskClaimFactsObserved"
-}
-const foreignTrackerFact: TrackerFactProjection = {
-  fact: { _tag: "Foreign", boundary: "TaskTracker" },
-  wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
-}
-const unobservedTrackerFact: TrackerFactProjection = {
-  fact: { _tag: "Unobserved", boundary: "TaskTracker" },
-  wakeCondition: "TaskClaimFactsObserved"
-}
-const taskTrackerRereadFact: TrackerFactProjection = {
-  fact: { _tag: "Unreadable", boundary: "TaskTracker" },
-  wakeCondition: "BoundaryRereadSucceeded"
-}
-
-const trackerFactForClaimState = (
-  claimState: "Foreign" | "Missing" | "Unreadable" | "Unobserved"
-): TrackerFactProjection => {
-  if (claimState === "Missing") return missingTrackerFact
-  if (claimState === "Unreadable") return unreadableTrackerFact
-  if (claimState === "Foreign") return foreignTrackerFact
-  return unobservedTrackerFact
-}
-
-const directTrackerFactForDisposition = (facts: ResponsibilityFreshFacts): TrackerFactProjection | null => {
-  const disposition = facts.disposition
-  if (disposition._tag === "TaskClaimMissingConstraint" || disposition._tag === "MissingClaim") {
-    return missingTrackerFact
+const canonicalJson = (value: unknown): string => {
+  const canonical = (current: unknown): unknown => {
+    if (Array.isArray(current)) return current.map(canonical)
+    if (current !== null && typeof current === "object") {
+      return Object.fromEntries(
+        Object.entries(current)
+          .toSorted(([left], [right]) => left.localeCompare(right))
+          .map(([key, nested]) => [key, canonical(nested)])
+      )
+    }
+    return current
   }
-  if (disposition._tag === "TaskClaimUnreadableWait") return unreadableTrackerFact
-  if (disposition._tag === "TaskForeignClaimIsolation" || disposition._tag === "ForeignClaimIsolation") {
-    return foreignTrackerFact
+  return JSON.stringify(canonical(value))
+}
+
+const proposalEquals = (left: DeliveryActionProposal, right: DeliveryActionProposal): boolean =>
+  canonicalJson(left) === canonicalJson(right)
+
+const liveOwnerConflict = (
+  subject: DeliveryStatusSubject,
+  proposalId: string,
+  detail: string
+): DeliveryStatusProjectionConflict =>
+  new DeliveryStatusProjectionConflict({ subject, entryIdentity: `live-owner:${proposalId}`, detail })
+
+/** Live owners are valid only as one exact lifecycle snapshot of one current proposal. */
+export const validateLiveOwnersForStatus = (
+  subject: DeliveryStatusSubject,
+  evaluation: DeliveryRuntimeEvaluation,
+  liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+): DeliveryStatusProjectionConflict | null => {
+  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return null
+  const duplicateProposal = evaluation.proposedActions.proposals.find(
+    (proposal, index, proposals) => proposals.findIndex(({ id }) => id === proposal.id) !== index
+  )
+  if (duplicateProposal !== undefined) {
+    return liveOwnerConflict(subject, duplicateProposal.id, "the current proposal frontier repeats one action identity")
+  }
+  const duplicateOwner = liveOwners.find(
+    (owner, index, owners) => owners.findIndex(({ proposal }) => proposal.id === owner.proposal.id) !== index
+  )
+  if (duplicateOwner !== undefined) {
+    return liveOwnerConflict(
+      subject,
+      duplicateOwner.proposal.id,
+      "multiple live lifecycle snapshots claim one exact proposal"
+    )
+  }
+  for (const owner of liveOwners) {
+    const proposalId = owner.proposal.id
+    const current = evaluation.proposedActions.proposals.find(({ id }) => id === proposalId)
+    if (current === undefined) {
+      return liveOwnerConflict(subject, proposalId, "a live owner proposal is absent from the current frontier")
+    }
+    if (!proposalEquals(owner.proposal, current)) {
+      return liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
+    }
   }
   return null
-}
-
-export const trackerFactForDisposition = (facts: ResponsibilityFreshFacts): TrackerFactProjection | null => {
-  const disposition = facts.disposition
-  if (disposition._tag === "WorkflowOperationTaskClaimConstraint") {
-    return trackerFactForClaimState(disposition.claimState)
-  }
-  if (disposition._tag === "UnreadableFactWait" && disposition.boundary === "TaskTracker") {
-    return taskTrackerRereadFact
-  }
-  return directTrackerFactForDisposition(facts)
-}
-
-export const unavailableFromFacts = (facts: ResponsibilityFreshFacts): DeliveryStatusUnavailableEvidence | null => {
-  const disposition = facts.disposition
-  if (disposition._tag === "Ready" || disposition._tag === "Relinquished" || disposition._tag === "DependencyWait") {
-    return null
-  }
-  if (trackerFactForDisposition(facts) !== null) return null
-  return { _tag: "ResponsibilityFacts", facts }
 }
 
 export const integrationTrackerFactForWait = (
@@ -189,11 +237,6 @@ export const integrationTrackerFactForWait = (
   }
   return { fact: { _tag: "Unobserved", boundary: "TaskTracker" }, wakeCondition: "TaskClaimFactsObserved" }
 }
-
-export const isIntegrationStandingFor = <WaitTag extends IntegrationDeliveryWait["_tag"]>(
-  standing: Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>,
-  waitTag: WaitTag
-): standing is DeliveryStatusIntegrationStanding<WaitTag> => standing.wait._tag === waitTag
 
 export const graphSourceOf = (snapshot: DeliveryRuntimeSnapshot): DeliveryStatusGraphSource | null => {
   if (snapshot.trackerGraph._tag !== "GraphEstablished") return null
@@ -227,17 +270,6 @@ const responsibilityHasStatusProjection = (facts: ResponsibilityFreshFacts): boo
   )
 }
 
-const unsupportedResponsibilityConflict = (
-  subject: DeliveryStatusSubject,
-  delivery: TicketDelivery,
-  facts: ResponsibilityFreshFacts
-): DeliveryStatusProjectionConflict =>
-  new DeliveryStatusProjectionConflict({
-    subject,
-    entryIdentity: `responsibility:${delivery.taskId}:${facts.disposition._tag}`,
-    detail: `the ${facts.disposition._tag} has no exact public status entry variant`
-  })
-
 const validateResponsibilityStandingForStatus = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery,
@@ -247,9 +279,6 @@ const validateResponsibilityStandingForStatus = (
   if (standing.facts.disposition._tag === "Relinquished") return null
   const hasStatusProjection = responsibilityHasStatusProjection(standing.facts)
   if (responsibility === null && hasStatusProjection) return responsibilityProjectionConflict(subject, delivery)
-  if (!hasStatusProjection && standing.facts.disposition._tag !== "Ready") {
-    return unsupportedResponsibilityConflict(subject, delivery, standing.facts)
-  }
   if (
     standing.facts.disposition._tag === "DependencyWait" &&
     standing.facts.disposition.prerequisiteTaskIds.length === 0

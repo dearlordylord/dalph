@@ -195,6 +195,7 @@ export type PlannedAttemptExecutorDisposition =
           | "TaskClaimMissingConstraint"
           | "TaskClaimUnreadableWait"
           | "TaskForeignClaimIsolation"
+          | "Relinquished"
           | "AppliedTaskClaimReacquisitionDirection"
           | "TaskLifecycleConstraint"
           | "TaskMembershipConstraint"

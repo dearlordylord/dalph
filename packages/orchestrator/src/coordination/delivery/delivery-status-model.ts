@@ -33,6 +33,10 @@ export type DeliveryStatusTrackerFact =
   | { readonly _tag: "Foreign"; readonly boundary: "TaskTracker" }
   | { readonly _tag: "Unobserved"; readonly boundary: "TaskTracker" }
 
+/** Branded identity of one exact accepted evidence source in a conflict. */
+export const DeliveryStatusEvidenceIdentity = Schema.NonEmptyString.pipe(Schema.brand("DeliveryStatusEvidenceIdentity"))
+export type DeliveryStatusEvidenceIdentity = typeof DeliveryStatusEvidenceIdentity.Type
+
 /** Wake conditions already owned by frontier explanations; status does not invent scheduler vocabulary. */
 export type DeliveryStatusWakeCondition = Extract<
   FrontierExplanation,
@@ -124,7 +128,10 @@ export type DeliveryStatusEvidenceConflictEntry =
       readonly classification: "Blocked"
       readonly subject: DeliveryStatusSubject
       readonly responsibility: ExactWorkflowObligation
-      readonly evidenceIdentities: readonly [string, ...ReadonlyArray<string>]
+      readonly evidenceIdentities: readonly [
+        DeliveryStatusEvidenceIdentity,
+        ...ReadonlyArray<DeliveryStatusEvidenceIdentity>
+      ]
       readonly standing: Extract<TicketDeliveryStanding, { readonly _tag: "ExactEvidenceConflict" }>
     }
   | {
@@ -132,7 +139,10 @@ export type DeliveryStatusEvidenceConflictEntry =
       readonly classification: "Blocked"
       readonly subject: DeliveryStatusSubject
       readonly responsibility: null
-      readonly evidenceIdentities: readonly [string, ...ReadonlyArray<string>]
+      readonly evidenceIdentities: readonly [
+        DeliveryStatusEvidenceIdentity,
+        ...ReadonlyArray<DeliveryStatusEvidenceIdentity>
+      ]
       readonly standing: Extract<TicketDeliveryStanding, { readonly _tag: "ExactEvidenceConflict" }>
     }
 
@@ -190,8 +200,6 @@ export type DeliveryStatusEntry =
       readonly classification: "Progressing"
       readonly subject: DeliveryStatusSubject
       readonly owner: DeliveryRuntimeLiveOwnerSnapshot
-      readonly proposal: DeliveryActionProposal
-      readonly operationId: OperationId | null
     }
   | {
       readonly _tag: "AcceptedFactPublicationWait"
@@ -201,8 +209,6 @@ export type DeliveryStatusEntry =
         DeliveryRuntimeLiveOwnerSnapshot,
         { readonly _tag: "SettledBeforeMaterialization" | "SettledMaterializedDeliveryAction" }
       >
-      readonly proposal: DeliveryActionProposal
-      readonly operationId: OperationId | null
       readonly acceptedAt: JournalPosition | null
     }
   | {
@@ -233,8 +239,9 @@ export type DeliveryStatusEntry =
       readonly classification: "Relinquished"
       readonly subject: DeliveryStatusSubject
       readonly responsibility: Extract<ExactWorkflowObligation, { readonly _tag: "WorkflowResponsibility" }>
-      readonly correlation: PlannedAttemptExecutorCorrelation | null
-      readonly operationId: OperationId | null
+      readonly supporting:
+        | { readonly _tag: "PlannedAttempt"; readonly correlation: PlannedAttemptExecutorCorrelation }
+        | { readonly _tag: "WorkflowOperation"; readonly operationId: OperationId }
       readonly reason: "AuthorizedHandoff" | "FreshAuthorityRevocation"
     }
 
