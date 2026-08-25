@@ -63,33 +63,57 @@ const cleanupUnreadable = (
   IntegratorCandidateCleanupObservation.cases.Unreadable.make({ detail, locator: authorization.locator })
 
 type SealedTerminalRunValidation =
-  | { readonly _tag: "Valid"; readonly expected: CodexIntegratorPrivateRecord["runs"][number] }
+  | { readonly _tag: "Valid"; readonly expected: SealedTerminalRun }
   | { readonly _tag: "Invalid"; readonly detail: string }
 
-type SealedTerminalRun = CodexIntegratorPrivateRecord["runs"][number] & {
+/** Cleanup evidence whose durable result, turn, and terminal status are mutually compatible. */
+type SealedTerminalRun =
+  | (CodexIntegratorPrivateRecord["runs"][number] & {
+      readonly phase: "Sealed"
+      readonly result: Extract<
+        NonNullable<CodexIntegratorPrivateRecord["runs"][number]["result"]>,
+        { readonly _tag: "PreparedCandidate" }
+      >
+      readonly terminalStatus: "completed"
+      readonly turnId: NonNullable<CodexIntegratorPrivateRecord["runs"][number]["turnId"]>
+    })
+  | (CodexIntegratorPrivateRecord["runs"][number] & {
+      readonly phase: "Sealed"
+      readonly result: Extract<
+        NonNullable<CodexIntegratorPrivateRecord["runs"][number]["result"]>,
+        { readonly _tag: "NotPrepared" }
+      >
+      readonly terminalStatus: "completed" | "failed"
+      readonly turnId: NonNullable<CodexIntegratorPrivateRecord["runs"][number]["turnId"]>
+    })
+
+type SealedTerminalRunEvidence = CodexIntegratorPrivateRecord["runs"][number] & {
   readonly phase: "Sealed"
   readonly result: NonNullable<CodexIntegratorPrivateRecord["runs"][number]["result"]>
+  readonly terminalStatus: Exclude<CodexIntegratorPrivateRecord["runs"][number]["terminalStatus"], null>
   readonly turnId: NonNullable<CodexIntegratorPrivateRecord["runs"][number]["turnId"]>
 }
 
 const hasSealedTerminalRunEvidence = (
   expected: CodexIntegratorPrivateRecord["runs"][number] | undefined
-): expected is SealedTerminalRun => {
+): expected is SealedTerminalRunEvidence => {
   if (expected === undefined || expected.phase !== "Sealed") return false
-  return expected.result !== null && expected.turnId !== null
+  return expected.result !== null && expected.terminalStatus !== null && expected.turnId !== null
 }
 
-const sealedTerminalRunContradictsResult = (expected: SealedTerminalRun): boolean =>
-  expected.terminalStatus === null ||
+const sealedTerminalRunContradictsResult = (expected: SealedTerminalRunEvidence): boolean =>
   (expected.terminalStatus === "failed" && expected.result._tag !== "NotPrepared") ||
   (expected.result._tag === "PreparedCandidate" && expected.terminalStatus !== "completed")
+
+const isCompatibleSealedTerminalRun = (expected: SealedTerminalRunEvidence): expected is SealedTerminalRun =>
+  !sealedTerminalRunContradictsResult(expected)
 
 const validateSealedTerminalRun = (record: CodexIntegratorPrivateRecord): SealedTerminalRunValidation => {
   const expected = record.runs[record.runs.length - 1]
   if (!hasSealedTerminalRunEvidence(expected)) {
     return { _tag: "Invalid", detail: "private predecessor has no sealed terminal turn evidence" }
   }
-  if (sealedTerminalRunContradictsResult(expected)) {
+  if (!isCompatibleSealedTerminalRun(expected)) {
     return { _tag: "Invalid", detail: "private predecessor has contradictory sealed terminal outcome evidence" }
   }
   return { _tag: "Valid", expected }
@@ -110,10 +134,8 @@ const terminalThreadTokenObservation = (
   return foreign === undefined ? undefined : cleanupForeign(authorization, predecessor.sessionId, "OtherSession")
 }
 
-const terminalTurnIdMismatch = (
-  exact: CodexThreadSnapshot["turns"][number],
-  expected: CodexIntegratorPrivateRecord["runs"][number]
-): boolean => exact.id !== expected.turnId
+const terminalTurnIdMismatch = (exact: CodexThreadSnapshot["turns"][number], expected: SealedTerminalRun): boolean =>
+  exact.id !== expected.turnId
 
 const isConclusiveTerminalStatus = (status: CodexThreadSnapshot["turns"][number]["status"]): boolean =>
   status === "completed" || status === "failed"
@@ -122,7 +144,7 @@ const terminalTurnObservation = (
   authorization: IntegratorCandidateCleanupAuthorization,
   predecessor: IntegratorSessionCorrelation,
   thread: CodexThreadSnapshot,
-  expected: CodexIntegratorPrivateRecord["runs"][number]
+  expected: SealedTerminalRun
 ): IntegratorCandidateCleanupObservation | undefined => {
   const matching = thread.turns.filter((turn) => turn.ownedTurnToken === expected.token)
   if (matching.length !== 1) {
