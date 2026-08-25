@@ -282,6 +282,7 @@ it.effect(
       expect(predecessorEvidence.candidateGit.position).toBeGreaterThan(predecessor.targetLineageObservedAt)
       const predecessorRequest = predecessorEvidence.request
       const predecessorCandidateCapture = predecessorEvidence.candidateCapture
+      expect(predecessorRequest.occurrence.correlation).toEqual(predecessor)
       expect(predecessorRequest.occurrence.correlation.queuedAt).toBe(predecessor.queuedAt)
       expect(predecessorRequest.occurrence.correlation.startedAt).toBe(predecessor.startedAt)
 
@@ -408,6 +409,7 @@ it.effect(
       expect(successorRequest.occurrence.correlation.plannedAttempt.attemptId).toBe(
         successorCorrelation.plannedAttempt.attemptId
       )
+      expect(successorRequest.occurrence.correlation).toEqual(successorCorrelation)
       expect(successorRequest.occurrence.correlation.queuedAt).toBe(predecessor.queuedAt)
       expect(successorRequest.occurrence.correlation.startedAt).toBe(predecessor.startedAt)
       expect(successorRequest.captureOrder).toBeGreaterThan(directionCapture.captureOrder)

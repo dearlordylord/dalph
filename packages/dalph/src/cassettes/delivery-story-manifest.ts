@@ -71,6 +71,9 @@ const chronologyTest = capstoneTest("executes DS01 through DS13 in one maintaine
 const finalityTest = capstoneTest(
   "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality"
 )
+const ds16NegativeTest = capstoneTest(
+  "rejects DS16 evidence without the rejected CAS attempt or with a pre-request stale read"
+)
 
 const spine = (
   beatId: DeliveryStoryBeatId,
@@ -92,7 +95,7 @@ const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeat
  */
 export const deliveryStoryManifest = {
   cassetteKey: "authored:deliveryInvariantStoryCapstone" as const,
-  cassetteAcceptanceTests: [chronologyTest, finalityTest],
+  cassetteAcceptanceTests: [chronologyTest, finalityTest, ds16NegativeTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
     spine("DS-01", chronologyTest),
