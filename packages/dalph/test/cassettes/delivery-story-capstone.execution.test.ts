@@ -101,7 +101,7 @@ const extractDs16PromotionEvidence = (
 
 /** One Integrator boundary is proved by its journal run/result/candidate records and bounded raw captures. */
 interface IntegratorBoundaryEvidence {
-  readonly session: JournalRecordFor<"IntegratorSessionFixed">
+  readonly session: JournalRecordFor<"IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed">
   readonly run: JournalRecordFor<"IntegratorRunStarted">
   readonly result: JournalRecordFor<"IntegratorRunResultRecorded">
   readonly candidateGit: JournalRecordFor<"IntegratorRunCandidateGitObserved">
@@ -111,6 +111,7 @@ interface IntegratorBoundaryEvidence {
 
 interface IntegratorBoundaryExpectation {
   readonly runId: string
+  readonly sessionKind: "Predecessor" | "Successor"
   readonly sessionId: string
   readonly acceptedCommit: string
   readonly expectedTargetHead: string
@@ -127,9 +128,15 @@ const integratorBoundaryEvidenceFor = (
   expectation: IntegratorBoundaryExpectation
 ): IntegratorBoundaryEvidence | undefined => {
   const authoredSessionId = expectation.sessionId.replaceAll(expectation.runId, "$authored-run")
+  const sessionRecords =
+    expectation.sessionKind === "Predecessor"
+      ? recordsFor(records, "IntegratorSessionFixed")
+      : recordsFor(records, "IntegratorSuccessorSessionFixed")
   const session = exactlyOne(
-    recordsFor(records, "IntegratorSessionFixed").filter(
-      ({ event }) => event.correlation.sessionId === expectation.sessionId
+    sessionRecords.filter(({ event }) =>
+      event._tag === "IntegratorSessionFixed"
+        ? event.correlation.sessionId === expectation.sessionId
+        : event.successor.sessionId === expectation.sessionId
     ),
     `${expectation.sessionId} Integrator session`
   )
@@ -303,6 +310,7 @@ it.effect(
         expectedTargetHead: initialHead,
         requestCaptureAfter: 0,
         runId: String(run.runId),
+        sessionKind: "Predecessor",
         sessionId: predecessor.sessionId
       })
       expect(predecessorEvidence).toBeDefined()
@@ -437,6 +445,7 @@ it.effect(
         expectedTargetHead: changedHead,
         requestCaptureAfter: directionCapture.captureOrder,
         runId: String(run.runId),
+        sessionKind: "Successor",
         sessionId: successorCorrelation.sessionId
       })
       expect(successorEvidence).toBeDefined()
