@@ -1,3 +1,4 @@
+import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey } from "@dalph/contracts"
 import type { TicketDelivery, TicketDeliveryStanding } from "./relations.js"
 import {
   DeliveryStatusProjectionConflict,
@@ -11,6 +12,85 @@ import { taskStatusSubject } from "./delivery-status-subject.js"
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
 
 type ResponsibilityStanding = Extract<TicketDeliveryStanding, { readonly _tag: "ResponsibilitySituation" }>
+const acceptedStandingCompositionOf = (standing: TicketDeliveryStanding) => {
+  if (standing._tag !== "ResponsibilitySituation" || standing.facts._tag !== "PlannedAttemptExecutorFreshFacts") {
+    return null
+  }
+  const disposition = acceptedStandingSettlementDispositionFor(standing.facts)
+  if (disposition === null) return null
+  return {
+    disposition,
+    responsibility: standing.facts.responsibility,
+    correlationKey: plannedAttemptExecutorCorrelationKey(
+      plannedAttemptExecutorCorrelation(standing.facts.responsibility.plannedAttempt)
+    )
+  }
+}
+const integrationObligationMatches = (delivery: TicketDelivery, correlationKey: string): boolean =>
+  delivery.obligations.some((obligation) => {
+    if (obligation._tag === "QueuedIntegration") {
+      return (
+        plannedAttemptExecutorCorrelationKey(
+          plannedAttemptExecutorCorrelation(obligation.responsibility.plannedAttempt)
+        ) === correlationKey
+      )
+    }
+    if (obligation._tag === "StartedIntegration") {
+      return (
+        plannedAttemptExecutorCorrelationKey(
+          plannedAttemptExecutorCorrelation(obligation.responsibility.plannedAttempt)
+        ) === correlationKey
+      )
+    }
+    return false
+  })
+
+const acceptedStandingCompositionConflict = (
+  subject: DeliveryStatusSubject,
+  delivery: TicketDelivery,
+  correlationKey: string,
+  detail: string
+): DeliveryStatusProjectionConflict =>
+  new DeliveryStatusProjectionConflict({
+    subject,
+    entryIdentity: makeDeliveryStatusEntryIdentity(
+      canonicalIdentity(["accepted-standing-settlement", delivery.taskId, correlationKey, "composition"])
+    ),
+    detail
+  })
+
+/** Rejects impossible cross-standing and integration-lifecycle compositions before entry building. */
+export const validateAcceptedStandingCompositionForStatus = (
+  subject: DeliveryStatusSubject,
+  delivery: TicketDelivery
+): DeliveryStatusProjectionConflict | null => {
+  const acceptedCompositions = delivery.standings.flatMap((standing) => {
+    const accepted = acceptedStandingCompositionOf(standing)
+    return accepted === null ? [] : [accepted]
+  })
+  for (const [index, accepted] of acceptedCompositions.entries()) {
+    const previous = acceptedCompositions
+      .slice(0, index)
+      .find(({ correlationKey }) => correlationKey === accepted.correlationKey)
+    if (previous !== undefined && previous.disposition._tag !== accepted.disposition._tag) {
+      return acceptedStandingCompositionConflict(
+        subject,
+        delivery,
+        accepted.correlationKey,
+        "one planned-attempt correlation has contradictory cancelled and stopped settlements"
+      )
+    }
+    if (integrationObligationMatches(delivery, accepted.correlationKey)) {
+      return acceptedStandingCompositionConflict(
+        subject,
+        delivery,
+        accepted.correlationKey,
+        "an accepted settled standing shares its planned-attempt correlation with a queued or started integration"
+      )
+    }
+  }
+  return null
+}
 
 type AcceptedStandingSettlementResolution =
   | { readonly _tag: "NotAccepted" }

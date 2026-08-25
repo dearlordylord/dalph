@@ -29,7 +29,7 @@ import {
 import { workflowResponsibilityKey } from "../reconstruction/state.js"
 import { addEntry, canonicalEncodingOf, canonicalIdentity, taskOrderFor } from "./delivery-status-order.js"
 import type { OrderedStatusEntry, StatusTaskOrder, StatusTaskOrderLookup } from "./delivery-status-order.js"
-import { validateAcceptedStandingForStatus } from "./delivery-status-settlement.js"
+import * as deliveryStatusSettlement from "./delivery-status-settlement.js"
 import { taskStatusSubject } from "./delivery-status-subject.js"
 
 export {
@@ -104,7 +104,6 @@ export const addDependencyEntry = (
 }
 
 type IntegrationWaitStanding = Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>
-
 export const integrationConfigurationStandingFor = (
   standing: IntegrationWaitStanding
 ): DeliveryStatusIntegrationStanding<"IntegrationConfigurationWait"> | null =>
@@ -288,7 +287,7 @@ const validateResponsibilityStandingForStatus = (
   delivery: TicketDelivery,
   standing: Extract<TicketDeliveryStanding, { readonly _tag: "ResponsibilitySituation" }>
 ): DeliveryStatusProjectionConflict | null => {
-  const acceptedConflict = validateAcceptedStandingForStatus(subject, delivery, standing)
+  const acceptedConflict = deliveryStatusSettlement.validateAcceptedStandingForStatus(subject, delivery, standing)
   if (acceptedConflict !== null) return acceptedConflict
   const responsibility = obligationForResponsibility(delivery, standing.facts)
   if (standing.facts.disposition._tag === "Relinquished") return null
@@ -449,6 +448,8 @@ export const validateDeliveryEvidenceForStatus = (
   subject: DeliveryStatusSubject,
   delivery: TicketDelivery
 ): DeliveryStatusProjectionConflict | null => {
+  const compositionConflict = deliveryStatusSettlement.validateAcceptedStandingCompositionForStatus(subject, delivery)
+  if (compositionConflict !== null) return compositionConflict
   for (const standing of delivery.standings) {
     const conflict = validateStandingForStatus(subject, delivery, standing)
     if (conflict !== null) return conflict

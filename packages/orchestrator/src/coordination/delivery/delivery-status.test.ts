@@ -48,6 +48,7 @@ import {
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeSnapshot,
   type DeliveryProposalFrontier,
+  type TicketDelivery,
   type TicketDeliveryEvidence
 } from "./relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
@@ -288,6 +289,28 @@ const evaluationOf = ({
     cancellationApplied: false
   }
   return DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners })
+}
+
+const readyWithFirstDeliveryOf = (
+  state: Extract<DeliveryRuntimeObservationState, { readonly _tag: "Ready" }>,
+  standings: TicketDelivery["standings"],
+  obligations: TicketDelivery["obligations"] = []
+): DeliveryRuntimeObservationState => {
+  const delivery = state.evaluation.current.ticketDeliveries.deliveries[0]
+  if (delivery === undefined) return expect.fail("status fixture must contain one delivery")
+  return DeliveryRuntimeObservationState.Ready({
+    evaluation: {
+      ...state.evaluation,
+      current: {
+        ...state.evaluation.current,
+        ticketDeliveries: {
+          ...state.evaluation.current.ticketDeliveries,
+          deliveries: [{ ...delivery, standings, obligations }]
+        }
+      }
+    },
+    liveOwners: state.liveOwners
+  })
 }
 
 const statusFor = (state: DeliveryRuntimeObservationState, subject: unknown): CurrentDeliveryStatus => {
@@ -852,6 +875,103 @@ it("projects cancelled and stopped accepted standings as distinct public settlem
   expect(
     deliveryStatusOf({ _tag: "Task", runId: integrationFinalityFixture.runId, taskId: mismatchTaskId }, foreignRunState)
   ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+})
+
+it("fails closed for contradictory settled standings and live integration obligations", () => {
+  const taskId = integrationFinalityFixture.taskId
+  const responsibility = {
+    _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+    beganAt: JournalPosition.make(2),
+    plannedAttempt: integrationFinalityFixture.plannedAttempt
+  }
+  const cancelledDisposition = ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })
+  const stoppedDisposition = ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "NoRelease" })
+  const standingOf = (
+    disposition: typeof cancelledDisposition | typeof stoppedDisposition
+  ): TicketDelivery["standings"][number] => ({
+    _tag: "ResponsibilitySituation",
+    facts: { _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }
+  })
+  const state = evaluationOf({
+    runtimeRunId: integrationFinalityFixture.runId,
+    tasks: [{ id: String(taskId) }],
+    evidence: [
+      {
+        _tag: "ResponsibilityFacts",
+        facts: { _tag: "PlannedAttemptExecutorFreshFacts", disposition: cancelledDisposition, responsibility }
+      }
+    ]
+  })
+  if (state._tag !== "Ready") return expect.fail("settled composition fixture must be ready")
+  const subject = Schema.decodeUnknownSync(DeliveryStatusSubject)({
+    _tag: "Task",
+    runId: integrationFinalityFixture.runId,
+    taskId
+  })
+
+  expect(
+    deliveryStatusOf(
+      subject,
+      readyWithFirstDeliveryOf(state, [standingOf(cancelledDisposition), standingOf(stoppedDisposition)])
+    )
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+
+  const integration = integrationFactsOf()
+  const queuedObligation: TicketDelivery["obligations"][number] = {
+    _tag: "QueuedIntegration",
+    responsibility: integration.queued
+  }
+  const startedObligation: TicketDelivery["obligations"][number] = {
+    _tag: "StartedIntegration",
+    responsibility: integration.started
+  }
+  expect(
+    deliveryStatusOf(subject, readyWithFirstDeliveryOf(state, [standingOf(cancelledDisposition)], [queuedObligation]))
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(
+    deliveryStatusOf(subject, readyWithFirstDeliveryOf(state, [standingOf(cancelledDisposition)], [startedObligation]))
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+})
+
+it("orders accepted-standing settlements by responsibility beganAt before correlation", () => {
+  const taskId = integrationFinalityFixture.taskId
+  const responsibilityOf = (attemptId: string, beganAt: number) => ({
+    _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+    beganAt: JournalPosition.make(beganAt),
+    plannedAttempt: { ...integrationFinalityFixture.plannedAttempt, attemptId: AttemptId.make(attemptId) }
+  })
+  type OrderedResponsibility = ReturnType<typeof responsibilityOf>
+  const cancelledDisposition = ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })
+  const earlierResponsibility = responsibilityOf("z-order-attempt", 1)
+  const laterResponsibility = responsibilityOf("a-order-attempt", 9)
+  const standingOf = (responsibility: OrderedResponsibility): TicketDelivery["standings"][number] => ({
+    _tag: "ResponsibilitySituation",
+    facts: { _tag: "PlannedAttemptExecutorFreshFacts", disposition: cancelledDisposition, responsibility }
+  })
+  const state = evaluationOf({ runtimeRunId: integrationFinalityFixture.runId, tasks: [{ id: String(taskId) }] })
+  if (state._tag !== "Ready") return expect.fail("settlement ordering fixture must be ready")
+  const subject = Schema.decodeUnknownSync(DeliveryStatusSubject)({
+    _tag: "Task",
+    runId: integrationFinalityFixture.runId,
+    taskId
+  })
+  const status = deliveryStatusOf(
+    subject,
+    readyWithFirstDeliveryOf(state, [standingOf(laterResponsibility), standingOf(earlierResponsibility)])
+  )
+  expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  if (status._tag !== "DeliveryStatusAvailable") return
+  const settlements = status.entries.filter(
+    (entry): entry is Extract<DeliveryStatusEntry, { readonly _tag: "Settlement" }> => entry._tag === "Settlement"
+  )
+  expect(settlements).toHaveLength(2)
+  expect(
+    settlements.map(({ settlement }) =>
+      settlement._tag === "AcceptedStandingSettlement"
+        ? settlement.standing.responsibility.plannedAttempt.attemptId
+        : settlement.attemptId
+    )
+  ).toEqual([earlierResponsibility.plannedAttempt.attemptId, laterResponsibility.plannedAttempt.attemptId])
 })
 
 it("retains materialized operation identity through live and settled owner chronology", () => {

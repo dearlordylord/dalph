@@ -181,7 +181,10 @@ const statusEntryPosition = Match.typeTags<NonActionStatusEntry, StructuralOrder
   IntegrationTargetWait: (entry) => orderPosition(obligationPosition(entry.responsibility)),
   EvidenceUnavailable: (entry) => optionalObligationPosition(entry.responsibility),
   EvidenceConflict: (entry) => optionalObligationPosition(entry.responsibility),
-  Settlement: () => missingOrderPosition,
+  Settlement: (entry) =>
+    entry.settlement._tag === "DeliverySettlement"
+      ? missingOrderPosition
+      : orderPosition(entry.settlement.standing.responsibility.beganAt),
   Relinquishment: (entry) => orderPosition(entry.responsibility.responsibility.beganAt)
 })
 
