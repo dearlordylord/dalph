@@ -62,7 +62,7 @@ const makeOwner = Effect.fn("DeliveryRuntimeObservationTest.makeOwner")(function
     (yield* makeApplicationExitLifecycle()).admission
   )
   const admission = yield* resources
-    .makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [] })
+    .makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [], preStart: [] })
     .pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
   const admitted = yield* admission.tryReserve(proposal)
   if (admitted._tag === "Deferred") return yield* Effect.die("fixture proposal must be admitted")

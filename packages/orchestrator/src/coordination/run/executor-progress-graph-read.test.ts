@@ -6,6 +6,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   executorProgressGraphReadInputOf,
   executorProgressGraphReadRequirementOf,
+  type ExecutorProgressGraphReadOutcome,
   type ExecutorProgressCommand,
   type ExecutorProgressGraphRead
 } from "./executor-progress-graph-read.js"
@@ -34,7 +35,7 @@ const readAt = (
   operationId: string,
   intentAt: number,
   observedAt: number | null,
-  observation: "Complete" | "Unchanged" | "Failed" | null = "Complete"
+  observation: ExecutorProgressGraphReadOutcome | null = "Complete"
 ): ExecutorProgressGraphRead => ({
   intentAt: JournalPosition.make(intentAt),
   observation:

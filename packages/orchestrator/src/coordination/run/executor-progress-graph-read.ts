@@ -23,12 +23,16 @@ export interface ExecutorProgressReport {
   readonly correlation: PlannedAttemptExecutorCorrelation
 }
 
+/** The only tracker outcomes that can be attached to a complete graph-read observation. */
+export const executorProgressGraphReadOutcomeLiterals = ["Complete", "Unchanged", "Failed"] as const
+export type ExecutorProgressGraphReadOutcome = (typeof executorProgressGraphReadOutcomeLiterals)[number]
+
 /** The outcome of one complete-graph read intent, with its position inseparable from the outcome. */
 export type ExecutorProgressGraphReadObservation =
   | { readonly _tag: "Unresolved" }
   | {
       readonly _tag: "Observed"
-      readonly outcome: "Complete" | "Unchanged" | "Failed"
+      readonly outcome: ExecutorProgressGraphReadOutcome
       readonly observedAt: JournalPosition
     }
 
@@ -274,7 +278,7 @@ export const executorProgressGraphReadInputOf = (
     if (observation === undefined || observation.event._tag !== "TaskTrackerFactsObserved") {
       return { ...intent, observation: { _tag: "Unresolved" } as const }
     }
-    const outcome: "Complete" | "Unchanged" | "Failed" =
+    const outcome: ExecutorProgressGraphReadOutcome =
       observation.event.observation._tag === "CompleteTaskTrackerFacts"
         ? "Complete"
         : observation.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"

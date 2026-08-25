@@ -79,6 +79,14 @@ export const deliveryProposalOrderTaskId = (order: DeliveryProposalOrderEvidence
 /** The task-work position the runtime must prove before it may perform this action. */
 export type TaskWorkPositionRequirement =
   | { readonly _tag: "NoTaskWorkPosition" }
+  /** A claim-to-start position retained across successful pre-executor workflow actions. */
+  | { readonly _tag: "PreStartTaskWorkPositionRequired"; readonly mode: "AcquireFresh"; readonly taskId: TaskId }
+  | {
+      readonly _tag: "PreStartTaskWorkPositionRequired"
+      readonly claimOperationId: OperationId
+      readonly mode: "ReuseExisting"
+      readonly taskId: TaskId
+    }
   | { readonly _tag: "TaskWorkPositionRequired"; readonly mode: "Existing"; readonly taskId: TaskId }
   | { readonly _tag: "TaskWorkPositionRequired"; readonly mode: "ReserveOrReuse"; readonly taskId: TaskId }
 
@@ -316,6 +324,11 @@ export type DeliveryProposalDerivationIssue =
         | "CommitFreshTaskClaimIntent"
         | "ContinueFreshWorkflowOperation"
         | "StartPlannedAttemptExecutorWork"
+    }
+  | {
+      readonly _tag: "PreStartClaimProvenanceMissing"
+      readonly taskId: TaskId
+      readonly transition: RunnableFrontierTransition["_tag"]
     }
   | {
       readonly _tag: "TypedRoutePolicyContradiction"

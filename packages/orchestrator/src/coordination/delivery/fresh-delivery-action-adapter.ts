@@ -42,11 +42,10 @@ const acquireTaskClaim = Effect.fn("DeliveryAction.acquireTaskClaim")(function* 
   })
   yield* trace.emit(OperationSelected.make({ operation }))
   yield* trace.emit(TaskClaimAcquisitionIntended.make({ operation }))
-  const result = yield* interpreter.acquireTaskClaim(
-    operation,
-    lease.recordIntent(action.operationId),
-    interruptibleBoundaryOf(lease)
-  )
+  const recordClaimIntent = lease
+    .recordIntent(action.operationId)
+    .pipe(Effect.andThen(lease.bindPreStartTaskWorkPosition(operation.acquisition.operationId).pipe(Effect.orDie)))
+  const result = yield* interpreter.acquireTaskClaim(operation, recordClaimIntent, interruptibleBoundaryOf(lease))
   yield* trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
 })
 
@@ -130,7 +129,8 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
 })
 
 export const executeFreshAttemptPlanning = Effect.fn("DeliveryAction.executeFreshAttemptPlanning")(function* (
-  action: Extract<MaterializedDeliveryAction, { readonly _tag: "FreshAttemptAction" }>
+  action: Extract<MaterializedDeliveryAction, { readonly _tag: "FreshAttemptAction" }>,
+  lease: DeliveryActionExecutionLease
 ) {
   const trace = yield* WorkflowTrace
   const interpreter = yield* WorkflowInterpreter
@@ -142,6 +142,18 @@ export const executeFreshAttemptPlanning = Effect.fn("DeliveryAction.executeFres
   })
   yield* trace.emit(OperationSelected.make({ operation }))
   yield* interpreter.recordTaskAttemptPlan(operation)
+  const requirement = action.proposal.admission.taskWorkPosition
+  if (requirement._tag === "PreStartTaskWorkPositionRequired" && requirement.mode === "ReuseExisting") {
+    yield* lease.bindPreStartPlannedAttemptPosition(requirement.claimOperationId, {
+      attemptId: action.plannedAttempt.attemptId,
+      runId: action.plannedAttempt.runId
+    })
+  } else {
+    yield* lease.bindPlannedAttemptPosition({
+      attemptId: action.plannedAttempt.attemptId,
+      runId: action.plannedAttempt.runId
+    })
+  }
   yield* trace.emit(TaskAttemptPlanAcknowledged.make({ operation }))
   return deliveryActionCompleted(action.proposal.id)
 })

@@ -153,7 +153,7 @@ const evaluation = (
     },
     proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals },
     quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" },
-    taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+    taskWork: { capacity: policy.taskExecutionCapacity, held: [], preStart: [] }
   }
 }
 

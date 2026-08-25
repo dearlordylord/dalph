@@ -120,7 +120,11 @@ const journaledStepFor = (
         reportRecord?.position ?? JournalPosition.make(0)
       )
       if (progressGraphOperationId !== undefined) {
-        return FreshWorkflowStep.ReadTaskWorkSpecification({ predecessorOperationId: progressGraphOperationId, task })
+        return FreshWorkflowStep.ReadTaskWorkSpecification({
+          predecessorOperationId: progressGraphOperationId,
+          purpose: "ExecutorProgress",
+          task
+        })
       }
       return FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
         acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: report.ordinal },
@@ -149,7 +153,11 @@ const journaledStepFor = (
           task
         })
       }
-      return FreshWorkflowStep.ReadTaskWorkSpecification({ predecessorOperationId: plan.operationId, task })
+      return FreshWorkflowStep.ReadTaskWorkSpecification({
+        predecessorOperationId: plan.operationId,
+        purpose: "PreStart",
+        task
+      })
     }
     return FreshWorkflowStep.ReconcileTaskWorktree({
       plannedAttempt: plan.plannedAttempt,
@@ -201,6 +209,7 @@ const journaledStepFor = (
       if (postClaimGraph?._tag === "TaskTrackerReadIntentRecorded") {
         return FreshWorkflowStep.ReadTaskWorkSpecification({
           predecessorOperationId: postClaimGraph.operation.operationId,
+          purpose: "PreStart",
           task
         })
       }

@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- The closed proposal relation keeps every transition-to-admission mapping exhaustive. */
-import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, type TaskId } from "@dalph/contracts"
 import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
@@ -49,7 +49,55 @@ const freshDecisionKey = (runId: DeliveryProposalsInput["runId"], decision: Fres
 const transitionKey = (runId: DeliveryProposalsInput["runId"], transition: RunnableFrontierTransition): string =>
   selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition))
 
-const taskWorkPositionFor = (transition: RunnableFrontierTransition): TaskWorkPositionRequirement => {
+const preStartClaimOperationIdFor = (
+  taskId: TaskId,
+  responsibilities: ReadonlyArray<WorkflowResponsibilityEntry>
+): OperationId | undefined => {
+  const responsibility = responsibilities.findLast(
+    (candidate) => candidate._tag === "TaskClaimResponsibility" && candidate.taskId === taskId
+  )
+  return responsibility?._tag === "TaskClaimResponsibility" ? responsibility.acquisition.operationId : undefined
+}
+
+const taskWorkPositionFor = (
+  transition: RunnableFrontierTransition,
+  freshStep: FreshWorkflowStep | undefined,
+  claimOperationId: OperationId | undefined
+): TaskWorkPositionRequirement | undefined => {
+  // This recovered continuation is admitted from the accepted executor
+  // projection. A concurrent fresh-stage decision must not erase its exact
+  // task-work requirement.
+  if (transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts") {
+    return { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: transition.plannedAttempt.taskId }
+  }
+  if (freshStep !== undefined) {
+    if (freshStep._tag === "StartPlannedAttemptExecutorWork") {
+      return { _tag: "TaskWorkPositionRequired", mode: "Existing", taskId: freshStep.task.id }
+    }
+    const mode: "AcquireFresh" | "ReuseExisting" | null =
+      freshStep._tag === "AcquireTaskClaim"
+        ? "AcquireFresh"
+        : freshStep._tag === "ReadPostClaimGraph" ||
+            (freshStep._tag === "ReadTaskWorkSpecification" && freshStep.purpose === "PreStart") ||
+            freshStep._tag === "RecordTaskAttemptPlan" ||
+            freshStep._tag === "ReconcileTaskWorktree"
+          ? "ReuseExisting"
+          : null
+    if (mode !== null) {
+      if (mode === "ReuseExisting") {
+        const exactClaimOperationId =
+          freshStep._tag === "ReadPostClaimGraph" ? freshStep.claimOperation.acquisition.operationId : claimOperationId
+        if (exactClaimOperationId === undefined) return undefined
+        return {
+          _tag: "PreStartTaskWorkPositionRequired",
+          claimOperationId: exactClaimOperationId,
+          mode,
+          taskId: freshStep.task.id
+        }
+      }
+      return { _tag: "PreStartTaskWorkPositionRequired", mode, taskId: freshStep.task.id }
+    }
+  }
   const mode = transitionTaskWorkPosition(transition)
   if (mode === null) return { _tag: "NoTaskWorkPosition" }
   const taskId = runnableTransitionTaskId(transition)
@@ -74,11 +122,14 @@ const plannedAttemptProtocolFor = (transition: RunnableFrontierTransition): Plan
 
 const admissionFor = (
   transition: RunnableFrontierTransition,
+  freshStep: FreshWorkflowStep | undefined,
+  claimOperationId: OperationId | undefined,
   integrationResponsibilities: ReadonlyArray<IntegrationResponsibility>
 ): DeliveryAdmissionRequirements | undefined => {
   const integrationTarget = integrationTargetFor(transition, integrationResponsibilities)
   const plannedAttemptProtocol = plannedAttemptProtocolFor(transition)
-  const taskWorkPosition = taskWorkPositionFor(transition)
+  const taskWorkPosition = taskWorkPositionFor(transition, freshStep, claimOperationId)
+  if (taskWorkPosition === undefined) return undefined
   if (plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired") {
     return { integrationTarget, plannedAttemptProtocol, taskWorkPosition }
   }
@@ -443,10 +494,18 @@ const appendContributionForTransition = (
   transition: RunnableFrontierTransition
 ): void => {
   const fresh = frame.freshByTransition.get(transitionKey(frame.runId, transition))
-  const admission = admissionFor(transition, frame.integrationResponsibilities)
+  const claimOperationId = preStartClaimOperationIdFor(runnableTransitionTaskId(transition), frame.responsibilities)
+  const admission = admissionFor(transition, fresh?.step, claimOperationId, frame.integrationResponsibilities)
   /* v8 ignore start -- the closed transition maps make an uncorrelated Existing requirement unreachable. */
   if (admission === undefined) {
-    appendDerived(contributions, routePolicyContradiction(transition))
+    appendDerived(contributions, {
+      _tag: "ProposalIssue",
+      issue: {
+        _tag: "PreStartClaimProvenanceMissing",
+        taskId: runnableTransitionTaskId(transition),
+        transition: transition._tag
+      }
+    })
     return
   }
   /* v8 ignore stop */

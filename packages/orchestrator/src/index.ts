@@ -775,6 +775,12 @@ export {
   DeliveryRuntimeReconfirmationStateInvalid,
   runDeliveryRuntime
 } from "./coordination/delivery/run-delivery-runtime.js"
+export {
+  ExecutorPlanTaskWorkPositionBindingContradiction,
+  PreStartClaimTaskWorkPositionBindingContradiction,
+  PreStartPlanTaskWorkPositionBindingContradiction,
+  type DeliveryTaskWorkPositionBindingContradiction
+} from "./coordination/delivery/delivery-runtime-task-work-position.js"
 export { runStabilizedDelivery } from "./coordination/run/run-stabilization.js"
 export {
   makeRunFinalityEvidence,

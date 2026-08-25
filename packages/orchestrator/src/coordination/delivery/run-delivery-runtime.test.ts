@@ -217,7 +217,7 @@ const baseEvaluation = Effect.gen(function* () {
                 applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
               },
               quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" },
-              taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+              taskWork: { capacity: policy.taskExecutionCapacity, held: [], preStart: [] }
             },
             trackerGraphProposals: []
           },
@@ -255,7 +255,7 @@ const withProposals = (
   ...evaluation,
   proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals },
   quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" },
-  taskWork: { capacity: TaskWorkCapacity.make(capacity), held: [] }
+  taskWork: { capacity: TaskWorkCapacity.make(capacity), held: [], preStart: [] }
 })
 
 const assertCausalRouteChangeDoesNotRepeat = Effect.fn("Test.assertCausalRouteChangeDoesNotRepeat")(function* (
@@ -1085,6 +1085,7 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
           quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const },
           taskWork: {
             capacity: TaskWorkCapacity.make(2),
+            preStart: [],
             held: [{ correlation: { attemptId: plannedAttempt.attemptId, runId }, taskId: taskA }]
           }
         },
@@ -1165,6 +1166,7 @@ it.effect("does not allocate an operation or attempt identity before admission",
       ...withProposals(yield* baseEvaluation, [a], 1),
       taskWork: {
         capacity: TaskWorkCapacity.make(1),
+        preStart: [],
         held: [{ correlation: { attemptId: AttemptId.make("attempt:B"), runId }, taskId: TaskId.make("B") }]
       }
     }
@@ -1197,7 +1199,7 @@ it.effect("does not allocate an operation or attempt identity before admission",
 
     yield* relation.publish({
       ...withProposals(initial, [a], 1),
-      taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
+      taskWork: { capacity: TaskWorkCapacity.make(1), held: [], preStart: [] }
     })
     yield* Deferred.await(executed)
     expect(yield* Ref.get(allocations)).toBe(1)
@@ -1680,12 +1682,11 @@ it.effect("passes a deferred proposal without reordering the later proposals", (
     const liveStarted = yield* Deferred.make<void>()
     const freeStarted = yield* Deferred.make<void>()
     const executor = DeliveryActionExecutor.of({
-      execute: (action, lease) =>
+      execute: (action) =>
         Effect.gen(function* () {
           if (action.proposal.id === live.id) {
             yield* Deferred.succeed(liveStarted, undefined)
           } else if (action.proposal.id === free.id) {
-            yield* lease.bindPlannedAttemptPosition({ attemptId: plannedAttempt.attemptId, runId })
             yield* Deferred.succeed(freeStarted, undefined)
           }
           return yield* Effect.never

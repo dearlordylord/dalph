@@ -264,6 +264,7 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
     const controller = yield* makeDeliveryRuntimeAdmissionController(
       {
         capacity: current.taskExecutionCapacity,
+        preStart: [],
         held: recovery.reconstructedPlannedAttemptPositions.map(({ attemptId, runId, taskId }) => ({
           correlation: { attemptId, runId },
           taskId

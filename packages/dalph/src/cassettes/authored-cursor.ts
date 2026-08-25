@@ -1573,7 +1573,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const awaitOwnedSelectionBeforeTrackerGraphResult = Effect.fn(
     "AuthoredCassette.awaitOwnedSelectionBeforeTrackerGraphResult"
   )(function* (item: StoryItem | undefined, index: number) {
-    if (item?._tag !== "DalphSelects" || !isIntegratorRecoverySelection(item.operation)) return false
+    if (item?._tag !== "DalphSelects") return false
     const ownership = SubscriptionRef.changes(activeDalphSelections).pipe(
       Stream.filter((active) => active.some((selection) => cassetteDecisionMatches(selection, item.operation)))
     )

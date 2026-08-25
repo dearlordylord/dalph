@@ -2,6 +2,7 @@ import type { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { latestPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
+export { requiredPreStartTaskWorkPositionsOf } from "./required-pre-start-task-work-positions.js"
 
 /** One exact planned attempt whose unfinished work still requires a process-local task-work position. */
 export interface RequiredPlannedAttemptPosition {

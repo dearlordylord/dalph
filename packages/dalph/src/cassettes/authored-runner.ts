@@ -1139,9 +1139,6 @@ const latestArrayElementIndex = -1
 const authoredSettlementYieldTurns = 10
 /** A maintained authored run must either consume a story item or fail with its exact stalled boundary. */
 const authoredProgressWatchdogTurns = 100_000
-const authoredCapstoneProgressWatchdogTurns = 5_000
-const authoredDiagnosticJournalTailLength = 12
-const authoredDiagnosticOwnerHistoryLength = 8
 
 const operatorControlFailureMatches = (
   failure: unknown,
@@ -2833,9 +2830,6 @@ const runAuthoredScenarioCassetteWith = (request: {
       const authoredProgressWatchdog = Effect.gen(function* () {
         let lastPosition = yield* cursor.storyPosition
         let stagnantTurns = 0
-        const watchdogTurns = cassette.name.startsWith("DS01-17")
-          ? authoredCapstoneProgressWatchdogTurns
-          : authoredProgressWatchdogTurns
         for (;;) {
           yield* Effect.yieldNow
           const position = yield* cursor.storyPosition
@@ -2845,48 +2839,10 @@ const runAuthoredScenarioCassetteWith = (request: {
             continue
           }
           stagnantTurns += 1
-          if (stagnantTurns < watchdogTurns) continue
+          if (stagnantTurns < authoredProgressWatchdogTurns) continue
           const current = yield* cursor.currentStoryItem
-          const latestPublication = (yield* Ref.get(capturedDeliveryPublications)).at(latestArrayElementIndex)
-          const journalTail = (yield* sharedJournal.read(runId))
-            .slice(-authoredDiagnosticJournalTailLength)
-            .map(({ event, position }) => ({ position, tag: event._tag }))
-          const publicationDiagnostic =
-            latestPublication === undefined
-              ? undefined
-              : {
-                  activationOrdinal: latestPublication.activationOrdinal,
-                  storyPosition: latestPublication.storyPosition,
-                  runtimeFacts: latestPublication.bundle.actionInputs.runtimeFacts,
-                  proposals: [
-                    ...latestPublication.bundle.actionInputs.proposalContributions.deliverySettlement,
-                    ...latestPublication.bundle.actionInputs.proposalContributions.ticketDelivery,
-                    ...latestPublication.bundle.actionInputs.reflectionProposals,
-                    ...latestPublication.bundle.actionInputs.trackerGraphProposals
-                  ].map(({ admission, id, route, waitsForLiveOperationId }) => ({
-                    id,
-                    taskWorkPosition: admission.taskWorkPosition._tag,
-                    route: route._tag === "IdentityFreeWorkflowRoute" ? route.transition._tag : route._tag,
-                    waitsForLiveOperationId
-                  }))
-                }
           return yield* Effect.die(
-            `authored scenario progress stalled at story position ${position}: ${JSON.stringify({
-              current: current ?? "EndOfStory",
-              latestPublication: publicationDiagnostic,
-              ownerHistory: (yield* Ref.get(observationCaptureState)).captures
-                .filter((capture) => capture._tag === "DeliveryRuntimeOwnersCaptured")
-                .slice(-authoredDiagnosticOwnerHistoryLength)
-                .map((capture) =>
-                  capture.liveOwners.map((owner) =>
-                    owner.proposal.route._tag === "IdentityFreeWorkflowRoute"
-                      ? owner.proposal.route.transition._tag
-                      : owner.proposal.route._tag
-                  )
-                ),
-              liveOwners: yield* Ref.get(lastRuntimeOwners),
-              journalTail
-            })}`
+            `authored scenario progress stalled at story position ${position}: ${JSON.stringify(current ?? "EndOfStory")}`
           )
         }
       })

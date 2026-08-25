@@ -25,6 +25,7 @@ import {
   type DeliveryQuiescenceDisposition,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeSnapshot,
+  type DeliveryTaskWorkAdmissionBasis,
   type TrackerGraphState
 } from "./relations.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
@@ -71,6 +72,25 @@ type EstablishedTrackerGraph = Extract<TrackerGraphState, { readonly _tag: "Grap
 type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> & {
   readonly trackerGraph: EstablishedTrackerGraph
 }
+
+const taskWorkPositionKey = (position: DeliveryTaskWorkAdmissionBasis["held"][number]): string =>
+  `${position.taskId}:${position.correlation.runId}:${position.correlation.attemptId}`
+
+const preStartTaskWorkPositionKey = (position: DeliveryTaskWorkAdmissionBasis["preStart"][number]): string =>
+  position._tag === "UnplannedPreStartTaskWorkPosition"
+    ? `${position._tag}:${position.taskId}:${position.claimOperationId}`
+    : `${position._tag}:${position.taskId}:${position.claimOperationId}:${position.correlation.runId}:${position.correlation.attemptId}`
+
+/** Task-work facts are the exact accepted basis that can release a capacity deferral. */
+const sameTaskWorkAdmissionBasis = (
+  left: DeliveryTaskWorkAdmissionBasis,
+  right: DeliveryTaskWorkAdmissionBasis
+): boolean =>
+  Number(left.capacity) === Number(right.capacity) &&
+  left.held.map(taskWorkPositionKey).toSorted().join("\u0000") ===
+    right.held.map(taskWorkPositionKey).toSorted().join("\u0000") &&
+  left.preStart.map(preStartTaskWorkPositionKey).toSorted().join("\u0000") ===
+    right.preStart.map(preStartTaskWorkPositionKey).toSorted().join("\u0000")
 
 /** The exact descriptive state observed after no executable or admitted action remains. */
 export type DeliveryRuntimeQuiescence =
@@ -136,6 +156,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const events = yield* Queue.unbounded<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
       const deferredAt = yield* Ref.make<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>(new Map())
+      const taskWorkDeferredAt = yield* Ref.make<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>(new Map())
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
@@ -237,6 +258,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const admissionLoop = yield* makeDeliveryRuntimeAdmissionLoop({
         admission,
         deferredAt,
+        taskWorkDeferredAt,
         emit,
         latest,
         owners,
@@ -250,6 +272,9 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       ) {
         yield* selectionGate.withPermit(
           Effect.gen(function* () {
+            const previous = Option.getOrThrow(yield* Ref.get(latest))
+            const taskWorkChanged = !sameTaskWorkAdmissionBasis(previous.taskWork, evaluation.taskWork)
+            const taskWorkDeferred = yield* Ref.get(taskWorkDeferredAt)
             yield* Ref.set(latest, Option.some(evaluation))
             yield* Ref.update(
               deferredAt,
@@ -257,7 +282,21 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                 new Map(
                   [...current].filter(
                     ([proposalId, acceptedAt]) =>
-                      acceptedAt === evaluation.acceptedAt && proposalIsPresent(evaluation.proposedActions, proposalId)
+                      acceptedAt === evaluation.acceptedAt &&
+                      proposalIsPresent(evaluation.proposedActions, proposalId) &&
+                      !(taskWorkChanged && taskWorkDeferred.has(proposalId))
+                  )
+                )
+            )
+            yield* Ref.update(
+              taskWorkDeferredAt,
+              (current) =>
+                new Map(
+                  [...current].filter(
+                    ([proposalId, acceptedAt]) =>
+                      !taskWorkChanged &&
+                      acceptedAt === evaluation.acceptedAt &&
+                      proposalIsPresent(evaluation.proposedActions, proposalId)
                   )
                 )
             )
@@ -292,6 +331,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               yield* Ref.set(latest, Option.some(current))
               yield* admission.synchronize(current.taskWork)
               if (completion.exit.value._tag === "ActionDeferred") {
+                yield* Ref.update(
+                  taskWorkDeferredAt,
+                  (deferred) => new Map([...deferred].filter(([id]) => id !== completion.proposalId))
+                )
                 yield* Ref.update(deferredAt, (deferred) =>
                   new Map(deferred).set(completion.proposalId, current.acceptedAt)
                 )

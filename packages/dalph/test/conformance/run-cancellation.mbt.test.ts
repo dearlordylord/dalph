@@ -656,6 +656,8 @@ const makeRunCancellationActions = {
 
 const settlementLeaseOf = (controller: PlannedAttemptProtocolController["Service"]): DeliveryActionExecutionLease => ({
   acceptIntegrationTargetOwnership: Effect.void,
+  bindPreStartTaskWorkPosition: () => Effect.void,
+  bindPreStartPlannedAttemptPosition: () => Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
   forwardBoundary: {
     _tag: "InterruptibleBoundary",

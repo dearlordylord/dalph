@@ -1,7 +1,10 @@
+/* eslint-disable functional/immutable-data -- Admission updates copy one local map inside each atomic Ref transition. */
+/* eslint-disable max-lines -- Exact task-work position binding and lifecycle cleanup remain one admission boundary. */
 import type { PlannedAttemptExecutorCorrelation, TaskId } from "@dalph/contracts"
 import { Effect, Option, Ref } from "effect"
 import type { DeliveryProposalId, DeliveryTaskWorkAdmissionBasis } from "./relations.js"
-import type { DeliveryActionProposal, TaskWorkPositionRequirement } from "./delivery-action-proposal.js"
+import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
+import type { OperationId } from "../../workflow/identity.js"
 import type {
   IntegrationTargetResourceController,
   IntegrationTargetResourceResponsibility
@@ -17,24 +20,29 @@ import {
 } from "../application-exit/lifecycle.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
-
-type TaskWorkPosition =
-  | { readonly _tag: "AcceptedAttemptPosition"; readonly correlation: PlannedAttemptExecutorCorrelation }
-  | {
-      readonly _tag: "BoundRuntimePosition"
-      readonly correlation: PlannedAttemptExecutorCorrelation
-      readonly proposalId: DeliveryProposalId
-    }
-  | { readonly _tag: "PendingRuntimePosition"; readonly proposalId: DeliveryProposalId }
-
-interface AdmissionState {
-  readonly capacity: DeliveryTaskWorkAdmissionBasis["capacity"]
-  readonly positions: ReadonlyMap<TaskId, TaskWorkPosition>
-}
+import {
+  failExecutorPlanBinding,
+  failPreStartClaimBinding,
+  failPreStartPlanBinding,
+  isPreStartRequirement,
+  positionCorrelationOf,
+  preStartPositionOf,
+  reserveTaskPositionState,
+  sameCorrelation,
+  sameOperationId,
+  type AdmissionState,
+  type DeliveryTaskWorkPositionBindingContradiction,
+  type TaskWorkPosition
+} from "./delivery-runtime-task-work-position.js"
 
 const DeliveryAdmissionReservationTypeId: unique symbol = Symbol.for("@dalph/DeliveryAdmissionReservation")
 
 type DeliveryForwardOwnerLease = AtomicForwardOwnerLease | InterruptibleForwardOwnerLease
+
+type PreStartClaimBindingFailure = Parameters<typeof failPreStartClaimBinding>[0]
+type PreStartPlanBindingFailure = Parameters<typeof failPreStartPlanBinding>[0]
+type ExecutorPlanBindingFailure = Parameters<typeof failExecutorPlanBinding>[0]
+type BindingResult<Failure> = { readonly _tag: "Success" } | { readonly _tag: "Failure"; readonly failure: Failure }
 
 interface DeliveryAdmissionReservationBase {
   readonly [DeliveryAdmissionReservationTypeId]: typeof DeliveryAdmissionReservationTypeId
@@ -56,10 +64,19 @@ export type DeliveryAdmissionReservation =
     })
 
 export interface DeliveryRuntimeAdmissionController {
+  readonly bindPreStartTaskWorkPosition: (
+    taskId: TaskId,
+    claimOperationId: OperationId
+  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
+  readonly bindPreStartPlannedAttemptPosition: (
+    taskId: TaskId,
+    claimOperationId: OperationId,
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
   readonly bindPlannedAttemptPosition: (
     taskId: TaskId,
     correlation: PlannedAttemptExecutorCorrelation
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
   readonly releasePlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
   readonly complete: (reservation: DeliveryAdmissionReservation) => Effect.Effect<void>
   readonly rollback: (
@@ -83,16 +100,6 @@ export interface DeliveryRuntimeAdmissionController {
   >
 }
 
-const sameCorrelation = (
-  left: PlannedAttemptExecutorCorrelation | undefined,
-  right: PlannedAttemptExecutorCorrelation
-): boolean => left?.attemptId === right.attemptId && left.runId === right.runId
-
-interface TaskPositionReservation {
-  readonly admitted: boolean
-  readonly createdFor: TaskId | null
-}
-
 /** Integration-family actions own one indivisible protocol section; every other route retains interruptible calls. */
 const forwardOwnerKindFor = (proposal: DeliveryActionProposal): DeliveryForwardOwnerLease["kind"] => {
   const route = proposal.route
@@ -110,85 +117,6 @@ type PlannedAttemptProtocolReservation =
     }
   | { readonly _tag: "PlannedAttemptProtocolUnavailable" }
 
-type ExistingTaskPositionRequirement = Extract<TaskWorkPositionRequirement, { readonly mode: "Existing" }>
-type ReusableTaskPositionRequirement = Extract<TaskWorkPositionRequirement, { readonly mode: "ReserveOrReuse" }>
-
-const unchangedTaskReservation = (
-  admitted: boolean,
-  current: AdmissionState
-): readonly [TaskPositionReservation, AdmissionState] => [{ admitted, createdFor: null }, current]
-
-const reserveExistingTaskPosition = (
-  requirement: ExistingTaskPositionRequirement,
-  correlation: PlannedAttemptExecutorCorrelation,
-  current: AdmissionState
-): readonly [TaskPositionReservation, AdmissionState] => {
-  const existing = current.positions.get(requirement.taskId)
-  return unchangedTaskReservation(
-    existing !== undefined &&
-      existing._tag !== "PendingRuntimePosition" &&
-      sameCorrelation(existing.correlation, correlation),
-    current
-  )
-}
-
-const reserveReusableTaskPosition = (
-  proposal: DeliveryActionProposal,
-  requirement: ReusableTaskPositionRequirement,
-  retainAs: PlannedAttemptExecutorCorrelation | undefined,
-  current: AdmissionState
-): readonly [TaskPositionReservation, AdmissionState] => {
-  const existing = current.positions.get(requirement.taskId)
-  if (existing !== undefined) {
-    if (retainAs === undefined) return unchangedTaskReservation(true, current)
-    if (existing._tag !== "PendingRuntimePosition") {
-      return unchangedTaskReservation(sameCorrelation(existing.correlation, retainAs), current)
-    }
-    return [
-      { admitted: true, createdFor: null },
-      {
-        ...current,
-        positions: new Map(current.positions).set(requirement.taskId, {
-          _tag: "BoundRuntimePosition",
-          correlation: retainAs,
-          proposalId: existing.proposalId
-        })
-      }
-    ]
-  }
-  if (current.positions.size >= current.capacity) return unchangedTaskReservation(false, current)
-  const position: TaskWorkPosition =
-    retainAs === undefined
-      ? { _tag: "PendingRuntimePosition", proposalId: proposal.id }
-      : { _tag: "BoundRuntimePosition", correlation: retainAs, proposalId: proposal.id }
-  return [
-    { admitted: true, createdFor: requirement.taskId },
-    { ...current, positions: new Map(current.positions).set(requirement.taskId, position) }
-  ]
-}
-
-const reserveTaskPositionState = (
-  proposal: DeliveryActionProposal,
-  current: AdmissionState
-): readonly [TaskPositionReservation, AdmissionState] => {
-  const admission = proposal.admission
-  const requirement = admission.taskWorkPosition
-  if (requirement._tag === "NoTaskWorkPosition") return unchangedTaskReservation(true, current)
-  if (requirement.mode === "Existing") {
-    /* v8 ignore start -- DeliveryAdmissionRequirements makes Existing without an exact correlation unconstructible. */
-    if (admission.plannedAttemptProtocol._tag !== "PlannedAttemptProtocolRequired") {
-      return unchangedTaskReservation(false, current)
-    }
-    /* v8 ignore stop */
-    return reserveExistingTaskPosition(requirement, admission.plannedAttemptProtocol.correlation, current)
-  }
-  const retainAs =
-    admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired"
-      ? admission.plannedAttemptProtocol.correlation
-      : undefined
-  return reserveReusableTaskPosition(proposal, requirement, retainAs, current)
-}
-
 /**
  * Owns proposal-native positions without inspecting action route tags. The
  * initial basis and later synchronization adopt the exact positions that
@@ -202,28 +130,96 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
   const plannedAttemptProtocol = yield* PlannedAttemptProtocolController
   const state = yield* Ref.make<AdmissionState>({
     capacity: initial.capacity,
-    positions: new Map(
-      initial.held.map(({ correlation, taskId }) => [
-        taskId,
-        { _tag: "AcceptedAttemptPosition" as const, correlation } satisfies TaskWorkPosition
-      ])
-    )
+    positions: new Map([
+      ...initial.preStart.map((position) => [position.taskId, preStartPositionOf(position)] as const),
+      ...initial.held.map(
+        ({ correlation, taskId }) =>
+          [taskId, { _tag: "AcceptedAttemptPosition" as const, correlation } satisfies TaskWorkPosition] as const
+      )
+    ])
   })
 
   const synchronize = Effect.fn("DeliveryRuntimeAdmission.synchronize")((basis: DeliveryTaskWorkAdmissionBasis) =>
     Ref.update(state, (current) => {
       const accepted = new Map(basis.held.map(({ correlation, taskId }) => [taskId, correlation] as const))
-      const positions = new Map(
-        [...current.positions].filter(
-          ([taskId, position]) => position._tag !== "AcceptedAttemptPosition" || accepted.has(taskId)
-        )
-      )
+      const preStart = new Map(basis.preStart.map((position) => [position.taskId, position] as const))
+      const positions = new Map<TaskId, TaskWorkPosition>()
+      for (const [taskId, position] of current.positions) {
+        if (position._tag === "AcceptedAttemptPosition") {
+          // A publication can be older than the executor report from which
+          // this process reconstructed the position. Preserve exactly one
+          // omission; a second consecutive omission is the authoritative release.
+          positions.set(
+            taskId,
+            accepted.has(taskId) ? position : { ...position, _tag: "AcceptedAttemptPositionOmittedOnce" }
+          )
+        } else if (position._tag === "AcceptedAttemptPositionOmittedOnce") {
+          if (accepted.has(taskId)) positions.set(taskId, { ...position, _tag: "AcceptedAttemptPosition" })
+        } else if (position._tag === "DurablePreStartPosition") {
+          const required = preStart.get(taskId)
+          if (
+            required?._tag === "UnplannedPreStartTaskWorkPosition" &&
+            sameOperationId(required.claimOperationId, position.claimOperationId)
+          )
+            positions.set(taskId, position)
+        } else if (position._tag === "DurablePlannedPreStartPosition") {
+          const required = preStart.get(taskId)
+          if (
+            required?._tag === "PlannedPreStartTaskWorkPosition" &&
+            sameOperationId(required.claimOperationId, position.claimOperationId) &&
+            sameCorrelation(required.correlation, position.correlation)
+          )
+            positions.set(taskId, position)
+        } else {
+          // Live reservations remain authoritative until complete or rollback.
+          positions.set(taskId, position)
+        }
+      }
       for (const [taskId, correlation] of accepted) {
         const currentPosition = positions.get(taskId)
-        if (currentPosition === undefined || currentPosition._tag === "AcceptedAttemptPosition") {
+        if (
+          currentPosition === undefined ||
+          currentPosition._tag === "AcceptedAttemptPosition" ||
+          currentPosition._tag === "AcceptedAttemptPositionOmittedOnce" ||
+          currentPosition._tag === "DurablePreStartPosition" ||
+          currentPosition._tag === "DurablePlannedPreStartPosition" ||
+          currentPosition._tag === "BoundPreStartRuntimePosition"
+        ) {
           positions.set(taskId, { _tag: "AcceptedAttemptPosition", correlation })
         } else if (currentPosition._tag === "PendingRuntimePosition") {
           positions.set(taskId, { _tag: "BoundRuntimePosition", correlation, proposalId: currentPosition.proposalId })
+        }
+      }
+      for (const [taskId, required] of preStart) {
+        if (accepted.has(taskId)) continue
+        const currentPosition = positions.get(taskId)
+        if (currentPosition === undefined) {
+          positions.set(taskId, preStartPositionOf(required))
+        } else if (required._tag === "PlannedPreStartTaskWorkPosition") {
+          if (currentPosition._tag === "PendingRuntimePosition") {
+            positions.set(taskId, {
+              _tag: "BoundPreStartRuntimePosition",
+              claimOperationId: required.claimOperationId,
+              proposalId: currentPosition.proposalId
+            })
+          } else if (currentPosition._tag === "BoundPreStartRuntimePosition") {
+            if (sameOperationId(currentPosition.claimOperationId, required.claimOperationId)) {
+              positions.set(taskId, {
+                _tag: "DurablePlannedPreStartPosition",
+                claimOperationId: required.claimOperationId,
+                correlation: required.correlation
+              })
+            }
+          } else if (
+            currentPosition._tag === "DurablePreStartPosition" ||
+            currentPosition._tag === "DurablePlannedPreStartPosition"
+          ) {
+            positions.set(taskId, preStartPositionOf(required))
+          }
+        } else if (currentPosition._tag === "DurablePlannedPreStartPosition") {
+          if (sameOperationId(currentPosition.claimOperationId, required.claimOperationId)) {
+            positions.set(taskId, { _tag: "DurablePreStartPosition", claimOperationId: required.claimOperationId })
+          }
         }
       }
       return { ...current, capacity: basis.capacity, positions }
@@ -249,11 +245,38 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
   const releaseTaskReservation = (taskId: TaskId, proposalId: DeliveryProposalId) =>
     Ref.update(state, (current) => {
       const position = current.positions.get(taskId)
-      if (position === undefined || position._tag === "AcceptedAttemptPosition" || position.proposalId !== proposalId)
+      if (
+        position === undefined ||
+        position._tag === "AcceptedAttemptPosition" ||
+        position._tag === "AcceptedAttemptPositionOmittedOnce" ||
+        position._tag === "DurablePreStartPosition" ||
+        position._tag === "DurablePlannedPreStartPosition" ||
+        position.proposalId !== proposalId
+      )
         return current
       const positions = new Map(current.positions)
       positions.delete(taskId)
       return { ...current, positions }
+    })
+
+  const retainCompletedPreStartReservation = (taskId: TaskId, proposalId: DeliveryProposalId) =>
+    Ref.update(state, (current) => {
+      const position = current.positions.get(taskId)
+      if (
+        position === undefined ||
+        position._tag === "AcceptedAttemptPosition" ||
+        position._tag === "AcceptedAttemptPositionOmittedOnce"
+      )
+        return current
+      if (position._tag === "PendingRuntimePosition" && position.proposalId === proposalId) {
+        return current
+      }
+      if (position._tag === "BoundPreStartRuntimePosition" && position.proposalId === proposalId) {
+        const positions = new Map(current.positions)
+        positions.set(taskId, { _tag: "DurablePreStartPosition", claimOperationId: position.claimOperationId })
+        return { ...current, positions }
+      }
+      return current
     })
 
   const reserveIntegration = Effect.fn("DeliveryRuntimeAdmission.reserveIntegration")(function* (
@@ -350,35 +373,232 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
   const complete = Effect.fn("DeliveryRuntimeAdmission.complete")(function* (
     reservation: DeliveryAdmissionReservation
   ) {
-    if (
-      reservation.createdTaskPositionFor !== null &&
-      reservation.proposal.admission.plannedAttemptProtocol._tag === "NoPlannedAttemptProtocol"
-    ) {
-      yield* releaseTaskReservation(reservation.createdTaskPositionFor, reservation.proposal.id)
+    if (reservation.createdTaskPositionFor !== null) {
+      const requirement = reservation.proposal.admission.taskWorkPosition
+      if (isPreStartRequirement(requirement)) {
+        yield* retainCompletedPreStartReservation(reservation.createdTaskPositionFor, reservation.proposal.id)
+      } else if (reservation.proposal.admission.plannedAttemptProtocol._tag === "NoPlannedAttemptProtocol") {
+        yield* releaseTaskReservation(reservation.createdTaskPositionFor, reservation.proposal.id)
+      }
     }
     if (reservation._tag === "PlannedAttemptProtocolAdmission") yield* reservation.permit.release
     yield* reservation.forwardOwner.release
   })
 
-  return {
-    bindPlannedAttemptPosition: (taskId, correlation) =>
-      Ref.update(state, (current) => {
+  const bindPreStartTaskWorkPosition = Effect.fn("DeliveryRuntimeAdmission.bindPreStartTaskWorkPosition")(function* (
+    taskId: TaskId,
+    claimOperationId: OperationId
+  ) {
+    const result = yield* Ref.modify(
+      state,
+      (current): readonly [BindingResult<PreStartClaimBindingFailure>, AdmissionState] => {
         const position = current.positions.get(taskId)
-        if (position === undefined || position._tag === "AcceptedAttemptPosition") return current
-        return {
-          ...current,
-          positions: new Map(current.positions).set(taskId, {
-            _tag: "BoundRuntimePosition",
-            correlation,
-            proposalId: position.proposalId
-          })
+        if (position === undefined) {
+          return [
+            {
+              _tag: "Failure" as const,
+              failure: { claimOperationId, reason: "PositionMissing" as const, taskId, position }
+            },
+            current
+          ] as const
         }
-      }),
+        if (position._tag === "PendingRuntimePosition") {
+          return [
+            { _tag: "Success" as const },
+            {
+              ...current,
+              positions: new Map(current.positions).set(taskId, {
+                _tag: "BoundPreStartRuntimePosition",
+                claimOperationId,
+                proposalId: position.proposalId
+              })
+            }
+          ] as const
+        }
+        if (
+          position._tag === "BoundPreStartRuntimePosition" ||
+          position._tag === "DurablePreStartPosition" ||
+          position._tag === "DurablePlannedPreStartPosition"
+        ) {
+          return sameOperationId(position.claimOperationId, claimOperationId)
+            ? ([{ _tag: "Success" as const }, current] as const)
+            : ([
+                {
+                  _tag: "Failure" as const,
+                  failure: { claimOperationId, reason: "ClaimOperationMismatch" as const, taskId, position }
+                },
+                current
+              ] as const)
+        }
+        return [
+          {
+            _tag: "Failure" as const,
+            failure: { claimOperationId, reason: "UnexpectedPositionPhase" as const, taskId, position }
+          },
+          current
+        ] as const
+      }
+    )
+    return yield* result._tag === "Failure" ? failPreStartClaimBinding(result.failure) : Effect.void
+  })
+
+  const bindPreStartPlannedAttemptPosition = (
+    taskId: TaskId,
+    claimOperationId: OperationId,
+    correlation: PlannedAttemptExecutorCorrelation
+  ) =>
+    Effect.gen(function* () {
+      const result = yield* Ref.modify(
+        state,
+        (current): readonly [BindingResult<PreStartPlanBindingFailure>, AdmissionState] => {
+          const position = current.positions.get(taskId)
+          if (position === undefined) {
+            return [
+              {
+                _tag: "Failure" as const,
+                failure: { claimOperationId, correlation, reason: "PositionMissing" as const, taskId, position }
+              },
+              current
+            ] as const
+          }
+          if (position._tag === "DurablePreStartPosition") {
+            return sameOperationId(position.claimOperationId, claimOperationId)
+              ? ([
+                  { _tag: "Success" as const },
+                  {
+                    ...current,
+                    positions: new Map(current.positions).set(taskId, {
+                      _tag: "DurablePlannedPreStartPosition",
+                      claimOperationId,
+                      correlation
+                    })
+                  }
+                ] as const)
+              : ([
+                  {
+                    _tag: "Failure" as const,
+                    failure: {
+                      claimOperationId,
+                      correlation,
+                      reason: "ClaimOperationMismatch" as const,
+                      taskId,
+                      position
+                    }
+                  },
+                  current
+                ] as const)
+          }
+          if (position._tag === "DurablePlannedPreStartPosition") {
+            if (!sameOperationId(position.claimOperationId, claimOperationId)) {
+              return [
+                {
+                  _tag: "Failure" as const,
+                  failure: {
+                    claimOperationId,
+                    correlation,
+                    reason: "ClaimOperationMismatch" as const,
+                    taskId,
+                    position
+                  }
+                },
+                current
+              ] as const
+            }
+            return sameCorrelation(position.correlation, correlation)
+              ? ([{ _tag: "Success" as const }, current] as const)
+              : ([
+                  {
+                    _tag: "Failure" as const,
+                    failure: {
+                      claimOperationId,
+                      correlation,
+                      reason: "AttemptCorrelationMismatch" as const,
+                      taskId,
+                      position
+                    }
+                  },
+                  current
+                ] as const)
+          }
+          return [
+            {
+              _tag: "Failure" as const,
+              failure: { claimOperationId, correlation, reason: "UnexpectedPositionPhase" as const, taskId, position }
+            },
+            current
+          ] as const
+        }
+      )
+      return yield* result._tag === "Failure" ? failPreStartPlanBinding(result.failure) : Effect.void
+    })
+
+  const bindPlannedAttemptPosition = Effect.fn("DeliveryRuntimeAdmission.bindPlannedAttemptPosition")(function* (
+    taskId: TaskId,
+    correlation: PlannedAttemptExecutorCorrelation
+  ) {
+    const result = yield* Ref.modify(
+      state,
+      (current): readonly [BindingResult<ExecutorPlanBindingFailure>, AdmissionState] => {
+        const position = current.positions.get(taskId)
+        if (position === undefined) {
+          return [
+            {
+              _tag: "Failure" as const,
+              failure: { correlation, reason: "PositionMissing" as const, taskId, position }
+            },
+            current
+          ] as const
+        }
+        if (position._tag === "PendingRuntimePosition") {
+          return [
+            { _tag: "Success" as const },
+            {
+              ...current,
+              positions: new Map(current.positions).set(taskId, {
+                _tag: "BoundRuntimePosition",
+                correlation,
+                proposalId: position.proposalId
+              })
+            }
+          ] as const
+        }
+        if (
+          position._tag === "AcceptedAttemptPosition" ||
+          position._tag === "AcceptedAttemptPositionOmittedOnce" ||
+          position._tag === "BoundRuntimePosition" ||
+          position._tag === "DurablePlannedPreStartPosition"
+        ) {
+          return sameCorrelation(positionCorrelationOf(position), correlation)
+            ? ([{ _tag: "Success" as const }, current] as const)
+            : ([
+                {
+                  _tag: "Failure" as const,
+                  failure: { correlation, reason: "AttemptCorrelationMismatch" as const, taskId, position }
+                },
+                current
+              ] as const)
+        }
+        return [
+          {
+            _tag: "Failure" as const,
+            failure: { correlation, reason: "UnexpectedPositionPhase" as const, taskId, position }
+          },
+          current
+        ] as const
+      }
+    )
+    return yield* result._tag === "Failure" ? failExecutorPlanBinding(result.failure) : Effect.void
+  })
+
+  return {
+    bindPreStartTaskWorkPosition,
+    bindPreStartPlannedAttemptPosition,
+    bindPlannedAttemptPosition,
     releasePlannedAttemptPosition: (correlation) =>
       Ref.update(state, (current) => {
         const found = [...current.positions].find(
           ([, position]) =>
-            position._tag !== "PendingRuntimePosition" && sameCorrelation(position.correlation, correlation)
+            position._tag !== "PendingRuntimePosition" && sameCorrelation(positionCorrelationOf(position), correlation)
         )
         if (found === undefined) return current
         const positions = new Map(current.positions)
