@@ -13,7 +13,10 @@ import {
   type RunnableFrontierTransition
 } from "../frontier/frontier.js"
 import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
-import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
+import {
+  requiredPlannedAttemptPositionsOf,
+  requiredPreStartTaskWorkPositionsOf
+} from "../run/required-planned-attempt-positions.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import {
   executorProgressContinuationAvailableFor,
@@ -138,6 +141,15 @@ const executorContinuationWithinLimit = (
     transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts") &&
   executorProgressContinuationAvailableFor(records, transition.plannedAttempt)
 
+/** Shares the durable continuation-budget gate between fresh and recovered candidates. */
+const executorContinuationAllowed = (
+  transition: RunnableFrontierTransition,
+  records: ReadonlyArray<JournalRecord>
+): boolean =>
+  (transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
+    transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts") ||
+  executorContinuationWithinLimit(transition, records)
+
 /**
  * A recovered attempt still has causal work to settle. A fresh executor start
  * must wait for that work, including its tracker reads, so an unstarted task
@@ -259,9 +271,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const fresh = freshCandidates.filter(
       ({ transition }) =>
         !executorProgressBlocked(transition, progressRequirement) &&
-        ((transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
-          transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts") ||
-          executorContinuationWithinLimit(transition, records)) &&
+        executorContinuationAllowed(transition, records) &&
         !recoveredContinuationBlocksFreshExecutorWork(recoveredCandidates, transition)
     )
     const establishCurrentGraph =
@@ -272,9 +282,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const recovered = recoveredCandidates.filter(
       (transition) =>
         !executorProgressBlocked(transition, progressRequirement) &&
-        ((transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
-          transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts") ||
-          executorContinuationWithinLimit(transition, records)) &&
+        executorContinuationAllowed(transition, records) &&
         !(establishCurrentGraph && transition._tag === "ObservePlannedAttemptContinuationGraph")
     )
     const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]
@@ -312,6 +320,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
             : { _tag: "TrackerReconfirmationAllowed" },
           taskWork: {
             capacity: policy.taskExecutionCapacity,
+            preStart: requiredPreStartTaskWorkPositionsOf(journal.reconstructed),
             held: requiredPlannedAttemptPositionsOf(journal.reconstructed).map(({ attemptId, runId, taskId }) => ({
               correlation: { attemptId, runId },
               taskId

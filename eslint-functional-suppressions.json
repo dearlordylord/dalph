@@ -15,9 +15,6 @@
     }
   },
   "packages/dalph/src/cassettes/authored-cursor.ts": {
-    "functional/immutable-data": {
-      "count": 1
-    },
     "functional/no-mixed-types": {
       "count": 1
     },
@@ -142,9 +139,6 @@
     }
   },
   "packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.ts": {
-    "functional/immutable-data": {
-      "count": 4
-    },
     "functional/no-mixed-types": {
       "count": 1
     }
@@ -255,7 +249,7 @@
   },
   "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
     "import-x/no-unused-modules": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/orchestrator/src/coordination/run/run-stabilization.test.ts": {

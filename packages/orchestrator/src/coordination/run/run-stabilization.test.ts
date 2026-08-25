@@ -99,7 +99,7 @@ const baseEvaluation = Effect.gen(function* () {
                 applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
               },
               quiescence: { _tag: "TrackerReconfirmationAllowed" },
-              taskWork: { capacity, held: [] }
+              taskWork: { capacity, held: [], preStart: [] }
             },
             trackerGraphProposals: []
           },
@@ -123,7 +123,7 @@ const evaluation = (
   pauseCoverage: base.pauseCoverage,
   proposedActions,
   quiescence: { _tag: "TrackerReconfirmationAllowed" },
-  taskWork: { capacity, held: [] }
+  taskWork: { capacity, held: [], preStart: [] }
 })
 
 const supportWithoutResources = Layer.mergeAll(

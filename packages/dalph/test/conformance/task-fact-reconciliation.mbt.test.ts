@@ -1282,7 +1282,7 @@ const taskFactReconciliationDriver = defineDriver(
           const freshProtocolController = yield* makePlannedAttemptProtocolController()
           protocolController = freshProtocolController
           controller = yield* makeDeliveryRuntimeAdmissionController(
-            { capacity: TaskWorkCapacity.make(1), held: [] },
+            { capacity: TaskWorkCapacity.make(1), held: [], preStart: [] },
             yield* makeIntegrationTargetResourceController(),
             (yield* makeApplicationExitLifecycle()).admission
           ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
@@ -2466,11 +2466,13 @@ const taskFactReconciliationDriver = defineDriver(
             logsPreserved: artifactsPreserved,
             positionHeld: (() => {
               const position = admissionSnapshot.positions.get(taskId)
+              const positionCorrelation =
+                position !== undefined && "correlation" in position ? position.correlation : undefined
               return (
                 position !== undefined &&
                 position._tag !== "PendingRuntimePosition" &&
-                position.correlation.attemptId === correlation.attemptId &&
-                position.correlation.runId === correlation.runId
+                positionCorrelation?.attemptId === correlation.attemptId &&
+                positionCorrelation.runId === correlation.runId
               )
             })(),
             quiescenceUnbroken:
@@ -2530,11 +2532,13 @@ const taskFactReconciliationDriver = defineDriver(
             successorAdmissionCount: BigInt(successorAdmissionCount),
             successorPositionHeld: (() => {
               const position = admissionSnapshot.positions.get(taskId)
+              const positionCorrelation =
+                position !== undefined && "correlation" in position ? position.correlation : undefined
               return (
                 position !== undefined &&
                 position._tag !== "PendingRuntimePosition" &&
-                position.correlation.attemptId === successorCorrelation.attemptId &&
-                position.correlation.runId === successorCorrelation.runId
+                positionCorrelation?.attemptId === successorCorrelation.attemptId &&
+                positionCorrelation.runId === successorCorrelation.runId
               )
             })(),
             successorExecutorStartCount: BigInt(successorExecutorStartCount),

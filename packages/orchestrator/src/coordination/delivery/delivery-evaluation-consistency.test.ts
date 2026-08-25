@@ -41,7 +41,7 @@ const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): Del
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
       },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
-      taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+      taskWork: { capacity: policy.taskExecutionCapacity, held: [], preStart: [] }
     },
     trackerGraphProposals: graph._tag === "GraphNotEstablished" ? [proposal] : []
   },

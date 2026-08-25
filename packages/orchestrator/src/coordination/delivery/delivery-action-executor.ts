@@ -64,6 +64,7 @@ import type {
   CompletionTaskPreconditionConflict
 } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import type { OperationId } from "../../workflow/identity.js"
+import type { DeliveryTaskWorkPositionBindingContradiction } from "./delivery-runtime-task-work-position.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import type { AtomicBoundaryExecution } from "../application-exit/lifecycle.js"
@@ -114,7 +115,16 @@ export type DeliveryActionForwardBoundary =
 
 export interface DeliveryActionExecutionLease {
   readonly acceptIntegrationTargetOwnership: Effect.Effect<void>
-  readonly bindPlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
+  readonly bindPreStartTaskWorkPosition: (
+    claimOperationId: OperationId
+  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
+  readonly bindPreStartPlannedAttemptPosition: (
+    claimOperationId: OperationId,
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
+  readonly bindPlannedAttemptPosition: (
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
   readonly forwardBoundary: DeliveryActionForwardBoundary
   readonly integrationTargets: IntegrationTargetResourceController
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
@@ -202,6 +212,7 @@ type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effec
 /** Exact typed protocol failures preserved by the action-coloured executor port. */
 export type DeliveryActionExecutionError =
   | DeliveryActionProtocolAdmissionMissing
+  | DeliveryTaskWorkPositionBindingContradiction
   | EffectFunctionFailure<typeof advanceAttemptRestart>
   | EffectFunctionFailure<typeof advanceAttemptStoppage>
   | EffectFunctionFailure<typeof observeAttemptStoppageExecutor>

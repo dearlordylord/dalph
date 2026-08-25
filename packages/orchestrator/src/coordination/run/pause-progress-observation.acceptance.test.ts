@@ -321,7 +321,7 @@ const bundle = ({ acceptedAt, evidence, graph, paused, proposals = [], taskWork 
           snapshot: graph
         },
         quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const },
-        taskWork: taskWork ?? { capacity: policy.taskExecutionCapacity, held: [] }
+        taskWork: taskWork ?? { capacity: policy.taskExecutionCapacity, held: [], preStart: [] }
       },
       trackerGraphProposals: []
     },
@@ -584,6 +584,7 @@ it.effect("shows Alice the exact Suspend changing from proposed to live before i
           proposals: [proposal],
           taskWork: {
             capacity: policy.taskExecutionCapacity,
+            preStart: [],
             held: [
               {
                 correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),

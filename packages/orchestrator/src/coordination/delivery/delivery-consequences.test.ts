@@ -131,7 +131,7 @@ const coherentBundle = (
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
       },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
-      taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [] }
+      taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [], preStart: [] }
     },
     trackerGraphProposals: []
   },

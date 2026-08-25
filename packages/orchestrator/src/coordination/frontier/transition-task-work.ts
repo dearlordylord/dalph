@@ -15,6 +15,8 @@ export const transitionTaskWorkPosition = (transition: RunnableFrontierTransitio
         ? "Existing"
         : transition._tag === "CommitFreshTaskClaimIntent" ||
             transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-            transition._tag === "StartPlannedAttemptExecutorWork"
+            transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
           ? "ReserveOrReuse"
-          : null
+          : transition._tag === "StartPlannedAttemptExecutorWork"
+            ? "Existing"
+            : null

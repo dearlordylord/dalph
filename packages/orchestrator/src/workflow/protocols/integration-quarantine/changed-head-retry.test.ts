@@ -302,6 +302,8 @@ it.effect("routes changed-head Retry through delivery once, releases ownership, 
     const integratorCalls = yield* Ref.make(0)
     const lease: DeliveryActionExecutionLease = {
       acceptIntegrationTargetOwnership: Effect.void,
+      bindPreStartTaskWorkPosition: () => Effect.void,
+      bindPreStartPlannedAttemptPosition: () => Effect.void,
       bindPlannedAttemptPosition: () => Effect.void,
       forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
       integrationTargets: {

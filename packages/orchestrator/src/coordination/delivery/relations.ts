@@ -35,6 +35,7 @@ import {
 } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { RequiredPreStartTaskWorkPosition } from "./task-work-position.js"
 import type {
   DeliveryActionProposal,
   DeliveryProposalContributions,
@@ -498,6 +499,8 @@ export interface DeliveryRuntimeSnapshot {
 export interface DeliveryTaskWorkAdmissionBasis {
   readonly capacity: TaskWorkCapacity
   readonly held: ReadonlyArray<{ readonly correlation: PlannedAttemptExecutorCorrelation; readonly taskId: TaskId }>
+  /** Journal-derived positions held from claim intent through plan/worktree reconciliation. */
+  readonly preStart: ReadonlyArray<RequiredPreStartTaskWorkPosition>
 }
 
 /** Whether an empty relation may ask for one final graph read or must remain passive. */

@@ -332,6 +332,8 @@ it("derives a fresh settlement proposal for the exact cancelled-attempt claim re
 
 const inertLease: DeliveryActionExecutionLease = {
   acceptIntegrationTargetOwnership: Effect.void,
+  bindPreStartTaskWorkPosition: () => Effect.void,
+  bindPreStartPlannedAttemptPosition: () => Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
   forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
   integrationTargets: {
@@ -1470,7 +1472,7 @@ describe("delivery proposal route matrix", () => {
     }).ticketDelivery
     expect(proposal).toMatchObject({
       actionIdentity: { _tag: "NoWorkflowOperationIdentity" },
-      admission: { taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId } },
+      admission: { taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "Existing", taskId } },
       route: { _tag: "FreshExecutorWorkflowRoute", step }
     })
 
@@ -1487,6 +1489,27 @@ describe("delivery proposal route matrix", () => {
         proposals: []
       })
     }
+  })
+
+  it("allows a current-facts continuation to reuse or reserve its task-work position", () => {
+    const continuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWorkAfterCurrentFacts({
+      acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+      plannedAttempt,
+      witness: {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: OperationId.make("current-facts-graph"),
+          taskClaimObservationOperationId: OperationId.make("current-facts-claim"),
+          taskWorkSpecificationObservationOperationId: OperationId.make("current-facts-specification")
+        },
+        worktreeObservationOperationId: OperationId.make("current-facts-worktree")
+      }
+    })
+    expect(proposalsFor(continuation).proposals).toMatchObject([
+      {
+        admission: { taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId } },
+        route: { _tag: "IdentityFreeWorkflowRoute", transition: continuation }
+      }
+    ])
   })
 
   effectIt.effect("executes the identity-free acquire route and names missing Integrator boundaries", () =>

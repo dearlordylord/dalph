@@ -218,7 +218,7 @@ const unpausedRuntimeEvaluation = Effect.gen(function* () {
                 applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
               },
               quiescence: { _tag: "TrackerReconfirmationAllowed" },
-              taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held: [] }
+              taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held: [], preStart: [] }
             },
             trackerGraphProposals: []
           },
@@ -246,7 +246,7 @@ const publicationBundle: DeliveryRelationInputBundle = {
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
       },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
-      taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held: [] }
+      taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held: [], preStart: [] }
     },
     trackerGraphProposals: []
   },

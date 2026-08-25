@@ -91,7 +91,7 @@ describe("deliveryProposalsOf", () => {
       actionIdentity: { _tag: "FreshOperationIdRequired" },
       admission: {
         integrationTarget: { _tag: "NoIntegrationTargetResource" },
-        taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
+        taskWorkPosition: { _tag: "PreStartTaskWorkPositionRequired", mode: "AcquireFresh", taskId }
       },
       owner: "TicketDelivery",
       route: { _tag: "FreshWorkflowRoute", step }
@@ -113,6 +113,18 @@ describe("deliveryProposalsOf", () => {
     const [proposal] = deliveryProposalsOf({
       acceptedOperationIds: new Set([predecessorOperationId]),
       fresh: [{ step, transition }],
+      responsibilities: [
+        WorkflowResponsibilityEntry.cases.TaskClaimResponsibility.make({
+          acquisition: TaskClaimAcquisition.make({
+            operationId: OperationId.make("accepted-claim-for-A"),
+            owner: ClaimOwner.make("dalph"),
+            taskId,
+            token: ClaimToken.make("claim-token-A")
+          }),
+          beganAt: JournalPosition.make(7),
+          taskId
+        })
+      ],
       runId,
       transitions: [transition]
     }).ticketDelivery

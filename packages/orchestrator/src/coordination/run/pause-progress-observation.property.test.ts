@@ -223,7 +223,7 @@ const evaluation = (
       proposals: options.proposals ?? [proposalFor(TaskId.make("A"))]
     },
     quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" },
-    taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+    taskWork: { capacity: policy.taskExecutionCapacity, held: [], preStart: [] }
   }
 }
 

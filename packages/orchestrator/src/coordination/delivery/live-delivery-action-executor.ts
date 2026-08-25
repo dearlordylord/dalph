@@ -110,7 +110,7 @@ const executeLiveAction = Effect.fn("DeliveryAction.executeLive")(function* (
   return yield* Match.valueTags(action, {
     AcceptedOperationAction: (action) => executeAcceptedAction(action, runId, lease),
     IdentityFreeAction: (action) => executeIdentityFreeAction(action, lease, target),
-    FreshAttemptAction: executeFreshAttemptPlanning,
+    FreshAttemptAction: (action) => executeFreshAttemptPlanning(action, lease),
     FreshOperationAction: (action) => executeFreshOperationAction(action, lease, runId, target)
   })
 })
