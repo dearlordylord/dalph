@@ -50,6 +50,7 @@ separately and are not current implementation authority.
 | `issue-73-qualify-real-git-lineage-candidate-ref.md` | 73 |
 | `issue-74-qualify-real-worktree-lease.md` | 74 |
 | `issue-75-codex-app-server-qualification.md` | 75 |
+| `issue-258-production-codex-integrator.md` | 258 |
 | `issue-156-reject-stale-task-control.md` | 156 |
 | `issue-192-describe-delivery-actions.md` | 192 |
 | `issue-193-run-reactive-delivery-actions.md` | 193 |

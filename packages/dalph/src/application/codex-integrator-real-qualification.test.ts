@@ -6,7 +6,7 @@
 import { NodeFileSystem, NodeServices } from "@effect/platform-node"
 import { execFile as nodeExecFile } from "node:child_process"
 import { createServer, type Server } from "node:http"
-import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
+import { access, chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import { promisify } from "node:util"
@@ -45,15 +45,16 @@ import {
 } from "@dalph/orchestrator"
 import { codexAppServerNodeLayer, nodeCodexOwnedActivityCensusLayer } from "./codex-app-server.js"
 import { memoryCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import { nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
   IntegratorCandidateWorktreeRoot,
-  IntegratorPrivateStoreLocator,
-  nodeCodexIntegratorLayer
-} from "./codex-integrator.js"
+  IntegratorPrivateStoreLocator
+} from "./codex-integrator-private-store.js"
 
 const execFile = promisify(nodeExecFile)
 const qualificationEnabled = nodeProcess.env["DALPH_RUN_REAL_CODEX_QUALIFICATION"] === "1"
+const integratorQualificationHost = nodePath.resolve("packages/dalph/dist/bin/codex-integrator-qualification-host.js")
 
 const appServerFixture = String.raw`#!/usr/bin/env node
 const fs = require("node:fs")
@@ -66,7 +67,13 @@ let state = loadState()
 const saveState = () => fs.writeFileSync(statePath, JSON.stringify(state))
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture response lost" } }) + "\n")
-const threadFor = (thread) => ({ id: thread.id, cwd: thread.cwd, status: "idle", turns: thread.turns })
+const threadFor = (thread) => ({
+  id: thread.id,
+  cwd: thread.cwd,
+  status: "idle",
+  turns: thread.turns,
+  ...(thread.ownedThreadToken === undefined ? {} : { ownedThreadToken: thread.ownedThreadToken })
+})
 const tokenFrom = (message) => message?.params?.input?.[0]?.text?.match(/dalph-owned-turn-token:v1:([^\s>]+)\s-->/)?.[1]
 const modelCall = async () => {
   const endpoint = process.env.DALPH_QUALIFICATION_MODEL_ENDPOINT
@@ -83,7 +90,13 @@ const respond = async (message) => {
     return
   }
   if (message.method === "thread/start") {
-    const thread = state.threads[0] || { id: "qualification-thread", cwd: message.params.cwd, turns: [] }
+    const ownedThreadToken = message.params?.metadata?.dalphOwnedThreadToken
+    const thread = state.threads[0] || {
+      id: "qualification-thread",
+      cwd: message.params.cwd,
+      turns: [],
+      ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
+    }
     if (state.threads.length === 0) state.threads.push(thread)
     saveState()
     write(message.id, { thread: threadFor(thread) })
@@ -228,14 +241,14 @@ describe("#258 disposable real-process Codex Integrator qualification", () => {
         const request = IntegratorRequest.make({
           correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
         })
-        const providerFor = (loseResponse: boolean) => {
+        const providerFor = () => {
           const app = codexAppServerNodeLayer({
             executable,
             environment: {
               CODEX_HOME: codexHome,
               DALPH_QUALIFICATION_MODEL_ENDPOINT: model.endpoint,
               DALPH_QUALIFICATION_STATE: statePath,
-              DALPH_QUALIFICATION_LOSE_TURN_RESPONSE: loseResponse ? "1" : "0"
+              DALPH_QUALIFICATION_LOSE_TURN_RESPONSE: "1"
             }
           }).pipe(Layer.provide(memoryCodexAttemptStoreLayer()), Layer.provide(NodeServices.layer))
           const ownership = productionCoordinatorOwnershipLayer(GitCommonDirectoryTarget.make(commonDirectory)).pipe(
@@ -254,23 +267,50 @@ describe("#258 disposable real-process Codex Integrator qualification", () => {
             Effect.gen(function* () {
               const integrator = yield* Integrator
               return yield* Effect.exit(integrator.prepare(request))
-            }).pipe(Effect.provide(providerFor(true)))
+            }).pipe(Effect.provide(providerFor()))
           )
         )
         expect(Exit.isFailure(firstExit)).toBe(true)
-        const secondExit = await Effect.runPromise(
-          Effect.scoped(
-            Effect.gen(function* () {
-              const integrator = yield* Integrator
-              return yield* Effect.exit(integrator.prepare(request))
-            }).pipe(Effect.provide(providerFor(false)))
-          )
-        )
-        expect(Exit.isSuccess(secondExit)).toBe(true)
-        if (Exit.isSuccess(secondExit)) {
-          expect(secondExit.value._tag).toBe("PreparedCandidate")
-          expect(secondExit.value.correlation.ordinal).toBe(1)
+        await access(integratorQualificationHost)
+        const {
+          NODE_OPTIONS: _nodeOptions,
+          NODE_V8_COVERAGE: _nodeV8Coverage,
+          VITEST: _vitest,
+          ...qualificationEnvironment
+        } = nodeProcess.env
+        const qualificationInput = JSON.stringify({
+          acceptedCommit: String(head),
+          candidateResource: "qualification-candidate",
+          candidateRoot,
+          commonDirectory,
+          expectedTargetHead: String(head),
+          privateStore,
+          repository,
+          sessionId: "qualification-session",
+          plannedWorktree: nodePath.join(root, "planned-worktree"),
+          targetRef: "refs/heads/master"
+        })
+        let child
+        try {
+          child = await execFile(nodeProcess.execPath, [integratorQualificationHost], {
+            env: {
+              ...qualificationEnvironment,
+              DALPH_INTEGRATOR_QUALIFICATION_INPUT: qualificationInput,
+              DALPH_QUALIFICATION_CODEX_EXECUTABLE: executable,
+              DALPH_QUALIFICATION_CODEX_HOME: codexHome,
+              DALPH_QUALIFICATION_MODEL_ENDPOINT: model.endpoint,
+              DALPH_QUALIFICATION_STATE: statePath
+            },
+            timeout: 120_000
+          })
+        } catch (error) {
+          const detail = error as { readonly stderr?: string }
+          throw new Error(`${String(error)}${detail.stderr === undefined ? "" : `: ${detail.stderr}`}`)
         }
+        const childResult = JSON.parse(String(child.stdout).trim().split("\n").at(-1) ?? "{}") as {
+          readonly _tag?: string
+        }
+        expect(childResult._tag).toBe("PreparedCandidate")
         expect(model.calls).toHaveLength(1)
       } finally {
         await closeServer(model.server)

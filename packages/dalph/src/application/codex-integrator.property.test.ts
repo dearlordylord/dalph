@@ -21,14 +21,14 @@ import {
 import * as fc from "fast-check"
 import { Context, Effect, FileSystem, Layer, Ref, Schema } from "effect"
 import { describe, expect, it } from "vitest"
+import { codexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator,
   candidateWorktreePathFor,
-  codexIntegratorLayer,
   memoryCodexIntegratorPrivateStoreLayer
-} from "./codex-integrator.js"
+} from "./codex-integrator-private-store.js"
 import {
   CodexAppServer,
   CodexOwnedActivityCensus,
@@ -36,7 +36,12 @@ import {
   type CodexOwnedActivityCensusProjection,
   type CodexTurnSnapshot
 } from "./codex-app-server.js"
-import { CodexServerIncarnation, CodexThreadId, CodexTurnId } from "./codex-attempt-store.js"
+import {
+  CodexServerIncarnation,
+  CodexThreadId,
+  type CodexThreadOwnershipToken,
+  CodexTurnId
+} from "./codex-attempt-store.js"
 import {
   CleanupMutationOrdinal,
   CoordinatorOwnership,
@@ -159,29 +164,44 @@ const authorityFixtureLayer = (
       const fileSystem = yield* FileSystem.FileSystem
       const registered = yield* Ref.make(false)
       const turns = yield* Ref.make<ReadonlyArray<CodexTurnSnapshot>>([])
+      const threadToken = yield* Ref.make<CodexThreadOwnershipToken | undefined>(undefined)
       const activityReads = yield* Ref.make(0)
       const app: CodexAppServerService = {
         incarnation: CodexServerIncarnation.make("property-incarnation"),
-        startThread: (cwd) =>
-          Effect.succeed({ id: CodexThreadId.make("property-thread"), cwd, status: "idle" as const, turns: [] }),
-        readThread: () =>
-          Ref.get(turns).pipe(
-            Effect.map((current) => ({
-              id: CodexThreadId.make("property-thread"),
-              cwd: options.candidatePath,
-              status: "idle" as const,
-              turns: current
-            }))
-          ),
-        resumeThread: (_threadId, cwd) =>
-          Ref.get(turns).pipe(
-            Effect.map((current) => ({
+        startThread: (cwd, ownedThreadToken) =>
+          Ref.set(threadToken, ownedThreadToken).pipe(
+            Effect.as({
               id: CodexThreadId.make("property-thread"),
               cwd,
               status: "idle" as const,
-              turns: current
-            }))
+              turns: [],
+              ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
+            })
           ),
+        readThread: () =>
+          Effect.gen(function* () {
+            const current = yield* Ref.get(turns)
+            const ownedThreadToken = yield* Ref.get(threadToken)
+            return {
+              id: CodexThreadId.make("property-thread"),
+              cwd: options.candidatePath,
+              status: "idle" as const,
+              turns: current,
+              ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
+            }
+          }),
+        resumeThread: (_threadId, cwd) =>
+          Effect.gen(function* () {
+            const current = yield* Ref.get(turns)
+            const ownedThreadToken = yield* Ref.get(threadToken)
+            return {
+              id: CodexThreadId.make("property-thread"),
+              cwd,
+              status: "idle" as const,
+              turns: current,
+              ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
+            }
+          }),
         startTurn: (_threadId, cwd, _prompt, token) => {
           if (token === undefined) return Effect.die("property fixture received no owned token")
           const turn: CodexTurnSnapshot = {
@@ -388,7 +408,9 @@ describe("Codex Integrator candidate mapping", () => {
             predecessor,
             successor
           }),
-          evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(identity.evidenceRevision),
+          // A successful prepare has nine private-record writes; cleanup must
+          // carry the exact revision it observed rather than a guessed value.
+          evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(9),
           locator: identity.locator,
           observationAt: JournalPosition.make(4),
           observationOperationId: identity.observationOperationId,

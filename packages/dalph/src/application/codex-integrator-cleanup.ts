@@ -6,8 +6,8 @@ import type {
   CodexOwnedActivityCensusProjection
 } from "./codex-app-server.js"
 import {
-  bump,
   candidateWorktreePathFor,
+  preserveRevision,
   type CodexIntegratorConfiguration,
   type CodexIntegratorPrivateRecord,
   type CodexIntegratorPrivateStoreService,
@@ -19,6 +19,7 @@ import { type GitWorktreeRecord, readWorktrees } from "./codex-integrator-worktr
 import {
   IntegratorCandidateCleanupMutationResult,
   type IntegratorCandidateCleanupAuthorization,
+  IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupObservation,
   IntegratorCandidateProviderAuthority,
   type CoordinatorOwnership,
@@ -31,20 +32,24 @@ type CleanupForeignReason = "OtherSession" | "Transferred" | "LiveWriter"
 const cleanupForeign = (
   authorization: IntegratorCandidateCleanupAuthorization,
   observedSessionId: IntegratorSessionCorrelation["sessionId"],
-  reason: CleanupForeignReason
+  reason: CleanupForeignReason,
+  revision: IntegratorCandidateCleanupEvidenceRevision = authorization.evidenceRevision
 ): IntegratorCandidateCleanupObservation =>
   IntegratorCandidateCleanupObservation.cases.Foreign.make({
     locator: authorization.locator,
     observedSessionId,
     reason,
-    revision: authorization.evidenceRevision
+    revision
   })
 
-const cleanupAbsent = (authorization: IntegratorCandidateCleanupAuthorization): IntegratorCandidateCleanupObservation =>
-  IntegratorCandidateCleanupObservation.cases.Absent.make({
-    locator: authorization.locator,
-    revision: authorization.evidenceRevision
-  })
+const cleanupAbsent = (
+  authorization: IntegratorCandidateCleanupAuthorization,
+  revision: IntegratorCandidateCleanupEvidenceRevision
+): IntegratorCandidateCleanupObservation =>
+  IntegratorCandidateCleanupObservation.cases.Absent.make({ locator: authorization.locator, revision })
+
+const privateRevision = (record: CodexIntegratorPrivateRecord): IntegratorCandidateCleanupEvidenceRevision =>
+  IntegratorCandidateCleanupEvidenceRevision.make(Number(record.revision))
 
 const cleanupUnreadable = (
   authorization: IntegratorCandidateCleanupAuthorization,
@@ -59,7 +64,12 @@ const cleanupMissingPrivateRecord = Effect.fn("CodexIntegrator.cleanupMissingPri
 ) {
   const occupied = yield* boundary(store.findByCandidatePath(candidatePath))
   return Option.isSome(occupied)
-    ? cleanupForeign(authorization, occupied.value.correlation.sessionId, "OtherSession")
+    ? cleanupForeign(
+        authorization,
+        occupied.value.correlation.sessionId,
+        "OtherSession",
+        privateRevision(occupied.value)
+      )
     : cleanupUnreadable(authorization, "private predecessor record is absent; absence cannot be inferred")
 })
 
@@ -70,27 +80,37 @@ const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegi
   pathExists: boolean,
   store: CodexIntegratorPrivateStoreService
 ) {
-  if (pathExists) return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
-  if (record.removed === true || record.threadId === null) return cleanupAbsent(authorization)
-  if (record.removalIntent === true) {
-    yield* boundary(store.write(bump(record, { removalIntent: false, removed: true })))
-    return cleanupAbsent(authorization)
+  const revision = privateRevision(record)
+  if (pathExists) return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
+  if (record.removed === true) return cleanupAbsent(authorization, revision)
+  if (record.threadStartIntent || record.threadId === null) {
+    return cleanupUnreadable(authorization, "provider thread ownership is unresolved; absence cannot be inferred")
   }
-  return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
+  if (record.removalIntent === true) {
+    yield* boundary(
+      store.write(
+        preserveRevision(record, { removalIntent: false, removed: true, threadId: null, worktreeReady: false })
+      )
+    )
+    return cleanupAbsent(authorization, revision)
+  }
+  return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
 })
 
 const cleanupProjection = (
   authorization: IntegratorCandidateCleanupAuthorization,
   predecessor: IntegratorSessionCorrelation,
-  projection: CodexOwnedActivityCensusProjection
+  projection: CodexOwnedActivityCensusProjection,
+  revision: IntegratorCandidateCleanupEvidenceRevision
 ): IntegratorCandidateCleanupObservation => {
-  if (projection._tag === "ExactLive") return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter")
+  if (projection._tag === "ExactLive")
+    return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter", revision)
   if (projection._tag === "Unreadable" || projection._tag === "Contradictory") {
     return cleanupUnreadable(authorization, projection.detail)
   }
   return IntegratorCandidateCleanupObservation.cases.Present.make({
     locator: authorization.locator,
-    revision: authorization.evidenceRevision,
+    revision,
     sessionId: predecessor.sessionId,
     writerQuiescent: true
   })
@@ -112,19 +132,23 @@ const cleanupRegistered = Effect.fn("CodexIntegrator.cleanupRegistered")(functio
   app: CodexAppServer["Service"],
   census: CodexOwnedActivityCensus["Service"]
 ) {
-  if (record.removed === true || record.removalIntent === true) {
-    return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
-  }
+  const revision = privateRevision(record)
+  if (record.removed === true) return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
   if (registrationIsForeign(registration, predecessor)) {
-    return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
+    return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
   }
   if (!pathExists)
     return cleanupUnreadable(authorization, "candidate is registered by Git but its filesystem path is absent")
-  if (record.threadId === null) return cleanupUnreadable(authorization, "candidate has no durable provider thread")
+  if (record.threadStartIntent || record.threadId === null) {
+    return cleanupUnreadable(authorization, "candidate has no settled provider thread")
+  }
   const thread = yield* observedThread(app, record.threadId, candidatePath)
+  if (thread.ownedThreadToken !== record.threadToken) {
+    return cleanupForeign(authorization, predecessor.sessionId, "OtherSession", revision)
+  }
   const terminals = yield* boundary(app.listBackgroundTerminals(thread.id))
   const projection = yield* boundary(census.observe(thread, terminals))
-  return cleanupProjection(authorization, predecessor, projection)
+  return cleanupProjection(authorization, predecessor, projection, revision)
 })
 
 const cleanupObservationFor = Effect.fn("CodexIntegrator.cleanupObservationFor")(function* (
@@ -138,6 +162,7 @@ const cleanupObservationFor = Effect.fn("CodexIntegrator.cleanupObservationFor")
 ) {
   const predecessor = authorization.disposition.predecessor
   const candidatePath = candidateWorktreePathFor(config, predecessor.candidateResource)
+  /* v8 ignore next -- @preserve The authorization schema fixes the locator to the predecessor resource and the path brand rejects an empty canonical path. */
   if (candidatePath === "" || authorization.locator !== predecessor.candidateResource) {
     return cleanupForeign(authorization, predecessor.sessionId, "Transferred")
   }
@@ -145,7 +170,14 @@ const cleanupObservationFor = Effect.fn("CodexIntegrator.cleanupObservationFor")
   if (Option.isNone(found)) return yield* cleanupMissingPrivateRecord(authorization, candidatePath, store)
   const record = found.value
   if (!sameSession(record.correlation, predecessor) || record.candidatePath !== candidatePath) {
-    return cleanupForeign(authorization, record.correlation.sessionId, "OtherSession")
+    return cleanupForeign(authorization, record.correlation.sessionId, "OtherSession", privateRevision(record))
+  }
+  const actualRevision = privateRevision(record)
+  if (actualRevision !== authorization.evidenceRevision) {
+    return cleanupUnreadable(
+      authorization,
+      `private predecessor revision ${String(actualRevision)} is stale against authorization revision ${String(authorization.evidenceRevision)}`
+    )
   }
   const records = yield* readWorktrees(commands, config)
   const registration = records.find((item) => item.worktree === candidatePath)
@@ -216,7 +248,14 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
       sessionId: authorization.owner.sessionId
     })
   }
-  yield* boundary(store.write(bump(found.value, { removalIntent: true, removed: false })))
+  if (privateRevision(found.value) !== authorization.evidenceRevision) {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "private predecessor revision changed before removal intent",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
+  yield* boundary(store.write(preserveRevision(found.value, { removalIntent: true, removed: false })))
   const mutation = boundary(
     commands.run(config.commonDirectory, [
       "worktree",
@@ -238,7 +277,16 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
   }
   const foundAfter = yield* boundary(store.read(authorization.owner.sessionId))
   if (Option.isSome(foundAfter)) {
-    yield* boundary(store.write(bump(foundAfter.value, { removalIntent: false, removed: true })))
+    yield* boundary(
+      store.write(
+        preserveRevision(foundAfter.value, {
+          removalIntent: false,
+          removed: true,
+          threadId: null,
+          worktreeReady: false
+        })
+      )
+    )
   }
   return IntegratorCandidateCleanupMutationResult.cases.Removed.make({
     locator: authorization.locator,

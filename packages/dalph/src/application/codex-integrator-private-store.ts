@@ -4,7 +4,13 @@ import { createHash } from "node:crypto"
 import nodePath from "node:path"
 import { GitRepositoryLocator } from "@dalph/contracts"
 import { Context, Effect, FileSystem, Layer, Option, Ref, Schema, Semaphore } from "effect"
-import { CodexOwnedTurnToken, CodexServerIncarnation, CodexThreadId, CodexTurnId } from "./codex-attempt-store.js"
+import {
+  CodexOwnedTurnToken,
+  CodexServerIncarnation,
+  CodexThreadId,
+  CodexThreadOwnershipToken,
+  CodexTurnId
+} from "./codex-attempt-store.js"
 import {
   GitCommonDirectoryLocator,
   type IntegratorCandidateResourceLocator,
@@ -12,6 +18,11 @@ import {
   IntegratorRunCorrelation,
   IntegratorSessionCorrelation
 } from "@dalph/orchestrator"
+
+const sameSessionValue = Schema.toEquivalence(IntegratorSessionCorrelation)
+const sameRunValue = Schema.toEquivalence(IntegratorRunCorrelation)
+const firstPrivateRunOrdinal = 1
+const maximumPrivateRunOrdinal = 2
 
 /** A canonical absolute root under which provider worktrees may be materialized. */
 export const IntegratorCandidateWorktreeRoot = Schema.String.check(
@@ -49,10 +60,10 @@ export const CodexIntegratorConfiguration = Schema.Struct({
 export type CodexIntegratorConfiguration = typeof CodexIntegratorConfiguration.Type
 
 /** Monotone private-record revision used to detect stale cleanup observations. */
-export const CodexIntegratorPrivateRevision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
+const CodexIntegratorPrivateRevision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
   Schema.brand("CodexIntegratorPrivateRevision")
 )
-export type CodexIntegratorPrivateRevision = typeof CodexIntegratorPrivateRevision.Type
+type CodexIntegratorPrivateRevision = typeof CodexIntegratorPrivateRevision.Type
 
 /** One exact private run; the token is allocated before the provider turn boundary. */
 export const CodexIntegratorPrivateRun = Schema.Struct({
@@ -61,7 +72,23 @@ export const CodexIntegratorPrivateRun = Schema.Struct({
   result: Schema.NullOr(IntegratorResult),
   token: CodexOwnedTurnToken,
   turnId: Schema.NullOr(CodexTurnId)
-})
+}).check(
+  Schema.makeFilter((run) => {
+    if (run.phase === "IntentRecorded" || run.phase === "TurnBoundaryCrossing") {
+      return run.result !== null || run.turnId !== null
+        ? "an unobserved provider turn cannot retain a result or turn id"
+        : undefined
+    }
+    if (run.phase === "TurnObserved") {
+      return run.result !== null || run.turnId === null
+        ? "an observed provider turn must retain only its exact turn id"
+        : undefined
+    }
+    return run.result === null || run.turnId === null
+      ? "a sealed provider turn must retain its exact turn and terminal result"
+      : undefined
+  })
+)
 export type CodexIntegratorPrivateRun = typeof CodexIntegratorPrivateRun.Type
 
 /** Private durable ownership and recovery facts. Transcript and prompt bytes are intentionally absent. */
@@ -76,11 +103,46 @@ export const CodexIntegratorPrivateRecord = Schema.Struct({
   /** A durable removal request whose response may require rereading Git. */
   removalIntent: Schema.optionalKey(Schema.Boolean),
   threadId: Schema.NullOr(CodexThreadId),
+  threadToken: CodexThreadOwnershipToken,
   threadStartIntent: Schema.Boolean,
   /** A durable candidate-materialization request preceding any Git add. */
   worktreeMaterializationIntent: Schema.optionalKey(Schema.Boolean),
   worktreeReady: Schema.Boolean
-})
+}).check(
+  Schema.makeFilter((record) => {
+    const runOrdinals = record.runs.map((run) => run.correlation.ordinal)
+    if (new Set(runOrdinals).size !== runOrdinals.length) return "private record repeats a provider run ordinal"
+    if (record.runs.length > maximumPrivateRunOrdinal)
+      return "private record contains more than the initial and retry provider runs"
+    /* v8 ignore next -- @preserve CodexIntegratorPrivateRun validates every ordinal before this record-level defensive check. */
+    if (
+      record.runs.some(
+        (run) =>
+          Number(run.correlation.ordinal) < firstPrivateRunOrdinal ||
+          Number(run.correlation.ordinal) > maximumPrivateRunOrdinal
+      )
+    ) {
+      return "private record contains an unsupported provider run ordinal"
+    }
+    if (record.threadStartIntent && record.threadId !== null) {
+      return "private record cannot retain a thread-start intent after recording a thread id"
+    }
+    if (record.removalIntent === true && record.removed === true) {
+      return "private record cannot retain removal intent after recording removal"
+    }
+    if (record.worktreeMaterializationIntent === true && record.worktreeReady) {
+      return "private record cannot retain worktree materialization intent after readiness"
+    }
+    if (record.removed === true && (record.worktreeReady || record.threadStartIntent || record.threadId !== null)) {
+      return "a removed private record cannot retain live candidate ownership"
+    }
+    const sessions = record.runs.filter((run) => !sameSessionValue(record.correlation, run.correlation.session))
+    if (sessions.length > 0) return "private run correlation belongs to another Integrator session"
+    return record.runs.some((run) => run.result !== null && !sameRunValue(run.result.correlation, run.correlation))
+      ? "private terminal result correlation does not match its provider run"
+      : undefined
+  })
+)
 export type CodexIntegratorPrivateRecord = typeof CodexIntegratorPrivateRecord.Type
 
 export class CodexIntegratorStoreFailure extends Schema.TaggedError<CodexIntegratorStoreFailure>()(
@@ -113,6 +175,27 @@ const recordFor = (
   return found === undefined ? Option.none() : Option.some(found)
 }
 
+const decodeRecords = (
+  value: unknown
+): Effect.Effect<ReadonlyArray<CodexIntegratorPrivateRecord>, CodexIntegratorStoreFailure> =>
+  Schema.decodeUnknownEffect(Schema.Array(CodexIntegratorPrivateRecord))(value).pipe(
+    Effect.flatMap((records) => {
+      const sessionIds = records.map((record) => record.correlation.sessionId)
+      if (new Set(sessionIds).size !== sessionIds.length) {
+        return Effect.fail(new CodexIntegratorStoreFailure({ detail: "private store repeats a session record" }))
+      }
+      const candidatePaths = records.map((record) => record.candidatePath)
+      return new Set(candidatePaths).size === candidatePaths.length
+        ? Effect.succeed(records)
+        : Effect.fail(new CodexIntegratorStoreFailure({ detail: "private store aliases a candidate path" }))
+    }),
+    Effect.mapError((error) =>
+      error instanceof CodexIntegratorStoreFailure
+        ? error
+        : new CodexIntegratorStoreFailure({ detail: `private store is malformed: ${String(error)}` })
+    )
+  )
+
 /** Controlled private store used by provider contract and prefix-recovery tests. */
 export const memoryCodexIntegratorPrivateStoreLayer = (
   initial: ReadonlyArray<CodexIntegratorPrivateRecord> = []
@@ -120,12 +203,20 @@ export const memoryCodexIntegratorPrivateStoreLayer = (
   Layer.effect(
     CodexIntegratorPrivateStore,
     Effect.gen(function* () {
-      const records = yield* Ref.make<ReadonlyArray<CodexIntegratorPrivateRecord>>(initial)
+      // Keep the initial value opaque until the first operation.  Controlled
+      // fixtures can therefore prove malformed durable state fails through
+      // the same typed store boundary as a corrupted node file.
+      const records = yield* Ref.make<ReadonlyArray<unknown>>(initial)
       const mutex = yield* Semaphore.make(1)
       return CodexIntegratorPrivateStore.of({
-        read: (sessionId) => Ref.get(records).pipe(Effect.map((current) => recordFor(current, sessionId))),
+        read: (sessionId) =>
+          Ref.get(records).pipe(
+            Effect.flatMap(decodeRecords),
+            Effect.map((current) => recordFor(current, sessionId))
+          ),
         findByCandidatePath: (candidatePath) =>
           Ref.get(records).pipe(
+            Effect.flatMap(decodeRecords),
             Effect.map((current) => {
               const found = current.find((record) => record.candidatePath === candidatePath)
               return found === undefined ? Option.none() : Option.some(found)
@@ -133,10 +224,15 @@ export const memoryCodexIntegratorPrivateStoreLayer = (
           ),
         write: (record) =>
           mutex.withPermits(1)(
-            Ref.update(records, (current) => [
-              record,
-              ...current.filter((item) => item.correlation.sessionId !== record.correlation.sessionId)
-            ])
+            Effect.gen(function* () {
+              const current = yield* decodeRecords(yield* Ref.get(records))
+              const next = [
+                record,
+                ...current.filter((item) => item.correlation.sessionId !== record.correlation.sessionId)
+              ]
+              yield* decodeRecords(next)
+              yield* Ref.set(records, next)
+            })
           )
       })
     })
@@ -150,20 +246,7 @@ const decodeStore = (
   Effect.try({
     try: (): unknown => JSON.parse(value),
     catch: (error) => new CodexIntegratorStoreFailure({ detail: `private store is malformed: ${String(error)}` })
-  }).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(CodexIntegratorPrivateRecord))),
-    Effect.flatMap((records) => {
-      const sessionIds = records.map((record) => record.correlation.sessionId)
-      return new Set(sessionIds).size === sessionIds.length
-        ? Effect.succeed(records)
-        : Effect.fail(new CodexIntegratorStoreFailure({ detail: "private store repeats a session record" }))
-    }),
-    Effect.mapError((error) =>
-      error instanceof CodexIntegratorStoreFailure
-        ? error
-        : new CodexIntegratorStoreFailure({ detail: `private store is malformed: ${String(error)}` })
-    )
-  )
+  }).pipe(Effect.flatMap(decodeRecords))
 
 /** Node-backed store. Every read reopens the file so a later process can recover the same private session. */
 export const nodeCodexIntegratorPrivateStoreLayer = (
@@ -236,10 +319,10 @@ export const candidateWorktreePathFor = (
   return IntegratorCandidateWorktreePath.make(candidate)
 }
 /** Shared equality for exact session ownership and cleanup reconciliation. */
-export const sameSession = Schema.toEquivalence(IntegratorSessionCorrelation)
+export const sameSession = sameSessionValue
 
 /** Shared equality for one exact provider run across a restart. */
-export const runCorrelationEquals = Schema.toEquivalence(IntegratorRunCorrelation)
+export const runCorrelationEquals = sameRunValue
 
 export const revision = (value: number): CodexIntegratorPrivateRevision => CodexIntegratorPrivateRevision.make(value)
 
@@ -248,6 +331,12 @@ export const bump = (
   update: Partial<CodexIntegratorPrivateRecord>
 ): CodexIntegratorPrivateRecord =>
   CodexIntegratorPrivateRecord.make({ ...record, ...update, revision: revision(Number(record.revision) + 1) })
+
+/** Applies a private lifecycle marker without changing the external evidence revision. */
+export const preserveRevision = (
+  record: CodexIntegratorPrivateRecord,
+  update: Partial<CodexIntegratorPrivateRecord>
+): CodexIntegratorPrivateRecord => CodexIntegratorPrivateRecord.make({ ...record, ...update })
 
 export const updateRun = (
   record: CodexIntegratorPrivateRecord,

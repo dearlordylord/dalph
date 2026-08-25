@@ -25,6 +25,10 @@ import {
 export const CodexThreadId = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadId"))
 export type CodexThreadId = typeof CodexThreadId.Type
 
+/** A private marker that binds one Integrator thread allocation to its recorded request. */
+export const CodexThreadOwnershipToken = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadOwnershipToken"))
+export type CodexThreadOwnershipToken = typeof CodexThreadOwnershipToken.Type
+
 /** The opaque identity returned by one Codex turn. */
 export const CodexTurnId = Schema.NonEmptyString.pipe(Schema.brand("CodexTurnId"))
 export type CodexTurnId = typeof CodexTurnId.Type

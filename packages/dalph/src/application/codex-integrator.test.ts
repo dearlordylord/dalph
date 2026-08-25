@@ -19,15 +19,19 @@ import {
 } from "@dalph/contracts"
 import { Context, Effect, FileSystem, Layer, Option, Ref } from "effect"
 import { describe, expect, expectTypeOf, it } from "vitest"
+import { codexIntegratorLayer, nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
+  CodexIntegratorPrivateRecord,
   CodexIntegratorPrivateStore,
+  IntegratorCandidateWorktreePath,
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator,
   candidateWorktreePathFor,
-  codexIntegratorLayer,
-  memoryCodexIntegratorPrivateStoreLayer
-} from "./codex-integrator.js"
+  memoryCodexIntegratorPrivateStoreLayer,
+  preserveRevision,
+  updateRun
+} from "./codex-integrator-private-store.js"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -36,7 +40,13 @@ import {
   type CodexAppServerService,
   type CodexOwnedActivityCensusProjection
 } from "./codex-app-server.js"
-import { CodexServerIncarnation, CodexThreadId, CodexTurnId, type CodexOwnedTurnToken } from "./codex-attempt-store.js"
+import {
+  CodexServerIncarnation,
+  CodexThreadId,
+  CodexThreadOwnershipToken,
+  CodexTurnId,
+  CodexOwnedTurnToken
+} from "./codex-attempt-store.js"
 import {
   CleanupMutationOrdinal,
   CoordinatorOwnership,
@@ -128,7 +138,9 @@ const cleanupAuthorization = IntegratorCandidateCleanupAuthorization.make({
     predecessor: session,
     successor: successorSession
   }),
-  evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+  // The provider record reaches revision 9 after recording candidate intent,
+  // worktree/thread ownership, the turn token, and its sealed terminal result.
+  evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(9),
   locator: resource,
   observationAt: JournalPosition.make(4),
   observationOperationId: OperationId.make("candidate-cleanup-observation"),
@@ -144,6 +156,8 @@ type FixtureOptions = {
   readonly duplicateThreads?: boolean
   readonly duplicateTurnToken?: boolean
   readonly enableThreadListing?: boolean
+  readonly listThreadsHidePersisted?: boolean
+  readonly listedThreadTokenMode?: "exact" | "tokenless" | "foreign"
   readonly preexistingThread?: boolean
   readonly preRegisteredWorktree?: boolean
   readonly preRegisteredWorktreePathExists?: boolean
@@ -155,17 +169,26 @@ type FixtureOptions = {
   readonly loseFirstThreadResponse?: boolean
   readonly loseFirstWorktreeAddResponse?: boolean
   readonly loseFirstWorktreeRemoveResponse?: boolean
+  readonly failFirstWorktreeRemoveWithoutApplying?: boolean
   readonly worktreePath?: string
   readonly failBeforeRecordingFirstTurn?: boolean
   readonly failAfterRecordingFirstTurn?: boolean
   readonly failAfterRecordingSecondTurn?: boolean
+  readonly turnTokenMode?: "exact" | "tokenless" | "foreign"
+  readonly resumeThreadTokenMode?: "exact" | "tokenless" | "foreign"
+  readonly persistedTurnCorrelation?: boolean
+  readonly hideTurnsOnRead?: boolean
+  readonly activeTurn?: boolean
+  readonly failedTerminalTurn?: boolean
   readonly precedingItems?: ReadonlyArray<unknown>
   readonly gitCalls?: Array<ReadonlyArray<string>>
   readonly threadStarts?: { value: number }
   readonly turnTokens?: Array<CodexOwnedTurnToken>
   readonly turnStarts?: { value: number }
   readonly worktreeAdds?: { value: number }
+  readonly worktreeRemoves?: { value: number }
   readonly ownershipCalls?: Array<"enter" | "exit">
+  readonly appIncarnation?: { value: CodexServerIncarnation }
 }
 
 const fixtureLayer = (
@@ -179,38 +202,57 @@ const fixtureLayer = (
       if (options.preRegisteredWorktreePathExists === true) {
         yield* fileSystem.makeDirectory(fixtureWorktreePath, { recursive: true }).pipe(Effect.orDie)
       }
-      const persistentThreads = yield* Ref.make<ReadonlyArray<CodexThreadId>>(
-        options.preexistingThread === true ? [CodexThreadId.make("fixture-thread")] : []
-      )
+      const persistentThreads = yield* Ref.make<
+        ReadonlyArray<{ readonly id: CodexThreadId; readonly ownedThreadToken?: CodexThreadOwnershipToken }>
+      >(options.preexistingThread === true ? [{ id: CodexThreadId.make("fixture-thread") }] : [])
+      const threadStartCalls = yield* Ref.make(0)
       const turns = yield* Ref.make<
         ReadonlyArray<{
           readonly id: CodexTurnId
-          readonly status: "completed"
+          readonly status: "completed" | "failed" | "inProgress"
           readonly items: ReadonlyArray<unknown>
-          readonly ownedTurnToken: CodexOwnedTurnToken
+          readonly ownedTurnToken?: CodexOwnedTurnToken
         }>
       >([])
+      const fixtureIncarnation = CodexServerIncarnation.make("fixture-incarnation")
       const listThreads = () =>
         Ref.get(persistentThreads).pipe(
           Effect.map((threads) =>
-            (options.duplicateThreads === true ? [...threads, ...threads] : threads).map((id) => ({
-              id,
+            (options.listThreadsHidePersisted === true
+              ? []
+              : options.duplicateThreads === true
+                ? [...threads, ...threads]
+                : threads
+            ).map((thread) => ({
+              id: thread.id,
               cwd: fixtureWorktreePath,
               status: "idle" as const,
-              turns: []
+              turns: [],
+              ...(options.listedThreadTokenMode === "tokenless"
+                ? {}
+                : {
+                    ownedThreadToken:
+                      options.listedThreadTokenMode === "foreign"
+                        ? CodexThreadOwnershipToken.make("foreign-listed-thread-token")
+                        : thread.ownedThreadToken
+                  })
             }))
           )
         )
       const app: CodexAppServerService = {
-        incarnation: CodexServerIncarnation.make("fixture-incarnation"),
-        startThread: (cwd) =>
+        get incarnation() {
+          return options.appIncarnation?.value ?? fixtureIncarnation
+        },
+        startThread: (cwd, ownedThreadToken) =>
           Effect.gen(function* () {
+            const threadStartCall = yield* Ref.modify(threadStartCalls, (value) => [value + 1, value + 1] as const)
             if (options.threadStarts !== undefined) options.threadStarts.value += 1
             const thread = {
               id: CodexThreadId.make("fixture-thread"),
               cwd,
               status: "idle" as const,
               turns: [],
+              ...(ownedThreadToken === undefined ? {} : { ownedThreadToken }),
               ...(options.foreignThread === true
                 ? {
                     correlation: PlannedAttemptExecutorCorrelation.make({
@@ -220,8 +262,11 @@ const fixtureLayer = (
                   }
                 : {})
             }
-            yield* Ref.update(persistentThreads, (current) => [...current, thread.id])
-            if (options.enableThreadListing === true && options.loseFirstThreadResponse === true) {
+            yield* Ref.update(persistentThreads, (current) => [
+              ...current,
+              { id: thread.id, ...(ownedThreadToken === undefined ? {} : { ownedThreadToken }) }
+            ])
+            if (options.loseFirstThreadResponse === true && threadStartCall === 1) {
               return yield* Effect.fail(
                 CodexAppServerFailure.make({
                   operation: "thread/start",
@@ -236,17 +281,70 @@ const fixtureLayer = (
         readThread: () =>
           Effect.gen(function* () {
             const current = yield* Ref.get(turns)
+            const persisted = yield* Ref.get(persistentThreads)
+            const persistedThreadToken = persisted.find(
+              (item) => item.id === CodexThreadId.make("fixture-thread")
+            )?.ownedThreadToken
+            const ownedThreadToken =
+              options.resumeThreadTokenMode === "tokenless"
+                ? undefined
+                : options.resumeThreadTokenMode === "foreign"
+                  ? CodexThreadOwnershipToken.make("foreign-resumed-thread-token")
+                  : persistedThreadToken
             return {
               id: CodexThreadId.make("fixture-thread"),
               cwd: fixtureWorktreePath,
               status: "idle" as const,
-              turns: current
+              turns:
+                options.hideTurnsOnRead === true
+                  ? []
+                  : current.map((turn) =>
+                      options.persistedTurnCorrelation === true
+                        ? {
+                            ...turn,
+                            correlation: PlannedAttemptExecutorCorrelation.make({
+                              attemptId: AttemptId.make("persisted-foreign-attempt"),
+                              runId: RunId.make("persisted-foreign-run")
+                            })
+                          }
+                        : turn
+                    ),
+              ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
             }
           }),
         resumeThread: (_threadId, cwd) =>
           Effect.gen(function* () {
             const current = yield* Ref.get(turns)
-            return { id: CodexThreadId.make("fixture-thread"), cwd, status: "idle" as const, turns: current }
+            const persisted = yield* Ref.get(persistentThreads)
+            const persistedThreadToken = persisted.find(
+              (item) => item.id === CodexThreadId.make("fixture-thread")
+            )?.ownedThreadToken
+            const ownedThreadToken =
+              options.resumeThreadTokenMode === "tokenless"
+                ? undefined
+                : options.resumeThreadTokenMode === "foreign"
+                  ? CodexThreadOwnershipToken.make("foreign-resumed-thread-token")
+                  : persistedThreadToken
+            return {
+              id: CodexThreadId.make("fixture-thread"),
+              cwd,
+              status: "idle" as const,
+              turns:
+                options.hideTurnsOnRead === true
+                  ? []
+                  : current.map((turn) =>
+                      options.persistedTurnCorrelation === true
+                        ? {
+                            ...turn,
+                            correlation: PlannedAttemptExecutorCorrelation.make({
+                              attemptId: AttemptId.make("persisted-foreign-attempt"),
+                              runId: RunId.make("persisted-foreign-run")
+                            })
+                          }
+                        : turn
+                    ),
+              ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
+            }
           }),
         startTurn: (_threadId, _cwd, _prompt, token) =>
           Effect.gen(function* () {
@@ -254,10 +352,21 @@ const fixtureLayer = (
             if (options.turnStarts !== undefined) options.turnStarts.value += 1
             if (options.turnTokens !== undefined) options.turnTokens.push(token)
             const priorTurns = yield* Ref.get(turns)
+            const returnedToken =
+              options.turnTokenMode === "tokenless"
+                ? undefined
+                : options.turnTokenMode === "foreign"
+                  ? CodexOwnedTurnToken.make("foreign-provider-token")
+                  : token
+            const status: "completed" | "failed" | "inProgress" = options.activeTurn
+              ? "inProgress"
+              : options.failedTerminalTurn === true
+                ? "failed"
+                : "completed"
             const turn = {
               id: CodexTurnId.make(`fixture-turn-${token}`),
-              status: "completed" as const,
-              ownedTurnToken: token,
+              status,
+              ...(returnedToken === undefined ? {} : { ownedTurnToken: returnedToken }),
               items: [
                 ...(options.precedingItems ?? []),
                 {
@@ -295,7 +404,13 @@ const fixtureLayer = (
                 })
               )
             }
-            return { ...turn, id: turn.id, status: turn.status, items: turn.items, ownedTurnToken: token }
+            return {
+              ...turn,
+              id: turn.id,
+              status: turn.status,
+              items: turn.items,
+              ...(returnedToken === undefined ? {} : { ownedTurnToken: returnedToken })
+            }
           }),
         interruptTurn: () => Effect.void,
         listBackgroundTerminals: () => Effect.succeed([]),
@@ -351,6 +466,14 @@ const fixtureLayer = (
               }
             }
             if (args[0] === "worktree" && args[1] === "remove") {
+              if (options.worktreeRemoves !== undefined) options.worktreeRemoves.value += 1
+              if (options.failFirstWorktreeRemoveWithoutApplying === true && options.worktreeRemoves?.value === 1) {
+                return {
+                  exitCode: 1,
+                  stderr: "worktree remove failed before applying to the exact registration",
+                  stdout: ""
+                }
+              }
               yield* Ref.set(registered, false)
               yield* fileSystem
                 .remove(fixtureWorktreePath, { recursive: true })
@@ -420,6 +543,16 @@ const providerLayer = (config: CodexIntegratorConfiguration, options: FixtureOpt
   )
 
 describe("Codex Integrator", () => {
+  it("composes the node-backed private store behind the integrator boundary", () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-layer-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-layer-test/store.json"),
+      repository
+    })
+    expect(nodeCodexIntegratorLayer(config)).toBeDefined()
+  })
+
   it("creates one candidate and returns the exact prepared envelope", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
@@ -851,6 +984,60 @@ describe("Codex Integrator", () => {
     expect(turnStarts.value).toBe(1)
   })
 
+  it.each(["tokenless", "foreign"] as const)(
+    "fails closed on a %s terminal turn without starting a replacement",
+    async (turnTokenMode) => {
+      const config = CodexIntegratorConfiguration.make({
+        candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+        commonDirectory,
+        privateStoreLocator: IntegratorPrivateStoreLocator.make(
+          `/tmp/dalph-integrator-test/${turnTokenMode}-terminal-store.json`
+        ),
+        repository
+      })
+      const turnStarts = { value: 0 }
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const integrator = yield* Integrator
+          const first = yield* Effect.flip(integrator.prepare(requestFor(1)))
+          const second = yield* Effect.flip(integrator.prepare(requestFor(1)))
+          return { first, second }
+        }).pipe(Effect.provide(providerLayer(config, { turnStarts, turnTokenMode })))
+      )
+      expect(result.first._tag).toBe("IntegratorCallFailure")
+      expect(result.second._tag).toBe("IntegratorCallFailure")
+      expect(result.second.detail).toContain("token")
+      expect(turnStarts.value).toBe(1)
+    }
+  )
+
+  it("seals a failed provider turn only as sanitized NotPrepared", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/failed-turn-store.json"),
+      repository
+    })
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const prepared = yield* integrator.prepare(requestFor(1))
+        const store = yield* CodexIntegratorPrivateStore
+        const stored = yield* store.read(session.sessionId)
+        return { prepared, stored }
+      }).pipe(Effect.provide(providerLayer(config, { failedTerminalTurn: true })))
+    )
+    expect(result.prepared._tag).toBe("NotPrepared")
+    expect(result.prepared._tag === "NotPrepared" ? result.prepared.detail : "").toBe(
+      "Codex provider turn failed before producing a candidate"
+    )
+    expect(Option.isSome(result.stored)).toBe(true)
+    if (Option.isSome(result.stored)) {
+      expect(result.stored.value.runs[0]?.result?._tag).toBe("NotPrepared")
+      expect(result.stored.value.runs[0]?.result?._tag).not.toBe("PreparedCandidate")
+    }
+  })
+
   it("reconciles a lost thread-start response through the complete thread list", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
@@ -1116,6 +1303,84 @@ describe("Codex Integrator", () => {
     expect(gitCalls.filter((args) => args[0] === "worktree" && args[1] === "remove")).toHaveLength(0)
   })
 
+  it("fails closed when cleanup authorization carries a stale private revision", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/stale-cleanup-store.json"),
+      repository
+    })
+    const gitCalls: Array<ReadonlyArray<string>> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        yield* integrator.prepare(requestFor(1))
+        const authority = yield* IntegratorCandidateProviderAuthority
+        const stale = IntegratorCandidateCleanupAuthorization.make({
+          ...cleanupAuthorization,
+          evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(8)
+        })
+        const observed = yield* authority.observe(stale)
+        const removed = yield* authority.remove(stale, CleanupMutationOrdinal.make(1))
+        return { observed, removed }
+      }).pipe(Effect.provide(providerLayer(config, { gitCalls })))
+    )
+    expect(result.observed._tag).toBe("Unreadable")
+    expect(result.removed._tag).toBe("DefinitelyNotApplied")
+    expect(gitCalls.filter((args) => args[0] === "worktree" && args[1] === "remove")).toHaveLength(0)
+  })
+
+  it("does not infer absence while an unresolved thread intent remains", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/unresolved-cleanup-store.json"
+      ),
+      repository
+    })
+    const registration: { value: "exact" | "foreign" | "missing" } = { value: "exact" }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        yield* integrator.prepare(requestFor(1))
+        const store = yield* CodexIntegratorPrivateStore
+        const current = yield* store.read(session.sessionId)
+        if (Option.isNone(current)) return yield* Effect.fail("private record was not written")
+        yield* store.write(preserveRevision(current.value, { threadId: null, threadStartIntent: true }))
+        const fileSystem = yield* FileSystem.FileSystem
+        yield* fileSystem.remove(candidatePath, { recursive: true })
+        registration.value = "missing"
+        const authority = yield* IntegratorCandidateProviderAuthority
+        return yield* authority.observe(cleanupAuthorization)
+      }).pipe(Effect.provide(providerLayer(config, { worktreeRegistrationState: registration })))
+    )
+    expect(result._tag).toBe("Unreadable")
+  })
+
+  it("reconciles a failed exact removal before retrying the same resource", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/retry-removal-store.json"),
+      repository
+    })
+    const worktreeRemoves = { value: 0 }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        yield* integrator.prepare(requestFor(1))
+        const authority = yield* IntegratorCandidateProviderAuthority
+        const first = yield* authority.remove(cleanupAuthorization, CleanupMutationOrdinal.make(1))
+        const second = yield* authority.remove(cleanupAuthorization, CleanupMutationOrdinal.make(2))
+        return { first, second }
+      }).pipe(Effect.provide(providerLayer(config, { failFirstWorktreeRemoveWithoutApplying: true, worktreeRemoves })))
+    )
+    expect(result.first._tag).toBe("Unknown")
+    expect(result.second._tag).toBe("Removed")
+    expect(worktreeRemoves.value).toBe(2)
+  })
+
   it("rereads exact absence after a lost candidate-removal response", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
@@ -1132,5 +1397,273 @@ describe("Codex Integrator", () => {
       }).pipe(Effect.provide(providerLayer(config, { loseFirstWorktreeRemoveResponse: true })))
     )
     expect(result._tag).toBe("AlreadyAbsent")
+  })
+
+  it("fails closed on unreadable activity and listed threads without the exact token", async () => {
+    const activityConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/unreadable-activity-store.json"
+      ),
+      repository
+    })
+    const activityFailure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        return yield* Effect.flip(integrator.prepare(requestFor(1)))
+      }).pipe(
+        Effect.provide(
+          providerLayer(activityConfig, {
+            activity: { _tag: "Contradictory", detail: "activity census contradiction" }
+          })
+        )
+      )
+    )
+    expect(activityFailure._tag).toBe("IntegratorCallFailure")
+    expect(activityFailure.detail).toContain("contradictory")
+
+    const listedConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/foreign-listed-store.json"),
+      repository
+    })
+    const listedFailure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        yield* Effect.flip(integrator.prepare(requestFor(1)))
+        return yield* Effect.flip(integrator.prepare(requestFor(1)))
+      }).pipe(
+        Effect.provide(
+          providerLayer(listedConfig, {
+            enableThreadListing: true,
+            loseFirstThreadResponse: true,
+            listedThreadTokenMode: "foreign",
+            resumeThreadTokenMode: "foreign"
+          })
+        )
+      )
+    )
+    expect(listedFailure._tag).toBe("IntegratorCallFailure")
+    expect(listedFailure.detail).toContain("token")
+  })
+
+  it("distinguishes unresolved thread-start recovery from a retry with the same intent", async () => {
+    const retryConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/thread-intent-retry-store.json"
+      ),
+      repository
+    })
+    const retry = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        const second = yield* integrator.prepare(requestFor(1))
+        return { first, second }
+      }).pipe(
+        Effect.provide(
+          providerLayer(retryConfig, {
+            enableThreadListing: true,
+            loseFirstThreadResponse: true,
+            listThreadsHidePersisted: true
+          })
+        )
+      )
+    )
+    expect(retry.first._tag).toBe("IntegratorCallFailure")
+    expect(retry.second._tag).toBe("PreparedCandidate")
+
+    const unresolvedConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/unresolved-thread-store.json"
+      ),
+      repository
+    })
+    const unresolved = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        yield* Effect.flip(integrator.prepare(requestFor(1)))
+        return yield* Effect.flip(integrator.prepare(requestFor(1)))
+      }).pipe(
+        Effect.provide(providerLayer(unresolvedConfig, { loseFirstThreadResponse: true, enableThreadListing: false }))
+      )
+    )
+    expect(unresolved._tag).toBe("IntegratorCallFailure")
+    expect(unresolved.detail).toContain("unresolved")
+  })
+
+  it("rejects retry ordinals without a sealed predecessor and above the retry limit", async () => {
+    const retryConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/invalid-retry-store.json"),
+      repository
+    })
+    const failure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const runTwo = yield* Effect.flip(integrator.prepare(requestFor(2)))
+        const runThree = yield* Effect.flip(integrator.prepare(requestFor(3)))
+        return { runThree, runTwo }
+      }).pipe(Effect.provide(providerLayer(retryConfig)))
+    )
+    expect(failure.runTwo.detail).toContain("sealed run-one")
+    expect(failure.runThree.detail).toContain("exceeds Retry")
+  })
+
+  it("rejects foreign resumed-thread tokens, correlated turns, and active turns", async () => {
+    const resumedConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/foreign-resumed-store.json"),
+      repository
+    })
+    const resumedFailure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        yield* integrator.prepare(requestFor(1))
+        return yield* Effect.flip(integrator.prepare(requestFor(1)))
+      }).pipe(Effect.provide(providerLayer(resumedConfig, { resumeThreadTokenMode: "foreign" })))
+    )
+    expect(resumedFailure.detail).toContain("ownership token")
+
+    const correlatedConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/correlated-turn-store.json"),
+      repository
+    })
+    const correlatedFailure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        const second = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        return { first, second }
+      }).pipe(
+        Effect.provide(
+          providerLayer(correlatedConfig, { failAfterRecordingFirstTurn: true, persistedTurnCorrelation: true })
+        )
+      )
+    )
+    expect(correlatedFailure.first._tag).toBe("IntegratorCallFailure")
+    expect(correlatedFailure.second.detail).toContain("correlation")
+
+    const activeConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/active-turn-store.json"),
+      repository
+    })
+    const activeFailure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        return yield* Effect.flip(integrator.prepare(requestFor(1)))
+      }).pipe(Effect.provide(providerLayer(activeConfig, { activeTurn: true })))
+    )
+    expect(activeFailure.detail).toContain("remains active")
+  })
+
+  it("fails closed on a turn observed without a matching token and reconciles app incarnation", async () => {
+    const hiddenConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/hidden-turn-store.json"),
+      repository
+    })
+    const hiddenFailure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        yield* Effect.flip(integrator.prepare(requestFor(1)))
+        const store = yield* CodexIntegratorPrivateStore
+        const stored = yield* store.read(session.sessionId)
+        if (Option.isNone(stored)) return yield* Effect.fail("private record was not written")
+        const run = stored.value.runs[0]
+        if (run === undefined) return yield* Effect.fail("provider run was not written")
+        yield* store.write(
+          updateRun(stored.value, run, { phase: "TurnObserved", turnId: CodexTurnId.make("hidden-turn") })
+        )
+        return yield* Effect.flip(integrator.prepare(requestFor(1)))
+      }).pipe(Effect.provide(providerLayer(hiddenConfig, { failAfterRecordingFirstTurn: true, hideTurnsOnRead: true })))
+    )
+    expect(hiddenFailure.detail).toContain("not readable")
+
+    const incarnation = { value: CodexServerIncarnation.make("first-incarnation") }
+    const incarnationConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/incarnation-store.json"),
+      repository
+    })
+    const reconciled = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* integrator.prepare(requestFor(1))
+        incarnation.value = CodexServerIncarnation.make("second-incarnation")
+        const second = yield* integrator.prepare(requestFor(1))
+        return { first, second }
+      }).pipe(Effect.provide(providerLayer(incarnationConfig, { appIncarnation: incarnation })))
+    )
+    expect(reconciled.first._tag).toBe("PreparedCandidate")
+    expect(reconciled.second._tag).toBe("PreparedCandidate")
+  })
+
+  it("rejects a tombstoned or path-mismatched private record and a foreign repository request", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/reconcile-record-store.json"),
+      repository
+    })
+    const failure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        yield* integrator.prepare(requestFor(1))
+        const store = yield* CodexIntegratorPrivateStore
+        const stored = yield* store.read(session.sessionId)
+        if (Option.isNone(stored)) return yield* Effect.fail("private record was not written")
+        yield* store.write(
+          CodexIntegratorPrivateRecord.make({
+            ...stored.value,
+            candidatePath: IntegratorCandidateWorktreePath.make("/tmp/foreign-private-candidate")
+          })
+        )
+        const pathFailure = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        yield* store.write(preserveRevision(stored.value, { removed: true, threadId: null, worktreeReady: false }))
+        const tombstoneFailure = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        return { pathFailure, tombstoneFailure }
+      }).pipe(Effect.provide(providerLayer(config)))
+    )
+    expect(failure.pathFailure.detail).toContain("candidate path")
+    expect(failure.tombstoneFailure.detail).toContain("tombstoned")
+
+    const foreignRepositorySession = IntegratorSessionCorrelation.make({
+      ...session,
+      integrationTarget: IntegrationTarget.make({
+        repository: GitRepositoryLocator.make("/tmp/foreign-target.git"),
+        ref: IntegrationTargetRef.make("refs/heads/main")
+      }),
+      sessionId: IntegratorSessionId.make("foreign-repository-session")
+    })
+    const foreignConfig = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/foreign-repository-store.json"
+      ),
+      repository
+    })
+    const repositoryFailure = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        return yield* Effect.flip(integrator.prepare(requestForSession(foreignRepositorySession, 1)))
+      }).pipe(Effect.provide(providerLayer(foreignConfig)))
+    )
+    expect(repositoryFailure.detail).toContain("configured canonical repository")
   })
 })
