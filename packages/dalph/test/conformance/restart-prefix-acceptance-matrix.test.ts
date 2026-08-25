@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import {
   InRunJournal,
@@ -12,6 +12,17 @@ import {
   type JournalRecord,
   makeIntegrationTargetResourceController
 } from "@dalph/orchestrator"
+import {
+  WorkflowInterpreter,
+  WorkflowTrace,
+  AuthoritativeTargetLineageObserved
+} from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
+import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
+import {
+  newRecoveredActionOf,
+  operationIdOf
+} from "../../../orchestrator/src/coordination/delivery/delivery-proposal-route.js"
+import { executeRestartRecoveredObservation } from "../../../orchestrator/src/coordination/delivery/recovered-delivery-action-adapter.js"
 import {
   expectedRecoveryPrefix,
   prefixThrough,
@@ -205,6 +216,74 @@ const productionRestartProjection = <Cut extends string>(
       }
       const afterAcquire = yield* recovery.readDeliveryProjection
       return { snapshot, beforeAcquire: snapshot, afterAcquire, records: yield* storage.read(runId) }
+    })
+  )
+
+const resumeFreshTargetLineage = (
+  prefix: RecoveryPrefix<RestartPrefixCutLabel>,
+  matrix: RestartPrefixMatrix,
+  lane: RecoveryStoreLane
+) =>
+  withRecoveryPrefixStore(prefix, lane, (storage) =>
+    Effect.gen(function* () {
+      const runId = prefix.records[0].runId
+      const began = prefix.records[0]
+      if (began.event._tag !== "WorkflowRunBegan") {
+        return yield* Effect.die("restart prefix has no WorkflowRunBegan authority")
+      }
+      if (
+        matrix.successor.event._tag !== "IntegratorSuccessorSessionFixed" ||
+        matrix.successorLineage.event._tag !== "TargetLineageObserved"
+      ) {
+        return yield* Effect.die("restart prefix lacks typed successor lineage evidence")
+      }
+      const successorEvent = matrix.successor.event
+      const successorLineageEvent = matrix.successorLineage.event
+      const journal = InRunJournal.of({ append: storage.append, read: storage.read })
+      const genericInterpreter = WorkflowInterpreter.of({
+        acquireTaskClaim: () => Effect.die("unused restart test interpreter operation"),
+        readTrackerGraph: () => Effect.die("unused restart test interpreter operation"),
+        readTaskClaim: () => Effect.die("unused restart test interpreter operation"),
+        readTaskWorktree: () => Effect.die("unused restart test interpreter operation"),
+        readTargetLineage: () =>
+          Effect.succeed(AuthoritativeTargetLineageObserved.make({ observation: successorLineageEvent.observation })),
+        releaseTaskClaim: () => Effect.die("unused restart test interpreter operation"),
+        readTaskWorkSpecification: () => Effect.die("unused restart test interpreter operation"),
+        reconcileTaskWorktree: () => Effect.die("unused restart test interpreter operation"),
+        recordTaskAttemptPlan: () => Effect.die("unused restart test interpreter operation")
+      })
+      const interpreterLayer = Layer.succeed(WorkflowInterpreter, genericInterpreter)
+      const journaledLayer = journaledWorkflowInterpreterLayer(runId, interpreterLayer)
+      const recovery = yield* makeRunRecoveryProjection(
+        runId,
+        successorEvent.predecessor.integrationTarget,
+        yield* makeIntegrationTargetResourceController(),
+        disabledTargetPromotionRuntime
+      ).pipe(Effect.provideService(InRunJournal, journal))
+      const snapshot = yield* recovery.readDeliveryProjection
+      const lineageTransition = snapshot.frontier.transitions.find(
+        (candidate) => candidate._tag === "ObservePlannedAttemptContinuationTargetLineage"
+      )
+      if (lineageTransition?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
+        return yield* Effect.die("restart prefix lacks fresh target-lineage action")
+      }
+      const action = newRecoveredActionOf(lineageTransition)
+      const operationId = operationIdOf(lineageTransition)
+      if (action?._tag !== "ReadTargetLineage" || operationId === undefined) {
+        return yield* Effect.die("restart target-lineage action identity was not reconstructed")
+      }
+      yield* executeRestartRecoveredObservation(action, operationId, {
+        forwardBoundary: {
+          _tag: "InterruptibleBoundary",
+          execution: { run: (_intent, effect, recordResult) => effect.pipe(Effect.flatMap(recordResult)) }
+        },
+        recordIntent: () => Effect.void
+      }).pipe(
+        Effect.provide(journaledLayer),
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+      )
+      return yield* storage.read(runId)
     })
   )
 
@@ -409,6 +488,27 @@ it.effect("selects the exact #255 action after each retained prefix", () =>
       expect(successorFixedRuns[0].run).toEqual(
         integratorRunCorrelationForSession(matrix.successor.event.successor, IntegratorRunOrdinal.make(1))
       )
+    }
+  })
+)
+
+it.effect("executes recovered target-lineage observations through the production interpreter", () =>
+  Effect.gen(function* () {
+    const run = yield* sourceRun()
+    const matrix = restartPrefixesFrom(run.records)
+    for (const cut of ["DirectionApplied", "FreshReadIntent"] as const) {
+      const prefix = prefixAt(matrix, cut)
+      for (const lane of lanes) {
+        const records = yield* resumeFreshTargetLineage(prefix, matrix, lane)
+        const suffix = records.slice(prefix.records.length)
+        expect(
+          suffix.map(({ event }) => event._tag),
+          cut + " / " + lane
+        ).toEqual(
+          cut === "DirectionApplied" ? ["GitReadIntentRecorded", "TargetLineageObserved"] : ["TargetLineageObserved"]
+        )
+        expect(suffix.at(-1)?.event).toEqual(matrix.successorLineage.event)
+      }
     }
   })
 )
