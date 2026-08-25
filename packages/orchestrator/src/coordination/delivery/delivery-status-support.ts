@@ -2,11 +2,11 @@ import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey
 import type { DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
 import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type {
-  DeliveryRuntimeSnapshot,
   DeliveryRuntimeEvaluation,
   ExactWorkflowObligation,
   TicketDelivery,
-  TicketDeliveryStanding
+  TicketDeliveryStanding,
+  TrackerGraphState
 } from "./relations.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { IntegrationDeliveryWait } from "../frontier/integration-frontier.js"
@@ -20,7 +20,6 @@ import {
   DeliveryStatusProjectionConflict,
   makeDeliveryStatusEntryIdentity,
   type DeliveryStatusGraphSource,
-  type DeliveryStatusIntegrationStanding,
   type DeliveryStatusEntry,
   type DeliveryStatusSubject,
   type DeliveryStatusTrackerFact,
@@ -87,13 +86,11 @@ export const emptyDependencyConflictFor = (
 export const addDependencyEntry = (
   subject: DeliveryStatusSubject,
   taskId: TaskId,
-  prerequisiteTaskIds: ReadonlyArray<TaskId>,
+  prerequisiteTaskIds: readonly [TaskId, ...ReadonlyArray<TaskId>],
   standing: Extract<DeliveryStatusEntry, { readonly _tag: "DependencyWait" }>["standing"],
   taskOrder: StatusTaskOrder,
   entries: Array<OrderedStatusEntry>
 ): void => {
-  const [first, ...rest] = prerequisiteTaskIds
-  if (first === undefined) return
   addEntry(
     entries,
     {
@@ -101,41 +98,12 @@ export const addDependencyEntry = (
       classification: "Waiting",
       subject: taskStatusSubject(subject, taskId),
       taskId,
-      prerequisiteTaskIds: [first, ...rest],
+      prerequisiteTaskIds,
       standing
     },
     taskOrder
   )
 }
-
-type IntegrationWaitStanding = Extract<TicketDeliveryStanding, { readonly _tag: "IntegrationWait" }>
-export const integrationConfigurationStandingFor = (
-  standing: IntegrationWaitStanding
-): DeliveryStatusIntegrationStanding<"IntegrationConfigurationWait"> | null =>
-  standing.wait._tag === "IntegrationConfigurationWait" ? { ...standing, wait: standing.wait } : null
-
-export const targetPromotionConfigurationStandingFor = (
-  standing: IntegrationWaitStanding
-): DeliveryStatusIntegrationStanding<"TargetPromotionConfigurationWait"> | null =>
-  standing.wait._tag === "TargetPromotionConfigurationWait" ? { ...standing, wait: standing.wait } : null
-
-export const integrationDependencyStandingFor = (
-  standing: IntegrationWaitStanding
-): DeliveryStatusIntegrationStanding<"IntegrationDependencyWait"> | null =>
-  standing.wait._tag === "IntegrationDependencyWait" ? { ...standing, wait: standing.wait } : null
-
-export const integrationTrackerStandingFor = (
-  standing: IntegrationWaitStanding
-): DeliveryStatusIntegrationStanding<"IntegrationTrackerFactsWait" | "IntegrationTaskClaimConstraint"> | null => {
-  if (standing.wait._tag === "IntegrationTrackerFactsWait") return { ...standing, wait: standing.wait }
-  if (standing.wait._tag === "IntegrationTaskClaimConstraint") return { ...standing, wait: standing.wait }
-  return null
-}
-
-export const integrationTargetStandingFor = (
-  standing: IntegrationWaitStanding
-): DeliveryStatusIntegrationStanding<"IntegrationTargetWait"> | null =>
-  standing.wait._tag === "IntegrationTargetWait" ? { ...standing, wait: standing.wait } : null
 
 export const obligationForResponsibility = (
   delivery: TicketDelivery,
@@ -252,9 +220,10 @@ export const integrationTrackerFactForWait = (
   return trackerFactForClaimState(wait.claimState)
 }
 
-export const graphSourceOf = (snapshot: DeliveryRuntimeSnapshot): DeliveryStatusGraphSource | null => {
-  if (snapshot.trackerGraph._tag !== "GraphEstablished") return null
-  const observation = snapshot.trackerGraph.observation
+export const graphSourceOf = (
+  graph: Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>
+): DeliveryStatusGraphSource => {
+  const observation = graph.observation
   return {
     _tag: "EstablishedGraph",
     revision: observation.snapshot.revision,

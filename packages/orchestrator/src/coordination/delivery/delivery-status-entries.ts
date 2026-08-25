@@ -16,6 +16,8 @@ import {
 } from "./delivery-status-model.js"
 import {
   addEntry,
+  ownerIsSettled,
+  runWideTaskOrder,
   compareOrderedEntries,
   deliveryTaskOrder,
   includeForSubject,
@@ -28,11 +30,82 @@ import {
   type OrderedStatusEntry
 } from "./delivery-status-support.js"
 import { deliveryTaskPositionAt, taskOrderAt, type StatusTaskOrder } from "./delivery-status-order.js"
-import {
-  actionEntriesFor,
-  dependencyEntriesFor,
-  trackerAndEvidenceEntriesFor
-} from "./delivery-status-entry-builders.js"
+import { dependencyEntriesFor, trackerAndEvidenceEntriesFor } from "./delivery-status-entry-builders.js"
+
+const addProposedDeliveryEntriesFor = (
+  subject: DeliveryStatusSubject,
+  evaluation: DeliveryRuntimeEvaluation,
+  liveProposalIds: ReadonlySet<string>,
+  entries: Array<OrderedStatusEntry>,
+  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>
+): DeliveryStatusProjectionConflict | null => {
+  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return null
+  for (const proposal of evaluation.proposedActions.proposals) {
+    if (liveProposalIds.has(proposal.id)) continue
+    const taskId = deliveryProposalOrderTaskId(proposal.order)
+    if (!includeForSubject(subject, taskId)) continue
+    const taskOrder = taskId === null ? runWideTaskOrder : taskOrderOrConflictFor(subject, taskOrders, taskId)
+    if (taskOrder instanceof DeliveryStatusProjectionConflict) return taskOrder
+    addEntry(
+      entries,
+      {
+        _tag: "ProposedDeliveryAction",
+        classification: "Waiting",
+        subject: taskId === null ? subject : taskStatusSubject(subject, taskId),
+        proposal
+      },
+      taskOrder
+    )
+  }
+  return null
+}
+
+const addLiveOwnerEntryFor = (
+  subject: DeliveryStatusSubject,
+  evaluation: DeliveryRuntimeEvaluation,
+  owner: DeliveryRuntimeLiveOwnerSnapshot,
+  entries: Array<OrderedStatusEntry>,
+  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>
+): DeliveryStatusProjectionConflict | null => {
+  const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
+  if (!includeForSubject(subject, taskId)) return null
+  const ownerTaskOrder = taskId === null ? runWideTaskOrder : taskOrderOrConflictFor(subject, taskOrders, taskId)
+  if (ownerTaskOrder instanceof DeliveryStatusProjectionConflict) return ownerTaskOrder
+  const entrySubject = taskId === null ? subject : taskStatusSubject(subject, taskId)
+  const entry: DeliveryStatusEntry = ownerIsSettled(owner)
+    ? {
+        _tag: "AcceptedFactPublicationWait",
+        classification: "Waiting",
+        subject: entrySubject,
+        owner,
+        acceptedAt: evaluation.acceptedAt
+      }
+    : { _tag: "LiveDeliveryAction", classification: "Progressing", subject: entrySubject, owner }
+  addEntry(entries, entry, ownerTaskOrder)
+  return null
+}
+
+const actionEntriesFor = (
+  subject: DeliveryStatusSubject,
+  evaluation: DeliveryRuntimeEvaluation,
+  liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>,
+  entries: Array<OrderedStatusEntry>,
+  taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>
+): DeliveryStatusProjectionConflict | null => {
+  const proposedConflict = addProposedDeliveryEntriesFor(
+    subject,
+    evaluation,
+    new Set(liveOwners.map(({ proposal }) => proposal.id)),
+    entries,
+    taskOrders
+  )
+  if (proposedConflict !== null) return proposedConflict
+  for (const owner of liveOwners) {
+    const ownerConflict = addLiveOwnerEntryFor(subject, evaluation, owner, entries, taskOrders)
+    if (ownerConflict !== null) return ownerConflict
+  }
+  return null
+}
 
 const deliveryHolderOrder = (
   holders: ReadonlyArray<{ readonly taskId: TaskId; readonly correlation: PlannedAttemptExecutorCorrelation }>

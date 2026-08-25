@@ -39,8 +39,7 @@ const absentTaskFor = (
   if (subject._tag !== "Task" || graph._tag !== "GraphEstablished") return null
   const present = graph.observation.snapshot.toWire().tasks.some(({ id }) => id === subject.taskId)
   if (present) return null
-  const source = graphSourceOf(ready.evaluation.current)
-  return source === null ? null : { _tag: "TaskAbsentFromCurrentGraph", subject, graphSource: source }
+  return { _tag: "TaskAbsentFromCurrentGraph", subject, graphSource: graphSourceOf(graph) }
 }
 
 const entriesForReady = (
