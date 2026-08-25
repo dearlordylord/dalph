@@ -99,6 +99,81 @@ const extractDs16PromotionEvidence = (
   return { attempt, stale, rejectedCompareAndSet }
 }
 
+/** One Integrator boundary is proved by its journal run/result/candidate records and bounded raw captures. */
+interface IntegratorBoundaryEvidence {
+  readonly run: JournalRecordFor<"IntegratorRunStarted">
+  readonly result: JournalRecordFor<"IntegratorRunResultRecorded">
+  readonly candidateGit: JournalRecordFor<"IntegratorRunCandidateGitObserved">
+  readonly request: CapturedOccurrenceFor<"IntegratorRequestReceived">
+  readonly candidateCapture: CapturedOccurrenceFor<"IntegratorGitObservationReturned">
+}
+
+interface IntegratorBoundaryExpectation {
+  readonly sessionId: string
+  readonly acceptedCommit: string
+  readonly expectedTargetHead: string
+  readonly candidateCommit: string
+  readonly directParents: readonly [string, string]
+  readonly requestCaptureAfter: number
+  readonly candidateCaptureBefore: number
+}
+
+/** Keeps predecessor/successor candidate evidence session-specific without treating raw capture tags as authority. */
+const integratorBoundaryEvidenceFor = (
+  records: ReadonlyArray<JournalRecord>,
+  captures: ReadonlyArray<AuthoredObservationCapture>,
+  expectation: IntegratorBoundaryExpectation
+): IntegratorBoundaryEvidence | undefined => {
+  const run = exactlyOne(
+    recordsFor(records, "IntegratorRunStarted").filter(
+      ({ event }) => event.run.session.sessionId === expectation.sessionId
+    ),
+    `${expectation.sessionId} Integrator run`
+  )
+  const result = exactlyOne(
+    recordsFor(records, "IntegratorRunResultRecorded").filter(
+      ({ event }) => event.run.session.sessionId === expectation.sessionId
+    ),
+    `${expectation.sessionId} Integrator result`
+  )
+  if (result.event.result._tag !== "PreparedCandidate") return undefined
+  const candidateText = result.event.result.candidateText
+  const candidateGit = exactlyOne(
+    recordsFor(records, "IntegratorRunCandidateGitObserved").filter(
+      ({ event }) => event.run.session.sessionId === expectation.sessionId
+    ),
+    `${expectation.sessionId} candidate Git observation`
+  )
+  if (candidateGit.event.observation._tag !== "Commit") return undefined
+  expect(candidateGit.event.candidateText).toBe(result.event.result.candidateText)
+  expect(candidateGit.event.observation.commit).toBe(expectation.candidateCommit)
+  expect(candidateGit.event.observation.directParents).toEqual(expectation.directParents)
+  const request = exactlyOne(
+    capturedOccurrencesFor(captures, "IntegratorRequestReceived").filter(
+      ({ captureOrder, occurrence }) =>
+        captureOrder > expectation.requestCaptureAfter &&
+        occurrence.correlation.sessionId === expectation.sessionId &&
+        occurrence.correlation.expectedTargetHead === expectation.expectedTargetHead &&
+        occurrence.correlation.acceptedResult.commit === expectation.acceptedCommit
+    ),
+    `${expectation.sessionId} captured Integrator request`
+  )
+  const candidateCapture = exactlyOne(
+    capturedOccurrencesFor(captures, "IntegratorGitObservationReturned").filter(
+      ({ captureOrder, occurrence }) =>
+        captureOrder > request.captureOrder &&
+        captureOrder < expectation.candidateCaptureBefore &&
+        occurrence.candidateText === candidateText &&
+        occurrence.observation._tag === "Commit" &&
+        occurrence.observation.commit === expectation.candidateCommit &&
+        occurrence.observation.directParents[0] === expectation.directParents[0] &&
+        occurrence.observation.directParents[1] === expectation.directParents[1]
+    ),
+    `${expectation.sessionId} captured candidate Git observation`
+  )
+  return { candidateCapture, candidateGit, request, result, run }
+}
+
 const capstoneTimeout = 600_000
 const cachedRun = Effect.runSync(
   Effect.cached(
@@ -138,6 +213,9 @@ it.effect(
       const changedHead = "2222222222222222222222222222222222222222"
       const initialCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
       const successorCandidateCommit = "dddddddddddddddddddddddddddddddddddddddd"
+      expect(recordsFor(records, "TargetPromotionAttemptIntended")).toHaveLength(2)
+      expect(recordsFor(records, "TargetPromotionStale")).toHaveLength(1)
+      expect(capturedOccurrencesFor(captures, "TargetPromotionCompareAndSetReturned")).toHaveLength(2)
 
       // DS14: the accepted result enters the journal queue exactly once, then crosses the start cutoff once.
       const responsibilityBegan = exactlyOne(
@@ -181,57 +259,31 @@ it.effect(
       expect(initialLineage.event.observation.targetHeadSha).toBe(initialHead)
       expect(initialLineage.event.observation.plannedBaseSha).toBe(initialHead)
 
-      const predecessorRun = exactlyOne(
-        recordsFor(records, "IntegratorRunStarted").filter(
-          ({ event }) => event.run.session.sessionId === predecessor.sessionId
-        ),
-        "predecessor Integrator run"
-      )
-      expect(predecessorRun.event.run.ordinal).toBe(1)
-      const predecessorResult = exactlyOne(
-        recordsFor(records, "IntegratorRunResultRecorded").filter(
-          ({ event }) => event.run.session.sessionId === predecessor.sessionId
-        ),
-        "predecessor Integrator result"
-      )
-      expect(predecessorResult.event.result._tag).toBe("PreparedCandidate")
-      if (predecessorResult.event.result._tag !== "PreparedCandidate") return
-
-      const predecessorCandidateGit = exactlyOne(
-        recordsFor(records, "IntegratorRunCandidateGitObserved").filter(
-          ({ event }) => event.run.session.sessionId === predecessor.sessionId
-        ),
-        "predecessor candidate Git observation"
-      )
-      expect(predecessorCandidateGit.event.candidateText).toBe(predecessorResult.event.result.candidateText)
-      expect(predecessorCandidateGit.event.observation._tag).toBe("Commit")
-      if (predecessorCandidateGit.event.observation._tag !== "Commit") return
-      expect(predecessorCandidateGit.event.observation.commit).toBe(initialCandidateCommit)
-      expect(predecessorCandidateGit.event.observation.directParents).toEqual([initialHead, acceptedCommit])
-      expect(predecessorCandidateGit.position).toBeGreaterThan(predecessor.targetLineageObservedAt)
-
-      const predecessorRequest = exactlyOne(
-        capturedOccurrencesFor(captures, "IntegratorRequestReceived").filter(
+      // The rejected CAS capture is an exact upper boundary for predecessor candidate evidence.
+      const rejectedCompareAndSetCapture = exactlyOne(
+        capturedOccurrencesFor(captures, "TargetPromotionCompareAndSetReturned").filter(
           ({ occurrence }) =>
-            occurrence.correlation.expectedTargetHead === initialHead &&
-            occurrence.correlation.acceptedResult.commit === acceptedCommit &&
-            occurrence.correlation.plannedAttempt.attemptId === predecessor.plannedAttempt.attemptId
+            occurrence.result._tag === "RejectedExpectedHead" && occurrence.result.observedHeadSha === changedHead
         ),
-        "captured predecessor Integrator request"
+        "captured predecessor rejected compare-and-set"
       )
+      const predecessorEvidence = integratorBoundaryEvidenceFor(records, captures, {
+        acceptedCommit,
+        candidateCaptureBefore: rejectedCompareAndSetCapture.captureOrder,
+        candidateCommit: initialCandidateCommit,
+        directParents: [initialHead, acceptedCommit],
+        expectedTargetHead: initialHead,
+        requestCaptureAfter: 0,
+        sessionId: predecessor.sessionId
+      })
+      expect(predecessorEvidence).toBeDefined()
+      if (predecessorEvidence === undefined) return
+      expect(predecessorEvidence.run.event.run.ordinal).toBe(1)
+      expect(predecessorEvidence.candidateGit.position).toBeGreaterThan(predecessor.targetLineageObservedAt)
+      const predecessorRequest = predecessorEvidence.request
+      const predecessorCandidateCapture = predecessorEvidence.candidateCapture
       expect(predecessorRequest.occurrence.correlation.queuedAt).toBe(predecessor.queuedAt)
       expect(predecessorRequest.occurrence.correlation.startedAt).toBe(predecessor.startedAt)
-      const predecessorCandidateCapture = exactlyOne(
-        capturedOccurrencesFor(captures, "IntegratorGitObservationReturned").filter(
-          ({ occurrence }) =>
-            occurrence.observation._tag === "Commit" &&
-            occurrence.observation.commit === initialCandidateCommit &&
-            occurrence.observation.directParents[0] === initialHead &&
-            occurrence.observation.directParents[1] === acceptedCommit
-        ),
-        "captured predecessor candidate Git observation"
-      )
-      expect(predecessorCandidateCapture.captureOrder).toBeGreaterThan(predecessorRequest.captureOrder)
 
       // DS15/16: promotion intent and the actual Git boundary are separate evidence; both are required.
       const predecessorPromotionIntent = exactlyOne(
@@ -266,6 +318,7 @@ it.effect(
         _tag: "RejectedExpectedHead",
         observedHeadSha: changedHead
       })
+      expect(ds16.rejectedCompareAndSet.captureOrder).toBe(rejectedCompareAndSetCapture.captureOrder)
       expect(ds16.rejectedCompareAndSet.captureOrder).toBeGreaterThan(predecessorCandidateCapture.captureOrder)
 
       const promotionStale = ds16.stale
@@ -333,15 +386,25 @@ it.effect(
       expect(successorCorrelation.startedAt).toBe(predecessor.startedAt)
       expect(successorCorrelation.expectedTargetHead).toBe(changedHead)
 
-      const successorRequest = exactlyOne(
-        capturedOccurrencesFor(captures, "IntegratorRequestReceived").filter(
-          ({ captureOrder, occurrence }) =>
-            captureOrder > directionCapture.captureOrder &&
-            occurrence.correlation.expectedTargetHead === changedHead &&
-            occurrence.correlation.acceptedResult.commit === acceptedCommit
+      const appliedCompareAndSet = exactlyOne(
+        capturedOccurrencesFor(captures, "TargetPromotionCompareAndSetReturned").filter(
+          ({ occurrence }) => occurrence.result._tag === "Applied"
         ),
-        "captured successor Integrator request"
+        "captured successor applied compare-and-set"
       )
+      const successorEvidence = integratorBoundaryEvidenceFor(records, captures, {
+        acceptedCommit,
+        candidateCaptureBefore: appliedCompareAndSet.captureOrder,
+        candidateCommit: successorCandidateCommit,
+        directParents: [changedHead, acceptedCommit],
+        expectedTargetHead: changedHead,
+        requestCaptureAfter: directionCapture.captureOrder,
+        sessionId: successorCorrelation.sessionId
+      })
+      expect(successorEvidence).toBeDefined()
+      if (successorEvidence === undefined) return
+      const successorRequest = successorEvidence.request
+      const successorCandidateCapture = successorEvidence.candidateCapture
       expect(successorRequest.occurrence.correlation.plannedAttempt.attemptId).toBe(
         successorCorrelation.plannedAttempt.attemptId
       )
@@ -388,48 +451,8 @@ it.effect(
       expect(direction.position).toBeLessThan(freshLineageIntent.position)
       expect(freshLineage.position).toBeLessThan(successor.position)
 
-      const successorRun = exactlyOne(
-        recordsFor(records, "IntegratorRunStarted").filter(
-          ({ event }) => event.run.session.sessionId === successorCorrelation.sessionId
-        ),
-        "successor Integrator run"
-      )
-      expect(successorRun.event.run.ordinal).toBe(1)
-      const successorResult = exactlyOne(
-        recordsFor(records, "IntegratorRunResultRecorded").filter(
-          ({ event }) => event.run.session.sessionId === successorCorrelation.sessionId
-        ),
-        "successor Integrator result"
-      )
-      expect(successorResult.event.result._tag).toBe("PreparedCandidate")
-      if (successorResult.event.result._tag !== "PreparedCandidate") return
-      const successorCandidateGit = exactlyOne(
-        recordsFor(records, "IntegratorRunCandidateGitObserved").filter(
-          ({ event }) => event.run.session.sessionId === successorCorrelation.sessionId
-        ),
-        "successor candidate Git observation"
-      )
-      expect(successorCandidateGit.event.candidateText).toBe(successorResult.event.result.candidateText)
-      expect(successorCandidateGit.event.observation).toMatchObject({
-        _tag: "Commit",
-        candidateText: successorResult.event.result.candidateText,
-        commit: successorCandidateCommit,
-        directParents: [changedHead, acceptedCommit]
-      })
-      if (successorCandidateGit.event.observation._tag !== "Commit") return
-      expect(successorCandidateGit.event.observation.directParents).toEqual([changedHead, acceptedCommit])
-      expect(successorCandidateGit.position).toBeGreaterThan(successorCorrelation.targetLineageObservedAt)
-
-      const successorCandidateCapture = exactlyOne(
-        capturedOccurrencesFor(captures, "IntegratorGitObservationReturned").filter(
-          ({ occurrence }) =>
-            occurrence.observation._tag === "Commit" &&
-            occurrence.observation.commit === successorCandidateCommit &&
-            occurrence.observation.directParents[0] === changedHead &&
-            occurrence.observation.directParents[1] === acceptedCommit
-        ),
-        "captured successor candidate Git observation"
-      )
+      expect(successorEvidence.run.event.run.ordinal).toBe(1)
+      expect(successorEvidence.candidateGit.position).toBeGreaterThan(successorCorrelation.targetLineageObservedAt)
       expect(successorCandidateCapture.captureOrder).toBeGreaterThan(successorRequest.captureOrder)
       expect(successorCandidateCapture.captureOrder).toBeGreaterThan(directionCapture.captureOrder)
 
@@ -463,12 +486,6 @@ it.effect(
         candidateAncestry: "Current",
         targetHeadSha: successorCandidateCommit
       })
-      const appliedCompareAndSet = exactlyOne(
-        capturedOccurrencesFor(captures, "TargetPromotionCompareAndSetReturned").filter(
-          ({ occurrence }) => occurrence.result._tag === "Applied"
-        ),
-        "captured successor applied compare-and-set"
-      )
       expect(appliedCompareAndSet.captureOrder).toBeGreaterThan(successorCandidateCapture.captureOrder)
 
       // Completion finality remains bound to A's original active claim and the focused success read.
@@ -500,6 +517,32 @@ it.effect(
       expect(replacementAttempt.event.attemptOrdinal).toBe(1)
       expect(replacement.event.claim).toEqual(replacementIntent.event.claim)
 
+      const completionIntent = exactlyOne(
+        recordsFor(records, "CompletionTaskIntended").filter(({ event }) => event.request.taskId === "A"),
+        "A exact completion request intent"
+      )
+      const completionAttempt = exactlyOne(
+        recordsFor(records, "CompletionTaskAttemptIntended").filter(
+          ({ event }) => event.request.operationId === completionIntent.event.request.operationId
+        ),
+        "A exact completion request attempt"
+      )
+      const completionAcknowledged = exactlyOne(
+        recordsFor(records, "CompletionTaskAcknowledged").filter(
+          ({ event }) => event.request.operationId === completionIntent.event.request.operationId
+        ),
+        "A exact completion request acknowledgement"
+      )
+      expect(completionIntent.event.request.claim).toEqual(replacementIntent.event.claim)
+      expect(completionAttempt.event.request).toEqual(completionIntent.event.request)
+      expect(completionAttempt.event.attemptOrdinal).toBe(1)
+      expect(completionAcknowledged.event.request).toEqual(completionIntent.event.request)
+      expect(completionAcknowledged.event.attemptOrdinal).toBe(1)
+      expect(completionAcknowledged.event.acknowledgement).toEqual({
+        operationId: completionIntent.event.request.operationId,
+        taskId: "A"
+      })
+
       const focusedCompleted = exactlyOne(
         recordsFor(records, "TaskTrackerFactsObserved").filter(
           ({ event }) =>
@@ -511,6 +554,13 @@ it.effect(
       )
       const focusedObservation = focusedCompleted.event.observation
       if (focusedObservation._tag !== "FocusedTaskCompletionFacts") return
+      expect(focusedObservation.purpose._tag).toBe("Confirmation")
+      expect(focusedObservation.facts.currentClaim).toEqual(replacementIntent.event.claim)
+      expect(focusedObservation.facts.targetMembership).toBe("Member")
+      expect(focusedObservation.facts.taskId).toBe("A")
+      expect(focusedObservation.facts.taskRevision).toBe(replacementIntent.event.claim.plannedAttempt.taskRevision)
+      expect(focusedObservation.facts.target).toEqual(successorCorrelation.integrationTarget)
+      expect(focusedObservation.facts.unfinishedPrerequisiteTaskIds).toEqual([])
       const deletionIntent = exactlyOne(
         recordsFor(records, "CompletionClaimDeletionIntended").filter(
           ({ event }) => event.claim.plannedAttempt.taskId === "A"
@@ -536,6 +586,13 @@ it.effect(
         "A integration finality settlement"
       )
       expect(focusedObservation.facts.lifecycle).toBe("CompletedSuccessfully")
+      expect(focusedObservation.operationId).toBe(deletionIntent.event.successObservation.operationId)
+      expect(focusedCompleted.position).toBe(deletionIntent.event.successObservation.observedAt)
+      expect(deletionIntent.event.successObservation.claim).toEqual(focusedObservation.facts.currentClaim)
+      expect(deletionIntent.event.successObservation.taskId).toBe(focusedObservation.facts.taskId)
+      expect(deletionIntent.event.successObservation.taskRevision).toBe(focusedObservation.facts.taskRevision)
+      expect(deletionIntent.event.successObservation.trackerRevision).toBe(focusedObservation.facts.trackerRevision)
+      expect(deletionIntent.event.successObservation.target).toEqual(focusedObservation.facts.target)
       expect(deletionIntent.event.claim).toEqual(replacementIntent.event.claim)
       expect(deletionIntent.event.successObservation.observedAt).toBe(focusedCompleted.position)
       expect(deletionAttempt.event.claim).toEqual(deletionIntent.event.claim)
@@ -553,6 +610,9 @@ it.effect(
         replacementIntent.position,
         replacementAttempt.position,
         replacement.position,
+        completionIntent.position,
+        completionAttempt.position,
+        completionAcknowledged.position,
         focusedCompleted.position,
         deletionIntent.position,
         deletionAttempt.position,
@@ -563,6 +623,11 @@ it.effect(
       expect(quarantine.position).toBeLessThan(direction.position)
       expect(direction.position).toBeLessThan(successor.position)
       expect(successorPromotion.position).toBeLessThan(replacementIntent.position)
+      expect(replacementIntent.position).toBeLessThan(replacementAttempt.position)
+      expect(replacementAttempt.position).toBeLessThan(replacement.position)
+      expect(replacement.position).toBeLessThan(completionIntent.position)
+      expect(completionIntent.position).toBeLessThan(completionAttempt.position)
+      expect(completionAttempt.position).toBeLessThan(completionAcknowledged.position)
       expect(replacement.position).toBeLessThan(focusedCompleted.position)
       expect(focusedCompleted.position).toBeLessThan(deletion.position)
       expect(deletion.position).toBeLessThan(settled.position)
@@ -576,14 +641,22 @@ it.effect(
     Effect.gen(function* () {
       const run = yield* cachedRun
       const stale = exactlyOne(recordsFor(run.records, "TargetPromotionStale"), "capstone stale promotion")
-      const omittedAttemptRecords = run.records.filter(
-        (record) =>
+      const retainedAttempt = exactlyOne(
+        recordsFor(run.records, "TargetPromotionAttemptIntended").filter(
+          ({ event }) => event.correlation.requestId === stale.event.correlation.requestId
+        ),
+        "retained predecessor promotion attempt"
+      )
+      expect(retainedAttempt.position).toBeLessThan(stale.position)
+      const omittedRejectedCompareAndSetCaptures = run.observationCaptures.filter(
+        (capture) =>
           !(
-            record.event._tag === "TargetPromotionAttemptIntended" &&
-            record.event.correlation.requestId === stale.event.correlation.requestId
+            capture._tag === "AuthoredStoryOccurrenceCaptured" &&
+            capture.occurrence._tag === "TargetPromotionCompareAndSetReturned" &&
+            capture.occurrence.result._tag === "RejectedExpectedHead"
           )
       )
-      expect(extractDs16PromotionEvidence(omittedAttemptRecords, run.observationCaptures)).toBeUndefined()
+      expect(extractDs16PromotionEvidence(run.records, omittedRejectedCompareAndSetCaptures)).toBeUndefined()
 
       const preRequestRun = yield* runAuthoredScenarioCassette(
         maintainedAuthoredCassetteCatalog.targetPromotionStaleBeforeCompareAndSet
@@ -593,6 +666,7 @@ it.effect(
         "pre-request stale promotion"
       )
       expect(preRequestStale.event.basis).toEqual({ _tag: "BeforeFirstAttempt" })
+      expect(recordsFor(preRequestRun.records, "TargetPromotionAttemptIntended")).toHaveLength(0)
       expect(
         capturedOccurrencesFor(preRequestRun.observationCaptures, "TargetPromotionCompareAndSetReturned")
       ).toHaveLength(0)
