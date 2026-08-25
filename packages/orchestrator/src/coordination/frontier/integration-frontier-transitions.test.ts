@@ -219,7 +219,7 @@ const quarantinedFirstSessionHistory = () => {
     record(
       7,
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation: scenario.session, detail: notPreparedDetail }),
+        result: IntegratorResult.cases.NotPrepared.make({ correlation: scenario.run, detail: notPreparedDetail }),
         run: scenario.run,
         version: workflowJournalEventVersion
       }),
@@ -314,7 +314,7 @@ const retryHistory = (evidence: RetryEvidence, freshHead?: GitCommitSha) => {
           record(
             7,
             IntegratorRunResultRecordedEvent.make({
-              result: IntegratorResult.cases.NotPrepared.make({ correlation: session, detail: notPreparedDetail }),
+              result: IntegratorResult.cases.NotPrepared.make({ correlation: runOne, detail: notPreparedDetail }),
               run: runOne,
               version: workflowJournalEventVersion
             }),
@@ -637,7 +637,7 @@ it("promotes the Git-qualified candidate from the successful Retry run", () => {
       IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.PreparedCandidate.make({
           candidateText: preparedCandidateText,
-          correlation: scenario.session
+          correlation: runTwo
         }),
         run: runTwo,
         version: workflowJournalEventVersion
@@ -687,7 +687,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
   const scenario = unfinishedFirstSessionHistory()
   const result = IntegratorResult.cases.PreparedCandidate.make({
     candidateText: preparedCandidateText,
-    correlation: scenario.session
+    correlation: scenario.run
   })
   const observation = IntegratorGitObservation.cases.Commit.make({
     candidateText: preparedCandidateText,
@@ -864,7 +864,7 @@ it("derives a fresh quarantine after the authorized Retry run ends conclusively"
     record(
       13,
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation: scenario.session, detail: notPreparedDetail }),
+        result: IntegratorResult.cases.NotPrepared.make({ correlation: runTwo, detail: notPreparedDetail }),
         run: runTwo,
         version: workflowJournalEventVersion
       }),
@@ -948,7 +948,7 @@ it("fixes one FullRerun successor after the conclusive Retry run is quarantined"
     record(
       13,
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation: scenario.session, detail: notPreparedDetail }),
+        result: IntegratorResult.cases.NotPrepared.make({ correlation: runTwo, detail: notPreparedDetail }),
         run: runTwo,
         version: workflowJournalEventVersion
       }),
@@ -1314,7 +1314,10 @@ it("blocks a Retry when its durable result detail no longer matches the quaranti
           ...candidate,
           event: IntegratorRunResultRecordedEvent.make({
             ...candidate.event,
-            result: IntegratorResult.cases.NotPrepared.make({ correlation: scenario.session, detail: mismatchedDetail })
+            result: IntegratorResult.cases.NotPrepared.make({
+              correlation: candidate.event.run,
+              detail: mismatchedDetail
+            })
           })
         }
       : candidate

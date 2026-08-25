@@ -113,11 +113,12 @@ requires a setting that cannot correctly be shared.
   functions above cyclomatic complexity eight in each file.
 - `pnpm check:duplicates` enforces the configured TypeScript duplication budget.
 - `pnpm test` runs the deterministic Vitest suite.
-- `pnpm qualify:codex` is the explicit real-host gate for issue
-  #75. It requires a built Codex CLI (`codex` or `CODEX_BIN`), creates an
-  isolated user-level `CODEX_HOME/config.toml`, serves a deterministic local
-  Responses endpoint, and runs the real app-server against a temporary Git
-  repository/worktree. The fixture is opt-in so `pnpm check:all` remains
+- `pnpm qualify:codex` is the explicit real-host gate for issues #75 and #258.
+  It requires a built Codex CLI (`codex` or `CODEX_BIN`), creates an isolated
+  user-level `CODEX_HOME/config.toml`, serves deterministic local Responses
+  endpoints, and runs both the real app-server matrix and the genuine second-
+  Dalph-process Integrator recovery against temporary Git repositories and
+  private stores. The fixture is opt-in so `pnpm check:all` remains
   deterministic when Codex is absent. The authoritative hosted matrix runs
   the same contract on `ubuntu-latest` and `macos-latest` in
   `.github/workflows/codex-app-server-qualification.yml`.

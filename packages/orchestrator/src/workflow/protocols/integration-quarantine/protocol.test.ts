@@ -149,9 +149,12 @@ const appendQuarantine = Effect.fn("IntegrationQuarantineTest.appendQuarantine")
     )
     const result =
       event.basis.cause._tag === "InvalidCandidate"
-        ? IntegratorResult.cases.PreparedCandidate.make({ candidateText: event.basis.cause.candidateText, correlation })
+        ? IntegratorResult.cases.PreparedCandidate.make({
+            candidateText: event.basis.cause.candidateText,
+            correlation: run
+          })
         : IntegratorResult.cases.NotPrepared.make({
-            correlation,
+            correlation: run,
             detail:
               event.basis.cause._tag === "NotPrepared"
                 ? event.basis.cause.detail
@@ -346,7 +349,7 @@ it.effect("accepts conclusive evidence bound to the exact initial Integrator run
       runId,
       integratorRunResultRecordedRecordKey(run),
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation, detail }),
+        result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail }),
         run,
         version: workflowJournalEventVersion
       })
@@ -540,7 +543,7 @@ it.effect("authorizes Retry from exact provider-failure and run-bound conclusive
       runId,
       integratorRunResultRecordedRecordKey(run),
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation, detail }),
+        result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail }),
         run,
         version: workflowJournalEventVersion
       })
@@ -775,7 +778,10 @@ it.effect("reconciles every ambiguous direction append outcome against the Journ
         Effect.succeed({
           event: IntegratorRunResultRecordedEvent.make({
             result: IntegratorResult.cases.NotPrepared.make({
-              correlation: event.correlation,
+              correlation: IntegratorRunCorrelation.make({
+                ordinal: IntegratorRunOrdinal.make(1),
+                session: event.correlation
+              }),
               detail: IntegratorNotPreparedDetail.make("foreign append result")
             }),
             run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: event.correlation }),
@@ -1063,7 +1069,10 @@ it.effect("detects duplicate directions on an earlier quarantine even after a la
       JournalRecordKey.make("later-quarantine-result"),
       IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.NotPrepared.make({
-          correlation: prior.correlation,
+          correlation: IntegratorRunCorrelation.make({
+            ordinal: IntegratorRunOrdinal.make(1),
+            session: prior.correlation
+          }),
           detail: IntegratorNotPreparedDetail.make("later conclusive result")
         }),
         run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: prior.correlation }),
@@ -1239,12 +1248,16 @@ it.effect("narrows only the closed Integration Quarantine Journal event vocabula
   Effect.sync(() => {
     const quarantine = quarantineEventFor("event-vocabulary")
     expect(isIntegrationQuarantineEvent(quarantine)).toBe(true)
+    const run = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: quarantine.correlation
+    })
     const result = IntegratorRunResultRecordedEvent.make({
       result: IntegratorResult.cases.NotPrepared.make({
-        correlation: quarantine.correlation,
+        correlation: run,
         detail: IntegratorNotPreparedDetail.make("event vocabulary probe")
       }),
-      run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: quarantine.correlation }),
+      run,
       version: workflowJournalEventVersion
     })
     expect(isIntegrationQuarantineEvent(result)).toBe(false)

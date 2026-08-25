@@ -537,9 +537,10 @@ it.effect(
           prepare: (request) =>
             Effect.gen(function* () {
               const correlation = request.correlation
-              const acceptedCommit = correlation.acceptedResult.commit
+              const acceptedCommit = correlation.session.acceptedResult.commit
               const plannedTask = taskKeys.find(
-                (candidate) => plannedAttempts.get(candidate)?.attemptId === correlation.plannedAttempt.attemptId
+                (candidate) =>
+                  plannedAttempts.get(candidate)?.attemptId === correlation.session.plannedAttempt.attemptId
               )
               if (plannedTask === undefined) return yield* Effect.die("Integrator received unknown accepted result")
               const expectedAttempt = taskValue(plannedAttempts, plannedTask)
@@ -552,14 +553,14 @@ it.effect(
                   ? baseSha
                   : taskValue(yield* Ref.get(promotionCandidates), plannedTask === "B" ? "A" : "B")
               if (
-                !plannedTaskAttemptEquivalence(correlation.plannedAttempt, expectedAttempt) ||
-                correlation.acceptedResult.commit !== expectedReport.result.acceptedResult.commit ||
+                !plannedTaskAttemptEquivalence(correlation.session.plannedAttempt, expectedAttempt) ||
+                correlation.session.acceptedResult.commit !== expectedReport.result.acceptedResult.commit ||
                 !evidenceReferenceEquals(
-                  correlation.acceptedResult.evidenceManifest,
+                  correlation.session.acceptedResult.evidenceManifest,
                   expectedReport.result.acceptedResult.evidenceManifest
                 ) ||
-                correlation.expectedTargetHead !== expectedTargetHead ||
-                !integrationTargetEquals(correlation.integrationTarget, integrationTarget)
+                correlation.session.expectedTargetHead !== expectedTargetHead ||
+                !integrationTargetEquals(correlation.session.integrationTarget, integrationTarget)
               ) {
                 return yield* Effect.die(`Integrator received a swapped correlation for ${plannedTask}`)
               }
@@ -567,8 +568,8 @@ it.effect(
               if (
                 previousRequests.some(
                   ({ correlation: previous }) =>
-                    previous.sessionId === correlation.sessionId ||
-                    previous.candidateResource === correlation.candidateResource
+                    previous.session.sessionId === correlation.session.sessionId ||
+                    previous.session.candidateResource === correlation.session.candidateResource
                 )
               ) {
                 return yield* Effect.die(`Integrator reused a session or candidate resource for ${plannedTask}`)
@@ -585,7 +586,7 @@ it.effect(
                 const tree = yield* runInGitDirectory(
                   git,
                   bareRemote,
-                  ["merge-tree", "--write-tree", correlation.expectedTargetHead, acceptedCommit],
+                  ["merge-tree", "--write-tree", correlation.session.expectedTargetHead, acceptedCommit],
                   `merge ${plannedTask} accepted tree with the expected target`
                 )
                 const candidate = GitCommitSha.make(
@@ -596,7 +597,7 @@ it.effect(
                       "commit-tree",
                       tree,
                       "-p",
-                      correlation.expectedTargetHead,
+                      correlation.session.expectedTargetHead,
                       "-p",
                       acceptedCommit,
                       "-m",
@@ -888,17 +889,21 @@ it.effect(
         expect((yield* Ref.get(promotionCandidates)).get("D")).toBe(dQualification.observation.commit)
         const recordedIntegratorRequests = yield* Ref.get(integratorRequests)
         const integratorRequestFor = (task: TaskKey) =>
-          recordedIntegratorRequests.find(({ correlation }) => correlation.plannedAttempt.taskId === taskIdOf(task))
+          recordedIntegratorRequests.find(
+            ({ correlation }) => correlation.session.plannedAttempt.taskId === taskIdOf(task)
+          )
         const lineageRecordFor = (task: TaskKey) => {
           const request = integratorRequestFor(task)
           return request === undefined
             ? undefined
-            : lineageRecords.find(({ position }) => position === request.correlation.targetLineageObservedAt)
+            : lineageRecords.find(({ position }) => position === request.correlation.session.targetLineageObservedAt)
         }
-        const sessionIds = recordedIntegratorRequests.map(({ correlation }) => correlation.sessionId)
-        const candidateResources = recordedIntegratorRequests.map(({ correlation }) => correlation.candidateResource)
+        const sessionIds = recordedIntegratorRequests.map(({ correlation }) => correlation.session.sessionId)
+        const candidateResources = recordedIntegratorRequests.map(
+          ({ correlation }) => correlation.session.candidateResource
+        )
         expect(recordedIntegratorRequests).toHaveLength(3)
-        expect(recordedIntegratorRequests.map(({ correlation }) => correlation.plannedAttempt.taskId)).toEqual([
+        expect(recordedIntegratorRequests.map(({ correlation }) => correlation.session.plannedAttempt.taskId)).toEqual([
           taskIdOf("A"),
           taskIdOf("B"),
           taskIdOf("D")
@@ -939,20 +944,20 @@ it.effect(
           expect(started.event.run.ordinal).toBe(1)
           expect(started.event.run.session.plannedAttempt).toEqual(plannedAttempts.get(task))
           expect(started.event.run.session.acceptedResult.commit).toBe(acceptedCommitFor(task))
-          expect(request.correlation.plannedAttempt).toEqual(responsibility.event.plannedAttempt)
-          expect(request.correlation.acceptedResult).toEqual(responsibility.event.acceptedResult)
-          expect(request.correlation.integrationTarget).toEqual(responsibility.event.integrationTarget)
-          expect(request.correlation.queuedAt).toBe(responsibility.position)
-          expect(request.correlation.startedAt).toBe(integrationStarted.position)
+          expect(request.correlation.session.plannedAttempt).toEqual(responsibility.event.plannedAttempt)
+          expect(request.correlation.session.acceptedResult).toEqual(responsibility.event.acceptedResult)
+          expect(request.correlation.session.integrationTarget).toEqual(responsibility.event.integrationTarget)
+          expect(request.correlation.session.queuedAt).toBe(responsibility.position)
+          expect(request.correlation.session.startedAt).toBe(integrationStarted.position)
           expect(integrationStarted.event.responsibilityBeganAt).toBe(responsibility.position)
-          expect(request.correlation.targetLineageObservedAt).toBeGreaterThan(integrationStarted.position)
-          expect(request.correlation.targetLineageObservedAt).toBeLessThan(started.position)
+          expect(request.correlation.session.targetLineageObservedAt).toBeGreaterThan(integrationStarted.position)
+          expect(request.correlation.session.targetLineageObservedAt).toBeLessThan(started.position)
           expect(started.position).toBeGreaterThan(integrationStarted.position)
-          expect(started.event.run.session).toEqual(request.correlation)
+          expect(started.event.run).toEqual(request.correlation)
           expect(qualification.event.run).toEqual(started.event.run)
           expect(qualification.position).toBeGreaterThan(started.position)
-          expect(lineage.event.plannedAttempt).toEqual(request.correlation.plannedAttempt)
-          expect(lineage.event.observation.targetHeadSha).toBe(request.correlation.expectedTargetHead)
+          expect(lineage.event.plannedAttempt).toEqual(request.correlation.session.plannedAttempt)
+          expect(lineage.event.observation.targetHeadSha).toBe(request.correlation.session.expectedTargetHead)
         }
         expect(qualificationRecords).toHaveLength(3)
         expect(promotionRecords).toHaveLength(3)

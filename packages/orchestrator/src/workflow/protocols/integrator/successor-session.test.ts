@@ -218,7 +218,7 @@ const makeFixture = (observedHead: GitCommitSha = freshHead, observedAt: number 
     journalRecord(
       8,
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation: predecessor, detail }),
+        result: IntegratorResult.cases.NotPrepared.make({ correlation: runOne, detail }),
         run: runOne,
         version: workflowJournalEventVersion
       }),

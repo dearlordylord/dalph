@@ -9,6 +9,7 @@ const execFile = promisify(nodeExecFile)
 const pinnedCodexVersion = "0.149.0"
 const testFiles = [
   "packages/dalph/src/application/codex-app-server-real-qualification.test.ts",
+  "packages/dalph/src/application/codex-integrator-real-qualification.test.ts",
   "packages/dalph/test/qualification/codex-real-host-qualification.test.ts",
   "packages/dalph/src/application/codex-planned-attempt-executor.test.ts"
 ]

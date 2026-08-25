@@ -22,6 +22,7 @@ import {
   type CodexServerLeaseOwnerProjection,
   CodexServerLeaseRecord,
   CodexThreadId,
+  CodexThreadOwnershipToken,
   CodexTurnId,
   type CodexAttemptStoreService,
   type CodexServerLaunchRecord
@@ -53,6 +54,8 @@ export interface CodexThreadSnapshot {
   readonly cwd: string
   readonly status: CodexThreadStatus
   readonly turns: ReadonlyArray<CodexTurnSnapshot>
+  /** Exact private marker returned by a thread-start request, when supplied. */
+  readonly ownedThreadToken?: CodexThreadOwnershipToken
   /** Controlled transports may expose this to prove a foreign correlation. */
   readonly correlation?: PlannedAttemptExecutorCorrelation
 }
@@ -70,6 +73,7 @@ export interface CodexBackgroundTerminal {
 const CodexAppServerOperation = Schema.Literals([
   "initialize",
   "thread/start",
+  "thread/list",
   "thread/read",
   "thread/resume",
   "turn/start",
@@ -206,7 +210,12 @@ export interface CodexAppServerService {
   readonly incarnation: CodexServerIncarnation
   /** Exact process root used only by the Node execution-substrate activity census. */
   readonly serverPid?: number
-  readonly startThread: (cwd: string) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
+  readonly startThread: (
+    cwd: string,
+    ownedThreadToken?: CodexThreadOwnershipToken
+  ) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
+  /** Complete persistent-thread identity read used to reconcile an ambiguous thread/start. */
+  readonly listThreads?: () => Effect.Effect<ReadonlyArray<CodexThreadSnapshot>, CodexAppServerFailure>
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
     threadId: CodexThreadId,
@@ -1195,27 +1204,55 @@ const isCodexThreadStatus = (value: unknown): value is CodexThreadSnapshot["stat
 
 const threadStatusValue = (value: unknown): unknown => (isJsonObject(value) ? value["type"] : value)
 
+const normalizedThreadIdentity = (
+  value: JsonObject,
+  operation: CodexAppServerOperation
+):
+  | {
+      readonly source: JsonObject
+      readonly id: string
+      readonly cwd: string
+      readonly status: CodexThreadSnapshot["status"]
+    }
+  | CodexAppServerFailure => {
+  const id = stringValue(value["id"])
+  const cwd = stringValue(value["cwd"])
+  const rawStatus = threadStatusValue(value["status"])
+  // `thread/list` summaries may omit a live status while still carrying the
+  // durable id and cwd needed to resume and complete the identity read.
+  const status = rawStatus === undefined && operation === "thread/list" ? "idle" : rawStatus
+  return id === undefined || cwd === undefined || !isCodexThreadStatus(status)
+    ? operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
+    : { source: value, id, cwd, status }
+}
+
 const normalizeThread = (
   value: unknown,
   operation: CodexAppServerOperation
 ): CodexThreadSnapshot | CodexAppServerFailure => {
   if (!isJsonObject(value)) return operationFailure(operation, "Malformed", "missing thread object")
-  const source = value
-  const id = stringValue(source["id"])
-  const cwd = stringValue(source["cwd"])
-  const status = threadStatusValue(source["status"])
-  if (id === undefined || cwd === undefined || !isCodexThreadStatus(status)) {
-    return operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
-  }
-  const normalizedTurns = normalizeThreadTurns(source["turns"], operation)
+  const identity = normalizedThreadIdentity(value, operation)
+  if (identity instanceof CodexAppServerFailure) return identity
+  const normalizedTurns = normalizeThreadTurns(identity.source["turns"], operation)
   if (normalizedTurns instanceof CodexAppServerFailure) return normalizedTurns
-  const correlation = normalizeCorrelation(source["correlation"], operation, "thread")
+  const correlation = normalizeCorrelation(identity.source["correlation"], operation, "thread")
   if (correlation instanceof CodexAppServerFailure) return correlation
+  const rawOwnedThreadToken =
+    identity.source["ownedThreadToken"] ??
+    (isJsonObject(identity.source["metadata"]) ? identity.source["metadata"]["dalphOwnedThreadToken"] : undefined)
+  const ownedThreadToken =
+    rawOwnedThreadToken === undefined || rawOwnedThreadToken === null
+      ? undefined
+      : typeof rawOwnedThreadToken === "string" && rawOwnedThreadToken.length > 0
+        ? CodexThreadOwnershipToken.make(rawOwnedThreadToken)
+        : operationFailure(operation, "Malformed", "thread ownership token is invalid")
+  if (ownedThreadToken instanceof CodexAppServerFailure) return ownedThreadToken
   return {
-    id: CodexThreadId.make(id),
-    cwd,
-    status,
+    id: CodexThreadId.make(identity.id),
+    cwd: identity.cwd,
+    status: identity.status,
     turns: normalizedTurns,
+    ...(ownedThreadToken === undefined ? {} : { ownedThreadToken }),
     ...(correlation === undefined ? {} : { correlation })
   }
 }
@@ -1224,6 +1261,31 @@ const normalizedThreadEffect = (
   thread: CodexThreadSnapshot | CodexAppServerFailure
 ): Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure> =>
   thread instanceof CodexAppServerFailure ? Effect.fail(thread) : Effect.succeed(thread)
+
+const maximumThreadListPages = 100
+
+const threadListPage = (
+  response: Record<string, unknown>
+):
+  | { readonly threads: ReadonlyArray<CodexThreadSnapshot>; readonly nextCursor: string | null | undefined }
+  | CodexAppServerFailure => {
+  const rawThreads = response["data"] ?? response["threads"]
+  if (!Array.isArray(rawThreads)) return operationFailure("thread/list", "Malformed", "thread list is invalid")
+  const normalizedThreads = rawThreads.map((thread) => normalizeThread(thread, "thread/list"))
+  const failure = normalizedThreads.find(
+    (thread): thread is CodexAppServerFailure => thread instanceof CodexAppServerFailure
+  )
+  if (failure !== undefined) return failure
+  const threads = normalizedThreads.filter(
+    (thread): thread is CodexThreadSnapshot => !(thread instanceof CodexAppServerFailure)
+  )
+  const nextCursor = response["nextCursor"] ?? response["next_cursor"]
+  if (nextCursor === undefined || nextCursor === null) return { threads, nextCursor }
+  if (typeof nextCursor !== "string" || nextCursor.length === 0) {
+    return operationFailure("thread/list", "Malformed", "thread list cursor is invalid")
+  }
+  return { threads, nextCursor }
+}
 
 type NormalizedBackgroundTerminal = {
   readonly processId: string
@@ -2464,13 +2526,48 @@ export const codexAppServerLayer = (
       const normalizedInitialize = normalizeInitializeResponse(initializeResponse, native)
       if (normalizedInitialize !== true) return yield* Effect.fail(normalizedInitialize)
       yield* rpc.notify("initialized")
-      const startThread = Effect.fn("CodexAppServer.startThread")(function* (cwd: string) {
+      const startThread = Effect.fn("CodexAppServer.startThread")(function* (
+        cwd: string,
+        ownedThreadToken?: CodexThreadOwnershipToken
+      ) {
         const response = responseObject(
-          yield* rpc.request("thread/start", "thread/start", { cwd, ephemeral: false }),
+          yield* rpc.request("thread/start", "thread/start", {
+            cwd,
+            ephemeral: false,
+            ...(ownedThreadToken === undefined ? {} : { metadata: { dalphOwnedThreadToken: ownedThreadToken } })
+          }),
           "thread/start"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
         return yield* normalizedThreadEffect(normalizeThread(response["thread"], "thread/start"))
+      })
+      const listThreads = Effect.fn("CodexAppServer.listThreads")(function* () {
+        let pages: ReadonlyArray<ReadonlyArray<CodexThreadSnapshot>> = []
+        let cursors: ReadonlySet<string> = new Set<string>()
+        let cursor: string | undefined
+        for (let page = 0; page < maximumThreadListPages; page += 1) {
+          const response = responseObject(
+            yield* rpc.request(
+              "thread/list",
+              "thread/list",
+              cursor === undefined ? { includeTurns: false } : { includeTurns: false, cursor }
+            ),
+            "thread/list"
+          )
+          if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
+          const parsed = threadListPage(response)
+          if (parsed instanceof CodexAppServerFailure) return yield* Effect.fail(parsed)
+          pages = [...pages, parsed.threads]
+          if (parsed.nextCursor === undefined || parsed.nextCursor === null) {
+            return pages.flatMap((items) => items)
+          }
+          if (cursors.has(parsed.nextCursor)) {
+            return yield* Effect.fail(operationFailure("thread/list", "Malformed", "thread list cursor repeated"))
+          }
+          cursors = new Set([...cursors, parsed.nextCursor])
+          cursor = parsed.nextCursor
+        }
+        return yield* Effect.fail(operationFailure("thread/list", "Malformed", "thread list exceeded page bound"))
       })
       const readThread = Effect.fn("CodexAppServer.readThread")(function* (threadId: CodexThreadId) {
         const response = responseObject(
@@ -2556,6 +2653,7 @@ export const codexAppServerLayer = (
         incarnation: liveIncarnation,
         serverPid: childPid,
         startThread,
+        listThreads,
         readThread,
         resumeThread,
         startTurn,
@@ -2599,7 +2697,12 @@ export const nodeCodexOwnedActivityCensusLayer: Layer.Layer<CodexOwnedActivityCe
     CodexOwnedActivityCensus,
     /* v8 ignore next -- @preserve Production composition is exercised by the separate built-host qualification runner. */
     Effect.map(CodexAppServer, (app) =>
-      makeNodeCodexOwnedActivityCensusService(nodeCodexProcessNativeService, app.serverPid, app.incarnation)
+      // The app-server incarnation proves ownership of the app process, not
+      // of every Integrator session.  Session-specific activity is already
+      // scoped by the exact thread/background-terminal boundary below; an
+      // unrelated session's app-incarnation descendant must not block this
+      // session's cleanup census.
+      makeNodeCodexOwnedActivityCensusService(nodeCodexProcessNativeService, app.serverPid)
     )
   )
 

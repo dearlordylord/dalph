@@ -11,6 +11,12 @@ import { selectCompatibilityFiles } from "./quality-lint-policy.mjs"
 
 const repositoryRoot = process.cwd()
 const qualityLintRunner = join(repositoryRoot, "scripts", "run-quality-lint.mjs")
+const {
+  NODE_OPTIONS: _nodeOptions,
+  NODE_V8_COVERAGE: _nodeV8Coverage,
+  VITEST: _vitest,
+  ...qualityLintEnvironment
+} = process.env
 const qualityFixtureRoot = join(repositoryRoot, "test", "fixtures", "quality-lint")
 // Compatibility lint builds the whole TypeScript import graph. Keep its integration-test bound above the
 // observed repository-scale runtime while the outer quality gate retains its own fixed overall deadline.
@@ -28,6 +34,7 @@ const run = (arguments_: ReadonlyArray<string>) =>
       new Promise((resolvePromise) => {
         const child = spawn(process.execPath, [qualityLintRunner, ...arguments_], {
           cwd: repositoryRoot,
+          env: qualityLintEnvironment,
           stdio: ["ignore", "pipe", "pipe"]
         })
         const stdout: Array<Buffer> = []

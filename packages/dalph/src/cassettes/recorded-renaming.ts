@@ -446,14 +446,14 @@ const renameIntegratorResult = (result: IntegratorResultType, maps: IdentityRena
     NotPrepared: (value) =>
       completeFields<typeof value>({
         _tag: "NotPrepared",
-        correlation: renameIntegratorSessionCorrelation(value.correlation, maps),
+        correlation: renameIntegratorRunCorrelation(value.correlation, maps),
         detail: preserveCassetteValue(value.detail)
       }),
     PreparedCandidate: (value) =>
       completeFields<typeof value>({
         _tag: "PreparedCandidate",
         candidateText: preserveCassetteValue(value.candidateText),
-        correlation: renameIntegratorSessionCorrelation(value.correlation, maps)
+        correlation: renameIntegratorRunCorrelation(value.correlation, maps)
       })
   })
 

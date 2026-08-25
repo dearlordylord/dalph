@@ -27,7 +27,6 @@ import {
 import type { IntegratorRunCorrelation } from "../integrator/events.js"
 import { IntegratorJournalContradiction } from "../integrator/errors.js"
 import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-authorization.js"
-import { integratorCorrelationsEqual } from "../integrator/state.js"
 
 type NotPreparedInput = Extract<IntegratorRunProtocolResult, { readonly _tag: "NotPrepared" }>
 type CandidateRejectedInput = Extract<IntegratorRunProtocolResult, { readonly _tag: "CandidateRejected" }>
@@ -90,7 +89,7 @@ const runResultRecordMatches = (
   record.runId === runIdFor(run) &&
   record.key === integratorRunResultRecordedRecordKey(run) &&
   integratorRunCorrelationsEqual(record.event.run, run) &&
-  integratorCorrelationsEqual(record.event.result.correlation, run.session) &&
+  integratorRunCorrelationsEqual(record.event.result.correlation, run) &&
   record.position > start.position
 
 const runResultOutcomeMatches = (record: RunResultRecord, input: RetryConclusiveIntegrationQuarantineInput): boolean =>

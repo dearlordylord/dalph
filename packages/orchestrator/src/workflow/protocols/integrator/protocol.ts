@@ -17,6 +17,7 @@ import {
   IntegratorNotPreparedDetail,
   IntegratorRunCandidateGitObservedEvent,
   IntegratorRunCorrelation,
+  integratorRunCorrelationsEqual,
   IntegratorRunOrdinal,
   IntegratorRunProtocolResult,
   IntegratorRunQualifiedCandidate,
@@ -216,9 +217,9 @@ const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPre
   result: IntegratorResult
 ) {
   /* v8 ignore next -- @preserve every public result path validates its session correlation before this qualification helper. */
-  if (!integratorCorrelationsEqual(result.correlation, run.session)) {
+  if (!integratorRunCorrelationsEqual(result.correlation, run)) {
     return yield* new IntegratorJournalContradiction({
-      detail: "Integrator result is not bound to the requested run session",
+      detail: "Integrator result is not bound to the requested run",
       runId: runIdForCorrelation(run.session)
     })
   }
@@ -331,9 +332,12 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
     result = reconciledRunResult.value
   } else {
     const integrator = yield* Integrator
-    const freshResult = yield* integrator.prepare(IntegratorRequest.make({ correlation: run.session }))
-    if (!integratorCorrelationsEqual(freshResult.correlation, run.session)) {
-      return yield* new IntegratorJournalContradiction({ detail: "Integrator returned a foreign correlation", runId })
+    const freshResult = yield* integrator.prepare(IntegratorRequest.make({ correlation: run }))
+    if (!integratorRunCorrelationsEqual(freshResult.correlation, run)) {
+      return yield* new IntegratorJournalContradiction({
+        detail: "Integrator returned a foreign run correlation",
+        runId
+      })
     }
     const appended = yield* journal.append(
       runId,

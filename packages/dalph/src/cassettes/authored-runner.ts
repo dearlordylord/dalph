@@ -1898,7 +1898,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           Integrator.of({
             prepare: (request) =>
               Effect.gen(function* () {
-                const authoredCorrelation = authoredIntegratorSessionCorrelationOf(request.correlation, runId)
+                const authoredCorrelation = authoredIntegratorSessionCorrelationOf(request.correlation.session, runId)
                 yield* cursor.consumeIntegratorRequest(authoredCorrelation)
                 const authored = yield* cursor.consumeIntegratorResult
                 return Match.valueTags(authored.result, {

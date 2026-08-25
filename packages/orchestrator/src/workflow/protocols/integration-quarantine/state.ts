@@ -146,7 +146,7 @@ const resultBelongsToQuarantinedRun = (record: IntegratorResultRecord, quarantin
     supportedOrdinal &&
     record.key === integratorRunResultRecordedRecordKey(run) &&
     integratorCorrelationsEqual(run.session, quarantine.event.correlation) &&
-    integratorCorrelationsEqual(record.event.result.correlation, quarantine.event.correlation)
+    integratorRunCorrelationsEqual(record.event.result.correlation, run)
   )
 }
 

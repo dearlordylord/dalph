@@ -286,12 +286,11 @@ const isExactRunResultRecord = (record: JournalRecord): record is ExactRunResult
 const runResultBindingIssue = (
   resultRecord: ExactRunResultRecord,
   started: JournalRecord,
-  run: IntegratorRunCorrelation,
-  dependencies: IntegratorRunStateDependencies
+  run: IntegratorRunCorrelation
 ): string | undefined =>
   resultRecord.position > started.position &&
   integratorRunCorrelationsEqual(resultRecord.event.run, run) &&
-  dependencies.correlationsEqual(resultRecord.event.result.correlation, run.session)
+  integratorRunCorrelationsEqual(resultRecord.event.result.correlation, run)
     ? undefined
     : "the recorded outer result is not bound to the exact run"
 
@@ -330,7 +329,7 @@ const stateAfterStartedRun = (
   if (!isExactRunResultRecord(resultRecord)) {
     return runContradictionState("the exact run result key contains a foreign event")
   }
-  const issue = runResultBindingIssue(resultRecord, started, run, dependencies)
+  const issue = runResultBindingIssue(resultRecord, started, run)
   if (issue !== undefined) return runContradictionState(issue)
   return stateAfterRunResult(records, runRelated, run, resultRecord, dependencies)
 }

@@ -43,7 +43,7 @@ describe("journal event descriptors", () => {
   it("describes retained Integrator and completion boundary events by exact key", () => {
     const integratorResult = IntegratorResult.cases.PreparedCandidate.make({
       candidateText,
-      correlation: integratorCorrelation
+      correlation: integratorRun
     })
     const integratorEvents = [
       IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion }),

@@ -9,7 +9,12 @@ import {
   type CodexAppServerService,
   codexAppServerNodeLayer
 } from "./codex-app-server.js"
-import { CodexOwnedTurnToken, CodexTurnId, memoryCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import {
+  CodexOwnedTurnToken,
+  CodexThreadOwnershipToken,
+  CodexTurnId,
+  memoryCodexAttemptStoreLayer
+} from "./codex-attempt-store.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 
 const protocolFixture = String.raw`#!/usr/bin/env node
@@ -33,7 +38,7 @@ const validTurn = {
 }
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
-const responseFor = (method) => {
+const responseFor = (method, params = {}) => {
   if (mode === "initialize-rpc-error" && method === "initialize") return { error: true }
   if (mode === "initialize-family-contradiction" && method === "initialize") {
     return { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "windows", platformOs: "linux" }
@@ -42,6 +47,48 @@ const responseFor = (method) => {
   if (mode === "response-not-object" && method === "thread/start") return "not-an-object"
   if (mode === "read-response-not-object" && method === "thread/read") return "not-an-object"
   if (mode === "resume-response-not-object" && method === "thread/resume") return "not-an-object"
+  if (mode === "thread-list-not-array" && method === "thread/list") return { data: {} }
+  if (mode === "thread-list-rpc-error" && method === "thread/list") return { error: true }
+  if (mode === "thread-list-invalid-item" && method === "thread/list") return { data: [null] }
+  if (mode === "thread-list-invalid-fields" && method === "thread/list") {
+    return { data: [{ ...validThread, cwd: "", status: "unknown" }] }
+  }
+  if (mode === "thread-list-valid" && method === "thread/list") return { data: [validThread] }
+  if (mode === "thread-list-threads-key" && method === "thread/list") return { threads: [validThread] }
+  if (mode === "thread-list-missing-status" && method === "thread/list") {
+    const { status: _status, ...threadWithoutStatus } = validThread
+    return { data: [threadWithoutStatus] }
+  }
+  if (mode === "thread-list-paginated" && method === "thread/list") {
+    return params.cursor === "page-two"
+      ? { data: [{ ...validThread, id: "protocol-thread-two", cwd: "/fixture/worktree-two" }], nextCursor: null }
+      : { data: [validThread], nextCursor: "page-two" }
+  }
+  if (mode === "thread-list-repeated-cursor" && method === "thread/list") {
+    return { data: [validThread], nextCursor: "same-page" }
+  }
+  if (mode === "thread-list-invalid-cursor" && method === "thread/list") {
+    return { data: [validThread], nextCursor: 42 }
+  }
+  if (mode === "thread-start-owned-token" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        ownedThreadToken: params.metadata?.dalphOwnedThreadToken
+      }
+    }
+  }
+  if (mode === "thread-start-metadata-token" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        metadata: { dalphOwnedThreadToken: params.metadata?.dalphOwnedThreadToken }
+      }
+    }
+  }
+  if (mode === "thread-start-invalid-metadata-token" && method === "thread/start") {
+    return { thread: { ...validThread, metadata: { dalphOwnedThreadToken: 42 } } }
+  }
   if (mode === "turn-response-not-object" && method === "turn/start") return "not-an-object"
   if (mode === "background-response-not-object" && method === "thread/backgroundTerminals/list") return "not-an-object"
   if (mode === "terminate-response-not-object" && method === "thread/backgroundTerminals/terminate") return "not-an-object"
@@ -175,11 +222,13 @@ const responseFor = (method) => {
       ? { thread: validThread }
       : method === "turn/start"
         ? { turn: validTurn }
-        : method === "thread/backgroundTerminals/list"
-          ? { data: [] }
-          : method === "thread/backgroundTerminals/terminate"
-            ? { terminated: true }
-            : {}
+            : method === "thread/backgroundTerminals/list"
+              ? { data: [] }
+              : method === "thread/list"
+                ? { data: [] }
+              : method === "thread/backgroundTerminals/terminate"
+                ? { terminated: true }
+                : {}
 }
 const onMessage = (message) => {
   if (message.method === "initialized") return
@@ -204,7 +253,7 @@ const onMessage = (message) => {
     process.stdout.write("not-json\n")
     return
   }
-  const response = responseFor(message.method)
+  const response = responseFor(message.method, message.params)
   if (response && response.error) return writeError(message.id)
   if (mode === "close-after-initialize" && message.method === "initialize") {
     write(message.id, response)
@@ -270,6 +319,7 @@ it.effect("maps malformed thread and turn state to typed protocol failures", () 
       ["invalid-turn-correlation-empty", "thread/start"],
       ["invalid-turn-token", "thread/start"],
       ["invalid-turn-token-empty", "thread/start"],
+      ["thread-start-invalid-metadata-token", "thread/start"],
       ["duplicate-turn-marker", "thread/start"],
       ["contradictory-turn-token", "thread/start"],
       ["invalid-thread-correlation", "thread/start"]
@@ -364,6 +414,71 @@ it.effect("reconciles valid turn markers, metadata, status, and correlation thro
       Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.id)
     )
     expect(ignoredInputShape).toBe("protocol-thread")
+  })
+)
+
+it.effect("reads a complete persistent thread list and preserves malformed-list failures", () =>
+  Effect.gen(function* () {
+    const listed = yield* withFixture("thread-list-valid", (app) => {
+      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
+    })
+    expect(listed).toEqual(["protocol-thread"])
+
+    const owned = yield* withFixture("thread-start-owned-token", (app) =>
+      Effect.map(
+        app.startThread("/fixture/worktree", CodexThreadOwnershipToken.make("owned-thread")),
+        (thread) => thread.ownedThreadToken
+      )
+    )
+    expect(owned).toBe("owned-thread")
+
+    const metadataOwned = yield* withFixture("thread-start-metadata-token", (app) =>
+      Effect.map(
+        app.startThread("/fixture/worktree", CodexThreadOwnershipToken.make("metadata-owned-thread")),
+        (thread) => thread.ownedThreadToken
+      )
+    )
+    expect(metadataOwned).toBe("metadata-owned-thread")
+
+    const missingStatus = yield* withFixture("thread-list-missing-status", (app) => {
+      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+      return Effect.map(app.listThreads(), (threads) => threads[0]?.status)
+    })
+    expect(missingStatus).toBe("idle")
+
+    const alternateKey = yield* withFixture("thread-list-threads-key", (app) => {
+      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
+    })
+    expect(alternateKey).toEqual(["protocol-thread"])
+
+    const paginated = yield* withFixture("thread-list-paginated", (app) => {
+      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
+    })
+    expect(paginated).toEqual(["protocol-thread", "protocol-thread-two"])
+
+    for (const mode of [
+      "thread-list-not-array",
+      "thread-list-invalid-item",
+      "thread-list-invalid-fields",
+      "thread-list-rpc-error"
+    ] as const) {
+      const result = yield* withFixture(mode, (app) => {
+        if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+        return Effect.exit(app.listThreads())
+      })
+      expectAppFailure(result, "thread/list")
+    }
+
+    for (const mode of ["thread-list-repeated-cursor", "thread-list-invalid-cursor"] as const) {
+      const result = yield* withFixture(mode, (app) => {
+        if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+        return Effect.exit(app.listThreads())
+      })
+      expectAppFailure(result, "thread/list")
+    }
   })
 )
 
@@ -519,3 +634,7 @@ it.effect("maps an initialization RPC error to unavailable app-server behavior",
     })
   )
 )
+
+it("selects the node process-native layer when no test-native override is supplied", () => {
+  expect(codexAppServerNodeLayer()).toBeDefined()
+})

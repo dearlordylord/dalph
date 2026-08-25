@@ -93,6 +93,19 @@ export const IntegratorCandidateCleanupOwner = Schema.Struct({ sessionId: Integr
 )
 export type IntegratorCandidateCleanupOwner = typeof IntegratorCandidateCleanupOwner.Type
 
+/** Exact predecessor identity supplied to the provider before cleanup authorization is journaled. */
+export const IntegratorCandidateCleanupEvidenceSubject = Schema.Struct({
+  locator: IntegratorCandidateResourceLocator,
+  predecessor: IntegratorSessionCorrelation
+}).check(
+  Schema.makeFilter((subject) =>
+    subject.locator === subject.predecessor.candidateResource
+      ? undefined
+      : "candidate cleanup evidence must bind the predecessor resource"
+  )
+)
+export type IntegratorCandidateCleanupEvidenceSubject = typeof IntegratorCandidateCleanupEvidenceSubject.Type
+
 const worktreeCleanupSubjectEquivalence = Schema.toEquivalence(
   Schema.Struct({ locator: WorktreeLocator, owner: WorktreeCleanupOwner })
 )

@@ -14,6 +14,12 @@ export {
 } from "./application/codex-attempt-store.js"
 export { codexAppServerNodeLayer, type CodexAppServerLayerConfig } from "./application/codex-app-server.js"
 export {
+  CodexIntegratorConfiguration,
+  IntegratorCandidateWorktreeRoot,
+  IntegratorPrivateStoreLocator
+} from "./application/codex-integrator-private-store.js"
+export { codexIntegratorLayer, nodeCodexIntegratorLayer } from "./application/codex-integrator.js"
+export {
   CodexReplacementAuthority,
   CodexReplacementAuthorityFailure,
   CodexReplacementAuthorityProof,

@@ -50,6 +50,7 @@ import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
+import type { IntegratorCandidateCleanupEvidenceReadFailure } from "../../workflow/protocols/disposition-cleanup/integrator-candidate.js"
 import type { AppliedRunCancellation } from "../../workflow/protocols/run-cancellation/events.js"
 
 export type JournaledRunProcessServices =
@@ -103,6 +104,7 @@ export type JournaledRunBootstrapError =
   | InvalidWorkflowJournalHistory
   | JournalStoreError
   | JournalStoreContradiction
+  | IntegratorCandidateCleanupEvidenceReadFailure
   | StartupRecoveryBlocked
   | WorkflowRunAlreadyBegan
   | WorkflowRunAlreadyTerminated

@@ -348,6 +348,8 @@ export const gitDispositionCleanupBoundaryLayer = (
           )
       })
       const candidate = IntegratorCandidateCleanupBoundary.of({
+        readEvidenceRevision:
+          candidateAuthority.readEvidenceRevision ?? (() => Effect.fail("candidate evidence is unavailable")),
         observe: candidateAuthority.observe,
         remove: (authorization, attempt) =>
           providerMutationIsLive

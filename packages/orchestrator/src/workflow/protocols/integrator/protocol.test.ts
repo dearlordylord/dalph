@@ -159,7 +159,10 @@ const notPrepared = (request: IntegratorRequest): IntegratorResult =>
 
 const controlledIntegratorContractService = Integrator.of({ prepare: (request) => Effect.succeed(prepared(request)) })
 const controlledIntegratorContractRequest = IntegratorRequest.make({
-  correlation: integratorCorrelationFor(compatibleInput())
+  correlation: integratorRunCorrelationForSession(
+    integratorCorrelationFor(compatibleInput()),
+    IntegratorRunOrdinal.make(1)
+  )
 })
 integratorContract({
   expected: prepared(controlledIntegratorContractRequest),
@@ -488,7 +491,10 @@ describe("outer Integrator protocol", () => {
               candidateText,
               correlation: {
                 ...request.correlation,
-                candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-result")
+                session: {
+                  ...request.correlation.session,
+                  candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-result")
+                }
               }
             })
           ),
@@ -580,21 +586,21 @@ describe("outer Integrator protocol", () => {
       expect(Schema.is(IntegratorRunQualifiedCandidate)({ ...qualified, qualifiedAt: targetLineageObservedAt })).toBe(
         false
       )
-      expect(calls[0]?.correlation.acceptedResult).toEqual(responsibility.acceptedResult)
-      expect(calls[0]?.correlation.integrationTarget).toEqual(responsibility.integrationTarget)
-      expect(calls[0]?.correlation.plannedAttempt).toEqual(responsibility.plannedAttempt)
-      expect(calls[0]?.correlation.queuedAt).toBe(responsibility.queuedAt)
-      expect(calls[0]?.correlation.startedAt).toBe(responsibility.startedAt)
-      expect(calls[0]?.correlation.expectedTargetHead).toBe(targetHead)
-      expect(calls[0]?.correlation.targetLineageObservedAt).toBe(targetLineageObservedAt)
-      expect(calls[0]?.correlation.candidateResource).toContain("integrator-resource:")
-      expect(calls[0]?.correlation.sessionId).toContain("integrator-session:")
-      expect(calls[0]?.correlation.candidateResource).toContain(acceptedResultCommit)
-      expect(calls[0]?.correlation.candidateResource).toContain(target.repository)
-      expect(calls[0]?.correlation.candidateResource).toContain(target.ref)
-      expect(calls[0]?.correlation.sessionId).toContain(acceptedResultCommit)
-      expect(calls[0]?.correlation.sessionId).toContain(target.repository)
-      expect(calls[0]?.correlation.sessionId).toContain(target.ref)
+      expect(calls[0]?.correlation.session.acceptedResult).toEqual(responsibility.acceptedResult)
+      expect(calls[0]?.correlation.session.integrationTarget).toEqual(responsibility.integrationTarget)
+      expect(calls[0]?.correlation.session.plannedAttempt).toEqual(responsibility.plannedAttempt)
+      expect(calls[0]?.correlation.session.queuedAt).toBe(responsibility.queuedAt)
+      expect(calls[0]?.correlation.session.startedAt).toBe(responsibility.startedAt)
+      expect(calls[0]?.correlation.session.expectedTargetHead).toBe(targetHead)
+      expect(calls[0]?.correlation.session.targetLineageObservedAt).toBe(targetLineageObservedAt)
+      expect(calls[0]?.correlation.session.candidateResource).toContain("integrator-resource:")
+      expect(calls[0]?.correlation.session.sessionId).toContain("integrator-session:")
+      expect(calls[0]?.correlation.session.candidateResource).toContain(acceptedResultCommit)
+      expect(calls[0]?.correlation.session.candidateResource).toContain(target.repository)
+      expect(calls[0]?.correlation.session.candidateResource).toContain(target.ref)
+      expect(calls[0]?.correlation.session.sessionId).toContain(acceptedResultCommit)
+      expect(calls[0]?.correlation.session.sessionId).toContain(target.repository)
+      expect(calls[0]?.correlation.session.sessionId).toContain(target.ref)
       expect(yield* Ref.get(harness.gitCandidates)).toEqual([candidateText])
       expect(records.filter(({ event }) => event._tag.startsWith("Integrator")).map(({ event }) => event._tag)).toEqual(
         [
@@ -657,8 +663,10 @@ describe("outer Integrator protocol", () => {
       expect(initialRunState(recordsAfterFailure, compatibleInput())._tag).toBe("RunUnfinished")
       expect(second._tag).toBe("PreparedCandidate")
       expect(requests).toHaveLength(2)
-      expect(requests[0]?.correlation.sessionId).toBe(requests[1]?.correlation.sessionId)
-      expect(requests[0]?.correlation.candidateResource).toBe(requests[1]?.correlation.candidateResource)
+      expect(requests[0]?.correlation.session.sessionId).toBe(requests[1]?.correlation.session.sessionId)
+      expect(requests[0]?.correlation.session.candidateResource).toBe(
+        requests[1]?.correlation.session.candidateResource
+      )
       expect(records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
     })
   )
@@ -1263,6 +1271,10 @@ describe("outer Integrator protocol", () => {
         ...session.event.correlation,
         candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-correlation")
       }
+      const foreignRun = IntegratorRunCorrelation.make({
+        ordinal: IntegratorRunOrdinal.make(1),
+        session: foreignCorrelation
+      })
       const replaceEvent = (
         records: ReadonlyArray<JournalRecord>,
         key: JournalRecordKey,
@@ -1303,14 +1315,14 @@ describe("outer Integrator protocol", () => {
           "result for another correlation",
           replaceEvent(pristine, result.key, {
             ...result.event,
-            result: { ...result.event.result, correlation: foreignCorrelation }
+            result: { ...result.event.result, correlation: foreignRun }
           })
         ],
         [
           "second outer result",
           appendEvent(pristine, "integrator-result:foreign", {
             ...result.event,
-            result: { ...result.event.result, correlation: foreignCorrelation }
+            result: { ...result.event.result, correlation: foreignRun }
           })
         ],
         ["Git observation without intent", pristine.filter((record) => record.key !== intent.key)],
@@ -1333,7 +1345,7 @@ describe("outer Integrator protocol", () => {
           "result for another correlation",
           replaceEvent(pristine, result.key, {
             ...result.event,
-            result: { ...result.event.result, correlation: foreignCorrelation }
+            result: { ...result.event.result, correlation: foreignRun }
           }),
           compatibleInput()
         ],

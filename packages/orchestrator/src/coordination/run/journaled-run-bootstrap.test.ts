@@ -1528,7 +1528,7 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
         runId,
         integratorRunResultRecordedRecordKey(run),
         IntegratorRunResultRecordedEvent.make({
-          result: IntegratorResult.cases.NotPrepared.make({ correlation: run.session, detail }),
+          result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail }),
           run,
           version: workflowJournalEventVersion
         })

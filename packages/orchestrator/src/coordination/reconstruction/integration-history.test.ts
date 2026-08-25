@@ -171,7 +171,7 @@ const validate = (historyIndexes: IntegrationHistoryIndexes, records: ReadonlyAr
 }
 
 const runResult = IntegratorRunResultRecordedEvent.make({
-  result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: session }),
+  result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run }),
   run,
   version: workflowJournalEventVersion
 })
@@ -391,7 +391,7 @@ describe("retained integration history", () => {
       IntegratorSessionFixedEvent.make({ correlation: foreignSession, version: workflowJournalEventVersion }),
       IntegratorRunStartedEvent.make({ run: foreignCorrelationRun, version: workflowJournalEventVersion }),
       IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: foreignSession }),
+        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: foreignCorrelationRun }),
         run: foreignCorrelationRun,
         version: workflowJournalEventVersion
       }),
