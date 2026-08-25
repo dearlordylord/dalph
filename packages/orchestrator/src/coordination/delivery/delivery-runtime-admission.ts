@@ -20,6 +20,7 @@ import {
 } from "../application-exit/lifecycle.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
+import type { RequiredPreStartTaskWorkPosition } from "./task-work-position.js"
 import {
   failExecutorPlanBinding,
   failPreStartClaimBinding,
@@ -117,6 +118,144 @@ type PlannedAttemptProtocolReservation =
     }
   | { readonly _tag: "PlannedAttemptProtocolUnavailable" }
 
+const synchronizeAcceptedPublishedPosition = (
+  position: Extract<
+    TaskWorkPosition,
+    { readonly _tag: "AcceptedAttemptPosition" | "AcceptedAttemptPositionOmittedOnce" }
+  >,
+  accepted: ReadonlyMap<TaskId, PlannedAttemptExecutorCorrelation>,
+  taskId: TaskId
+): TaskWorkPosition | undefined => {
+  if (position._tag === "AcceptedAttemptPosition") {
+    return accepted.has(taskId) ? position : { ...position, _tag: "AcceptedAttemptPositionOmittedOnce" }
+  }
+  return accepted.has(taskId) ? { ...position, _tag: "AcceptedAttemptPosition" } : undefined
+}
+
+const durablePreStartPositionMatches = (
+  position: Extract<TaskWorkPosition, { readonly _tag: "DurablePreStartPosition" }>,
+  required: RequiredPreStartTaskWorkPosition | undefined
+): boolean =>
+  required?._tag === "UnplannedPreStartTaskWorkPosition" &&
+  sameOperationId(required.claimOperationId, position.claimOperationId)
+
+const durablePlannedPreStartPositionMatches = (
+  position: Extract<TaskWorkPosition, { readonly _tag: "DurablePlannedPreStartPosition" }>,
+  required: RequiredPreStartTaskWorkPosition | undefined
+): boolean =>
+  required?._tag === "PlannedPreStartTaskWorkPosition" &&
+  sameOperationId(required.claimOperationId, position.claimOperationId) &&
+  sameCorrelation(required.correlation, position.correlation)
+
+const synchronizeDurablePublishedPosition = (
+  taskId: TaskId,
+  position: Extract<TaskWorkPosition, { readonly _tag: "DurablePreStartPosition" | "DurablePlannedPreStartPosition" }>,
+  preStart: ReadonlyMap<TaskId, RequiredPreStartTaskWorkPosition>
+): TaskWorkPosition | undefined => {
+  const required = preStart.get(taskId)
+  if (position._tag === "DurablePreStartPosition") {
+    return durablePreStartPositionMatches(position, required) ? position : undefined
+  }
+  return durablePlannedPreStartPositionMatches(position, required) ? position : undefined
+}
+
+/** Preserve one stale accepted publication; release follows a second omission. */
+const synchronizePublishedPosition = (
+  taskId: TaskId,
+  position: TaskWorkPosition,
+  accepted: ReadonlyMap<TaskId, PlannedAttemptExecutorCorrelation>,
+  preStart: ReadonlyMap<TaskId, RequiredPreStartTaskWorkPosition>
+): TaskWorkPosition | undefined => {
+  if (position._tag === "AcceptedAttemptPosition" || position._tag === "AcceptedAttemptPositionOmittedOnce") {
+    return synchronizeAcceptedPublishedPosition(position, accepted, taskId)
+  }
+  if (position._tag === "DurablePreStartPosition" || position._tag === "DurablePlannedPreStartPosition") {
+    return synchronizeDurablePublishedPosition(taskId, position, preStart)
+  }
+  // Live reservations remain authoritative until complete or rollback.
+  return position
+}
+
+const synchronizeAcceptedTaskPosition = (
+  position: TaskWorkPosition | undefined,
+  correlation: PlannedAttemptExecutorCorrelation
+): TaskWorkPosition | undefined => {
+  if (
+    position === undefined ||
+    position._tag === "AcceptedAttemptPosition" ||
+    position._tag === "AcceptedAttemptPositionOmittedOnce" ||
+    position._tag === "DurablePreStartPosition" ||
+    position._tag === "DurablePlannedPreStartPosition" ||
+    position._tag === "BoundPreStartRuntimePosition"
+  ) {
+    return { _tag: "AcceptedAttemptPosition", correlation }
+  }
+  return position._tag === "PendingRuntimePosition"
+    ? { _tag: "BoundRuntimePosition", correlation, proposalId: position.proposalId }
+    : undefined
+}
+
+const synchronizePlannedPreStartTaskPosition = (
+  position: TaskWorkPosition,
+  required: Extract<RequiredPreStartTaskWorkPosition, { readonly _tag: "PlannedPreStartTaskWorkPosition" }>
+): TaskWorkPosition | undefined => {
+  if (position._tag === "PendingRuntimePosition") {
+    return {
+      _tag: "BoundPreStartRuntimePosition",
+      claimOperationId: required.claimOperationId,
+      proposalId: position.proposalId
+    }
+  }
+  if (position._tag === "BoundPreStartRuntimePosition") {
+    return sameOperationId(position.claimOperationId, required.claimOperationId)
+      ? {
+          _tag: "DurablePlannedPreStartPosition",
+          claimOperationId: required.claimOperationId,
+          correlation: required.correlation
+        }
+      : undefined
+  }
+  return position._tag === "DurablePreStartPosition" || position._tag === "DurablePlannedPreStartPosition"
+    ? preStartPositionOf(required)
+    : undefined
+}
+
+const synchronizePreStartTaskPosition = (
+  position: TaskWorkPosition | undefined,
+  required: RequiredPreStartTaskWorkPosition
+): TaskWorkPosition | undefined => {
+  if (position === undefined) return preStartPositionOf(required)
+  if (required._tag === "PlannedPreStartTaskWorkPosition")
+    return synchronizePlannedPreStartTaskPosition(position, required)
+  return position._tag === "DurablePlannedPreStartPosition" &&
+    sameOperationId(position.claimOperationId, required.claimOperationId)
+    ? { _tag: "DurablePreStartPosition", claimOperationId: required.claimOperationId }
+    : undefined
+}
+
+const synchronizedTaskWorkPositions = (
+  current: AdmissionState,
+  basis: DeliveryTaskWorkAdmissionBasis
+): ReadonlyMap<TaskId, TaskWorkPosition> => {
+  const accepted = new Map(basis.held.map(({ correlation, taskId }) => [taskId, correlation] as const))
+  const preStart = new Map(basis.preStart.map((position) => [position.taskId, position] as const))
+  const positions = new Map<TaskId, TaskWorkPosition>()
+  for (const [taskId, position] of current.positions) {
+    const synchronized = synchronizePublishedPosition(taskId, position, accepted, preStart)
+    if (synchronized !== undefined) positions.set(taskId, synchronized)
+  }
+  for (const [taskId, correlation] of accepted) {
+    const synchronized = synchronizeAcceptedTaskPosition(positions.get(taskId), correlation)
+    if (synchronized !== undefined) positions.set(taskId, synchronized)
+  }
+  for (const [taskId, required] of preStart) {
+    if (accepted.has(taskId)) continue
+    const synchronized = synchronizePreStartTaskPosition(positions.get(taskId), required)
+    if (synchronized !== undefined) positions.set(taskId, synchronized)
+  }
+  return positions
+}
+
 /**
  * Owns proposal-native positions without inspecting action route tags. The
  * initial basis and later synchronization adopt the exact positions that
@@ -140,90 +279,11 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
   })
 
   const synchronize = Effect.fn("DeliveryRuntimeAdmission.synchronize")((basis: DeliveryTaskWorkAdmissionBasis) =>
-    Ref.update(state, (current) => {
-      const accepted = new Map(basis.held.map(({ correlation, taskId }) => [taskId, correlation] as const))
-      const preStart = new Map(basis.preStart.map((position) => [position.taskId, position] as const))
-      const positions = new Map<TaskId, TaskWorkPosition>()
-      for (const [taskId, position] of current.positions) {
-        if (position._tag === "AcceptedAttemptPosition") {
-          // A publication can be older than the executor report from which
-          // this process reconstructed the position. Preserve exactly one
-          // omission; a second consecutive omission is the authoritative release.
-          positions.set(
-            taskId,
-            accepted.has(taskId) ? position : { ...position, _tag: "AcceptedAttemptPositionOmittedOnce" }
-          )
-        } else if (position._tag === "AcceptedAttemptPositionOmittedOnce") {
-          if (accepted.has(taskId)) positions.set(taskId, { ...position, _tag: "AcceptedAttemptPosition" })
-        } else if (position._tag === "DurablePreStartPosition") {
-          const required = preStart.get(taskId)
-          if (
-            required?._tag === "UnplannedPreStartTaskWorkPosition" &&
-            sameOperationId(required.claimOperationId, position.claimOperationId)
-          )
-            positions.set(taskId, position)
-        } else if (position._tag === "DurablePlannedPreStartPosition") {
-          const required = preStart.get(taskId)
-          if (
-            required?._tag === "PlannedPreStartTaskWorkPosition" &&
-            sameOperationId(required.claimOperationId, position.claimOperationId) &&
-            sameCorrelation(required.correlation, position.correlation)
-          )
-            positions.set(taskId, position)
-        } else {
-          // Live reservations remain authoritative until complete or rollback.
-          positions.set(taskId, position)
-        }
-      }
-      for (const [taskId, correlation] of accepted) {
-        const currentPosition = positions.get(taskId)
-        if (
-          currentPosition === undefined ||
-          currentPosition._tag === "AcceptedAttemptPosition" ||
-          currentPosition._tag === "AcceptedAttemptPositionOmittedOnce" ||
-          currentPosition._tag === "DurablePreStartPosition" ||
-          currentPosition._tag === "DurablePlannedPreStartPosition" ||
-          currentPosition._tag === "BoundPreStartRuntimePosition"
-        ) {
-          positions.set(taskId, { _tag: "AcceptedAttemptPosition", correlation })
-        } else if (currentPosition._tag === "PendingRuntimePosition") {
-          positions.set(taskId, { _tag: "BoundRuntimePosition", correlation, proposalId: currentPosition.proposalId })
-        }
-      }
-      for (const [taskId, required] of preStart) {
-        if (accepted.has(taskId)) continue
-        const currentPosition = positions.get(taskId)
-        if (currentPosition === undefined) {
-          positions.set(taskId, preStartPositionOf(required))
-        } else if (required._tag === "PlannedPreStartTaskWorkPosition") {
-          if (currentPosition._tag === "PendingRuntimePosition") {
-            positions.set(taskId, {
-              _tag: "BoundPreStartRuntimePosition",
-              claimOperationId: required.claimOperationId,
-              proposalId: currentPosition.proposalId
-            })
-          } else if (currentPosition._tag === "BoundPreStartRuntimePosition") {
-            if (sameOperationId(currentPosition.claimOperationId, required.claimOperationId)) {
-              positions.set(taskId, {
-                _tag: "DurablePlannedPreStartPosition",
-                claimOperationId: required.claimOperationId,
-                correlation: required.correlation
-              })
-            }
-          } else if (
-            currentPosition._tag === "DurablePreStartPosition" ||
-            currentPosition._tag === "DurablePlannedPreStartPosition"
-          ) {
-            positions.set(taskId, preStartPositionOf(required))
-          }
-        } else if (currentPosition._tag === "DurablePlannedPreStartPosition") {
-          if (sameOperationId(currentPosition.claimOperationId, required.claimOperationId)) {
-            positions.set(taskId, { _tag: "DurablePreStartPosition", claimOperationId: required.claimOperationId })
-          }
-        }
-      }
-      return { ...current, capacity: basis.capacity, positions }
-    })
+    Ref.update(state, (current) => ({
+      ...current,
+      capacity: basis.capacity,
+      positions: synchronizedTaskWorkPositions(current, basis)
+    }))
   )
 
   const reservePlannedAttemptProtocol = Effect.fn("DeliveryRuntimeAdmission.reservePlannedAttemptProtocol")(function* (

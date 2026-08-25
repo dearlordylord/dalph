@@ -2503,6 +2503,7 @@ const historicalSpecificationFor = (
       record.event.observation.factFamily.fingerprint === plannedAttempt.taskRevision
   )
 
+// eslint-disable-next-line complexity -- Recovery projection combines restart freshness, pending reads, and continuation decisions at one chronological state boundary.
 const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecoveredRunState")(function* (
   runState: ReconstructedRunState,
   integrationResources: IntegrationTargetResourceController,
@@ -2663,54 +2664,57 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           plannedAttemptExecutorCorrelation(plannedAttempt)
         )
     )
-  const continuationDecisions = ordinary.transitions.map((transition) => {
-    if (transition._tag !== "ContinuePlannedAttemptExecutorWork") {
-      return continuationDecisionFor(
+  const continuationDecisions = ordinary.transitions.map(
+    // eslint-disable-next-line complexity -- Each continuation decision preserves the exact restart freshness and causal read sequence.
+    (transition) => {
+      if (transition._tag !== "ContinuePlannedAttemptExecutorWork") {
+        return continuationDecisionFor(
+          transition,
+          runState.workflowHistory.records,
+          undefined,
+          activationBaselinePosition,
+          integrationTarget
+        )
+      }
+      if (pendingAttemptIds.has(transition.plannedAttempt.attemptId)) return {}
+      const currentGraphObservation = currentCompleteGraphObservationAfter(
+        runState.workflowHistory.records,
+        freshnessBaselineForAttempt(transition.plannedAttempt)
+      )
+      const historicalSpecificationRecord =
+        isRestartActivation &&
+        hasPendingTargetLineageRead &&
+        currentGraphObservation !== undefined &&
+        claimObservedAfterActivation(
+          runState.workflowHistory.records,
+          activationBaselinePosition,
+          transition.plannedAttempt.taskId
+        ) &&
+        !worktreeObservedAfterActivation(
+          runState.workflowHistory.records,
+          activationBaselinePosition,
+          transition.plannedAttempt
+        )
+          ? historicalSpecificationFor(
+              runState.workflowHistory.records,
+              activationBaselinePosition,
+              transition.plannedAttempt
+            )
+          : undefined
+      const decision = continuationDecisionFor(
         transition,
         runState.workflowHistory.records,
-        undefined,
-        activationBaselinePosition,
-        integrationTarget
+        currentGraphObservation,
+        freshnessBaselineForAttempt(transition.plannedAttempt),
+        integrationTarget,
+        historicalSpecificationRecord
       )
+      return !postQuiescenceGraphReconfirmationAvailable() &&
+        decision.transition?._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
+        ? {}
+        : decision
     }
-    if (pendingAttemptIds.has(transition.plannedAttempt.attemptId)) return {}
-    const currentGraphObservation = currentCompleteGraphObservationAfter(
-      runState.workflowHistory.records,
-      freshnessBaselineForAttempt(transition.plannedAttempt)
-    )
-    const historicalSpecificationRecord =
-      isRestartActivation &&
-      hasPendingTargetLineageRead &&
-      currentGraphObservation !== undefined &&
-      claimObservedAfterActivation(
-        runState.workflowHistory.records,
-        activationBaselinePosition,
-        transition.plannedAttempt.taskId
-      ) &&
-      !worktreeObservedAfterActivation(
-        runState.workflowHistory.records,
-        activationBaselinePosition,
-        transition.plannedAttempt
-      )
-        ? historicalSpecificationFor(
-            runState.workflowHistory.records,
-            activationBaselinePosition,
-            transition.plannedAttempt
-          )
-        : undefined
-    const decision = continuationDecisionFor(
-      transition,
-      runState.workflowHistory.records,
-      currentGraphObservation,
-      freshnessBaselineForAttempt(transition.plannedAttempt),
-      integrationTarget,
-      historicalSpecificationRecord
-    )
-    return !postQuiescenceGraphReconfirmationAvailable() &&
-      decision.transition?._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
-      ? {}
-      : decision
-  })
+  )
   /**
    * A target-lineage read can be the durable last boundary before a process
    * dies. On the next activation the graph reread and the exact task-claim
@@ -2721,56 +2725,62 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
    */
   const restartContinuationClaimTransitions =
     isRestartActivation && hasPendingTargetLineageRead
-      ? ordinary.transitions.flatMap((transition, index) => {
-          if (transition._tag !== "ContinuePlannedAttemptExecutorWork") return []
-          if (pendingAttemptIds.has(transition.plannedAttempt.attemptId)) return []
-          if (
-            claimObservedAfterActivation(
-              runState.workflowHistory.records,
-              activationBaselinePosition,
-              transition.plannedAttempt.taskId
+      ? ordinary.transitions.flatMap(
+          // eslint-disable-next-line complexity -- Restart claim replay joins graph, specification, claim, and executor evidence in one causal chain.
+          (transition, index) => {
+            if (transition._tag !== "ContinuePlannedAttemptExecutorWork") return []
+            if (pendingAttemptIds.has(transition.plannedAttempt.attemptId)) return []
+            if (
+              claimObservedAfterActivation(
+                runState.workflowHistory.records,
+                activationBaselinePosition,
+                transition.plannedAttempt.taskId
+              )
+            ) {
+              return []
+            }
+            if (executorReportedAfterPendingTargetLineage(transition.plannedAttempt)) return []
+            const decision = continuationDecisions[index]
+            const graphTransition = decision?.transition
+            if (graphTransition?._tag !== "ObservePlannedAttemptContinuationGraph") return []
+            const specificationRecord = runState.workflowHistory.records.findLast(
+              (record): record is TrackerFactsRecord =>
+                record.position <= Option.getOrElse(activationBaselinePosition, () => Number.MAX_SAFE_INTEGER) &&
+                record.event._tag === "TaskTrackerFactsObserved" &&
+                record.event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+                record.event.observation.factFamily.taskId === transition.plannedAttempt.taskId &&
+                record.event.observation.factFamily.fingerprint === transition.plannedAttempt.taskRevision
             )
-          ) {
-            return []
-          }
-          if (executorReportedAfterPendingTargetLineage(transition.plannedAttempt)) return []
-          const decision = continuationDecisions[index]
-          const graphTransition = decision?.transition
-          if (graphTransition?._tag !== "ObservePlannedAttemptContinuationGraph") return []
-          const specificationRecord = runState.workflowHistory.records.findLast(
-            (record): record is TrackerFactsRecord =>
-              record.position <= Option.getOrElse(activationBaselinePosition, () => Number.MAX_SAFE_INTEGER) &&
-              record.event._tag === "TaskTrackerFactsObserved" &&
-              record.event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-              record.event.observation.factFamily.taskId === transition.plannedAttempt.taskId &&
-              record.event.observation.factFamily.fingerprint === transition.plannedAttempt.taskRevision
-          )
-          if (specificationRecord === undefined) return []
-          const historicalGraph = currentCompleteGraphObservationAfter(runState.workflowHistory.records, Option.none())
-          if (historicalGraph === undefined) return []
-          const planOperationId = plannedAttemptPlanOperationId(
-            runState.workflowHistory.records,
-            transition.plannedAttempt
-          )
-          const graphOperation = graphTransition.operation
-          return [
-            RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
-              operation: makeTaskClaimObservationOperation(
-                OperationId.make(
-                  `continuation:${transition.plannedAttempt.attemptId}:after:${graphOperation.operationId}:claim`
+            if (specificationRecord === undefined) return []
+            const historicalGraph = currentCompleteGraphObservationAfter(
+              runState.workflowHistory.records,
+              Option.none()
+            )
+            if (historicalGraph === undefined) return []
+            const planOperationId = plannedAttemptPlanOperationId(
+              runState.workflowHistory.records,
+              transition.plannedAttempt
+            )
+            const graphOperation = graphTransition.operation
+            return [
+              RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+                operation: makeTaskClaimObservationOperation(
+                  OperationId.make(
+                    `continuation:${transition.plannedAttempt.attemptId}:after:${graphOperation.operationId}:claim`
+                  ),
+                  graphOperation.target,
+                  transition.plannedAttempt.taskId,
+                  [
+                    ...(planOperationId === undefined ? [] : [planOperationId]),
+                    historicalGraph.event.operationId,
+                    specificationRecord.event.operationId
+                  ]
                 ),
-                graphOperation.target,
-                transition.plannedAttempt.taskId,
-                [
-                  ...(planOperationId === undefined ? [] : [planOperationId]),
-                  historicalGraph.event.operationId,
-                  specificationRecord.event.operationId
-                ]
-              ),
-              plannedAttempt: transition.plannedAttempt
-            })
-          ]
-        })
+                plannedAttempt: transition.plannedAttempt
+              })
+            ]
+          }
+        )
       : []
   /**
    * A prior activation may have recorded a non-exact executor projection while
