@@ -23,7 +23,7 @@ import {
 } from "@dalph/contracts"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
-import { Effect, Layer, Ref, Stream } from "effect"
+import { Cause, Effect, Layer, Ref, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { GraphProjectionError, projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -196,6 +196,10 @@ import {
 } from "../../workflow/protocols/evidence-store.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
+import {
+  failPreStartClaimBinding,
+  PreStartClaimTaskWorkPositionBindingContradiction
+} from "./delivery-runtime-task-work-position.js"
 
 const runId = RunId.make("route-matrix-run")
 const taskId = TaskId.make("A")
@@ -2870,6 +2874,107 @@ describe("delivery proposal route matrix", () => {
 
       expect(result).toEqual({ _tag: "ActionCompleted", proposalId: proposal.id })
       expect(yield* Ref.get(traceTags)).not.toContain("TrackerExecutionAdmitted")
+    })
+  )
+
+  effectIt.effect("propagates a fresh claim position contradiction as a typed action failure", () =>
+    Effect.gen(function* () {
+      const claimOperation = makeTaskClaimAcquisitionOperation({
+        acquisition: {
+          operationId: OperationId.make("claim-binding-contradiction-operation"),
+          owner: ClaimOwner.make("dalph"),
+          taskId,
+          token: ClaimToken.make("claim-binding-contradiction-token")
+        },
+        predecessorOperationIds: []
+      })
+      const step = FreshWorkflowStep.AcquireTaskClaim({
+        predecessorOperationId: claimOperation.acquisition.operationId,
+        task
+      })
+      const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+        operationId: claimOperation.acquisition.operationId,
+        taskId
+      })
+      const proposal = deliveryProposalsOf({
+        acceptedOperationIds: new Set<OperationId>(),
+        fresh: [{ step, transition }],
+        runId,
+        transitions: [transition]
+      }).ticketDelivery[0]
+      if (
+        proposal === undefined ||
+        !isFreshOperationProposal(proposal) ||
+        proposal.route._tag !== "FreshWorkflowRoute"
+      ) {
+        return yield* Effect.die("a fresh claim route must be derivable")
+      }
+
+      const claim = ActiveTaskClaim.make({
+        operationId: claimOperation.acquisition.operationId,
+        owner: claimOperation.acquisition.owner,
+        taskId: claimOperation.acquisition.taskId,
+        token: claimOperation.acquisition.token
+      })
+      const contradiction = failPreStartClaimBinding({
+        claimOperationId: claimOperation.acquisition.operationId,
+        position: undefined,
+        reason: "PositionMissing",
+        taskId
+      })
+      const exit = yield* Effect.exit(
+        executeFreshWorkflowOperation(
+          {
+            _tag: "FreshOperationAction",
+            operationId: OperationId.make("claim-binding-contradiction-action"),
+            proposal
+          },
+          proposal.route,
+          { ...inertLease, bindPreStartTaskWorkPosition: () => contradiction },
+          target
+        ).pipe(
+          Effect.provideService(
+            WorkflowInterpreter,
+            WorkflowInterpreter.of({
+              acquireTaskClaim: (_operation, onIntentRecorded = Effect.void) =>
+                onIntentRecorded.pipe(
+                  Effect.andThen(Effect.succeed({ _tag: "AuthoritativeTaskClaimAcquired" as const, claim }))
+                ),
+              readTaskClaim: () => Effect.die("unused claim read"),
+              readTaskWorktree: () => Effect.die("unused worktree read"),
+              readTargetLineage: () => Effect.die("unused lineage read"),
+              readTrackerGraph: () => Effect.die("unused graph read"),
+              readTaskWorkSpecification: () => Effect.die("unused specification read"),
+              reconcileTaskWorktree: () => Effect.die("unused worktree reconciliation"),
+              recordTaskAttemptPlan: () => Effect.die("unused attempt planning"),
+              releaseTaskClaim: () => Effect.die("unused claim release")
+            })
+          ),
+          Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+          Effect.provideService(
+            TaskClaimAcquisitionPlanner,
+            TaskClaimAcquisitionPlanner.of({
+              plan: (operationId, selectedTaskId) =>
+                Effect.succeed({
+                  operationId,
+                  owner: claimOperation.acquisition.owner,
+                  taskId: selectedTaskId,
+                  token: claimOperation.acquisition.token
+                })
+            })
+          )
+        )
+      )
+
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag !== "Failure") return
+      expect(
+        exit.cause.reasons.some(
+          (reason) =>
+            Cause.isFailReason(reason) && reason.error instanceof PreStartClaimTaskWorkPositionBindingContradiction
+        )
+      ).toBe(true)
+      expect(exit.cause.reasons.some((reason) => Cause.isDieReason(reason))).toBe(false)
     })
   )
 

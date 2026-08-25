@@ -44,7 +44,7 @@ const acquireTaskClaim = Effect.fn("DeliveryAction.acquireTaskClaim")(function* 
   yield* trace.emit(TaskClaimAcquisitionIntended.make({ operation }))
   const recordClaimIntent = lease
     .recordIntent(action.operationId)
-    .pipe(Effect.andThen(lease.bindPreStartTaskWorkPosition(operation.acquisition.operationId).pipe(Effect.orDie)))
+    .pipe(Effect.andThen(lease.bindPreStartTaskWorkPosition(operation.acquisition.operationId)))
   const result = yield* interpreter.acquireTaskClaim(operation, recordClaimIntent, interruptibleBoundaryOf(lease))
   yield* trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
 })

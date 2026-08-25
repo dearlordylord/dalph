@@ -67,9 +67,11 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
 
       const readTrackerGraph = journaledTrackerGraphRead(runId, interpreter, journal)
 
-      const acquireTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.acquireTaskClaim")(function* (
+      const acquireTaskClaim = Effect.fn("WorkflowInterpreter.Journaled.acquireTaskClaim")(function* <
+        IntentError = never
+      >(
         operation: typeof WorkflowOperation.cases.AcquireTaskClaim.Type,
-        onIntentRecorded: Effect.Effect<void> = Effect.void,
+        onIntentRecorded: Effect.Effect<void, IntentError> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
         yield* Effect.uninterruptible(
