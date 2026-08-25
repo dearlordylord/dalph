@@ -41,6 +41,7 @@ import type {
   prepareIntegrationCandidateRun
 } from "../../workflow/protocols/integrator/protocol.js"
 import type { appendChangedHeadRetryQuarantine } from "../../workflow/protocols/integration-quarantine/changed-head-retry.js"
+import type { appendPromotionStaleIntegrationQuarantine } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 import type { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import type {
   recoverTaskClaimOperation,
@@ -211,6 +212,7 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof recoverTaskWorktreeOperation>
   | EffectFunctionFailure<typeof prepareIntegrationCandidateRun>
   | EffectFunctionFailure<typeof appendChangedHeadRetryQuarantine>
+  | EffectFunctionFailure<typeof appendPromotionStaleIntegrationQuarantine>
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof runTargetPromotion>
   | EffectFunctionFailure<typeof runCompletionClaimReplacementProtocol>

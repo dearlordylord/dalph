@@ -39,7 +39,7 @@ type DeliveryStoryBeatCoverage =
   | {
       readonly _tag: "DemonstratedBySpine"
       readonly acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
-      readonly cassetteKeys: readonly ["authored:deliveryInvariantStory"]
+      readonly cassetteKeys: readonly ["authored:deliveryInvariantStoryCapstone"]
     }
   | {
       readonly _tag: "DemonstratedByMaintainedSlice"
@@ -61,39 +61,23 @@ interface DeliveryStoryBeatManifestEntry {
   readonly coverage: DeliveryStoryBeatCoverage
 }
 
-const scenarioTest = (name: string): DeliveryStoryAcceptanceTest => ({
-  declaration: "it.effect",
-  name,
-  sourceFile: "packages/dalph/test/cassettes/scenario.test.ts"
-})
-
 const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
   declaration: "it.effect",
   name,
   sourceFile: "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
 })
 
-const topologyTest = capstoneTest("consumes a staggered graph while reconstructed positions delay restart-added X")
-const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
+const chronologyTest = capstoneTest("executes DS01 through DS13 in one maintained chronology")
+const finalityTest = capstoneTest(
+  "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality"
+)
 
 const spine = (
   beatId: DeliveryStoryBeatId,
   ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
 ): DeliveryStoryBeatManifestEntry => ({
   beatId,
-  coverage: { _tag: "DemonstratedBySpine", acceptanceTests, cassetteKeys: ["authored:deliveryInvariantStory"] }
-})
-
-const slice = (
-  beatId: DeliveryStoryBeatId,
-  cassetteKeys: readonly [
-    `authored:${string}` | `integration-finality:${string}`,
-    ...ReadonlyArray<`authored:${string}` | `integration-finality:${string}`>
-  ],
-  ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
-): DeliveryStoryBeatManifestEntry => ({
-  beatId,
-  coverage: { _tag: "DemonstratedByMaintainedSlice", acceptanceTests, cassetteKeys }
+  coverage: { _tag: "DemonstratedBySpine", acceptanceTests, cassetteKeys: ["authored:deliveryInvariantStoryCapstone"] }
 })
 
 const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeatManifestEntry => ({
@@ -102,69 +86,32 @@ const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeat
 })
 
 /**
- * Machine-readable coverage for the prose story. The long spine proves the
- * double-diamond graph/restart path; one maintained story proves one narrower beat;
- * unsupported combined behavior remains explicit instead of fabricated.
+ * Machine-readable coverage for the prose story. The maintained capstone proves
+ * the accepted DS01-DS17 chronology; later unsupported behavior remains explicit
+ * instead of fabricated.
  */
 export const deliveryStoryManifest = {
-  cassetteKey: "authored:deliveryInvariantStory" as const,
-  cassetteAcceptanceTests: [topologyTest, restartTest],
+  cassetteKey: "authored:deliveryInvariantStoryCapstone" as const,
+  cassetteAcceptanceTests: [chronologyTest, finalityTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
-    missing(
-      "DS-01",
-      "The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks."
-    ),
-    missing("DS-02", "No maintained run admits A, B, and C together yet."),
-    missing(
-      "DS-03",
-      "No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change."
-    ),
-    missing(
-      "DS-04",
-      "No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together."
-    ),
-    missing(
-      "DS-05",
-      "The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart."
-    ),
-    missing(
-      "DS-06",
-      "No maintained run admits D after B's changed-instruction suspension releases one of three held positions."
-    ),
-    missing(
-      "DS-07",
-      "No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held."
-    ),
-    spine("DS-08", restartTest),
-    missing("DS-09", "The maintained double diamond recovers held B and C, not held A, C, and D plus retained B."),
-    missing("DS-10", "No maintained run closes C without success and then asks its exact executor to suspend."),
-    missing("DS-11", "No maintained run releases closed C's position while retaining its reversible lifecycle wait."),
-    missing(
-      "DS-12",
-      "No maintained run applies Continue to retained B while two other tasks consume all current capacity."
-    ),
-    missing(
-      "DS-13",
-      "No maintained run releases A's position after its accepted result and then admits already-owned B."
-    ),
-    slice(
-      "DS-14",
-      ["authored:acceptedResultRestartsIntoIntegration"],
-      scenarioTest("continues an accepted result after process death and crosses its integration cutoff once")
-    ),
-    missing(
-      "DS-15",
-      "No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat."
-    ),
-    missing(
-      "DS-16",
-      "The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer."
-    ),
-    missing(
-      "DS-17",
-      "The separate A-finality spine settles A, but does not first reconcile a stale head and rebuild its successor candidate."
-    ),
+    spine("DS-01", chronologyTest),
+    spine("DS-02", chronologyTest),
+    spine("DS-03", chronologyTest),
+    spine("DS-04", chronologyTest),
+    spine("DS-05", chronologyTest),
+    spine("DS-06", chronologyTest),
+    spine("DS-07", chronologyTest),
+    spine("DS-08", chronologyTest),
+    spine("DS-09", chronologyTest),
+    spine("DS-10", chronologyTest),
+    spine("DS-11", chronologyTest),
+    spine("DS-12", chronologyTest),
+    spine("DS-13", chronologyTest),
+    spine("DS-14", finalityTest),
+    spine("DS-15", finalityTest),
+    spine("DS-16", finalityTest),
+    spine("DS-17", finalityTest),
     missing(
       "DS-18",
       "No maintained run reopens a tracker lifecycle wait for C; Operator task Unpause is a different phenomenon."

@@ -57,6 +57,30 @@ type DeliveryRuntimeAdmissionLoopCleanup = {
 
 type DeliveryRuntimeAdmissionLoop = DeliveryRuntimeAdmissionLoopObservation & DeliveryRuntimeAdmissionLoopCleanup
 
+const isPromotionStaleQuarantineProposal = (proposal: DeliveryActionProposal): boolean =>
+  proposal.route._tag === "IdentityFreeWorkflowRoute" &&
+  proposal.route.transition._tag === "RecordPromotionStaleIntegrationQuarantine"
+
+const admissionPriority = (proposal: DeliveryActionProposal): number =>
+  isPromotionStaleQuarantineProposal(proposal) ? 0 : 1
+
+/** A stale promotion must be durably quarantined before unrelated recovered reads can consume the turn. */
+const availableProposalOf = (
+  proposals: ReadonlyArray<DeliveryActionProposal>,
+  live: ReadonlyMap<DeliveryProposalId, LiveOwner>,
+  liveActionKeys: ReadonlySet<LiveDeliveryActionKey>,
+  liveOperationIds: ReadonlySet<OperationId>,
+  deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
+  acceptedAt: JournalPosition | null
+): DeliveryActionProposal | undefined => {
+  const isAvailable = (proposal: DeliveryActionProposal) =>
+    proposalIsAvailable(proposal, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)
+  const staleQuarantine = proposals.find(
+    (proposal) => isPromotionStaleQuarantineProposal(proposal) && isAvailable(proposal)
+  )
+  return staleQuarantine ?? proposals.find(isAvailable)
+}
+
 /** Coordinates proposal admission, process-local ownership, and target-resource cleanup. */
 export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmissionLoop.make")((
   dependencies: DeliveryRuntimeAdmissionLoopDependencies
@@ -81,10 +105,10 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
     acceptedAt: JournalPosition | null
   ) {
-    for (const independent of proposals.slice(deferredIndex + 1)) {
-      if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)) {
-        continue
-      }
+    for (const independent of proposals
+      .slice(deferredIndex + 1)
+      .toSorted((left, right) => admissionPriority(left) - admissionPriority(right))) {
+      if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)) continue
       const laterReservation = yield* reserveAndStart(independent)
       if (laterReservation._tag === "Started") return laterReservation.started
       yield* emit({ _tag: "ProposalDeferred", proposalId: independent.id, reason: laterReservation.reason })
@@ -109,12 +133,15 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
         const liveOperationIds = new Set(
           (yield* Effect.forEach(live.values(), ({ operationId }) => operationId)).flatMap(Option.toArray)
         )
-        const proposal = proposedActions.proposals.find((candidate) =>
-          proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)
+        const proposal = availableProposalOf(
+          proposedActions.proposals,
+          live,
+          liveActionKeys,
+          liveOperationIds,
+          deferred,
+          current.acceptedAt
         )
-        if (proposal === undefined) {
-          return false
-        }
+        if (proposal === undefined) return false
         const reservation = yield* reserveAndStart(proposal)
         if (reservation._tag === "Deferred") {
           yield* emit({ _tag: "ProposalDeferred", proposalId: proposal.id, reason: reservation.reason })

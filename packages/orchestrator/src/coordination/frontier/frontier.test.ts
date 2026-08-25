@@ -30,6 +30,7 @@ import {
   makeTaskWorktreeReconciliationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 
 const taskA = TaskId.make("task-A")
 const taskB = TaskId.make("task-B")
@@ -94,6 +95,38 @@ it("orders owned work by earliest outstanding journal position before task ident
   })
 
   expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskA, taskB, taskA])
+})
+
+it("prioritizes a sibling executor safety suspension before continuation", () => {
+  const continuingA = { ...executionResponsibilityFor(taskA, "task-A-continuing"), beganAt: JournalPosition.make(1) }
+  const suspendingB = { ...executionResponsibilityFor(taskB, "task-B-suspending"), beganAt: JournalPosition.make(3) }
+  const frontier = deriveRunnableFrontier({
+    freshEligibleTasks: [],
+    responsibility: WorkflowResponsibilityState.make({ entries: [continuingA, suspendingB] }),
+    responsibilityFacts: [
+      {
+        _tag: "PlannedAttemptExecutorFreshFacts" as const,
+        disposition: {
+          _tag: "Ready" as const,
+          acceptedProgress: {
+            _tag: "ExecutorReportAccepted" as const,
+            ordinal: PlannedAttemptExecutorReportOrdinal.make(2)
+          }
+        },
+        responsibility: continuingA
+      },
+      {
+        _tag: "PlannedAttemptExecutorFreshFacts" as const,
+        disposition: ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested(),
+        responsibility: suspendingB
+      }
+    ]
+  })
+
+  expect(frontier.transitions.map((transition) => [transition._tag, runnableTransitionTaskId(transition)])).toEqual([
+    ["SuspendPlannedAttemptExecutorWork", taskB],
+    ["ContinuePlannedAttemptExecutorWork", taskA]
+  ])
 })
 
 it("reconciles an already-intended exact claim release as its own responsibility", () => {

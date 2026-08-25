@@ -34,10 +34,15 @@ export const IntegrationQuarantineResultEvidence = Schema.Struct({
 })
 export type IntegrationQuarantineResultEvidence = typeof IntegrationQuarantineResultEvidence.Type
 
-/** Either conclusive result evidence or a fresh target read that invalidated Retry. */
+/** Either conclusive result evidence, a fresh target read that invalidated Retry, or a stale promotion. */
 export const IntegrationQuarantineBasis = Schema.TaggedUnion({
   ConclusiveResult: { cause: IntegrationQuarantineCause, evidence: IntegrationQuarantineResultEvidence },
   ProviderRunFailure: { detail: IntegrationQuarantineFailureDetail, ownedActivityProvenAbsentAt: JournalPosition },
+  PromotionStale: {
+    candidateCommit: GitCommitSha,
+    observedTargetHead: GitCommitSha,
+    targetPromotionStaleAt: JournalPosition
+  },
   RetryTargetHeadChanged: {
     direction: Schema.Literal("Retry"),
     directionAppliedAt: JournalPosition,
@@ -54,7 +59,9 @@ export const integrationQuarantineBasisKey = (basis: IntegrationQuarantineBasis)
     ? `result:${basis.evidence.resultRecordedAt}`
     : basis._tag === "ProviderRunFailure"
       ? `provider-failure:${basis.ownedActivityProvenAbsentAt}`
-      : `retry-head:${basis.priorQuarantineAt}:${basis.directionAppliedAt}:${basis.targetLineageObservedAt}`
+      : basis._tag === "PromotionStale"
+        ? `promotion-stale:${basis.targetPromotionStaleAt}`
+        : `retry-head:${basis.priorQuarantineAt}:${basis.directionAppliedAt}:${basis.targetLineageObservedAt}`
 
 /** Backwards-readable name for the result evidence carried by a conclusive basis. */
 export const IntegrationQuarantineEvidence = IntegrationQuarantineResultEvidence
@@ -95,6 +102,14 @@ const retryTargetHeadBasisIsValid = (
     ? undefined
     : "Retry target-head quarantine requires a changed head after its applied Retry and predecessor quarantine"
 
+const promotionStaleBasisIsValid = (
+  basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "PromotionStale" }>,
+  correlation: IntegratorSessionCorrelation
+): string | undefined =>
+  basis.observedTargetHead !== correlation.expectedTargetHead
+    ? undefined
+    : "promotion-stale quarantine requires a target head different from the candidate session's fixed head"
+
 const quarantineBasisIsValid = (event: {
   readonly basis: IntegrationQuarantineBasis
   readonly correlation: IntegratorSessionCorrelation
@@ -107,7 +122,9 @@ const quarantineBasisIsValid = (event: {
       : /* v8 ignore next -- @preserve JournalPosition is branded to be at least one, so this defensive rejection is unreachable. */ "provider-run quarantine requires a positive owned-activity absence position"
     : basis._tag === "RetryTargetHeadChanged"
       ? retryTargetHeadBasisIsValid(basis, correlation)
-      : conclusiveBasisIsValid({ basis, correlation })
+      : basis._tag === "PromotionStale"
+        ? promotionStaleBasisIsValid(basis, correlation)
+        : conclusiveBasisIsValid({ basis, correlation })
 }
 
 export const IntegrationQuarantinedEvent = Schema.TaggedStruct("IntegrationQuarantined", {

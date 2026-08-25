@@ -214,10 +214,9 @@ const providerAbsenceMatchesRunOne = (
 /** Retry is allowed only from the first quarantine's exact run-one evidence. */
 const retryIsEligible = (records: ReadonlyArray<JournalRecord>, quarantine: QuarantineRecord): boolean => {
   const { basis } = quarantine.event
-  if (basis._tag === "RetryTargetHeadChanged") return false
-  return basis._tag === "ConclusiveResult"
-    ? conclusiveResultIsFromRunOne(records, quarantine, basis)
-    : providerFailureIsFromRunOne(records, quarantine, basis)
+  if (basis._tag === "ConclusiveResult") return conclusiveResultIsFromRunOne(records, quarantine, basis)
+  if (basis._tag === "ProviderRunFailure") return providerFailureIsFromRunOne(records, quarantine, basis)
+  return false
 }
 
 /** Issue #68 permits one FullRerun successor generation; S2 cannot create S3. */

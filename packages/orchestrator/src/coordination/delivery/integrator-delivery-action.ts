@@ -11,6 +11,7 @@ import {
   reconcileProviderRunFailureQuarantine
 } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
 import { appendRetryConclusiveIntegrationQuarantine } from "../../workflow/protocols/integration-quarantine/retry-conclusive.js"
+import { appendPromotionStaleIntegrationQuarantine } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
@@ -30,6 +31,10 @@ type RecordProviderRunFailureIntegrationQuarantine = Extract<
 type RecordRetryConclusiveIntegrationQuarantine = Extract<
   RunnableFrontierTransition,
   { readonly _tag: "RecordRetryConclusiveIntegrationQuarantine" }
+>
+type RecordPromotionStaleIntegrationQuarantine = Extract<
+  RunnableFrontierTransition,
+  { readonly _tag: "RecordPromotionStaleIntegrationQuarantine" }
 >
 type FixIntegratorSuccessorSession = Extract<
   RunnableFrontierTransition,
@@ -71,6 +76,19 @@ export const recordRetryConclusiveIntegrationQuarantine = Effect.fn(
   lease: DeliveryActionExecutionLease
 ) {
   yield* appendRetryConclusiveIntegrationQuarantine(transition.result)
+  yield* lease.integrationTargets.release(transition.responsibility)
+  return deliveryActionCompleted(action.proposal.id)
+})
+
+/** Appends promotion-stale Q from the exact durable stale promotion fact before releasing target ownership. */
+export const recordPromotionStaleIntegrationQuarantine = Effect.fn(
+  "DeliveryAction.recordPromotionStaleIntegrationQuarantine"
+)(function* (
+  action: IdentityFreeAction,
+  transition: RecordPromotionStaleIntegrationQuarantine,
+  lease: DeliveryActionExecutionLease
+) {
+  yield* appendPromotionStaleIntegrationQuarantine(transition.input)
   yield* lease.integrationTargets.release(transition.responsibility)
   return deliveryActionCompleted(action.proposal.id)
 })

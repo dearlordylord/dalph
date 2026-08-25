@@ -51,6 +51,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       GitWorktreeObservationChanged: noLandmark,
       GitPlannedWorktreeCreateResponseLost: noLandmark,
       IntegratorRequestReceived: noLandmark,
+      OperatorAppliesIntegrationQuarantineDirection: noLandmark,
       IntegratorResultReturned: noLandmark,
       IntegratorGitObservationReturned: noLandmark,
       IntegratorGitObservationFailed: noLandmark,
@@ -301,6 +302,7 @@ type OperatorStoryItem = Extract<
       | "OperatorAppliesControlDirection"
       | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
       | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
+      | "OperatorAppliesIntegrationQuarantineDirection"
       | "OperatorAppliesRunCancellation"
       | "OperatorAppliesRunCancellationWhileExecutorRequestInFlight"
       | "OperatorControlDirectionFailed"
@@ -317,6 +319,7 @@ const operatorStoryItemTags: ReadonlySet<RemainingCoordinatorStoryItem["_tag"]> 
   "OperatorAppliesControlDirection",
   "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
   "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+  "OperatorAppliesIntegrationQuarantineDirection",
   "OperatorAppliesRunCancellation",
   "OperatorAppliesRunCancellationWhileExecutorRequestInFlight",
   "OperatorControlDirectionFailed",
@@ -390,6 +393,9 @@ const operatorLyric = (item: OperatorStoryItem): string => {
   }
   if (item._tag === "OperatorAppliesRunCancellationWhileExecutorRequestInFlight") {
     return `Operator applies whole-Run cancellation while executor attempt ${item.duringAttemptId} is in flight.`
+  }
+  if (item._tag === "OperatorAppliesIntegrationQuarantineDirection") {
+    return `Alice applies ${item.request.fingerprint.direction} to the Integrator quarantine at ${item.request.fingerprint.quarantineAt}.`
   }
   if (isAttemptChoiceOperatorItem(item)) return attemptChoiceOperatorLyric(item)
   if (item._tag === "OperatorRacesContinueAndStop") {
