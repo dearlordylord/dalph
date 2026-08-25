@@ -704,8 +704,13 @@ it.effect("rejects recovery for a foreign exact promotion correlation sharing th
   })
 )
 
-it("rejects changed ordered parents before a candidate can become a promotion correlation", () => {
-  expect(
-    Schema.is(IntegratorRunQualifiedCandidate)({ ...qualifiedCandidate, directParents: [acceptedCommit, expectedHead] })
-  ).toBe(false)
+it("rejects swapped or extra ordered parents before a candidate can become a promotion correlation", () => {
+  const invalidParentOrders = [
+    [acceptedCommit, expectedHead],
+    [expectedHead, acceptedCommit, changedHead]
+  ] as const
+
+  for (const directParents of invalidParentOrders) {
+    expect(Schema.is(IntegratorRunQualifiedCandidate)({ ...qualifiedCandidate, directParents })).toBe(false)
+  }
 })
