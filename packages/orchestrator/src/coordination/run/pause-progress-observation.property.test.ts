@@ -629,6 +629,9 @@ it.effect("does not let a late runtime publication reopen a closed observation",
 
     const state = yield* controller.signal.get
     expect(state._tag).toBe("Closed")
+    if (state._tag === "Closed") {
+      expect(state.final?._tag).toBe("Ready")
+    }
     if (state._tag === "Closed" && state.final?._tag === "Ready") {
       expect(state.final.evaluation).toEqual(finalEvaluation)
     }
