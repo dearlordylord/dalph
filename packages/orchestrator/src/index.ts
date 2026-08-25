@@ -732,11 +732,6 @@ export {
   type MaterializedDeliveryAction
 } from "./coordination/delivery/delivery-action-executor.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
-export {
-  dispatchRecoveredIntegrationAction,
-  RecoveredIntegrationActionDeferred,
-  type RecoveredIntegrationDispatcherDependencies
-} from "./coordination/delivery/recovered-integration-dispatcher.js"
 export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
 export {
   DeliveryRelationPublicationObserver,
