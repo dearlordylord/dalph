@@ -791,7 +791,9 @@ it.effect("keeps candidate responsibility selection independent of a worktree te
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
     yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
-    const activation = yield* activateDispositionCleanup(runId)
+    const activation = yield* activateDispositionCleanup(runId, () =>
+      Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
+    )
     const candidate = activation.candidate[0]
     expect(candidate).toBeDefined()
     if (candidate === undefined) return
@@ -815,6 +817,21 @@ it.effect("keeps candidate responsibility selection independent of a worktree te
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
+it.effect("carries the exact provider-private revision into candidate cleanup authorization", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("issue-69-provider-revision-boundary"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-provider-revision")
+    const expected = IntegratorCandidateCleanupEvidenceRevision.make(9)
+    const activation = yield* activateDispositionCleanup(runId, () => Effect.succeed(expected))
+    expect(activation.candidate[0]?.evidenceRevision).toBe(expected)
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
 it.effect("does not let a candidate terminal fact suppress a worktree responsibility", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
@@ -825,7 +842,9 @@ it.effect("does not let a candidate terminal fact suppress a worktree responsibi
     )
     yield* appendReplacementProvenance(attempt, replacementSuccessor)
     yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
-    const activation = yield* activateDispositionCleanup(runId)
+    const activation = yield* activateDispositionCleanup(runId, () =>
+      Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
+    )
     const worktree = activation.worktree[0]
     expect(worktree).toBeDefined()
     if (worktree === undefined) return
@@ -871,7 +890,9 @@ it.effect("does not let a self-consistent forged candidate authorization suppres
         version: workflowJournalEventVersion
       })
     )
-    const activation = yield* activateDispositionCleanup(runId)
+    const activation = yield* activateDispositionCleanup(runId, () =>
+      Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
+    )
     expect(activation.candidate.map(({ operationId }) => operationId)).toEqual([
       "disposition-cleanup:integrator-candidate:session:issue-69-p1"
     ])

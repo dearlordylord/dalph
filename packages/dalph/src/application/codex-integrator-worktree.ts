@@ -1,5 +1,6 @@
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import type { FileSystem } from "effect"
+import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import {
   bump,
   type CodexIntegratorConfiguration,
@@ -17,9 +18,9 @@ interface CoordinatorMutationGuard {
 }
 
 export type GitWorktreeRecord = {
-  readonly worktree: string
-  readonly head: string
-  readonly branch?: string
+  readonly worktree: WorktreeLocator
+  readonly head: GitCommitSha
+  readonly branch?: TaskBranchRef
   readonly detached: boolean
   readonly prunable: boolean
 }
@@ -47,15 +48,22 @@ const parseWorktreeList = (
     )
       return undefined
     const values = new Map(fields)
-    const worktree = values.get("worktree")
-    const head = values.get("HEAD")
-    const branch = values.get("branch")
+    const worktree = Option.flatMap(
+      Option.fromUndefinedOr(values.get("worktree")),
+      Schema.decodeUnknownOption(WorktreeLocator)
+    )
+    const head = Option.flatMap(Option.fromUndefinedOr(values.get("HEAD")), Schema.decodeUnknownOption(GitCommitSha))
+    const branchValue = values.get("branch")
+    const branch = Option.flatMap(Option.fromUndefinedOr(branchValue), Schema.decodeUnknownOption(TaskBranchRef))
     const detached = values.has("detached")
     const prunable = values.has("prunable")
-    return worktree !== undefined && head !== undefined && (branch !== undefined || detached)
-      ? branch === undefined
-        ? { worktree, head, detached, prunable }
-        : { worktree, head, branch, detached, prunable }
+    return Option.isSome(worktree) &&
+      Option.isSome(head) &&
+      (branchValue === undefined || Option.isSome(branch)) &&
+      (Option.isSome(branch) || detached)
+      ? Option.isNone(branch)
+        ? { worktree: worktree.value, head: head.value, detached, prunable }
+        : { worktree: worktree.value, head: head.value, branch: branch.value, detached, prunable }
       : undefined
   })
   if (records.some((record) => record === undefined)) {
@@ -115,7 +123,7 @@ const reconcileExistingCandidateWorktree = Effect.fn("CodexIntegrator.reconcileE
 const createdWorktreeValidation = (
   result: { readonly exitCode: number; readonly stderr: string },
   exact: GitWorktreeRecord | undefined,
-  expectedHead: string
+  expectedHead: GitCommitSha
 ):
   | { readonly _tag: "Valid"; readonly exact: GitWorktreeRecord }
   | { readonly _tag: "Invalid"; readonly detail: string } => {
@@ -163,7 +171,7 @@ const materializeCandidateWorktree = Effect.fn("CodexIntegrator.materializeCandi
     )
     .pipe(Effect.mapError((error) => providerFailure(errorDetail(error))))
   const records = yield* readWorktrees(commands, config)
-  const exact = records.find((item) => item.worktree === candidatePath)
+  const exact = records.find((item) => item.worktree === WorktreeLocator.make(candidatePath))
   const validation = createdWorktreeValidation(created, exact, record.correlation.expectedTargetHead)
   if (validation._tag === "Invalid") return yield* Effect.fail(providerFailure(validation.detail))
   const createdPathExists = yield* boundary(fileSystem.exists(candidatePath))
@@ -190,7 +198,7 @@ export const ensureCandidateWorktree = Effect.fn("CodexIntegrator.ensureCandidat
       : bump(record, { worktreeMaterializationIntent: true })
   if (intended !== record) yield* boundary(store.write(intended))
   const records = yield* readWorktrees(commands, config)
-  const exact = records.find((item) => item.worktree === candidatePath)
+  const exact = records.find((item) => item.worktree === WorktreeLocator.make(candidatePath))
   if (exact !== undefined) {
     return yield* reconcileExistingCandidateWorktree(exact, intended, record, candidatePath, fileSystem, store)
   }

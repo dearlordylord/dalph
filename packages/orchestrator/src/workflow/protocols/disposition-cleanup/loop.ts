@@ -1,4 +1,4 @@
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import type { OperationId } from "../../identity.js"
@@ -7,6 +7,8 @@ import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import {
   isCleanupEligibleDisposition,
   type BranchCleanupAuthorization,
+  type IntegratorCandidateCleanupEvidenceSubject,
+  type IntegratorCandidateCleanupEvidenceRevision,
   type IntegratorCandidateCleanupAuthorization,
   type WorktreeCleanupAuthorization,
   branchCleanupAuthorizationEquals,
@@ -42,7 +44,19 @@ import {
 } from "./provenance.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { cleanupAuthorizationKey, deriveCleanupAuthorizations } from "./activation.js"
+import {
+  candidateCleanupEvidenceSubjects,
+  cleanupAuthorizationKey,
+  deriveCleanupAuthorizations,
+  type CandidateCleanupEvidenceRevisionFor
+} from "./activation.js"
+
+type CandidateEvidenceRevisionReader = (
+  subject: IntegratorCandidateCleanupEvidenceSubject
+) => Effect.Effect<IntegratorCandidateCleanupEvidenceRevision, unknown>
+
+const candidateEvidenceKey = (subject: IntegratorCandidateCleanupEvidenceSubject): string =>
+  `${subject.predecessor.sessionId}:${subject.locator}`
 
 /** The three independent cleanup responsibilities reconstructed for one Run. */
 export type DispositionCleanupResponsibilities = {
@@ -359,12 +373,15 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
  * composition supplies that set to `runDispositionCleanupLoop`, which is the
  * shared execution path used by controlled cassettes and production callers.
  */
-export const activateDispositionCleanup = Effect.fn("DispositionCleanup.activate")(function* (runId: RunId) {
+export const activateDispositionCleanup = Effect.fn("DispositionCleanup.activate")(function* (
+  runId: RunId,
+  readEvidenceRevision?: CandidateEvidenceRevisionReader
+) {
   // A settled worktree is the durable predecessor for branch cleanup.  Keeping
   // this in the same ordinary activation pass means a resumed Run can derive
   // the branch authorization without a caller supplying one; the loop will
   // execute it only when the settlement is already present.
-  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "branch", "candidate"])
+  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "branch", "candidate"], readEvidenceRevision)
   const journal = yield* InRunJournal
   return selectCleanupResponsibilitySet(yield* journal.read(runId))
 })
@@ -381,7 +398,9 @@ export const makeDispositionCleanupActivation = Effect.fn("DispositionCleanup.ma
   const worktreeBoundary = yield* WorktreeCleanupBoundary
   const branchBoundary = yield* BranchCleanupBoundary
   const candidateBoundary = yield* IntegratorCandidateCleanupBoundary
-  const responsibilities = yield* activateDispositionCleanup(runId)
+  const readEvidenceRevision =
+    candidateBoundary.readEvidenceRevision ?? (() => Effect.fail("candidate evidence is unavailable"))
+  const responsibilities = yield* activateDispositionCleanup(runId, readEvidenceRevision)
   const run = runDispositionCleanupLoop(runId).pipe(
     Effect.provideService(InRunJournal, journal),
     Effect.provideService(WorktreeCleanupBoundary, worktreeBoundary),
@@ -396,10 +415,36 @@ export const makeDispositionCleanupActivation = Effect.fn("DispositionCleanup.ma
  * never overwritten: a contradiction remains preserved for reconstruction.
  */
 export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.appendDerivedAuthorizations")(
-  function* (runId: RunId, families: ReadonlyArray<"branch" | "candidate" | "worktree">) {
+  function* (
+    runId: RunId,
+    families: ReadonlyArray<"branch" | "candidate" | "worktree">,
+    readEvidenceRevision?: CandidateEvidenceRevisionReader
+  ) {
     const journal = yield* InRunJournal
     let records = yield* journal.read(runId)
-    const derived = deriveCleanupAuthorizations(records)
+    const evidenceSubjects =
+      families.includes("candidate") && readEvidenceRevision !== undefined
+        ? candidateCleanupEvidenceSubjects(records)
+        : []
+    const evidencePairs =
+      readEvidenceRevision === undefined
+        ? []
+        : yield* Effect.forEach(evidenceSubjects, (subject) =>
+            readEvidenceRevision(subject).pipe(
+              Effect.option,
+              Effect.map((revision) =>
+                Option.isSome(revision) ? ([candidateEvidenceKey(subject), revision.value] as const) : undefined
+              )
+            )
+          )
+    const evidenceRevisions = new Map(
+      evidencePairs.filter(
+        (pair): pair is readonly [string, IntegratorCandidateCleanupEvidenceRevision] => pair !== undefined
+      )
+    )
+    const evidenceRevisionFor: CandidateCleanupEvidenceRevisionFor | undefined =
+      readEvidenceRevision === undefined ? undefined : (subject) => evidenceRevisions.get(candidateEvidenceKey(subject))
+    const derived = deriveCleanupAuthorizations(records, evidenceRevisionFor)
     const appendOne = Effect.fn("DispositionCleanup.appendOne")(function* (
       authorization: WorktreeCleanupAuthorization | BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization
     ) {

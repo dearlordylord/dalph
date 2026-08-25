@@ -1,4 +1,5 @@
 import { Effect, Option } from "effect"
+import { WorktreeLocator } from "@dalph/contracts"
 import type { FileSystem } from "effect"
 import type {
   CodexAppServer,
@@ -14,11 +15,12 @@ import {
   type IntegratorCandidateWorktreePath,
   sameSession
 } from "./codex-integrator-private-store.js"
-import { boundary, errorDetail, observedThread } from "./codex-integrator-runtime.js"
+import { boundary, errorDetail, observedThread, providerFailure } from "./codex-integrator-runtime.js"
 import { type GitWorktreeRecord, readWorktrees } from "./codex-integrator-worktree.js"
 import {
   IntegratorCandidateCleanupMutationResult,
   type IntegratorCandidateCleanupAuthorization,
+  type IntegratorCandidateCleanupEvidenceSubject,
   IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupObservation,
   IntegratorCandidateProviderAuthority,
@@ -78,7 +80,9 @@ const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegi
   predecessor: IntegratorSessionCorrelation,
   record: CodexIntegratorPrivateRecord,
   pathExists: boolean,
-  store: CodexIntegratorPrivateStoreService
+  store: CodexIntegratorPrivateStoreService,
+  app: CodexAppServer["Service"],
+  census: CodexOwnedActivityCensus["Service"]
 ) {
   const revision = privateRevision(record)
   if (pathExists) return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
@@ -87,6 +91,18 @@ const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegi
     return cleanupUnreadable(authorization, "provider thread ownership is unresolved; absence cannot be inferred")
   }
   if (record.removalIntent === true) {
+    const thread = yield* observedThread(app, record.threadId, record.candidatePath)
+    if (thread.ownedThreadToken !== record.threadToken) {
+      return cleanupForeign(authorization, predecessor.sessionId, "OtherSession", revision)
+    }
+    const terminals = yield* boundary(app.listBackgroundTerminals(thread.id))
+    const projection = yield* boundary(census.observe(thread, terminals))
+    if (projection._tag === "ExactLive") {
+      return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter", revision)
+    }
+    if (projection._tag === "Unreadable" || projection._tag === "Contradictory") {
+      return cleanupUnreadable(authorization, projection.detail)
+    }
     yield* boundary(
       store.write(
         preserveRevision(record, { removalIntent: false, removed: true, threadId: null, worktreeReady: false })
@@ -180,10 +196,10 @@ const cleanupObservationFor = Effect.fn("CodexIntegrator.cleanupObservationFor")
     )
   }
   const records = yield* readWorktrees(commands, config)
-  const registration = records.find((item) => item.worktree === candidatePath)
+  const registration = records.find((item) => item.worktree === WorktreeLocator.make(candidatePath))
   const pathExists = yield* boundary(fileSystem.exists(candidatePath))
   if (registration === undefined) {
-    return yield* cleanupWithoutRegistration(authorization, predecessor, record, pathExists, store)
+    return yield* cleanupWithoutRegistration(authorization, predecessor, record, pathExists, store, app, census)
   }
   return yield* cleanupRegistered(
     authorization,
@@ -276,17 +292,38 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
     })
   }
   const foundAfter = yield* boundary(store.read(authorization.owner.sessionId))
-  if (Option.isSome(foundAfter)) {
-    yield* boundary(
-      store.write(
-        preserveRevision(foundAfter.value, {
-          removalIntent: false,
-          removed: true,
-          threadId: null,
-          worktreeReady: false
-        })
-      )
-    )
+  if (Option.isNone(foundAfter)) {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "Git remove returned and private predecessor tombstone was not observed",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
+  const candidatePath = candidateWorktreePathFor(config, authorization.locator)
+  if (
+    !sameSession(foundAfter.value.correlation, authorization.disposition.predecessor) ||
+    foundAfter.value.candidatePath !== candidatePath
+  ) {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "Git remove returned but the private predecessor record became foreign",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
+  }
+  const tombstone = preserveRevision(foundAfter.value, {
+    removalIntent: false,
+    removed: true,
+    threadId: null,
+    worktreeReady: false
+  })
+  yield* boundary(store.write(tombstone))
+  const confirmed = yield* boundary(store.read(authorization.owner.sessionId))
+  if (Option.isNone(confirmed) || !confirmed.value.removed || confirmed.value.candidatePath !== candidatePath) {
+    return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+      detail: "Git remove returned but the private predecessor tombstone was not durable",
+      locator: authorization.locator,
+      sessionId: authorization.owner.sessionId
+    })
   }
   return IntegratorCandidateCleanupMutationResult.cases.Removed.make({
     locator: authorization.locator,
@@ -304,6 +341,17 @@ export const providerAuthorityFor = (
   store: CodexIntegratorPrivateStoreService,
   ownership: CoordinatorOwnership["Service"]
 ) => {
+  const readEvidenceRevision = (subject: IntegratorCandidateCleanupEvidenceSubject) =>
+    boundary(store.read(subject.predecessor.sessionId)).pipe(
+      Effect.flatMap((found) => {
+        if (Option.isNone(found)) return Effect.fail(providerFailure("private predecessor record is absent"))
+        const record = found.value
+        return sameSession(record.correlation, subject.predecessor) &&
+          record.candidatePath === candidateWorktreePathFor(config, subject.locator)
+          ? Effect.succeed(privateRevision(record))
+          : Effect.fail(providerFailure("private predecessor record is foreign to cleanup evidence"))
+      })
+    )
   const observe = (authorization: IntegratorCandidateCleanupAuthorization) =>
     cleanupObservationFor(config, authorization, app, census, commands, fileSystem, store).pipe(
       Effect.catch((error) =>
@@ -334,5 +382,5 @@ export const providerAuthorityFor = (
         )
       )
     )
-  return IntegratorCandidateProviderAuthority.of({ observe, remove })
+  return IntegratorCandidateProviderAuthority.of({ readEvidenceRevision, observe, remove })
 }

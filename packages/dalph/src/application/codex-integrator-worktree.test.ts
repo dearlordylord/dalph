@@ -237,6 +237,17 @@ describe("Codex Integrator worktree parser", () => {
       await read("worktree /tmp/candidate\nHEAD abc\n"),
       await read("HEAD abc\ndetached\n"),
       await read(
+        ["worktree /tmp/candidate", "HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "branch refs/heads/"].join("\n")
+      ),
+      await read(
+        [
+          "worktree /tmp/candidate",
+          "HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "branch refs/heads/",
+          "detached"
+        ].join("\n")
+      ),
+      await read(
         ["worktree /tmp/one", "HEAD abc", "detached", "", "worktree /tmp/one", "HEAD def", "detached", ""].join("\n")
       )
     ]

@@ -19,18 +19,17 @@ import {
   BranchCleanupEvidenceRevision,
   BranchCleanupAuthorization as BranchCleanupAuthorizationSchema,
   IntegratorCandidateCleanupDisposition,
-  IntegratorCandidateCleanupEvidenceRevision,
+  type IntegratorCandidateCleanupEvidenceRevision,
+  type IntegratorCandidateCleanupEvidenceSubject,
   IntegratorCandidateCleanupOwner,
   IntegratorCandidateCleanupAuthorization as IntegratorCandidateCleanupAuthorizationSchema,
   PlannedAttemptCleanupDisposition,
   WorktreeCleanupEvidenceRevision,
   WorktreeCleanupOwner,
-  WorktreeCleanupAuthorization as WorktreeCleanupAuthorizationSchema
-} from "./disposition.js"
-import type {
-  BranchCleanupAuthorization,
-  IntegratorCandidateCleanupAuthorization,
-  WorktreeCleanupAuthorization
+  WorktreeCleanupAuthorization as WorktreeCleanupAuthorizationSchema,
+  type BranchCleanupAuthorization,
+  type IntegratorCandidateCleanupAuthorization,
+  type WorktreeCleanupAuthorization
 } from "./disposition.js"
 import {
   validateBranchCleanupHistory,
@@ -315,44 +314,78 @@ const branchAuthorizationsFromSettledWorktrees = (
     return [authorization]
   })
 
+export type CandidateCleanupEvidenceRevisionFor = (
+  subject: IntegratorCandidateCleanupEvidenceSubject
+) => IntegratorCandidateCleanupEvidenceRevision | undefined
+
+type CandidateSuccessorEvidence = {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSuccessorSessionFixed" }>
+  readonly lineage: NonNullable<ReturnType<typeof exactTargetLineageRecord>>
+  readonly direction: JournalRecord & {
+    readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationQuarantineDirectionApplied" }>
+  }
+  readonly disposition: IntegratorCandidateCleanupDisposition
+  readonly subject: IntegratorCandidateCleanupEvidenceSubject
+}
+
+const candidateSuccessorEvidence = (
+  records: ReadonlyArray<JournalRecord>,
+  record: JournalRecord
+): CandidateSuccessorEvidence | undefined => {
+  if (record.event._tag !== "IntegratorSuccessorSessionFixed") return undefined
+  const event = record.event
+  const successorRun = IntegratorRunCorrelation.make({ ordinal: integratorRetryRunOrdinal, session: event.successor })
+  const lineage = exactTargetLineageRecord(records, {
+    expectedTargetHead: event.predecessor.expectedTargetHead,
+    integrationTarget: event.predecessor.integrationTarget,
+    plannedAttempt: event.predecessor.plannedAttempt,
+    targetLineageObservedAt: event.predecessor.targetLineageObservedAt
+  })
+  if (lineage === undefined) return undefined
+  const fullRerun = evaluateIntegratorFullRerunAuthorization(
+    records,
+    successorRun,
+    event.predecessor,
+    event.successor.targetLineageObservedAt
+  )
+  if (fullRerun._tag === "Rejected") return undefined
+  const disposition = IntegratorCandidateCleanupDisposition.make({
+    directionAppliedAt: event.directionAppliedAt,
+    dispositionAt: event.quarantineAt,
+    predecessor: event.predecessor,
+    successor: event.successor
+  })
+  const direction = records.find(
+    (candidate): candidate is CandidateSuccessorEvidence["direction"] =>
+      candidate.event._tag === "IntegrationQuarantineDirectionApplied" &&
+      candidate.position === event.directionAppliedAt
+  )
+  /* v8 ignore next -- @preserve Authorized FullRerun evaluation above includes this exact typed direction record. */
+  if (direction === undefined) return undefined
+  return {
+    disposition,
+    direction,
+    event,
+    lineage,
+    subject: { locator: event.predecessor.candidateResource, predecessor: event.predecessor }
+  }
+}
+
 const candidateAuthorizationsFromSuccessors = (
-  records: ReadonlyArray<JournalRecord>
+  records: ReadonlyArray<JournalRecord>,
+  evidenceRevisionFor?: CandidateCleanupEvidenceRevisionFor
 ): ReadonlyArray<IntegratorCandidateCleanupAuthorization> =>
   records.flatMap((record) => {
-    if (record.event._tag !== "IntegratorSuccessorSessionFixed") return []
-    const event = record.event
-    const successorRun = IntegratorRunCorrelation.make({ ordinal: integratorRetryRunOrdinal, session: event.successor })
-    const lineage = exactTargetLineageRecord(records, {
-      expectedTargetHead: event.predecessor.expectedTargetHead,
-      integrationTarget: event.predecessor.integrationTarget,
-      plannedAttempt: event.predecessor.plannedAttempt,
-      targetLineageObservedAt: event.predecessor.targetLineageObservedAt
-    })
-    if (lineage === undefined) return []
-    const fullRerun = evaluateIntegratorFullRerunAuthorization(
-      records,
-      successorRun,
-      event.predecessor,
-      event.successor.targetLineageObservedAt
-    )
-    if (fullRerun._tag === "Rejected") return []
-    const disposition = IntegratorCandidateCleanupDisposition.make({
-      directionAppliedAt: event.directionAppliedAt,
-      dispositionAt: event.quarantineAt,
-      predecessor: event.predecessor,
-      successor: event.successor
-    })
-    const direction = records.find(
-      (candidate) =>
-        candidate.event._tag === "IntegrationQuarantineDirectionApplied" &&
-        candidate.position === event.directionAppliedAt
-    )
-    /* v8 ignore next -- @preserve Authorized FullRerun evaluation above includes this exact typed direction record. */
-    if (direction?.event._tag !== "IntegrationQuarantineDirectionApplied") return []
+    const evidence = candidateSuccessorEvidence(records, record)
+    if (evidence === undefined) return []
+    const { direction, disposition, event, lineage, subject } = evidence
+    const evidenceRevision = evidenceRevisionFor?.(subject)
+    /* A private revision is provider authority. Activation must not invent one from journal positions or lifecycle assumptions. */
+    if (evidenceRevision === undefined) return []
     const authorization = decodeCandidateAuthorization({
       causalPredecessors: [OperationId.make(direction.event.requestId.nonce)],
       disposition,
-      evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+      evidenceRevision,
       locator: event.predecessor.candidateResource,
       observationAt: lineage.observation.position,
       observationOperationId: lineage.observation.event.operationId,
@@ -371,6 +404,14 @@ const candidateAuthorizationsFromSuccessors = (
     return [authorization]
   })
 
+export const candidateCleanupEvidenceSubjects = (
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject> =>
+  records.flatMap((record) => {
+    const evidence = candidateSuccessorEvidence(records, record)
+    return evidence === undefined ? [] : [evidence.subject]
+  })
+
 const uniqueByOperation = <Authorization extends { readonly operationId: OperationId }>(
   values: ReadonlyArray<Authorization>
 ): ReadonlyArray<Authorization> =>
@@ -380,9 +421,12 @@ const uniqueByOperation = <Authorization extends { readonly operationId: Operati
     []
   )
 
-export const deriveCleanupAuthorizations = (records: ReadonlyArray<JournalRecord>) => ({
+export const deriveCleanupAuthorizations = (
+  records: ReadonlyArray<JournalRecord>,
+  evidenceRevisionFor?: CandidateCleanupEvidenceRevisionFor
+) => ({
   branch: uniqueByOperation(branchAuthorizationsFromSettledWorktrees(records)),
-  candidate: uniqueByOperation(candidateAuthorizationsFromSuccessors(records)),
+  candidate: uniqueByOperation(candidateAuthorizationsFromSuccessors(records, evidenceRevisionFor)),
   worktree: uniqueByOperation(worktreeAuthorizationsFromTerminalFacts(records))
 })
 

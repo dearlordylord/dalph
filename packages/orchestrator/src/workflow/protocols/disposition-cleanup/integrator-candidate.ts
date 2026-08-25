@@ -17,6 +17,7 @@ import {
   CleanupMutationOrdinal,
   CleanupObservationOrdinal,
   IntegratorCandidateCleanupAuthorization,
+  type IntegratorCandidateCleanupEvidenceSubject,
   IntegratorCandidateCleanupEvidenceRevision,
   cleanupMutationRequestLimit,
   integratorCandidateCleanupAuthorizationEquals
@@ -191,6 +192,10 @@ export type IntegratorCandidateCleanupJournalEvent = typeof IntegratorCandidateC
 
 /** Provider-neutral candidate disposal boundary. */
 export interface IntegratorCandidateCleanupBoundaryService {
+  /** Reads the provider-private revision before the authorization crosses into the journal. */
+  readonly readEvidenceRevision?: (
+    subject: IntegratorCandidateCleanupEvidenceSubject
+  ) => Effect.Effect<IntegratorCandidateCleanupEvidenceRevision, unknown>
   readonly observe: (
     authorization: IntegratorCandidateCleanupAuthorization
   ) => Effect.Effect<IntegratorCandidateCleanupObservation>
@@ -210,6 +215,10 @@ export class IntegratorCandidateCleanupBoundary extends Context.Service<
  * but it must not infer those facts from a locator lookup.
  */
 export interface IntegratorCandidateProviderAuthorityService {
+  /** Reads the provider-private revision for the exact predecessor before authorization. */
+  readonly readEvidenceRevision?: (
+    subject: IntegratorCandidateCleanupEvidenceSubject
+  ) => Effect.Effect<IntegratorCandidateCleanupEvidenceRevision, unknown>
   readonly observe: (
     authorization: IntegratorCandidateCleanupAuthorization
   ) => Effect.Effect<IntegratorCandidateCleanupObservation>
@@ -230,6 +239,7 @@ export class IntegratorCandidateProviderAuthority extends Context.Service<
 
 /** No provider authority is available in a provider-neutral composition. */
 export const unavailableIntegratorCandidateProviderAuthority = IntegratorCandidateProviderAuthority.of({
+  readEvidenceRevision: () => Effect.fail("provider authority is unavailable; candidate evidence cannot be observed"),
   observe: (authorization) =>
     Effect.succeed(
       IntegratorCandidateCleanupObservation.cases.Unreadable.make({
@@ -271,6 +281,7 @@ export class TestIntegratorCandidateCleanupBoundary extends Context.Service<
 /** Deterministic candidate boundary script for maintained cassettes. */
 export const integratorCandidateCleanupTestLayer = (input: {
   readonly observations: ReadonlyArray<IntegratorCandidateCleanupObservation>
+  readonly evidenceRevision?: IntegratorCandidateCleanupEvidenceRevision
   readonly mutations?: ReadonlyArray<IntegratorCandidateCleanupMutationResult>
 }) =>
   Layer.effectContext(
@@ -324,10 +335,14 @@ export const integratorCandidateCleanupTestLayer = (input: {
             })
           )
         })
-      const service = IntegratorCandidateCleanupBoundary.of({ observe, remove })
+      const readEvidenceRevision = () =>
+        input.evidenceRevision === undefined
+          ? Effect.fail("candidate evidence revision was not supplied by the controlled provider")
+          : Effect.succeed(input.evidenceRevision)
+      const service = IntegratorCandidateCleanupBoundary.of({ readEvidenceRevision, observe, remove })
       return Context.empty().pipe(
         Context.add(IntegratorCandidateCleanupBoundary, service),
-        Context.add(IntegratorCandidateProviderAuthority, { observe, remove }),
+        Context.add(IntegratorCandidateProviderAuthority, { readEvidenceRevision, observe, remove }),
         Context.add(TestIntegratorCandidateCleanupBoundary, { calls: () => Ref.get(calls) })
       )
     })

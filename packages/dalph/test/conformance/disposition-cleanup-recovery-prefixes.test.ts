@@ -634,6 +634,7 @@ const resumeCandidateCleanupAfter =
       responseLossCut
         ? {
             observations: [candidatePresent, candidateAbsent],
+            evidenceRevision: candidatePresent.revision,
             mutations: [
               IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
                 detail: "response lost after apply",
@@ -642,7 +643,7 @@ const resumeCandidateCleanupAfter =
               })
             ]
           }
-        : { observations: [candidateAbsent] }
+        : { observations: [candidateAbsent], evidenceRevision: candidatePresent.revision }
     )
     return Effect.gen(function* () {
       const firstActivation = yield* makeDispositionCleanupActivation(runId)

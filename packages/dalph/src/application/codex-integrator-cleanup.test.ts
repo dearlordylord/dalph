@@ -24,6 +24,7 @@ import {
   IntegratorCandidateCleanupDisposition,
   IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupOwner,
+  type IntegratorCandidateCleanupEvidenceSubject,
   type IntegratorCandidateProviderAuthority,
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
@@ -257,6 +258,25 @@ const runCase = <A>(
     )
   )
 
+type RevisionReadOutcome =
+  | { readonly _tag: "Left"; readonly error: unknown }
+  | { readonly _tag: "Right"; readonly value: IntegratorCandidateCleanupEvidenceRevision | undefined }
+
+const revisionReadOutcome = (
+  authority: IntegratorCandidateProviderAuthority["Service"],
+  subject: IntegratorCandidateCleanupEvidenceSubject
+): Effect.Effect<RevisionReadOutcome> =>
+  authority.readEvidenceRevision === undefined
+    ? Effect.succeed({ _tag: "Left", error: "missing provider reader" })
+    : authority
+        .readEvidenceRevision(subject)
+        .pipe(
+          Effect.match({
+            onFailure: (error): RevisionReadOutcome => ({ _tag: "Left", error }),
+            onSuccess: (value): RevisionReadOutcome => ({ _tag: "Right", value })
+          })
+        )
+
 const recordFor = (
   candidatePath: string,
   overrides: Partial<{
@@ -285,6 +305,28 @@ const recordFor = (
   })
 
 describe("Codex Integrator cleanup boundary", () => {
+  it("reads the exact private revision for authorization and rejects foreign evidence", async () => {
+    const observed = await runCase(
+      { record: recordFor("/tmp/unused", { revision: 9 }), registration: "none" },
+      (authority) => revisionReadOutcome(authority, { locator: predecessor.candidateResource, predecessor })
+    )
+    expect(observed._tag === "Right" ? observed.value : undefined).toBe(
+      IntegratorCandidateCleanupEvidenceRevision.make(9)
+    )
+
+    const foreign = await runCase(
+      {
+        record: recordFor("/tmp/foreign-record", {
+          correlation: sessionFor("foreign", "candidate:foreign"),
+          revision: 9
+        }),
+        registration: "none"
+      },
+      (authority) => revisionReadOutcome(authority, { locator: predecessor.candidateResource, predecessor })
+    )
+    expect(foreign._tag).toBe("Left")
+  })
+
   it("fails closed for missing, foreign, unresolved, transferred, and settled ownership", async () => {
     const absent = await runCase({ record: null, registration: "none" }, (authority, authorization) =>
       authority.observe(authorization)
@@ -337,11 +379,57 @@ describe("Codex Integrator cleanup boundary", () => {
     )
     expect(removalIntent._tag).toBe("Absent")
 
+    const liveRemovalIntent = await runCase(
+      {
+        record: recordFor("/tmp/unused", { removalIntent: true }),
+        registration: "none",
+        projection: { _tag: "ExactLive", activities: [] }
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(liveRemovalIntent._tag).toBe("Foreign")
+
+    const foreignThreadRemovalIntent = await runCase(
+      { record: recordFor("/tmp/unused", { removalIntent: true }), registration: "none", threadTokenMode: "foreign" },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(foreignThreadRemovalIntent._tag).toBe("Foreign")
+
     const noIntent = await runCase(
       { record: recordFor("/tmp/unused"), registration: "none" },
       (authority, authorization) => authority.observe(authorization)
     )
     expect(noIntent._tag).toBe("Foreign")
+  })
+
+  it("requires exact thread, terminal, and process absence before settling a removal intent", async () => {
+    const liveThread = await runCase(
+      {
+        record: recordFor("/tmp/unused", { removalIntent: true }),
+        registration: "none",
+        projection: { _tag: "ExactLive", activities: [] }
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(liveThread._tag).toBe("Foreign")
+
+    const terminalCensusFailure = await runCase(
+      { record: recordFor("/tmp/unused", { removalIntent: true }), registration: "none", backgroundFailure: true },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(terminalCensusFailure._tag).toBe("Unreadable")
+
+    const processCensusFailure = await runCase(
+      { record: recordFor("/tmp/unused", { removalIntent: true }), registration: "none", censusFailure: true },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(processCensusFailure._tag).toBe("Unreadable")
+
+    const tokenlessThread = await runCase(
+      { record: recordFor("/tmp/unused", { removalIntent: true }), registration: "none", threadTokenMode: "tokenless" },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(tokenlessThread._tag).toBe("Foreign")
   })
 
   it("classifies exact registrations and all activity outcomes", async () => {
@@ -483,12 +571,31 @@ describe("Codex Integrator cleanup boundary", () => {
       },
       (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
     )
-    expect(disappearsAfterRemoval._tag).toBe("Removed")
+    expect(disappearsAfterRemoval._tag).toBe("Unknown")
 
     const ownershipFailure = await runCase(
       { record: recordFor("/tmp/unused"), registration: "exact", pathExists: true, ownershipFailure: true },
       (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
     )
     expect(ownershipFailure._tag).toBe("Unknown")
+  })
+
+  it("keeps cleanup retryable when the post-removal private tombstone disappears", async () => {
+    const result = await runCase(
+      {
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        applyRemoval: true,
+        readSequence: [
+          recordFor("/tmp/unused"),
+          recordFor("/tmp/unused"),
+          recordFor("/tmp/unused", { removalIntent: true }),
+          null
+        ]
+      },
+      (authority, authorization) => authority.remove(authorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(result._tag).toBe("Unknown")
   })
 })
