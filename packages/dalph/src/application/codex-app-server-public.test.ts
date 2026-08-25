@@ -269,10 +269,12 @@ setInterval(() => {}, 1000)
 type OwnedActivityCensusService = {
   readonly observe: (
     thread: CodexThreadSnapshot,
-    backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
+    backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>,
+    scope: "IntegratorSession" | "PlannedAttempt"
   ) => Effect.Effect<CodexOwnedActivityCensusProjection, CodexAppServerFailure>
   readonly terminateDescendants: (
-    descendants: ReadonlyArray<CodexOwnedProcessIdentity>
+    descendants: ReadonlyArray<CodexOwnedProcessIdentity>,
+    scope: "IntegratorSession" | "PlannedAttempt"
   ) => Effect.Effect<void, CodexAppServerFailure>
 }
 
@@ -327,23 +329,23 @@ it.effect("keeps controlled app-server and owned-activity substitutions at their
 
 it.effect("reports exact owned activities only after fresh turn, terminal, and process observations", () =>
   Effect.gen(function* () {
-    const absent = yield* runCensus((census) => census.observe(thread("idle", []), [])).pipe(
+    const absent = yield* runCensus((census) => census.observe(thread("idle", []), [], "IntegratorSession")).pipe(
       Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer)
     )
     expect(absent).toEqual({ _tag: "Absent" })
 
-    const activeWithoutTurn = yield* runCensus((census) => census.observe(thread("active", []), [])).pipe(
-      Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer)
-    )
+    const activeWithoutTurn = yield* runCensus((census) =>
+      census.observe(thread("active", []), [], "IntegratorSession")
+    ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(activeWithoutTurn._tag).toBe("Contradictory")
 
     const multipleTurns = yield* runCensus((census) =>
-      census.observe(thread("idle", [turn("one", "inProgress"), turn("two", "inProgress")]), [])
+      census.observe(thread("idle", [turn("one", "inProgress"), turn("two", "inProgress")]), [], "IntegratorSession")
     ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(multipleTurns._tag).toBe("Contradictory")
 
     const activeTurn = yield* runCensus((census) =>
-      census.observe(thread("idle", [turn("active", "inProgress")]), [])
+      census.observe(thread("idle", [turn("active", "inProgress")]), [], "IntegratorSession")
     ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(activeTurn).toEqual({
       _tag: "ExactLive",
@@ -351,12 +353,12 @@ it.effect("reports exact owned activities only after fresh turn, terminal, and p
     })
 
     const background = yield* runCensus((census) =>
-      census.observe(thread("idle", [turn("done", "completed")]), [terminal(null)])
+      census.observe(thread("idle", [turn("done", "completed")]), [terminal(null)], "IntegratorSession")
     ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(background).toMatchObject({ _tag: "ExactLive", activities: [{ _tag: "BackgroundTerminal" }] })
 
     const processBacked = yield* runCensus((census) =>
-      census.observe(thread("idle", []), [terminal(nodeProcess.pid)])
+      census.observe(thread("idle", []), [terminal(nodeProcess.pid)], "IntegratorSession")
     ).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
     expect(processBacked._tag).toBe("ExactLive")
     if (processBacked._tag === "ExactLive") {
@@ -375,8 +377,8 @@ it.effect("keeps two independent session threads scoped to their own activity", 
       "/session-two/worktree"
     )
     const census = yield* CodexOwnedActivityCensus
-    const firstProjection = yield* census.observe(firstSession, [])
-    const secondProjection = yield* census.observe(secondSession, [])
+    const firstProjection = yield* census.observe(firstSession, [], "IntegratorSession")
+    const secondProjection = yield* census.observe(secondSession, [], "IntegratorSession")
     expect(firstProjection).toEqual({ _tag: "Absent" })
     expect(secondProjection).toEqual({
       _tag: "ExactLive",
@@ -403,7 +405,7 @@ it.effect("keeps app-server token descendants out of Integrator sessions but in 
         CodexServerIncarnation.make("scope-token|linux%3Aleader")
       )
       return Effect.gen(function* () {
-        expect(yield* census.observe(thread("idle", []), [])).toEqual({ _tag: "Absent" })
+        expect(yield* census.observe(thread("idle", []), [], "IntegratorSession")).toEqual({ _tag: "Absent" })
         const planned = yield* census.observe(thread("idle", []), [], "PlannedAttempt")
         expect(planned).toMatchObject({
           _tag: "ExactLive",
@@ -519,7 +521,7 @@ it.effect("classifies controlled Linux process census observations at the public
     withFakeLinuxProc(
       entries,
       stats,
-      runCensus((census) => census.observe(thread("idle", []), [terminal(rootPid)])).pipe(
+      runCensus((census) => census.observe(thread("idle", []), [terminal(rootPid)], "IntegratorSession")).pipe(
         Effect.map((observed) => expect(observed).toEqual(expected))
       ),
       liveKill
@@ -541,11 +543,11 @@ it.effect("revalidates and signals controlled Linux descendants without touching
   const terminate = (descendant: CodexOwnedProcessIdentity) =>
     Effect.gen(function* () {
       const census = yield* CodexOwnedActivityCensus
-      return yield* census.terminateDescendants([descendant])
+      return yield* census.terminateDescendants([descendant], "IntegratorSession")
     })
   const absent = Effect.gen(function* () {
     const census = yield* CodexOwnedActivityCensus
-    return yield* census.terminateDescendants([])
+    return yield* census.terminateDescendants([], "IntegratorSession")
   }).pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
   const errorKill = (() => {
     // eslint-disable-next-line functional/no-throw-statements -- the controlled kill fixture emulates a native signal failure.
@@ -613,7 +615,7 @@ it.effect("revalidates and signals controlled Linux descendants without touching
     expect(empty).toBeUndefined()
     const unsupported = yield* Effect.gen(function* () {
       const census = yield* CodexOwnedActivityCensus
-      return yield* census.terminateDescendants([member(209)])
+      return yield* census.terminateDescendants([member(209)], "IntegratorSession")
     }).pipe(Effect.provide(unsupportedLayer), Effect.exit)
     expect(Exit.isFailure(unsupported)).toBe(true)
     yield* Effect.forEach(cases, ({ descendant, expectedFailure, kill, stats }) => {
@@ -639,24 +641,30 @@ it.effect("revalidates and signals controlled Linux descendants without touching
 it.effect("revalidates exact descendant identities before stopping owned activity", () =>
   Effect.gen(function* () {
     const census = yield* CodexOwnedActivityCensus.pipe(Effect.provide(standaloneNodeCodexOwnedActivityCensusLayer))
-    yield* census.terminateDescendants([
-      {
-        pid: 999_999_999,
-        parentPid: 1,
-        processGroupId: 1,
-        startIdentity: CodexProcessStartIdentity.make("linux:missing")
-      }
-    ])
-
-    const changed = yield* census
-      .terminateDescendants([
+    yield* census.terminateDescendants(
+      [
         {
-          pid: nodeProcess.pid,
+          pid: 999_999_999,
           parentPid: 1,
           processGroupId: 1,
-          startIdentity: CodexProcessStartIdentity.make("linux:foreign")
+          startIdentity: CodexProcessStartIdentity.make("linux:missing")
         }
-      ])
+      ],
+      "IntegratorSession"
+    )
+
+    const changed = yield* census
+      .terminateDescendants(
+        [
+          {
+            pid: nodeProcess.pid,
+            parentPid: 1,
+            processGroupId: 1,
+            startIdentity: CodexProcessStartIdentity.make("linux:foreign")
+          }
+        ],
+        "IntegratorSession"
+      )
       .pipe(Effect.exit)
     expect(Exit.isFailure(changed)).toBe(true)
   })
@@ -665,7 +673,7 @@ it.effect("revalidates exact descendant identities before stopping owned activit
 it.effect("keeps unsupported host process census fail-closed", () =>
   Effect.gen(function* () {
     const census = yield* CodexOwnedActivityCensus
-    const observed = yield* census.observe(thread("idle", []), [terminal(nodeProcess.pid)])
+    const observed = yield* census.observe(thread("idle", []), [terminal(nodeProcess.pid)], "IntegratorSession")
     expect(observed).toEqual({
       _tag: "Unreadable",
       detail: "owned attempt process census is not qualified on this host"

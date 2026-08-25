@@ -149,7 +149,7 @@ const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegi
     const terminalEvidence = terminalTurnEvidence(authorization, predecessor, record, thread)
     if (terminalEvidence !== undefined) return terminalEvidence
     const terminals = yield* boundary(app.listBackgroundTerminals(thread.id))
-    const projection = yield* boundary(census.observe(thread, terminals))
+    const projection = yield* boundary(census.observe(thread, terminals, "IntegratorSession"))
     if (projection._tag === "ExactLive") {
       return cleanupForeign(authorization, predecessor.sessionId, "LiveWriter", revision)
     }
@@ -221,7 +221,7 @@ const cleanupRegistered = Effect.fn("CodexIntegrator.cleanupRegistered")(functio
   const terminalEvidence = terminalTurnEvidence(authorization, predecessor, record, thread)
   if (terminalEvidence !== undefined) return terminalEvidence
   const terminals = yield* boundary(app.listBackgroundTerminals(thread.id))
-  const projection = yield* boundary(census.observe(thread, terminals))
+  const projection = yield* boundary(census.observe(thread, terminals, "IntegratorSession"))
   return cleanupProjection(authorization, predecessor, projection, revision)
 })
 

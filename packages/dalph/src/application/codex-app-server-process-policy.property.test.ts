@@ -296,7 +296,8 @@ describe("Codex process observation policy", () => {
         await Effect.runPromiseExit(
           activityCensus.observe(
             { cwd: "/worktree", id: CodexThreadId.make("census-thread"), status: "idle", turns: [] },
-            [{ command: "work", cwd: "/worktree", itemId: "item", osPid: 40, processId: "process" }]
+            [{ command: "work", cwd: "/worktree", itemId: "item", osPid: 40, processId: "process" }],
+            "PlannedAttempt"
           )
         )
       )
@@ -312,9 +313,11 @@ describe("Codex process observation policy", () => {
         return Reflect.get(target, property, receiver)
       }
     })
-    expect(Exit.isFailure(await Effect.runPromiseExit(activityCensus.terminateDescendants([throwingMember])))).toBe(
-      true
-    )
+    expect(
+      Exit.isFailure(
+        await Effect.runPromiseExit(activityCensus.terminateDescendants([throwingMember], "PlannedAttempt"))
+      )
+    ).toBe(true)
     expect(
       Exit.isFailure(await Effect.runPromiseExit(awaitExactMembersAbsent([throwingMember], 0, selectedNative)))
     ).toBe(true)
@@ -801,7 +804,8 @@ describe("Codex process observation policy", () => {
       await Effect.runPromise(
         darwinActivityCensus.observe(
           { cwd: "/worktree", id: CodexThreadId.make("darwin-thread"), status: "idle", turns: [] },
-          []
+          [],
+          "IntegratorSession"
         )
       )
     ).toEqual({ _tag: "Absent" })

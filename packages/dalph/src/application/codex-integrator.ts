@@ -81,7 +81,7 @@ const observeQuiescence = (
   thread: CodexThreadSnapshot
 ): Effect.Effect<void, CodexIntegratorProviderFailure> =>
   boundary(app.listBackgroundTerminals(thread.id)).pipe(
-    Effect.flatMap((terminals) => boundary(census.observe(thread, terminals))),
+    Effect.flatMap((terminals) => boundary(census.observe(thread, terminals, "IntegratorSession"))),
     Effect.flatMap(activityIsAbsent)
   )
 const configError = (config: CodexIntegratorConfiguration): string | undefined => {

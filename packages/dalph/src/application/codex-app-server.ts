@@ -174,11 +174,11 @@ interface CodexOwnedActivityCensusService {
   readonly observe: (
     thread: CodexThreadSnapshot,
     backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>,
-    scope?: CodexOwnedActivityScope
+    scope: CodexOwnedActivityScope
   ) => Effect.Effect<CodexOwnedActivityCensusProjection, CodexAppServerFailure>
   readonly terminateDescendants: (
     descendants: ReadonlyArray<CodexOwnedProcessIdentity>,
-    scope?: CodexOwnedActivityScope
+    scope: CodexOwnedActivityScope
   ) => Effect.Effect<void, CodexAppServerFailure>
 }
 
@@ -961,26 +961,43 @@ const terminateExactOwnedActivityProcesses = async (
   }
 }
 
+type OwnedActivityTurnObservation =
+  | { readonly _tag: "Valid"; readonly activeTurns: ReadonlyArray<CodexTurnSnapshot> }
+  | { readonly _tag: "Contradictory"; readonly detail: string }
+
+/** Rejects an active thread that cannot identify exactly one in-progress turn. */
+const observeOwnedActivityTurns = (thread: CodexThreadSnapshot): OwnedActivityTurnObservation => {
+  const activeTurns = thread.turns.filter((turn) => turn.status === "inProgress")
+  if (thread.status === "active" && activeTurns.length === 0) {
+    return { _tag: "Contradictory", detail: "active thread has no in-progress turn" }
+  }
+  if (activeTurns.length > 1) {
+    return { _tag: "Contradictory", detail: "thread has multiple in-progress turns" }
+  }
+  return { _tag: "Valid", activeTurns }
+}
+
+/** Selects process roots reported by the app-server without treating the app-server itself as activity. */
+const processRootsForBackgroundTerminals = (
+  backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
+): ReadonlyArray<number> =>
+  backgroundTerminals.flatMap((terminal) =>
+    terminal.osPid === null || terminal.osPid === undefined ? [] : [terminal.osPid]
+  )
+
 /** Node attempt-activity authority; server launch ownership remains separate. */
 export const makeNodeCodexOwnedActivityCensusService = (
   native: CodexProcessNativeService = nodeCodexProcessNativeService,
   appServerPid?: number,
   incarnation?: CodexServerIncarnation
 ): CodexOwnedActivityCensusService => ({
-  observe: (thread, backgroundTerminals, scope = "IntegratorSession") =>
+  observe: (thread, backgroundTerminals, scope) =>
     Effect.tryPromise({
       try: async (): Promise<CodexOwnedActivityCensusProjection> => {
-        const activeTurns = thread.turns.filter((turn) => turn.status === "inProgress")
-        if (thread.status === "active" && activeTurns.length === 0) {
-          return { _tag: "Contradictory", detail: "active thread has no in-progress turn" }
-        }
-        if (activeTurns.length > 1) {
-          return { _tag: "Contradictory", detail: "thread has multiple in-progress turns" }
-        }
+        const turnObservation = observeOwnedActivityTurns(thread)
+        if (turnObservation._tag === "Contradictory") return turnObservation
         const processProjection = await observeOwnedActivityProcesses(
-          backgroundTerminals.flatMap((terminal) =>
-            terminal.osPid === null || terminal.osPid === undefined ? [] : [terminal.osPid]
-          ),
+          processRootsForBackgroundTerminals(backgroundTerminals),
           native,
           scope === "PlannedAttempt" ? incarnation : undefined,
           appServerPid
@@ -989,7 +1006,7 @@ export const makeNodeCodexOwnedActivityCensusService = (
           return processProjection
         }
         const activities: Array<CodexOwnedActivity> = [
-          ...activeTurns.map((turn) => ({ _tag: "ActiveTurn" as const, turnId: turn.id })),
+          ...turnObservation.activeTurns.map((turn) => ({ _tag: "ActiveTurn" as const, turnId: turn.id })),
           ...backgroundTerminals.map((terminal) => ({ _tag: "BackgroundTerminal" as const, terminal })),
           ...(processProjection._tag === "ExactLive"
             ? processProjection.members
@@ -1001,7 +1018,7 @@ export const makeNodeCodexOwnedActivityCensusService = (
       },
       catch: preserveAppServerFailure("thread/ownedActivity/census", "Ownership")
     }),
-  terminateDescendants: (descendants, scope = "IntegratorSession") =>
+  terminateDescendants: (descendants, scope) =>
     Effect.tryPromise({
       try: () =>
         terminateExactOwnedActivityProcesses(descendants, native, scope === "PlannedAttempt" ? incarnation : undefined),
