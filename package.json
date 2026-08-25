@@ -34,7 +34,7 @@
     "check:quint": "node scripts/check-quint-models.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",
     "qualify:codex": "node scripts/qualify-codex-app-server.mjs",
-    "test:codex-integrator-qualification": "DALPH_RUN_REAL_CODEX_QUALIFICATION=1 vitest run packages/dalph/src/application/codex-integrator-real-qualification.test.ts --pool=forks",
+    "test:codex-integrator-qualification": "pnpm --filter @dalph/dalph... build && DALPH_RUN_REAL_CODEX_QUALIFICATION=1 vitest run packages/dalph/src/application/codex-integrator-real-qualification.test.ts --pool=forks",
     "test": "vitest run",
     "test:coverage": "vitest run --mode coverage --reporter=dot --coverage --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=json && node scripts/verify-coverage-summary.mjs && node scripts/verify-changed-coverage.mjs",
     "test:mbt": "vitest run --mode mbt",
