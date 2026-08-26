@@ -26,14 +26,14 @@ the latest compatible Program is supplied as TypeScript's old Program.
 
 | Node | Row | Wall time | Compiler diagnostics | Rebuilt virtual trees | Reused virtual trees | Issues |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 22.22.2 | baseline | 4.043s | 0 | 624 | 0 | 0 |
-| 22.22.2 | same-path semantic mutation | 1.042s | 1 | 1 | 624 | 1 |
-| 22.22.2 | added/re-export roots | 1.300s | 0 | 3 | 624 | 1 |
-| 22.22.2 | provider-text roots | 1.155s | 0 | 2 | 624 | 1 |
-| 24.15.0 | baseline | 2.555s | 0 | 624 | 0 | 0 |
-| 24.15.0 | same-path semantic mutation | 0.967s | 1 | 1 | 624 | 1 |
-| 24.15.0 | added/re-export roots | 1.365s | 0 | 3 | 624 | 1 |
-| 24.15.0 | provider-text roots | 1.158s | 0 | 2 | 624 | 1 |
+| 22.22.2 | baseline | 2.707s | 0 | 624 | 0 | 0 |
+| 22.22.2 | same-path semantic mutation | 0.960s | 1 | 1 | 624 | 1 |
+| 22.22.2 | added/re-export roots | 1.116s | 0 | 3 | 624 | 1 |
+| 22.22.2 | provider-text roots | 1.123s | 0 | 2 | 624 | 1 |
+| 24.15.0 | baseline | 2.608s | 0 | 624 | 0 | 0 |
+| 24.15.0 | same-path semantic mutation | 0.906s | 1 | 1 | 624 | 1 |
+| 24.15.0 | added/re-export roots | 1.020s | 0 | 3 | 624 | 1 |
+| 24.15.0 | provider-text roots | 1.005s | 0 | 2 | 624 | 1 |
 
 The added and provider rows intentionally report one unregistered production
 Layer issue. Their source text is parsed and bound; no provider expression is
@@ -81,8 +81,12 @@ Program. This avoids scanning all 624 virtual file names for every TypeScript
 boundary. The final 47-test observations above replace the earlier 41-test
 observation. Each wall time includes the pinned `mise exec` and package-runner
 startup; both documented Node pins (`22.22.2` and `24.15.0`) were available in
-the qualification environment. The stressed command uses exact cleanup and
-reaping for its fixed competing workload:
+the qualification environment. Each of the four qualification profiles was
+invoked as its own serialized shell command; dedicated commands captured the
+`mise` status directly, and stressed commands captured the `run_stressed`
+status from the Bash pipeline before exiting with it. All four returned `0`.
+The stressed command uses exact cleanup and reaping for its fixed competing
+workload:
 
 ```sh
 run_stressed() (
@@ -137,8 +141,8 @@ run_stressed() (
   mise exec "$node_version" -- pnpm test:capability-registration -- --reporter=dot
 )
 
-run_stressed node@22.22.2
-run_stressed node@24.15.0
+run_stressed node@22.22.2 || exit $?
+run_stressed node@24.15.0 || exit $?
 ```
 
 Cleanup accepts an already-running worker only when the explicit `kill` succeeds
@@ -152,15 +156,26 @@ worker failure is detected:
 
 ```sh
 (
-  marker=$(mktemp)
+  marker=""
+  worker_pid=""
+  cleanup() {
+    probe_status=$?
+    trap - EXIT INT TERM
+    if [ -n "$worker_pid" ]; then wait "$worker_pid" 2>/dev/null || true; fi
+    if [ -n "$marker" ]; then rm -f "$marker" || true; fi
+    return "$probe_status"
+  }
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if ! marker=$(mktemp); then exit 1; fi
   taskset -c 11 mise exec node@22.22.2 -- node -e 'process.exit(7)' "$marker" &
   worker_pid=$!
   worker_status=0
   wait "$worker_pid" || worker_status=$?
-  test "$worker_status" -eq 7
-  test "$worker_status" -ne 143
-  test ! -s "$marker"
-  rm -f "$marker"
+  if [ "$worker_status" -ne 7 ]; then exit 1; fi
+  if [ "$worker_status" -eq 143 ]; then exit 1; fi
+  if [ -s "$marker" ]; then exit 1; fi
 )
 ```
 
