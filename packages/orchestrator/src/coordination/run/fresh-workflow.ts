@@ -91,6 +91,10 @@ type PositionedRunningExecutorReport = JournalRecord & {
   }
 }
 
+type PositionedExecutorReport = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
+}
+
 const isPositionedRunningExecutorReport = (
   record: JournalRecord | undefined
 ): record is PositionedRunningExecutorReport =>
@@ -108,6 +112,16 @@ export const latestRunningExecutorReportRecordFor = (
   )
   return isPositionedRunningExecutorReport(record) ? record : undefined
 }
+
+const latestExecutorReportRecordFor = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): PositionedExecutorReport | undefined =>
+  records.findLast(
+    (record): record is PositionedExecutorReport =>
+      record.event._tag === "PlannedAttemptExecutorWorkReported" &&
+      record.event.report.correlation.attemptId === plannedAttempt.attemptId
+  )
 
 // eslint-disable-next-line complexity -- Closed journal occurrence families route to one next workflow operation.
 const journaledStepFor = (
@@ -257,55 +271,56 @@ const journaledStepFor = (
   return FreshWorkflowStep.ReadCurrentTaskGraph({ predecessorOperationId: latestGraphCoveringTask.operationId, task })
 }
 
+const executorProjectionIssueRequiresOwnership = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): boolean => {
+  const exactEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
+  const projectionIssue = latestPlannedAttemptExecutorProjectionIssue(records, plannedAttempt)
+  return (
+    projectionIssue !== undefined &&
+    (exactEvidence === undefined || projectionIssue.observedAt > exactEvidence.observedAt)
+  )
+}
+
+const latestFocusedSpecificationDiffersFrom = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): boolean => {
+  const latestSpecification = records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      event.observation.factFamily.taskId === plannedAttempt.taskId
+  )
+  return (
+    latestSpecification?.event._tag === "TaskTrackerFactsObserved" &&
+    latestSpecification.event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+    latestSpecification.event.observation.factFamily.fingerprint !== plannedAttempt.taskRevision
+  )
+}
+
+const runningReportRequiresOwnership = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  report: PositionedRunningExecutorReport
+): boolean =>
+  latestFocusedSpecificationDiffersFrom(records, plannedAttempt) ||
+  specificationReadRequiredAfterProgressGraph(records, plannedAttempt, report.position) !== undefined
+
 const executorResponsibilityStillOwnsTask = (
   responsibility: Extract<WorkflowResponsibilityEntry, { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }>,
   records: ReadonlyArray<JournalRecord>,
   recoveredAttemptIds: ReadonlySet<AttemptId>
 ): boolean => {
-  if (recoveredAttemptIds.has(responsibility.plannedAttempt.attemptId)) return true
-  const latestReport = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report.correlation.attemptId === responsibility.plannedAttempt.attemptId
-  )
-  const exactEvidence = latestPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
-  const projectionIssue = latestPlannedAttemptExecutorProjectionIssue(records, responsibility.plannedAttempt)
-  if (
-    projectionIssue !== undefined &&
-    (exactEvidence === undefined || projectionIssue.observedAt > exactEvidence.observedAt)
-  ) {
-    return true
+  const { plannedAttempt } = responsibility
+  if (recoveredAttemptIds.has(plannedAttempt.attemptId)) return true
+  const latestReport = latestExecutorReportRecordFor(records, plannedAttempt)
+  if (executorProjectionIssueRequiresOwnership(records, plannedAttempt)) return true
+  if (isPositionedRunningExecutorReport(latestReport)) {
+    return runningReportRequiresOwnership(records, plannedAttempt, latestReport)
   }
-  if (
-    latestReport?.event._tag === "PlannedAttemptExecutorWorkReported" &&
-    latestReport.event.report._tag === "Running"
-  ) {
-    const latestSpecification = records.findLast(
-      ({ event }) =>
-        event._tag === "TaskTrackerFactsObserved" &&
-        event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-        event.observation.factFamily.taskId === responsibility.plannedAttempt.taskId
-    )
-    if (
-      latestSpecification?.event._tag === "TaskTrackerFactsObserved" &&
-      latestSpecification.event.observation._tag === "FocusedTaskWorkSpecificationFacts"
-    ) {
-      if (latestSpecification.event.observation.factFamily.fingerprint !== responsibility.plannedAttempt.taskRevision) {
-        return true
-      }
-    }
-    if (
-      specificationReadRequiredAfterProgressGraph(records, responsibility.plannedAttempt, latestReport.position) !==
-      undefined
-    ) {
-      return true
-    }
-  }
-  return (
-    latestReport !== undefined &&
-    latestReport.event._tag === "PlannedAttemptExecutorWorkReported" &&
-    latestReport.event.report._tag !== "Running"
-  )
+  return latestReport !== undefined && latestReport.event.report._tag !== "Running"
 }
 
 export const responsibilityStillOwnsTask = (
