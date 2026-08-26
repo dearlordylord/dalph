@@ -728,6 +728,18 @@ const assertRestartActionTrace = (
         expect.fail(label + " graph refresh shared identity lacks its typed graph intent")
       } else {
         expect(operationId, label + " exact post-claim graph refresh identity").toBe(String(expectedOperationId))
+        expect(
+          activation.boundaryCalls.trackerGraphReadOperationIds.filter(
+            (calledOperationId) => calledOperationId === expectedOperationId
+          ),
+          label + " shared graph route crosses one exact tracker boundary"
+        ).toHaveLength(1)
+        expect(
+          activation.records.filter(
+            ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === expectedOperationId
+          ),
+          label + " shared graph route records one exact observation"
+        ).toHaveLength(1)
         expect(graphIntent.position, label + " graph refresh follows its claim observation").toBeGreaterThan(
           claimObservation.position
         )
@@ -2663,6 +2675,16 @@ it.effect(
               expect.fail(prefix.cut + " / " + lane + " lacks its G2 tracker graph read")
             } else {
               const stabilizationOperationId = stabilizationRead.event.operation.operationId
+              const acceptedG1Observation = prefix.records.findLast(
+                ({ event }) =>
+                  event._tag === "TaskTrackerFactsObserved" &&
+                  (event.observation._tag === "CompleteTaskTrackerFacts" ||
+                    event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+              )
+              if (acceptedG1Observation?.event._tag !== "TaskTrackerFactsObserved") {
+                expect.fail(prefix.cut + " / " + lane + " lacks accepted G1 tracker facts")
+              }
+              const acceptedG1OperationId = acceptedG1Observation.event.operationId
               const stabilizationObservation = exactlyOne(
                 suffix.filter(
                   ({ event, position }) =>
@@ -2677,6 +2699,22 @@ it.effect(
                 stabilizationRead.event.operation.readShape._tag,
                 prefix.cut + " / " + lane + " G2 tracker graph read shape"
               ).toBe("CompleteTargetClosure")
+              expect(
+                stabilizationOperationId,
+                prefix.cut + " / " + lane + " G2 operation identity differs from G1"
+              ).not.toBe(acceptedG1OperationId)
+              expect(
+                stabilizationRead.position,
+                prefix.cut + " / " + lane + " G2 intent follows accepted G1"
+              ).toBeGreaterThan(acceptedG1Observation.position)
+              expect(
+                stabilizationRead.event.operation.predecessorOperationIds,
+                prefix.cut + " / " + lane + " G2 causally names G1"
+              ).toContain(acceptedG1OperationId)
+              expect(
+                stabilizationObservation.position,
+                prefix.cut + " / " + lane + " G2 observation follows G1"
+              ).toBeGreaterThan(acceptedG1Observation.position)
               expect(
                 stabilizationObservation.position,
                 prefix.cut + " / " + lane + " G2 observation before phase two"

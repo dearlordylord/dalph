@@ -218,6 +218,8 @@ export type FreshOperationOnlyRoute =
 export type TrackerGraphReadRoute =
   | {
       readonly _tag: "TrackerGraphReadRoute"
+      /** The latest accepted graph read when this establishes current facts after restart. */
+      readonly predecessorOperationIds?: NonEmptyOperationIds
       readonly purpose: "EstablishCurrentGraph"
       readonly target: TrackerTarget
     }
@@ -363,6 +365,7 @@ export interface DeliveryProposalsInput {
 export type TrackerGraphReadProposalInput =
   | {
       readonly acceptedAt: JournalPosition | null
+      readonly predecessorOperationIds?: NonEmptyOperationIds
       readonly purpose: "EstablishCurrentGraph"
       readonly runId: RunId
       readonly target: TrackerTarget
@@ -413,7 +416,14 @@ export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal
 export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput): TrackerGraphActionProposal => {
   const route: FreshOperationRoute =
     input.purpose === "EstablishCurrentGraph"
-      ? { _tag: "TrackerGraphReadRoute", purpose: input.purpose, target: input.target }
+      ? {
+          _tag: "TrackerGraphReadRoute",
+          ...(input.predecessorOperationIds === undefined
+            ? {}
+            : { predecessorOperationIds: input.predecessorOperationIds }),
+          purpose: input.purpose,
+          target: input.target
+        }
       : input.purpose === "CheckExecutorProgress"
         ? {
             _tag: "TrackerGraphReadRoute",

@@ -182,6 +182,18 @@ const latestUnresolvedGraphReadOperationIdOf = (
     .filter(({ observation }) => observation._tag === "Unresolved")
     .toSorted((left, right) => Number(right.intentAt) - Number(left.intentAt))[0]?.operationId
 
+/** The most recent accepted graph read is the causal G1 for a restart-time G2 establishment read. */
+const latestAcceptedGraphReadOperationIdOf = (
+  graphReads: ReturnType<typeof executorProgressGraphReadInputOf>["graphReads"]
+) => {
+  const accepted = graphReads.flatMap(({ observation, operationId }) =>
+    observation._tag === "Observed" && (observation.outcome === "Complete" || observation.outcome === "Unchanged")
+      ? [{ observedAt: observation.observedAt, operationId }]
+      : []
+  )
+  return accepted.toSorted((left, right) => Number(right.observedAt) - Number(left.observedAt))[0]?.operationId
+}
+
 const trackerGraphEstablishmentRequired = (
   journal: JournalProjection,
   progressRequirement: ExecutorProgressGraphReadRequirement | undefined,
@@ -198,12 +210,16 @@ const trackerGraphProposalsWithoutRefresh = (
   runId: RunId,
   target: TrackerTarget,
   progressRequirement: ExecutorProgressGraphReadRequirement | undefined,
-  unresolvedGraphReadOperationId: ReturnType<typeof latestUnresolvedGraphReadOperationIdOf>
+  unresolvedGraphReadOperationId: ReturnType<typeof latestUnresolvedGraphReadOperationIdOf>,
+  latestAcceptedGraphReadOperationId: ReturnType<typeof latestAcceptedGraphReadOperationIdOf>
 ): ReadonlyArray<TrackerGraphActionProposal> => {
   if (trackerGraphEstablishmentRequired(journal, progressRequirement, recoveredTransitions)) {
     return [
       trackerGraphReadProposalOf({
         acceptedAt: journal.position,
+        ...(latestAcceptedGraphReadOperationId === undefined
+          ? {}
+          : { predecessorOperationIds: [latestAcceptedGraphReadOperationId] }),
         purpose: "EstablishCurrentGraph",
         runId,
         target,
@@ -233,7 +249,8 @@ const trackerGraphProposalsOf = (
   runId: RunId,
   target: TrackerTarget,
   progressRequirement: ExecutorProgressGraphReadRequirement | undefined,
-  unresolvedGraphReadOperationId: ReturnType<typeof latestUnresolvedGraphReadOperationIdOf>
+  unresolvedGraphReadOperationId: ReturnType<typeof latestUnresolvedGraphReadOperationIdOf>,
+  latestAcceptedGraphReadOperationId: ReturnType<typeof latestAcceptedGraphReadOperationIdOf>
 ): ReadonlyArray<TrackerGraphActionProposal> => {
   if (runIsPaused) return []
   return trackerGraphProposalsWithoutRefresh(
@@ -242,7 +259,8 @@ const trackerGraphProposalsOf = (
     runId,
     target,
     progressRequirement,
-    unresolvedGraphReadOperationId
+    unresolvedGraphReadOperationId,
+    latestAcceptedGraphReadOperationId
   )
 }
 
@@ -298,6 +316,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const progressInput = executorProgressGraphReadInputOf(records, runId, target)
     const progressRequirement = executorProgressGraphReadRequirementOf(progressInput)
     const unresolvedGraphReadOperationId = latestUnresolvedGraphReadOperationIdOf(progressInput.graphReads)
+    const latestAcceptedGraphReadOperationId = latestAcceptedGraphReadOperationIdOf(progressInput.graphReads)
     const freshCandidates = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
     const freshTaskIds = new Set(freshCandidates.map(({ transition }) => runnableTransitionTaskId(transition)))
     const recoveredCandidates = eligibleRecoveredTransitions(journal, projection, freshTaskIds)
@@ -339,7 +358,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           runId,
           target,
           progressRequirement,
-          unresolvedGraphReadOperationId
+          unresolvedGraphReadOperationId,
+          latestAcceptedGraphReadOperationId
         )
     return {
       actionInputs: {

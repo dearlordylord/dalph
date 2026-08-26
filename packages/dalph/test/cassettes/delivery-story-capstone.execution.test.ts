@@ -753,6 +753,13 @@ it.effect(
         capturedOccurrencesFor(preRequestRun.observationCaptures, "TargetPromotionCompareAndSetReturned")
       ).toHaveLength(0)
       expect(extractDs16PromotionEvidence(preRequestRun.records, preRequestRun.observationCaptures)).toBeUndefined()
+      expect(
+        recordsFor(preRequestRun.records, "IntegrationQuarantined").filter(
+          ({ event }) => event.basis._tag === "PromotionStale"
+        )
+      ).toHaveLength(0)
+      expect(recordsFor(preRequestRun.records, "IntegrationQuarantineDirectionApplied")).toHaveLength(0)
+      expect(recordsFor(preRequestRun.records, "IntegratorSuccessorSessionFixed")).toHaveLength(0)
     }),
   capstoneTimeout
 )

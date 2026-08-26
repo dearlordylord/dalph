@@ -5093,9 +5093,9 @@ export const targetPromotionAmbiguityExhaustionAuthoredCassette: ScenarioCassett
   }
 )
 
-/** The post-intent Git read sees H2, records stale evidence, and sends no compare-and-set. */
+/** The post-intent Git read sees H2, sends no compare-and-set, and cannot establish quarantine Q. */
 export const targetPromotionStaleBeforeCompareAndSetAuthoredCassette: ScenarioCassette = promotionScenarioFrom(
-  "records stale H2 and never overwrites it",
+  "records stale H2 without quarantine and never overwrites it",
   [
     targetPromotionGitReadReturned("/dalph/cassettes/integration.git", promotionCandidateCommit, {
       _tag: "CandidateNotInAncestry",
