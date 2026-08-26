@@ -37,17 +37,20 @@ export const formatQuintGateTimingReport = (timing) => {
 export const createQuintGateTiming = ({ now = () => performance.now() } = {}) => {
   const records = []
 
-  const measure = async ({ kind, name, run }) => {
+  const measure = async ({ kind, name, order, run }) => {
     if (!isQuintCommandKind(kind)) throw new Error(`Unknown Quint command kind: ${kind}`)
     const startedAt = now()
     try {
       return await run()
     } finally {
-      records.push({ kind, name, durationMilliseconds: now() - startedAt })
+      records.push({ kind, name, durationMilliseconds: now() - startedAt, order: order ?? records.length })
     }
   }
 
-  const copyRecords = () => records.map((record) => ({ ...record }))
+  const copyRecords = () =>
+    [...records]
+      .sort((left, right) => left.order - right.order)
+      .map(({ durationMilliseconds, kind, name }) => ({ kind, name, durationMilliseconds }))
 
   const aggregates = () =>
     Object.fromEntries(
