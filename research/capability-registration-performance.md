@@ -54,8 +54,9 @@ dependency, syntax error, and semantic error.
 ## Complete focused suite
 
 The main focused command retains all 33 accepted capability positives and
-negative controls and adds three cache contracts plus five compiler-diagnostic
-contracts. All 41 tests passed in each final dedicated or stressed run below:
+negative controls and adds three cache contracts plus seven compiler-diagnostic
+contracts. The current focused command has 43 tests; final Node22/Node24 rows
+will be refreshed after the compiler-complete dependency rerun:
 
 ```sh
 mise exec node@22.22.2 -- pnpm test:capability-registration -- --reporter=dot
@@ -64,10 +65,10 @@ mise exec node@24.15.0 -- pnpm test:capability-registration -- --reporter=dot
 
 | Node | Run | Workload | Wall time | Result |
 | --- | --- | --- | ---: | --- |
-| 22.22.2 | dedicated | none | 33.470s | 41/41 passed |
-| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | 31.527s | 41/41 passed |
-| 24.15.0 | dedicated | none | 55.650s | 41/41 passed |
-| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | 29.109s | 41/41 passed |
+| 22.22.2 | dedicated | none | pending 43-test profile | pending |
+| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | pending 43-test profile | pending |
+| 24.15.0 | dedicated | none | pending 43-test profile | pending |
+| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | pending 43-test profile | pending |
 
 The existing capability-registration quality stage remains bounded at 60s;
 that bounded runner contract is the stage verdict. The benchmark test reports
@@ -77,8 +78,8 @@ and the bounded quality-gate stage enforce and profile the 60-second contract.
 The virtual compiler host precomputes its virtual directory set once per
 Program. This avoids scanning all 624 virtual file names for every TypeScript
 `directoryExists` lookup while retaining the same source-only resolution
-boundary. The maximum final observation is 55.650s, leaving 4.350s of measured
-margin; the bound was not raised. The stressed command uses exact cleanup and
+boundary. The final 43-test observation will replace the earlier 41-test
+observation before integration. The stressed command uses exact cleanup and
 reaping for its fixed competing workload:
 
 ```sh
@@ -114,6 +115,7 @@ the final implementation checks only changed or newly added relevant sources.
 | A negative fixture changes one existing source | `rebuilds a source whose complete text changes instead of reusing its old tree`; semantic diagnostic contract; same-path mutation row |
 | A fixture adds virtual/re-export roots | `reuses unchanged source trees when a later audit adds a virtual root`; added/re-export row |
 | A dependency export changes or a dependency root is removed | `fails closed when a changed dependency removes an imported export`; `fails closed when a removed dependency remains imported` |
+| A type-only import dependency changes or a triple-slash dependency is removed | `fails closed when a changed import-type dependency removes an exported type`; `fails closed when a removed triple-slash dependency remains referenced` |
 | An added source uses a repository source prefix | `fails closed for a first-audit virtual source under a repository source root` |
 | An added or changed source has a TypeScript syntax or semantic error | `fails closed on syntax diagnostics from an added virtual source without exposing repository diagnostics`; `fails closed on semantic diagnostics from a changed virtual source` |
 | A source contains a provider expression | `audits source text without loading or invoking a live provider`; provider-text row |

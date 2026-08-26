@@ -84,24 +84,6 @@ const isUnchangedRepositorySource = (file: CapabilitySourceFile): boolean =>
   existsSync(resolve(file.path)) &&
   readFileSync(resolve(file.path), "utf8") === file.source
 
-const sourceModuleSpecifierTexts = (source: ts.SourceFile): ReadonlyArray<string> =>
-  source.statements.flatMap((statement) => {
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteralLike(statement.moduleSpecifier)) {
-      return [statement.moduleSpecifier.text]
-    }
-    if (ts.isExportDeclaration(statement) && statement.moduleSpecifier !== undefined) {
-      return ts.isStringLiteralLike(statement.moduleSpecifier) ? [statement.moduleSpecifier.text] : []
-    }
-    if (
-      ts.isImportEqualsDeclaration(statement) &&
-      statement.moduleReference.kind === ts.SyntaxKind.ExternalModuleReference &&
-      ts.isStringLiteralLike(statement.moduleReference.expression)
-    ) {
-      return [statement.moduleReference.expression.text]
-    }
-    return []
-  })
-
 const sourceDependencyPaths = (
   program: ts.Program,
   sourceFiles: ReadonlyArray<CapabilitySourceFile>,
@@ -112,15 +94,42 @@ const sourceDependencyPaths = (
   return new Map(
     sourceFiles.map((file) => {
       const source = program.getSourceFile(virtualPath(file.path))
-      const dependencies =
-        source === undefined
-          ? []
-          : sourceModuleSpecifierTexts(source)
-              .flatMap((text) => {
-                const resolved = ts.resolveModuleName(text, source.fileName, options, host).resolvedModule
-                return resolved === undefined ? [] : [sourcePathFromVirtualPath(resolved.resolvedFileName)]
-              })
-              .filter((path) => path !== file.path && sourcePaths.has(path))
+      const preprocessed = ts.preProcessFile(file.source, true, true)
+      const sourcePath = (resolvedFileName: string): string | undefined => {
+        const normalized = normalizedVirtualPath(resolvedFileName)
+        return normalized.startsWith(`${virtualRoot}/`) ? sourcePathFromVirtualPath(normalized) : undefined
+      }
+      const moduleDependencies = [...preprocessed.importedFiles, ...preprocessed.referencedFiles].flatMap(
+        ({ fileName }) => {
+          const resolved = ts.resolveModuleName(
+            fileName,
+            source?.fileName ?? virtualPath(file.path),
+            options,
+            host
+          ).resolvedModule
+          const dependencyPath = resolved === undefined ? undefined : sourcePath(resolved.resolvedFileName)
+          return dependencyPath === undefined ? [] : [dependencyPath]
+        }
+      )
+      const typeDependencies = [
+        ...preprocessed.typeReferenceDirectives,
+        ...preprocessed.libReferenceDirectives
+      ].flatMap(({ fileName }) => {
+        const resolved = ts.resolveTypeReferenceDirective(
+          fileName,
+          source?.fileName ?? virtualPath(file.path),
+          options,
+          host
+        ).resolvedTypeReferenceDirective
+        const dependencyPath =
+          resolved === undefined || resolved.resolvedFileName === undefined
+            ? undefined
+            : sourcePath(resolved.resolvedFileName)
+        return dependencyPath === undefined ? [] : [dependencyPath]
+      })
+      const dependencies = [...moduleDependencies, ...typeDependencies].filter(
+        (path) => path !== file.path && sourcePaths.has(path)
+      )
       return [file.path, dependencies] as const
     })
   )
