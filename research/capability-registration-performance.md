@@ -54,8 +54,8 @@ dependency, syntax error, and semantic error.
 ## Complete focused suite
 
 The main focused command retains all 33 accepted capability positives and
-negative controls and adds three cache contracts plus seven compiler-diagnostic
-contracts. The current focused command has 43 tests; final Node22/Node24 rows
+negative controls and adds three cache contracts plus nine compiler-diagnostic
+contracts. The current focused command has 45 tests; final Node22/Node24 rows
 will be refreshed after the compiler-complete dependency rerun:
 
 ```sh
@@ -65,10 +65,10 @@ mise exec node@24.15.0 -- pnpm test:capability-registration -- --reporter=dot
 
 | Node | Run | Workload | Wall time | Result |
 | --- | --- | --- | ---: | --- |
-| 22.22.2 | dedicated | none | pending 43-test profile | pending |
-| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | pending 43-test profile | pending |
-| 24.15.0 | dedicated | none | pending 43-test profile | pending |
-| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | pending 43-test profile | pending |
+| 22.22.2 | dedicated | none | pending 45-test profile | pending |
+| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | pending 45-test profile | pending |
+| 24.15.0 | dedicated | none | pending 45-test profile | pending |
+| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | pending 45-test profile | pending |
 
 The existing capability-registration quality stage remains bounded at 60s;
 that bounded runner contract is the stage verdict. The benchmark test reports
@@ -78,25 +78,36 @@ and the bounded quality-gate stage enforce and profile the 60-second contract.
 The virtual compiler host precomputes its virtual directory set once per
 Program. This avoids scanning all 624 virtual file names for every TypeScript
 `directoryExists` lookup while retaining the same source-only resolution
-boundary. The final 43-test observation will replace the earlier 41-test
+boundary. The final 45-test observation will replace the earlier 41-test
 observation before integration. The stressed command uses exact cleanup and
 reaping for its fixed competing workload:
 
 ```sh
-run_stressed() {
-  local node_version="$1"
-  local stress_pid=""
+run_stressed() (
+  node_version="$1"
+  stress_pid=""
+  previous_exit_trap=$(trap -p EXIT)
+  previous_int_trap=$(trap -p INT)
+  previous_term_trap=$(trap -p TERM)
   cleanup() {
+    test_status=$?
+    trap - EXIT INT TERM
     if [ -n "$stress_pid" ]; then
       kill "$stress_pid" 2>/dev/null || true
       wait "$stress_pid" 2>/dev/null || true
     fi
+    if [ -n "$previous_exit_trap" ]; then eval "$previous_exit_trap"; else trap - EXIT; fi
+    if [ -n "$previous_int_trap" ]; then eval "$previous_int_trap"; else trap - INT; fi
+    if [ -n "$previous_term_trap" ]; then eval "$previous_term_trap"; else trap - TERM; fi
+    return "$test_status"
   }
-  trap cleanup EXIT INT TERM
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   taskset -c 11 mise exec "$node_version" -- node -e 'const end = Date.now() + 70000; let value = 0; while (Date.now() < end) value = (value + 1) % 1000003' &
   stress_pid=$!
   mise exec "$node_version" -- pnpm test:capability-registration -- --reporter=dot
-}
+)
 
 run_stressed node@22.22.2
 run_stressed node@24.15.0
