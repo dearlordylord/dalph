@@ -51,16 +51,16 @@ const staleTargetHead = "2222222222222222222222222222222222222222"
 const successorCandidateCommit = "dddddddddddddddddddddddddddddddddddddddd"
 const integratorCandidateA = "refs/heads/dalph/integrator-candidate-A"
 const integratorSuccessorCandidateA = "refs/heads/dalph/integrator-candidate-A-successor"
-const initialCandidateTargetLineageObservedAt = 155
-const promotionStaleQuarantineAt = 186
-const successorTargetLineageObservedAt = 233
+const initialCandidateTargetLineageObservedAt = 156
+const promotionStaleQuarantineAt = 187
+const successorTargetLineageObservedAt = 234
 const initialAttempts = [
   { taskId: "A", attemptId: "attempt:A:0" },
   { taskId: "B", attemptId: "attempt:B:1" },
   { taskId: "C", attemptId: "attempt:C:2" }
 ] as const
 const integratorSessionCorrelationA = (targetLineageObservedAt: number) => {
-  const suffix = `$authored-run:attempt:A:0:147:${targetLineageObservedAt}:${expectedHead}:${acceptedCommitA}:/dalph/cassettes/ds-probe.git:refs/heads/master`
+  const suffix = `$authored-run:attempt:A:0:148:${targetLineageObservedAt}:${expectedHead}:${acceptedCommitA}:/dalph/cassettes/ds-probe.git:refs/heads/master`
   return {
     acceptedResult: {
       commit: acceptedCommitA,
@@ -79,14 +79,14 @@ const integratorSessionCorrelationA = (targetLineageObservedAt: number) => {
       taskRevision: makeTaskWorkSpecification(specification("A")).fingerprint,
       worktree: "/dalph/cassettes/ds-probe/attempt-A-0"
     },
-    queuedAt: 140,
+    queuedAt: 141,
     sessionId: `integrator-session:${suffix}`,
-    startedAt: 147,
+    startedAt: 148,
     targetLineageObservedAt
   }
 }
 
-const integratorSuccessorSessionCorrelationA = (targetLineageObservedAt: number, directionAppliedAt = 187) => {
+const integratorSuccessorSessionCorrelationA = (targetLineageObservedAt: number, directionAppliedAt = 188) => {
   const predecessor = integratorSessionCorrelationA(initialCandidateTargetLineageObservedAt)
   const material = [
     "full-rerun-successor",
@@ -236,13 +236,20 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "B" },
     { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "A" },
     ...graphReadG1,
+    {
+      _tag: "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
+      members: [
+        { attemptId: "attempt:C:2", request: "StartOrContinue", taskId: "C" },
+        { attemptId: "attempt:B:1", request: "Suspend", taskId: "B" },
+        { attemptId: "attempt:A:0", request: "StartOrContinue", taskId: "A" }
+      ]
+    },
     ...specRead("C"),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:C:2" },
       request: "StartOrContinue"
     },
-    ...graphReadG1,
     { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "B" },
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "B" } },
     { _tag: "TaskWorkSpecificationReadReturned" as const, ...changedSpecification },
@@ -258,6 +265,8 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "StartOrContinue"
     },
+    { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "C" },
+    { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "A" },
     ...graphReadG1,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
@@ -268,6 +277,8 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "SetTaskExecutionCapacity", capacity: 2 },
     { _tag: "CoordinatorProcessDies" },
     ...graphReadG1,
+    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "C" },
+    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "A" },
     ...specRead("A"),
     ...specRead("C"),
     ...specRead("D"),
@@ -308,7 +319,6 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       report: { _tag: "Running", attemptId: "attempt:C:2" },
       request: "StartOrContinue"
     },
-    ...graphReadG1,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:D:3" },

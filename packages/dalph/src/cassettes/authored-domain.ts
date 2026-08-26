@@ -1329,6 +1329,9 @@ const executorReportRendezvousMembersAreUnique = Schema.makeFilter(
       if (item._tag !== "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady") continue
       const identities = item.members.map(({ attemptId, request, taskId }) => `${taskId}:${attemptId}:${request}`)
       const appendIdentities = item.members.map(({ attemptId, request }) => `${attemptId}:${request}`)
+      if (!item.members.some(({ request }) => request === "StartOrContinue")) {
+        return "an executor-report progress rendezvous must name at least one StartOrContinue report"
+      }
       if (new Set(identities).size !== identities.length || new Set(appendIdentities).size !== identities.length) {
         return "an executor-report append rendezvous must name unique exact task, attempt, and request identities whose attempt/request pair identifies one append"
       }

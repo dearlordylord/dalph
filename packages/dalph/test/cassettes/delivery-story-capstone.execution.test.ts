@@ -378,6 +378,57 @@ it.effect(
             event.observation.factFamily.fingerprint === changedB.fingerprint
         )
       ).toBe(true)
+      const graphIntents = recordsFor(run.records, "TaskTrackerReadIntentRecorded").filter(
+        ({ event }) => event.operation._tag === "ReadTrackerGraph"
+      )
+      const graphCoverage = (record: (typeof graphIntents)[number]) =>
+        record.event.operation._tag === "ReadTrackerGraph"
+          ? record.event.operation.readShape.explicitlyCoveredTaskIds.map(String)
+          : []
+      const establishmentReads = graphIntents.filter((record) => graphCoverage(record).length === 0)
+      const restartEstablishment = establishmentReads[1]
+      expect(restartEstablishment).toBeDefined()
+      if (restartEstablishment === undefined) return
+      const executorReports = recordsFor(run.records, "PlannedAttemptExecutorWorkReported")
+      const report = (attemptId: string, ordinal: number) =>
+        exactlyOne(
+          executorReports.filter(
+            ({ event }) => event.report.correlation.attemptId === attemptId && event.ordinal === ordinal
+          ),
+          `${attemptId} executor report ordinal ${ordinal}`
+        )
+      const initialReports = [report("attempt:A:0", 1), report("attempt:B:1", 1), report("attempt:C:2", 1)]
+      const laterBatchReports = [report("attempt:C:2", 2), report("attempt:B:1", 2), report("attempt:A:0", 2)]
+      const dReport = report("attempt:D:3", 1)
+      const preRestartProgressReads = graphIntents.filter(
+        (record) =>
+          record.position > Math.min(...initialReports.map(({ position }) => position)) &&
+          record.position < restartEstablishment.position
+      )
+      expect(preRestartProgressReads.map(graphCoverage)).toEqual([["A", "B", "C"], ["A", "C"], ["D"]])
+      const [initialBatchRead, laterBatchRead, dRead] = preRestartProgressReads
+      expect(initialBatchRead).toBeDefined()
+      expect(laterBatchRead).toBeDefined()
+      expect(dRead).toBeDefined()
+      if (initialBatchRead === undefined || laterBatchRead === undefined || dRead === undefined) return
+      expect(initialBatchRead.position).toBeGreaterThan(Math.max(...initialReports.map(({ position }) => position)))
+      expect(laterBatchRead.position).toBeGreaterThan(Math.max(...laterBatchReports.map(({ position }) => position)))
+      expect(dRead.position).toBeGreaterThan(dReport.position)
+      const graphOutcomes = recordsFor(run.records, "TaskTrackerFactsObserved")
+      const outcomeFor = (intent: (typeof graphIntents)[number]) =>
+        exactlyOne(
+          graphOutcomes.filter(({ event }) => event.operationId === intent.event.operation.operationId),
+          `${intent.event.operation.operationId} graph outcome`
+        )
+      const initialBatchOutcome = outcomeFor(initialBatchRead)
+      const laterBatchOutcome = outcomeFor(laterBatchRead)
+      const dOutcome = outcomeFor(dRead)
+      expect(initialBatchOutcome.position).toBeGreaterThan(initialBatchRead.position)
+      expect(laterBatchOutcome.position).toBeGreaterThan(laterBatchRead.position)
+      expect(dReport.position).toBeGreaterThan(laterBatchOutcome.position)
+      expect(dOutcome.position).toBeGreaterThan(dRead.position)
+      expect(restartEstablishment.position).toBeGreaterThan(dOutcome.position)
+      expect(restartEstablishment.event.operation.operationId).not.toBe(dRead.event.operation.operationId)
     }),
   capstoneTimeout
 )
