@@ -43,6 +43,17 @@ interface CapabilitySourceProgram {
   readonly checker: ts.TypeChecker
   readonly program: ts.Program
   readonly sourceByPath: ReadonlyMap<string, CapabilitySourceFile>
+  readonly diagnostics: CapabilitySourceProgramDiagnostics
+}
+
+/**
+ * Source-tree events recorded while one semantic audit Program is built. The
+ * paths are virtual-source paths, not evidence that any source module was
+ * imported or evaluated.
+ */
+interface CapabilitySourceProgramDiagnostics {
+  readonly rebuiltSourcePaths: ReadonlyArray<string>
+  readonly reusedSourcePaths: ReadonlyArray<string>
 }
 
 const virtualRoot = "/__dalph_capability_registration__"
@@ -50,7 +61,7 @@ const virtualPath = (path: string): string => join(virtualRoot, path).replaceAll
 const normalizedVirtualPath = (path: string): string => resolve(path).replaceAll("\\", "/")
 
 const sourceProgramCache = new WeakMap<object, CapabilitySourceProgram>()
-const sourceProgramByRootKey = new Map<string, CapabilitySourceProgram>()
+let latestSourceProgram: CapabilitySourceProgram | undefined
 const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): CapabilitySourceProgram => {
   const cached = sourceProgramCache.get(sourceFiles)
   if (cached !== undefined) return cached
@@ -59,8 +70,10 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   const virtualSources = new Map(
     sourceFiles.map((file) => [normalizedVirtualPath(virtualPath(file.path)), file] as const)
   )
-  const rootKey = sourceFiles.map(({ path }) => path).join("\u0000")
-  const previous = sourceProgramByRootKey.get(rootKey)
+  // TypeScript can incrementally construct a Program with a different root
+  // set. The host below is the compatibility boundary: it returns an old
+  // tree only when the exact path and complete source text still match.
+  const previous = latestSourceProgram
   const options: ts.CompilerOptions = {
     baseUrl: virtualRoot,
     lib: ["lib.es2023.d.ts"],
@@ -80,6 +93,8 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   const defaultReadFile = host.readFile.bind(host)
   const defaultGetSourceFile = host.getSourceFile.bind(host)
   const defaultDirectoryExists = host.directoryExists?.bind(host)
+  const rebuiltSourcePaths: Array<string> = []
+  const reusedSourcePaths: Array<string> = []
   /* eslint-disable functional/immutable-data -- TypeScript's compiler host is an intentionally mutable adapter. */
   host.getCurrentDirectory = () => virtualRoot
   host.fileExists = (fileName) => {
@@ -92,10 +107,14 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   }
   host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
     const source = virtualSources.get(normalizedVirtualPath(fileName))
-    const previousSource = previous?.sourceByPath.get(sourcePathFromVirtualPath(fileName))
+    const sourcePath = sourcePathFromVirtualPath(fileName)
+    const previousSource = previous?.sourceByPath.get(sourcePath)
     const previousTree = previous?.program.getSourceFile(fileName)
-    if (source !== undefined && previousSource?.source === source.source && previousTree !== undefined)
+    if (source !== undefined && previousSource?.source === source.source && previousTree !== undefined) {
+      reusedSourcePaths.push(sourcePath)
       return previousTree
+    }
+    if (source !== undefined) rebuiltSourcePaths.push(sourcePath)
     return source === undefined
       ? defaultGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile)
       : ts.createSourceFile(fileName, source.source, languageVersion, true, ts.ScriptKind.TS)
@@ -115,12 +134,25 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
     host,
     previous?.program
   )
-  const indexed = { checker: program.getTypeChecker(), program, sourceByPath }
+  const indexed = {
+    checker: program.getTypeChecker(),
+    diagnostics: { rebuiltSourcePaths, reusedSourcePaths },
+    program,
+    sourceByPath
+  }
   sourceProgramCache.set(sourceFiles, indexed)
-  sourceProgramByRootKey.set(rootKey, indexed)
+  latestSourceProgram = indexed
   /* eslint-enable functional/immutable-data */
   return indexed
 }
+
+/**
+ * Exposes source-tree reuse evidence for the focused capability-registration
+ * contract tests. It does not expose or execute an audited source module.
+ */
+export const inspectCapabilitySourceProgram = (
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>
+): CapabilitySourceProgramDiagnostics => sourceProgram(sourceFiles).diagnostics
 
 const sourcePathFromVirtualPath = (path: string): string => relative(virtualRoot, path).replaceAll("\\", "/")
 
