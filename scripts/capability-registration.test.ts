@@ -6,6 +6,7 @@ import {
   type CapabilityRegistrationInventory
 } from "./capability-registration.js"
 import {
+  inspectCapabilitySourceProgram,
   repositoryCapabilitySourceFiles,
   runCapabilityRegistrationGate,
   type CapabilitySourceFile
@@ -650,6 +651,39 @@ describe("capability registration gate", () => {
     )
   })
 
+  it("reuses unchanged source trees when a later audit adds a virtual root", () => {
+    const basePath = "scripts/fixtures/issue-262-cache-base.ts"
+    const addedPath = "scripts/fixtures/issue-262-cache-added.ts"
+    const base = [{ path: basePath, source: "export const cacheBase = 1" }]
+
+    inspectCapabilitySourceProgram(base)
+    const expanded = inspectCapabilitySourceProgram([
+      ...base,
+      { path: addedPath, source: "export const cacheAdded = 2" }
+    ])
+
+    expect(expanded.reusedSourcePaths).toContain(basePath)
+    expect(expanded.rebuiltSourcePaths).toContain(addedPath)
+    expect(expanded.rebuiltSourcePaths).not.toContain(basePath)
+  })
+
+  it("rebuilds a source whose complete text changes instead of reusing its old tree", () => {
+    const path = "scripts/fixtures/issue-262-cache-changed.ts"
+    const original = [{ path, source: "export const cacheValue = 1" }]
+
+    inspectCapabilitySourceProgram(original)
+    const changed = inspectCapabilitySourceProgram([{ path, source: "export const cacheValue = 2" }])
+
+    expect(changed.rebuiltSourcePaths).toContain(path)
+    expect(changed.reusedSourcePaths).not.toContain(path)
+  })
+
+  it("keeps exact source-array identity caching for repeated audits", () => {
+    const source = [{ path: "scripts/fixtures/issue-262-cache-identity.ts", source: "export const cached = 1" }]
+
+    expect(inspectCapabilitySourceProgram(source)).toBe(inspectCapabilitySourceProgram(source))
+  })
+
   it("audits source text without loading or invoking a live provider", () => {
     const providerCalled = false
     const providerLayer: CapabilitySourceFile = {
@@ -679,6 +713,9 @@ describe("capability registration gate", () => {
     const qualityGate = readFileSync("scripts/run-quality-gate.mjs", "utf8")
 
     expect(packageJson).toContain('"test:capability-registration"')
-    expect(qualityGate).toContain("test:capability-registration")
+    expect(qualityGate).toMatch(
+      /args: \["test:capability-registration"\], name: "capability registration", timeout: 60 \* SECOND/u
+    )
+    expect(qualityGate).toContain("runBoundedCommand")
   })
 })
