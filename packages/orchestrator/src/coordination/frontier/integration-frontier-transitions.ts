@@ -45,7 +45,10 @@ import {
   validateProviderRunActivityAbsent,
   type ProviderRunFailureQuarantineInput
 } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
-import type { PromotionStaleIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
+import {
+  promotionStaleQuarantineEvidenceIssue,
+  type PromotionStaleIntegrationQuarantineInput
+} from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 
 type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; readonly taskId: TaskId } }
 type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
@@ -173,7 +176,8 @@ const promotionStaleQuarantineFor = (
       record.event._tag === "TargetPromotionStale" &&
       targetPromotionCorrelationEquals(record.event.correlation, promotion.correlation)
   )
-  return stale === undefined
+  return stale === undefined ||
+    promotionStaleQuarantineEvidenceIssue(runState.workflowHistory.records, stale) !== undefined
     ? undefined
     : { correlation: promotion.correlation, targetPromotionStaleAt: stale.position }
 }
