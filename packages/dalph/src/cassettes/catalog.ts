@@ -766,7 +766,9 @@ const unpauseTerminalStory = (item: ExpectedBehaviorStoryItem): ReadonlyArray<Au
             { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
             { _tag: "TaskWorktreeReady", attemptId: "attempt:B:1", taskId: "B" },
             { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
-            { _tag: "ControlDirectionApplied", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } }
+            { _tag: "ControlDirectionApplied", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } },
+            { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" },
+            { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" }
           ],
     taskWork: {
       ...item.taskWork,
@@ -780,13 +782,43 @@ const unpauseTerminalStory = (item: ExpectedBehaviorStoryItem): ReadonlyArray<Au
 ]
 
 const unpauseAfterSafeStory: ReadonlyArray<AuthoredCassetteStoryItem> = [
+  ...taskControlMembershipRead(groupingChildTasksGraph),
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } }),
+  decodeStoryItem({
+    _tag: "TaskWorkSpecificationReadReturned",
+    body: "Implement the accepted singleton behavior.",
+    taskId: "A",
+    title: "Implement singleton"
+  }),
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } }),
+  decodeStoryItem({ _tag: "TaskClaimCurrentReadReturned", taskId: "A" }),
+  decodeStoryItem({
+    _tag: "DalphSelects",
+    operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" }
+  }),
+  ...taskControlMembershipRead(groupingChildTasksGraph),
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } }),
+  decodeStoryItem({
+    _tag: "TaskWorkSpecificationReadReturned",
+    body: "Implement the accepted singleton behavior.",
+    taskId: "A",
+    title: "Implement singleton"
+  }),
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } }),
+  decodeStoryItem({ _tag: "TaskClaimCurrentReadReturned", taskId: "A" }),
+  decodeStoryItem({
+    _tag: "DalphSelects",
+    operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" }
+  }),
+  decodeStoryItem({
+    _tag: "DalphSelects",
+    operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" }
+  }),
   decodeStoryItem({
     _tag: "PlannedAttemptExecutorWorkReported",
     report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
     request: "StartOrContinue"
-  }),
-  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
-  decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph })
+  })
 ]
 
 const graphSelectionFollowsBasePauseObservation = (
@@ -814,6 +846,25 @@ const followsBasePauseObservation = (
 ): boolean =>
   graphSelectionFollowsBasePauseObservation(item, index, story) ||
   graphReturnFollowsBasePauseObservation(item, index, story)
+
+const followsBaseSafeSuspension = (
+  item: AuthoredCassetteStoryItem,
+  index: number,
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): boolean => {
+  const prior = story[index - 1]
+  const twoPrior = story[index - twoStoryItemsBefore]
+  return (
+    (item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTrackerGraph" &&
+      prior?._tag === "PlannedAttemptExecutorWorkReported" &&
+      prior.report._tag === "SafelySuspended") ||
+    (item._tag === "TrackerGraphReadReturned" &&
+      prior?._tag === "DalphSelects" &&
+      twoPrior?._tag === "PlannedAttemptExecutorWorkReported" &&
+      twoPrior.report._tag === "SafelySuspended")
+  )
+}
 
 const unpauseWaitingStory = (): ReadonlyArray<AuthoredCassetteStoryItem> => [
   decodeStoryItem({
@@ -866,7 +917,12 @@ const unpauseStoryItem = (
     return [item, ...unpauseAfterSafeStory]
   }
   if (item._tag === "ExpectedBehavior") return unpauseTerminalStory(item)
-  if (item._tag === "OperatorStartsPauseObservation" || followsBasePauseObservation(item, index, story)) return []
+  if (
+    item._tag === "OperatorStartsPauseObservation" ||
+    followsBasePauseObservation(item, index, story) ||
+    followsBaseSafeSuspension(item, index, story)
+  )
+    return []
   return item._tag === "PauseProgressObserved" && item.result._tag === "PauseWaiting" ? unpauseWaitingStory() : [item]
 }
 
@@ -2170,6 +2226,10 @@ export const runUnpauseDuringSuspensionRestartsAuthoredCassette: ScenarioCassett
   story: suspensionResponseLostAcrossRestart(
     runUnpauseAfterSafeSuspensionAuthoredCassette.story,
     "the exact Run suspension succeeded after Unpause, but the coordinator lost its response"
+  ).flatMap((item) =>
+    item._tag === "PlannedAttemptExecutorProjectionReturned"
+      ? [item, ...taskControlMembershipRead(singletonGraph)]
+      : [item]
   )
 })
 
@@ -2189,6 +2249,7 @@ export const taskUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = 
       }
       if (item._tag !== "ExpectedBehavior" || item.protocol === null) return [item]
       return [
+        ...taskControlMembershipRead(singletonGraph),
         decodeStoryItem({
           ...item,
           protocol: item.protocol.map((evidence) =>
@@ -2202,6 +2263,16 @@ export const taskUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = 
   )
 })
 
+const isFinalTaskUnpauseProgressRead = (
+  item: AuthoredCassetteStoryItem,
+  index: number,
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): boolean =>
+  (item._tag === "DalphSelects" &&
+    item.operation._tag === "ReadTrackerGraph" &&
+    story[index + twoStoryItemsBefore]?._tag === "ExpectedBehavior") ||
+  (item._tag === "TrackerGraphReadReturned" && story[index + 1]?._tag === "ExpectedBehavior")
+
 /** The next activation reconciles the lost task suspension response before ordinary work resumes after Unpause. */
 export const taskUnpauseDuringSuspensionRestartsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
@@ -2211,7 +2282,7 @@ export const taskUnpauseDuringSuspensionRestartsAuthoredCassette: ScenarioCasset
   story: suspensionResponseLostAcrossRestart(
     taskUnpauseAfterSafeSuspensionAuthoredCassette.story,
     "the exact task suspension succeeded after Unpause, but the coordinator lost its response"
-  )
+  ).filter((item, index, story) => !isFinalTaskUnpauseProgressRead(item, index, story))
 })
 
 /** After process death, the same attempt continues when Git proves the target advanced from its immutable Base. */
@@ -2310,6 +2381,13 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette: ScenarioCa
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: independentPostDeathGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Complete independent task C.",
+      taskId: "C",
+      title: "Complete C"
+    },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } },
@@ -2613,6 +2691,7 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
     { _tag: "CoordinatorProcessDies" },
     ...taskControlMembershipRead(threeEligibleTasksGraph),
     ...taskControlMembershipRead(threeEligibleTasksGraph),
+    ...taskControlMembershipRead(threeEligibleTasksGraph),
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
     {
       _tag: "TaskWorkSpecificationReadReturned",
@@ -2626,32 +2705,14 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
       body: "Implement the second eligible behavior.",
       taskId: "B",
       title: "Implement second task"
-    },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the accepted singleton behavior.",
-      taskId: "A",
-      title: "Implement singleton"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the second eligible behavior.",
-      taskId: "B",
-      title: "Implement second task"
-    },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "B" } },
-    { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:B:1", taskId: "B" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
@@ -2663,8 +2724,6 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
       report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
-    ...taskControlMembershipRead(threeEligibleTasksGraph),
-    ...taskControlMembershipRead(threeEligibleTasksGraph),
     { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "C" } },
     ...taskControlMembershipRead(threeEligibleTasksGraph),
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
@@ -2681,6 +2740,7 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
       report: { _tag: "Terminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
+    ...taskControlMembershipRead(threeEligibleTasksGraph),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4493,11 +4553,11 @@ const defaultDiamondIntegrationPositions = {
 } as const satisfies DoubleDiamondIntegrationPositions
 
 const fiveTaskDiamondIntegrationPositions = {
-  A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 102, startedAt: 109, targetLineageObservedAt: 124 },
-  C: { queuedAt: 106, startedAt: 150, targetLineageObservedAt: 152 },
-  D: { queuedAt: 224, startedAt: 225, targetLineageObservedAt: 235 },
-  E: { queuedAt: 110, startedAt: 178, targetLineageObservedAt: 180 },
+  A: { queuedAt: 24, startedAt: 25, targetLineageObservedAt: 35 },
+  B: { queuedAt: 114, startedAt: 122, targetLineageObservedAt: 144 },
+  C: { queuedAt: 123, startedAt: 170, targetLineageObservedAt: 172 },
+  D: { queuedAt: 248, startedAt: 249, targetLineageObservedAt: 259 },
+  E: { queuedAt: 130, startedAt: 198, targetLineageObservedAt: 200 },
   F: defaultDiamondIntegrationPositions,
   G: defaultDiamondIntegrationPositions,
   H: defaultDiamondIntegrationPositions,
@@ -5081,6 +5141,8 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       fiveTaskDiamondAttempts.a
     ]),
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.a, "Running"),
+    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.noneComplete),
+    ...doubleDiamondFocusedSpecificationRead(fiveTaskDiamondAttempts.a.taskId),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.a),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.noneComplete),
     {
@@ -5109,9 +5171,17 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.b, "Running"),
     { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:E:2", taskId: "E" } },
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.c, "Running"),
+    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
+    ...doubleDiamondFocusedSpecificationRead(fiveTaskDiamondAttempts.b.taskId),
+    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
+    ...doubleDiamondFocusedSpecificationRead(fiveTaskDiamondAttempts.b.taskId),
+    ...doubleDiamondFocusedSpecificationRead(fiveTaskDiamondAttempts.c.taskId),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.b),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.c),
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.e, "Running"),
+    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
+    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
+    ...doubleDiamondFocusedSpecificationRead(fiveTaskDiamondAttempts.e.taskId),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.e),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
     {
@@ -5152,6 +5222,8 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       fiveTaskDiamondAttempts.d
     ]),
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.d, "Running"),
+    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.abceComplete),
+    ...doubleDiamondFocusedSpecificationRead(fiveTaskDiamondAttempts.d.taskId),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.d),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.abceComplete),
     {

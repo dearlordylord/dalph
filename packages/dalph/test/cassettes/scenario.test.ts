@@ -2089,7 +2089,9 @@ it.effect("applies an authored operator direction through the production control
       direction: "Unpause",
       subject: { _tag: "Task", taskId: "A" }
     })
-    expect(renderAuthoredCassetteLyrics(taskRun.cassette)).toContain("Operator applies Unpause to task A.")
+    expect(renderAuthoredCassetteLyrics(taskRun.cassette)).toContain(
+      "Operator applies Unpause to task A while executor request attempt:A:0 is in flight."
+    )
   })
 )
 
@@ -4747,11 +4749,22 @@ it.effect(
             report: { _tag: "Running", attemptId: bAttemptId },
             request: "StartOrContinue"
           },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("B") } },
+          {
+            _tag: "TaskWorkSpecificationReadReturned",
+            body: "Complete independent task B.",
+            taskId: TaskId.make("B"),
+            title: "Complete B"
+          },
           {
             _tag: "PlannedAttemptExecutorWorkReported",
             report: { _tag: "Terminal", attemptId: bAttemptId, result: { _tag: "Completed" } },
             request: "StartOrContinue"
           },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
           {
             _tag: "ExpectedBehavior",
             orchestration: [
