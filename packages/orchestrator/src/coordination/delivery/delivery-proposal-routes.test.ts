@@ -158,6 +158,7 @@ import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.j
 import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
 import { liveDeliveryActionExecutorLayer, makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"
+import { proposalOwnerIsRepresented } from "./live-delivery-action.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import {
   completionClaimDeletionRequestFor,
@@ -280,6 +281,107 @@ type FreshTrackerGraphProposal = Extract<
 
 const isFreshTrackerGraphProposal = (proposal: TrackerGraphActionProposal): proposal is FreshTrackerGraphProposal =>
   proposal.actionIdentity._tag === "FreshOperationIdRequired"
+
+const progressGraphProposal = (
+  reports: readonly [
+    { readonly acceptedAt: number; readonly attemptId: string; readonly taskId: string },
+    ...ReadonlyArray<{ readonly acceptedAt: number; readonly attemptId: string; readonly taskId: string }>
+  ],
+  explicitlyCoveredTaskIds?: readonly [string, ...ReadonlyArray<string>],
+  unresolvedReadOperationId: OperationId | null = null
+) => {
+  const [firstReport, ...remainingReports] = reports
+  const [firstCoveredTaskId, ...remainingCoveredTaskIds] = explicitlyCoveredTaskIds ?? [
+    firstReport.taskId,
+    ...remainingReports.map(({ taskId }) => taskId)
+  ]
+  const pendingReportOf = ({ acceptedAt, attemptId, taskId }: (typeof reports)[number]) => ({
+    acceptedAt: JournalPosition.make(acceptedAt),
+    correlation: plannedAttemptExecutorCorrelation({
+      ...plannedAttempt,
+      attemptId: AttemptId.make(attemptId),
+      taskId: TaskId.make(taskId)
+    }),
+    taskId: TaskId.make(taskId)
+  })
+  return trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(100),
+    purpose: "CheckExecutorProgress",
+    requirement: {
+      _tag: "ExecutorProgressGraphReadRequirement",
+      explicitlyCoveredTaskIds: [
+        TaskId.make(firstCoveredTaskId),
+        ...remainingCoveredTaskIds.map((taskId) => TaskId.make(taskId))
+      ],
+      pendingReports: [pendingReportOf(firstReport), ...remainingReports.map(pendingReportOf)],
+      runId,
+      target,
+      unresolvedReadOperationId
+    },
+    runId,
+    target
+  })
+}
+
+it("gives one exact progress-report batch a canonical stable proposal identity", () => {
+  const aThenC = progressGraphProposal([
+    { acceptedAt: 20, attemptId: "attempt-A", taskId: "A" },
+    { acceptedAt: 21, attemptId: "attempt-C", taskId: "C" }
+  ])
+  const cThenA = progressGraphProposal(
+    [
+      { acceptedAt: 21, attemptId: "attempt-C", taskId: "C" },
+      { acceptedAt: 20, attemptId: "attempt-A", taskId: "A" }
+    ],
+    ["C", "A"],
+    OperationId.make("already-intended-progress-read")
+  )
+
+  expect(cThenA.id).toBe(aThenC.id)
+})
+
+it("distinguishes every semantic progress batch while keeping establishment coalesced", () => {
+  const ac = progressGraphProposal([
+    { acceptedAt: 20, attemptId: "attempt-A", taskId: "A" },
+    { acceptedAt: 21, attemptId: "attempt-C", taskId: "C" }
+  ])
+  const changedPosition = progressGraphProposal([
+    { acceptedAt: 20, attemptId: "attempt-A", taskId: "A" },
+    { acceptedAt: 22, attemptId: "attempt-C", taskId: "C" }
+  ])
+  const changedCorrelation = progressGraphProposal([
+    { acceptedAt: 20, attemptId: "attempt-A-replacement", taskId: "A" },
+    { acceptedAt: 21, attemptId: "attempt-C", taskId: "C" }
+  ])
+  const changedCoverage = progressGraphProposal(
+    [
+      { acceptedAt: 20, attemptId: "attempt-A", taskId: "A" },
+      { acceptedAt: 21, attemptId: "attempt-C", taskId: "C" }
+    ],
+    ["A"]
+  )
+  const d = progressGraphProposal([{ acceptedAt: 30, attemptId: "attempt-D", taskId: "D" }])
+  const establishment = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(1),
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target
+  })
+  const laterEstablishment = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(99),
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target,
+    waitsForLiveOperationId: OperationId.make("establishment-intent")
+  })
+
+  expect(new Set([ac.id, changedPosition.id, changedCorrelation.id, changedCoverage.id, d.id])).toHaveLength(5)
+  expect(establishment.id).toBe(laterEstablishment.id)
+  expect(establishment.id).not.toBe(ac.id)
+  expect(
+    proposalOwnerIsRepresented({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [d] }, ac.id, null)
+  ).toBe(false)
+})
 
 const proposalsFor = (transition: Transition, acceptedOperationIds: ReadonlySet<OperationId> = new Set()) => {
   const result = deliveryProposalsOf({
@@ -2965,6 +3067,9 @@ describe("delivery proposal route matrix", () => {
         runId,
         target
       })
+      if (!isFreshTrackerGraphProposal(proposal)) {
+        return yield* Effect.die("expected a fresh tracker graph proposal")
+      }
       const projected = projectTrackerSnapshot({ revision: "progress-batch-coverage", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die(projected)
       const observedOperation = yield* Ref.make<ReturnType<typeof makeTrackerGraphObservationOperation> | null>(null)

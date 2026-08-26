@@ -46,3 +46,11 @@ it("rejects duplicate exact members in an executor-report rendezvous", () => {
     Schema.decodeUnknownSync(AuthoredScenarioCassette)(withExecutorReportRendezvous([member, member]))
   ).toThrow(/must name unique exact task, attempt, and request identities/u)
 })
+
+it("rejects an executor-report progress rendezvous without a Running-capable report", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)(
+      withExecutorReportRendezvous([{ attemptId: "attempt:A:0", request: "Suspend", taskId: "A" }])
+    )
+  ).toThrow(/must name at least one StartOrContinue report/u)
+})

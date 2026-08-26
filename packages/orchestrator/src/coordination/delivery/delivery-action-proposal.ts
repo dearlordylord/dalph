@@ -402,13 +402,32 @@ const canonical = (value: unknown): unknown => {
 }
 
 export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal["route"]): DeliveryProposalId => {
-  // Establishment and progress-check reads are the same one-at-a-time graph
-  // boundary. Keep those process-local identities coalesced while preserving
-  // one exact post-claim refresh identity so its causal read cannot be hidden
-  // behind an earlier graph owner.
+  // Establishment reads retain one process-local identity. Each progress-read
+  // batch retains its own accepted-report identity so a settled owner for an
+  // earlier batch cannot hide a later report behind the same proposal ID.
   const identityRoute =
-    route._tag === "TrackerGraphReadRoute" && route.purpose !== "RefreshCurrentGraph"
-      ? { _tag: route._tag, target: route.target }
+    route._tag === "TrackerGraphReadRoute"
+      ? route.purpose === "EstablishCurrentGraph"
+        ? { _tag: route._tag, purpose: route.purpose, target: route.target }
+        : route.purpose === "CheckExecutorProgress"
+          ? {
+              _tag: route._tag,
+              explicitlyCoveredTaskIds: [...route.explicitlyCoveredTaskIds].toSorted((left, right) =>
+                left.localeCompare(right)
+              ),
+              pendingReports: route.pendingReports
+                .map(({ acceptedAt, correlation, taskId }) => ({ acceptedAt, correlation, taskId }))
+                .toSorted(
+                  (left, right) =>
+                    left.acceptedAt - right.acceptedAt ||
+                    left.taskId.localeCompare(right.taskId) ||
+                    left.correlation.runId.localeCompare(right.correlation.runId) ||
+                    left.correlation.attemptId.localeCompare(right.correlation.attemptId)
+                ),
+              purpose: route.purpose,
+              target: route.target
+            }
+          : route
       : route
   return DeliveryProposalId.make(`delivery:${JSON.stringify(canonical({ route: identityRoute, runId }))}`)
 }
