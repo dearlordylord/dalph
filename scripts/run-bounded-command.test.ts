@@ -113,6 +113,62 @@ test("cancels a running child through its process group", async () => {
   await expect(command).rejects.toThrow("cancelled command fixture cancelled")
 })
 
+test.skipIf(process.platform === "win32")(
+  "kills a resistant descendant when cancellation closes the process-group leader",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dalph-bounded-command-cancel-"))
+    const pidFile = join(directory, "descendant.pid")
+    const controller = new AbortController()
+    const resistantDescendant = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
+    const leader = `
+      const { spawn } = require("node:child_process")
+      const { writeFileSync } = require("node:fs")
+      const descendant = spawn(
+        process.execPath,
+        ["-e", ${JSON.stringify(resistantDescendant)}],
+        { stdio: "ignore" }
+      )
+      writeFileSync(${JSON.stringify(pidFile)}, String(descendant.pid))
+      process.on("SIGTERM", () => process.exit(0))
+      setInterval(() => {}, 1000)
+    `
+    const command = runBoundedCommand({
+      args: ["-e", leader],
+      executable: process.execPath,
+      forwardOutput: false,
+      name: "cancelled resistant descendant fixture",
+      signal: controller.signal,
+      terminationGraceMilliseconds: 100,
+      timeoutMilliseconds: 5000
+    })
+    let descendantPid = 0
+
+    try {
+      await expect
+        .poll(
+          async () => {
+            try {
+              descendantPid = Number(await readFile(pidFile, "utf8"))
+              return descendantPid > 0
+            } catch {
+              return false
+            }
+          },
+          { interval: 20, timeout: 2000 }
+        )
+        .toBe(true)
+      controller.abort()
+      await expect(command).rejects.toThrow("cancelled resistant descendant fixture cancelled")
+      await expect.poll(() => processExists(descendantPid), { interval: 20, timeout: 2000 }).toBe(false)
+    } finally {
+      controller.abort()
+      await command.catch(() => undefined)
+      if (descendantPid > 0 && processExists(descendantPid)) process.kill(descendantPid, "SIGKILL")
+      await rm(directory, { force: true, recursive: true })
+    }
+  }
+)
+
 test("rejects an already-aborted signal without starting a child", async () => {
   const controller = new AbortController()
   controller.abort()

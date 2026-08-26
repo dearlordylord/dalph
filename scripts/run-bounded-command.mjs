@@ -3,6 +3,18 @@ import { clearTimeout, setTimeout } from "node:timers"
 
 const defaultTerminationGraceMilliseconds = 5000
 
+const processGroupExists = (pid) => {
+  if (pid === undefined || process.platform === "win32") return false
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (error) {
+    if (error.code === "ESRCH") return false
+    if (error.code === "EPERM") return true
+    throw error
+  }
+}
+
 const terminate = (child, signal) => {
   if (child.pid === undefined) return
 
@@ -156,9 +168,11 @@ export const runBoundedCommand = ({
         return
       }
       if (cancelled) {
-        clearTimeout(escalationTimer)
-        cleanupSignal()
-        finishReject(new Error(`${name} cancelled`))
+        if (!processGroupExists(child.pid)) {
+          clearTimeout(escalationTimer)
+          cleanupSignal()
+          finishReject(new Error(`${name} cancelled`))
+        }
         return
       }
       clearTimeout(escalationTimer)
