@@ -55,8 +55,8 @@ dependency, syntax error, and semantic error.
 
 The main focused command retains all 33 accepted capability positives and
 negative controls and adds three cache contracts plus eleven compiler-diagnostic
-contracts. The current focused command has 47 tests; final Node22/Node24 rows
-will be refreshed after the compiler-complete dependency rerun:
+contracts. The current focused command has 47 tests; the final Node22/Node24
+rows below are serialized qualification observations:
 
 ```sh
 mise exec node@22.22.2 -- pnpm test:capability-registration -- --reporter=dot
@@ -65,10 +65,10 @@ mise exec node@24.15.0 -- pnpm test:capability-registration -- --reporter=dot
 
 | Node | Run | Workload | Wall time | Result |
 | --- | --- | --- | ---: | --- |
-| 22.22.2 | dedicated | none | pending 47-test profile | pending |
-| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | pending 47-test profile | pending |
-| 24.15.0 | dedicated | none | pending 47-test profile | pending |
-| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | pending 47-test profile | pending |
+| 22.22.2 | dedicated | none | 33.822s | 47/47 passed |
+| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | 33.604s | 47/47 passed |
+| 24.15.0 | dedicated | none | 40.903s | 47/47 passed |
+| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | 36.653s | 47/47 passed |
 
 The existing capability-registration quality stage remains bounded at 60s;
 that bounded runner contract is the stage verdict. The benchmark test reports
@@ -78,8 +78,10 @@ and the bounded quality-gate stage enforce and profile the 60-second contract.
 The virtual compiler host precomputes its virtual directory set once per
 Program. This avoids scanning all 624 virtual file names for every TypeScript
 `directoryExists` lookup while retaining the same source-only resolution
-boundary. The final 47-test observation will replace the earlier 41-test
-observation before integration. The stressed command uses exact cleanup and
+boundary. The final 47-test observations above replace the earlier 41-test
+observation. Each wall time includes the pinned `mise exec` and package-runner
+startup; both documented Node pins (`22.22.2` and `24.15.0`) were available in
+the qualification environment. The stressed command uses exact cleanup and
 reaping for its fixed competing workload:
 
 ```sh
