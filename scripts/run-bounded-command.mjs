@@ -59,14 +59,14 @@ export const runBoundedCommand = ({
       }
       if (process.platform === "win32") {
         cleanupSignal()
-        finishReject(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`))
+        finishReject(attachCapturedOutput(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`)))
         return
       }
       escalationTimer = setTimeout(() => {
         try {
           terminate(child, "SIGKILL")
           cleanupSignal()
-          finishReject(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`))
+          finishReject(attachCapturedOutput(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`)))
         } catch (error) {
           cleanupSignal()
           finishReject(error)
@@ -120,6 +120,17 @@ export const runBoundedCommand = ({
       if (forwardOutput) destination.write(output)
     }
 
+    const attachCapturedOutput = (error) => {
+      if (!captureOutput) return error
+      error.output = Buffer.concat(outputChunks).toString("utf8")
+      error.outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
+        (total, lineCounter) =>
+          total + lineCounter.lineBreaks + (lineCounter.wasWritten && !lineCounter.endsWithLineBreak ? 1 : 0),
+        0
+      )
+      return error
+    }
+
     child.stdout.on("data", (output) => {
       observeOutput(output, process.stdout, stdoutLineCounter)
     })
@@ -154,15 +165,7 @@ export const runBoundedCommand = ({
       cleanupSignal()
       if (!acceptedExitCodes.includes(code)) {
         const error = new Error(`${name} failed with ${childSignal ?? `exit ${code}`}`)
-        if (captureOutput) {
-          error.output = Buffer.concat(outputChunks).toString("utf8")
-          error.outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
-            (total, lineCounter) =>
-              total + lineCounter.lineBreaks + (lineCounter.wasWritten && !lineCounter.endsWithLineBreak ? 1 : 0),
-            0
-          )
-        }
-        finishReject(error)
+        finishReject(attachCapturedOutput(error))
       } else {
         const outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
           (total, lineCounter) =>

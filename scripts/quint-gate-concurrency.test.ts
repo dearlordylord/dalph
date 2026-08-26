@@ -24,6 +24,25 @@ describe("Quint gate family scheduler", () => {
     expect(results).toEqual(["slow result", "fast result", "medium result"])
   })
 
+  it("caps a caller-requested concurrency above the fixed family bound", async () => {
+    let active = 0
+    let peak = 0
+    const results = await runQuintGateFamily({
+      commands: ["first", "second", "third", "fourth"],
+      concurrency: 3,
+      run: async (command) => {
+        active += 1
+        peak = Math.max(peak, active)
+        await new Promise<void>((resolve) => setTimeout(resolve, 10))
+        active -= 1
+        return command
+      }
+    })
+
+    expect(peak).toBe(quintGateFamilyConcurrency)
+    expect(results).toEqual(["first", "second", "third", "fourth"])
+  })
+
   it("aborts running siblings and does not admit work after the first failure", async () => {
     const started: Array<string> = []
     const aborted: Array<string> = []
@@ -71,7 +90,7 @@ describe("Quint gate family scheduler", () => {
         commands: ["first failure", "cancelled sibling"],
         run: async (command, signal) => {
           if (command === "first failure") throw new Error("first failure is authoritative")
-          await new Promise((resolve, reject) => {
+          await new Promise<never>((_resolve, reject) => {
             signal.addEventListener("abort", () => reject(new Error("sibling cancellation")), { once: true })
           })
           return command

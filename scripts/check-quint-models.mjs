@@ -11,6 +11,7 @@ import {
 } from "./quint-model-obligations.mjs"
 import { quintGateRegressionBudgetMilliseconds } from "./quint-gate-policy.mjs"
 import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
+import { assertQuintGateCommandContract } from "./quint-gate-command-contract.mjs"
 import {
   apalacheVersion,
   assertCleanTemporalVerdict,
@@ -1100,11 +1101,17 @@ await runWithQuintGateTiming({
   write: (report) => process.stdout.write(report)
 })
 
-if (manifestPosition !== quintGateCommandManifest.length) {
-  throw new Error(
-    `Quint gate executed ${manifestPosition} commands, expected ${quintGateCommandManifest.length} from its manifest`
-  )
-}
+const phaseCounts = timing.aggregates()
+assertQuintGateCommandContract({
+  manifest: quintGateCommandManifest,
+  executed: {
+    total: manifestPosition,
+    typecheck: phaseCounts.typecheck.count,
+    test: phaseCounts.test.count,
+    "sampled-run": phaseCounts["sampled-run"].count,
+    verify: phaseCounts.verify.count
+  }
+})
 
 const elapsedMilliseconds = performance.now() - startedAt
 process.stdout.write(

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 
+import { quintGateExpectedCommandCounts } from "./quint-gate-command-contract.mjs"
 import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 
 const usage = () =>
@@ -11,19 +12,20 @@ const timingPattern = /^Quint command timing: (typecheck|test|sampled-run|verify
 const phasePattern = /^Quint phase timing: (typecheck|test|sampled-run|verify) (\d+) command\(s\), ([0-9.]+)s$/gm
 const totalPattern = /^Complete Quint model gate: ([0-9.]+)s \(budget ([0-9.]+)s\)$/m
 
-const expectedPhaseCounts = Object.fromEntries(
-  commandKinds.map((kind) => [kind, quintGateCommandManifest.filter((command) => command.kind === kind).length])
-)
+const expectedPhaseCounts = Object.fromEntries(commandKinds.map((kind) => [kind, quintGateExpectedCommandCounts[kind]]))
 
 const assertManifestMatch = (commands, sourceDescription) => {
-  if (commands.length !== quintGateCommandManifest.length) {
+  if (commands.length !== quintGateExpectedCommandCounts.total) {
     throw new Error(
-      `Expected ${quintGateCommandManifest.length} commands in ${sourceDescription}; found ${commands.length}`
+      `Expected ${quintGateExpectedCommandCounts.total} commands in ${sourceDescription}; found ${commands.length}`
     )
   }
   for (const [index, [actual, expected]] of commands
     .map((command, position) => [command, quintGateCommandManifest[position]])
     .entries()) {
+    if (expected === undefined) {
+      throw new Error(`Command manifest missing entry at ${index} in ${sourceDescription}`)
+    }
     if (actual.kind !== expected.kind || actual.name !== expected.name) {
       throw new Error(
         `Command manifest mismatch at ${index} in ${sourceDescription}: expected ${expected.kind} ${expected.name}, received ${actual.kind} ${actual.name}`
