@@ -704,6 +704,12 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
     request: Schema.Literals(["StartOrContinue", "Suspend"]),
     taskId: TaskId
   },
+  /** Harness synchronization: hold progress-read admission until all named genuine executor reports are durably accepted. */
+  DalphHoldsExecutorProgressAdmissionUntilReportBatchReady: {
+    members: Schema.NonEmptyArray(
+      Schema.Struct({ attemptId: AttemptId, request: Schema.Literals(["StartOrContinue", "Suspend"]), taskId: TaskId })
+    )
+  },
   DalphSelects: { operation: AuthoredCassetteDecision },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
@@ -902,6 +908,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptContinuation",
     "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
+    "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary",
@@ -1316,6 +1323,20 @@ const admittedContinuationHoldHasExactAttemptChoiceClosure = Schema.makeFilter(
   }
 )
 
+const executorReportRendezvousMembersAreUnique = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    for (const item of cassette.story) {
+      if (item._tag !== "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady") continue
+      const identities = item.members.map(({ attemptId, request, taskId }) => `${taskId}:${attemptId}:${request}`)
+      const appendIdentities = item.members.map(({ attemptId, request }) => `${attemptId}:${request}`)
+      if (new Set(identities).size !== identities.length || new Set(appendIdentities).size !== identities.length) {
+        return "an executor-report append rendezvous must name unique exact task, attempt, and request identities whose attempt/request pair identifies one append"
+      }
+    }
+    return undefined
+  }
+)
+
 const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   exactlyOneAt("InitialControlPolicy", () => 0, "one InitialControlPolicy must be the first story item")
 )
@@ -1335,5 +1356,6 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactAttemptChoiceClosure)
+  .check(executorReportRendezvousMembersAreUnique)
 export const AuthoredScenarioCassette: typeof AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteSchema
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

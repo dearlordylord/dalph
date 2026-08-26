@@ -403,11 +403,11 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     const ownership = appendTextElement(article, "p", "Production runner: ", "group-facts")
     appendTextElement(ownership, "code", row.runnerName)
     ownership.append(` · Available controlled boundaries for this catalog: ${row.controlledBoundaries}`)
-    if (row.catalogKey === "authored:deliveryInvariantStory") {
+    if (row.catalogKey === "authored:deliveryInvariantStoryCapstone") {
       appendTextElement(
         article,
         "p",
-        "Production scheduler/restart chronology: the runtime consumes a staggered graph A → B+C → D → E+F → H+I → G with capacity 2. While the coordinator is down, Alice adds X after A and before G. Restart reconstructs the exact B/C positions, so X is observed but waits; paired work then releases one position at a time before the frontier continues. The maintained story exposes one outer Integrator session; issues #222, #223, #68, and #225 keep this graph chronology as supporting delivery evidence.",
+        "Maintained delivery-story chronology: A, B, and C first hold capacity three. Alice changes B; Dalph keeps B's exact attempt and worktree until safe suspension, admits D into the released position, retains A/C/D when capacity contracts to two, and reconstructs those exact positions after restart. Alice then continues B only after exact capacity is released. The same DS01-17 capstone follows A through stale-head rejection, Operator-authorized FullRerun, successor promotion, and tracker finality.",
         "delivery-story-scope"
       )
     }

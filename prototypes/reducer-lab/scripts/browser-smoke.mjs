@@ -9,7 +9,7 @@ const codexExecutorCassette = "codex-executor:lostTurnResponseReconciled"
 const framedCassette = "authored:dependentTasksCompleteInOneRun"
 const acceptedIntegrationCassette = "authored:acceptedResultRestartsIntoIntegration"
 const targetPromotionCassette = "authored:targetPromotionSuccess"
-const linkedDeliveryStoryCassette = "authored:deliveryInvariantStory"
+const linkedDeliveryStoryCassette = "authored:deliveryInvariantStoryCapstone"
 
 const selectCassette = async (page, catalogKey) => {
   const search = page.locator('[data-role="cassette-selector"]')
@@ -47,7 +47,7 @@ try {
     .getAttribute("label")
   const humanPrototypeTitle = prototypeTitle?.split(" · ")[0]
   if (humanPrototypeTitle === undefined) throw new Error("The prototype cassette title is missing")
-  await selector.fill("deliveryInvariantStory")
+  await selector.fill("deliveryInvariantStoryCapstone")
   assert.equal(await page.locator("#selected-cassette").getAttribute("data-catalog-key"), linkedDeliveryStoryCassette)
   await selector.fill(humanPrototypeTitle)
   assert.equal(await page.locator("#selected-cassette").getAttribute("data-catalog-key"), linkedDeliveryStoryCassette)

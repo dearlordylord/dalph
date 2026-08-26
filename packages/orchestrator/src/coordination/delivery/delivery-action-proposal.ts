@@ -232,6 +232,7 @@ export type TrackerGraphReadRoute =
     }
   | {
       readonly _tag: "TrackerGraphReadRoute"
+      readonly explicitlyCoveredTaskIds: NonEmptyTaskIds
       readonly pendingReports: ExecutorProgressGraphReadRequirement["pendingReports"]
       readonly purpose: "CheckExecutorProgress"
       readonly unresolvedReadOperationId: OperationId | null
@@ -427,6 +428,7 @@ export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput)
       : input.purpose === "CheckExecutorProgress"
         ? {
             _tag: "TrackerGraphReadRoute",
+            explicitlyCoveredTaskIds: input.requirement.explicitlyCoveredTaskIds,
             pendingReports: input.requirement.pendingReports,
             purpose: input.purpose,
             unresolvedReadOperationId: input.requirement.unresolvedReadOperationId,

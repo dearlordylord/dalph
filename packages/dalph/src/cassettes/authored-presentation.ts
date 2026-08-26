@@ -39,6 +39,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: noLandmark,
       CassetteReleasesHeldPlannedAttemptContinuation: noLandmark,
       DalphHoldsExecutorRequestThroughNextDeliveryPublication: noLandmark,
+      DalphHoldsExecutorProgressAdmissionUntilReportBatchReady: noLandmark,
       CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: noLandmark,
       CassetteReleasesHeldPlannedAttemptSuspension: noLandmark,
       CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary: noLandmark,
@@ -420,6 +421,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `The cassette releases the held continuation for task ${item.taskId} attempt ${item.attemptId}.`,
       DalphHoldsExecutorRequestThroughNextDeliveryPublication: (item) =>
         `The cassette keeps ${item.request} for task ${item.taskId} attempt ${item.attemptId} in flight until the next ordinary delivery fact publishes.`,
+      DalphHoldsExecutorProgressAdmissionUntilReportBatchReady: (item) =>
+        `The cassette withholds progress-read admission until ${item.members.length} exact executor reports are durably accepted.`,
       CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: (item) =>
         `The cassette holds Suspend for task ${item.taskId} attempt ${item.attemptId} before calling the executor.`,
       CassetteReleasesHeldPlannedAttemptSuspension: (item) =>

@@ -3,7 +3,6 @@ import type { AttemptId, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
 import type { Task } from "../../authorities/task-tracker/task.js"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
@@ -85,6 +84,31 @@ const plannedSpecificationFor = (records: ReadonlyArray<JournalRecord>, plannedA
       specification.taskId === plannedAttempt.taskId && specification.fingerprint === plannedAttempt.taskRevision
   )
 
+/** Returns the exact positioned Running report, or explicit absence; no synthetic journal position is possible. */
+type PositionedRunningExecutorReport = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorWorkReported" }> & {
+    readonly report: { readonly _tag: "Running" }
+  }
+}
+
+const isPositionedRunningExecutorReport = (
+  record: JournalRecord | undefined
+): record is PositionedRunningExecutorReport =>
+  record?.event._tag === "PlannedAttemptExecutorWorkReported" && record.event.report._tag === "Running"
+
+export const latestRunningExecutorReportRecordFor = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): PositionedRunningExecutorReport | undefined => {
+  const record = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" &&
+      event.report.correlation.runId === plannedAttempt.runId &&
+      event.report.correlation.attemptId === plannedAttempt.attemptId
+  )
+  return isPositionedRunningExecutorReport(record) ? record : undefined
+}
+
 // eslint-disable-next-line complexity -- Closed journal occurrence families route to one next workflow operation.
 const journaledStepFor = (
   task: Task,
@@ -100,30 +124,20 @@ const journaledStepFor = (
     executorResponsibility?._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
     !recoveredAttemptIds.has(executorResponsibility.plannedAttempt.attemptId)
   ) {
-    const reportRecord = records.findLast(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.runId === executorResponsibility.plannedAttempt.runId &&
-        event.report.correlation.attemptId === executorResponsibility.plannedAttempt.attemptId
-    )
-    const report = reportRecord?.event
+    const reportRecord = latestRunningExecutorReportRecordFor(records, executorResponsibility.plannedAttempt)
     const specification = plannedSpecificationFor(records, executorResponsibility.plannedAttempt)
     /* v8 ignore start -- A fresh non-running report already transfers the task to terminal or integration responsibility. */
-    if (
-      report?._tag === "PlannedAttemptExecutorWorkReported" &&
-      report.report._tag === "Running" &&
-      specification !== undefined
-    ) {
+    if (reportRecord !== undefined && specification !== undefined) {
       const progressGraphOperationId = specificationReadRequiredAfterProgressGraph(
         records,
         executorResponsibility.plannedAttempt,
-        reportRecord?.position ?? JournalPosition.make(0)
+        reportRecord.position
       )
       if (progressGraphOperationId !== undefined) {
         return FreshWorkflowStep.ReadTaskWorkSpecification({ predecessorOperationId: progressGraphOperationId, task })
       }
       return FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
-        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: report.ordinal },
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: reportRecord.event.ordinal },
         plannedAttempt: executorResponsibility.plannedAttempt,
         specification,
         task

@@ -263,6 +263,9 @@ export interface StoryCursor {
   readonly consumeExecutorRequestPublicationHold: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type>
   >
+  readonly consumeExecutorProgressAdmissionBatchGate: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorProgressAdmissionUntilReportBatchReady.Type>
+  >
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
   >
@@ -450,6 +453,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     new Map()
   )
   const cursorDriverBarrierTags: ReadonlySet<StoryItem["_tag"]> = new Set([
+    "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteReleasesHeldTargetPromotionReconciliationRead",
@@ -694,6 +698,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current hold tag. */
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(claimed.item)
+  })
+  const consumeExecutorProgressAdmissionBatchGate = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorProgressAdmissionUntilReportBatchReady.Type =>
+        item?._tag === "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current synchronization item. */
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
   })
   const consumePlannedAttemptContinuationExecutorBoundaryHold = Effect.gen(function* () {
     const claimed = yield* claimNext(
@@ -1303,6 +1315,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   })
   const inFlightOperatorTags: ReadonlySet<StoryItem["_tag"]> = new Set([
+    "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
@@ -1523,6 +1536,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     awaitInFlightOperatorItems,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),
     consumeAdmittedContinuationExecutorIntentHold,
+    consumeExecutorProgressAdmissionBatchGate,
     consumePlannedAttemptSuspensionExecutorBoundaryHold,
     consumePlannedAttemptContinuationExecutorBoundaryHold,
     consumePlannedAttemptContinuationExecutorBoundaryRelease,

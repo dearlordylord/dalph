@@ -102,6 +102,8 @@ import {
   updateTraceCursorSelection
 } from "./trace-cursor-selection.ts"
 
+const linkedDeliveryStoryCatalogKey = "authored:deliveryInvariantStoryCapstone" as const
+
 type CompletedCassette = Extract<CassetteLabResult, { readonly _tag: "Completed" }>
 
 const authoredStoryPosition = (value: number): AuthoredObservationMoment["storyPosition"] =>
@@ -533,6 +535,24 @@ await scenario("captures every authored delivery frame from the real production 
       `${result.catalogKey} must retain the final tracker-reflection layer`
     )
   }
+})
+
+await scenario("links Reducer Lab to the maintained DS01-17 delivery-story capstone", () => {
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === linkedDeliveryStoryCatalogKey)
+  const result = everyResult.find(({ catalogKey }) => catalogKey === linkedDeliveryStoryCatalogKey)
+  assert(row?.storyName.includes("DS01-17") === true, "The linked delivery story must be the current DS01-17 capstone")
+  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The DS01-17 capstone must complete with production Delivery frames")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
+  const frameShape = (capacity: number, heldTaskIds: ReadonlyArray<string>, restarted = false) =>
+    result.deliveryFrames?.some(
+      (frame) =>
+        frame.capacity === capacity &&
+        frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === heldTaskIds.toSorted().join(",") &&
+        (!restarted || (frame.activationOrdinal > 1 && frame.graph._tag === "NotEstablished"))
+    ) === true
+  assert(frameShape(3, ["A", "B", "C"]), "The current capstone must show A/B/C holding capacity three")
+  assert(frameShape(2, ["A", "C", "D"]), "The current capstone must show contracted capacity retaining A/C/D")
+  assert(frameShape(2, ["A", "C", "D"], true), "The current capstone must reconstruct exact A/C/D positions after restart")
 })
 
 await scenario("shows the staggered double-diamond frontier being consumed on one graph", () => {
