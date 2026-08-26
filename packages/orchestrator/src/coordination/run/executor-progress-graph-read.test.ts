@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { AttemptId, PlannedAttemptExecutorCorrelation, PlannedAttemptExecutorReport, RunId } from "@dalph/contracts"
+import {
+  AttemptId,
+  PlannedAttemptExecutorCorrelation,
+  PlannedAttemptExecutorReport,
+  RunId,
+  TaskId
+} from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -27,15 +33,18 @@ const reportAt = (attemptId: string, acceptedAt: number, report: "Running" | "Sa
   report:
     report === "Running"
       ? PlannedAttemptExecutorReport.cases.Running.make({ correlation: correlationFor(attemptId) })
-      : PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: correlationFor(attemptId) })
+      : PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: correlationFor(attemptId) }),
+  taskId: TaskId.make(attemptId)
 })
 
 const readAt = (
   operationId: string,
   intentAt: number,
   observedAt: number | null,
-  observation: "Complete" | "Unchanged" | "Failed" | null = "Complete"
+  observation: "Complete" | "Unchanged" | "Failed" | null = "Complete",
+  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]
 ): ExecutorProgressGraphRead => ({
+  explicitlyCoveredTaskIds,
   intentAt: JournalPosition.make(intentAt),
   observation:
     observedAt === null
@@ -67,6 +76,7 @@ describe("executor progress graph-read requirement", () => {
     )
 
     expect(requirement?.pendingReports).toHaveLength(3)
+    expect(requirement?.explicitlyCoveredTaskIds).toEqual([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")])
     expect(requirement?.unresolvedReadOperationId).toBeNull()
   })
 
@@ -81,6 +91,20 @@ describe("executor progress graph-read requirement", () => {
     expect(requirement).toBeUndefined()
   })
 
+  it("keeps A pending when a later complete graph read explicitly covers only B", () => {
+    const requirement = executorProgressGraphReadRequirementOf(
+      inputOf(
+        [reportAt("A", 1, "Running"), reportAt("B", 2, "Running")],
+        [readAt("B-only-progress-read", 3, 4, "Complete", [TaskId.make("B")])]
+      )
+    )
+
+    expect(requirement?.pendingReports).toEqual([
+      { acceptedAt: JournalPosition.make(1), correlation: correlationFor("A"), taskId: TaskId.make("A") }
+    ])
+    expect(requirement?.explicitlyCoveredTaskIds).toEqual([TaskId.make("A")])
+  })
+
   it("does not reread unchanged facts until another Running report is accepted", () => {
     const reports: ReadonlyArray<ReturnType<typeof reportAt>> = [reportAt("A", 1, "Running")]
     const read = readAt("unchanged-read", 2, 3, "Unchanged")
@@ -88,7 +112,7 @@ describe("executor progress graph-read requirement", () => {
     expect(executorProgressGraphReadRequirementOf(inputOf(reports, [read]))).toBeUndefined()
     expect(
       executorProgressGraphReadRequirementOf(inputOf([...reports, reportAt("A", 4, "Running")], [read]))?.pendingReports
-    ).toEqual([{ acceptedAt: JournalPosition.make(4), correlation: correlationFor("A") }])
+    ).toEqual([{ acceptedAt: JournalPosition.make(4), correlation: correlationFor("A"), taskId: TaskId.make("A") }])
   })
 
   it("preserves the durable continuation limit and does not require a graph read after exhaustion", () => {
@@ -135,7 +159,8 @@ describe("executor progress graph-read requirement", () => {
     const foreignReport = {
       acceptedAt: JournalPosition.make(1),
       correlation: foreignCorrelation,
-      report: PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation })
+      report: PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation }),
+      taskId: TaskId.make("foreign-task")
     }
     const foreignCommand = {
       command: "StartOrContinue" as const,
@@ -156,7 +181,12 @@ describe("executor progress graph-read requirement", () => {
   })
 
   it("keeps a foreign-run observation with the same operation ID unresolved", () => {
-    const operation = makeTrackerGraphObservationOperation(OperationId.make("shared-progress-read"), target)
+    const operation = makeTrackerGraphObservationOperation(
+      OperationId.make("shared-progress-read"),
+      target,
+      [],
+      [TaskId.make("A")]
+    )
     const graph = projectTrackerSnapshot({ revision: "foreign-progress-graph", tasks: [] })
     expect(graph._tag).toBe("Valid")
     if (graph._tag === "Invalid") return
@@ -180,5 +210,22 @@ describe("executor progress graph-read requirement", () => {
     expect(derived.graphReads[0]?.observation).toEqual({ _tag: "Unresolved" })
     const requirement = executorProgressGraphReadRequirementOf({ ...derived, reports: [reportAt("A", 1, "Running")] })
     expect(requirement?.unresolvedReadOperationId).toBe(OperationId.make("shared-progress-read"))
+  })
+
+  it("ignores an intent whose exact journal envelope belongs to another run", () => {
+    const operation = makeTrackerGraphObservationOperation(
+      OperationId.make("foreign-run-progress-intent"),
+      target,
+      [],
+      [TaskId.make("A")]
+    )
+
+    const derived = executorProgressGraphReadInputOf(
+      [{ event: taskTrackerReadIntent(operation), position: JournalPosition.make(2), runId: foreignRunId }],
+      runId,
+      target
+    )
+
+    expect(derived.graphReads).toEqual([])
   })
 })

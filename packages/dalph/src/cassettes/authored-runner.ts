@@ -15,7 +15,8 @@ import {
   Scope,
   type Result,
   Schema,
-  Stream
+  Stream,
+  SubscriptionRef
 } from "effect"
 import {
   AcceptedResultEvidenceManifest,
@@ -52,6 +53,8 @@ import {
   type DeliveryConsequences,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
+  type ControlledDeliveryRuntimeInputTransform,
+  currentSignalFromCurrentFirstStream,
   type DeliveryRuntimeLiveOwnerSnapshot,
   deliveryProposalOrderTaskId,
   type JournaledTrackerGraphObservation,
@@ -1378,6 +1381,42 @@ const runAuthoredScenarioCassetteWith = (request: {
       yield* Effect.forEach(cassette.story, (item) => assertExactlyOneAuthoredCassetteStoryItemOwner(item._tag), {
         discard: true
       })
+      interface DurableExecutorReportRequirement {
+        readonly attemptId: AttemptId
+        readonly ordinal: number
+        readonly reportShape: string
+      }
+      const executorReportShape = (report: { readonly _tag: string; readonly result?: { readonly _tag: string } }) =>
+        report._tag === "Terminal" ? `Terminal:${report.result?._tag ?? "Unknown"}` : report._tag
+      const { requirements: durableReportBeforeSpecificationRelease } = cassette.story.reduce<{
+        readonly latestReport: DurableExecutorReportRequirement | undefined
+        readonly ordinals: ReadonlyMap<AttemptId, number>
+        readonly requirements: ReadonlyMap<number, DurableExecutorReportRequirement>
+      }>(
+        ({ latestReport, ordinals, requirements }, item, index) => {
+          if (item._tag === "PlannedAttemptExecutorWorkReported") {
+            const ordinal = (ordinals.get(item.report.attemptId) ?? 0) + 1
+            return {
+              latestReport: {
+                attemptId: item.report.attemptId,
+                ordinal,
+                reportShape: executorReportShape(item.report)
+              },
+              ordinals: new Map([...ordinals, [item.report.attemptId, ordinal] as const]),
+              requirements
+            }
+          }
+          if (item._tag !== "CassetteReleasesHeldTaskWorkSpecificationRead" || latestReport === undefined) {
+            return { latestReport, ordinals, requirements }
+          }
+          return {
+            latestReport,
+            ordinals,
+            requirements: new Map([...requirements, [index, latestReport] as const])
+          }
+        },
+        { latestReport: undefined, ordinals: new Map(), requirements: new Map() }
+      )
       const activeDeliveryActivation = yield* Ref.make<AuthoredRunActivationOrdinalType>(
         AuthoredRunActivationOrdinal.make(1)
       )
@@ -1417,6 +1456,28 @@ const runAuthoredScenarioCassetteWith = (request: {
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
       const lastRuntimeOwners = yield* Ref.make<string | null>(null)
+      const durableExecutorReports = yield* SubscriptionRef.make<ReadonlySet<string>>(new Set())
+      type ExecutorReportRequest = "StartOrContinue" | "Suspend"
+      type ExecutorReportBatchGate =
+        | { readonly _tag: "Inactive" }
+        | {
+            readonly _tag: "Holding"
+            readonly durablyAppended: ReadonlySet<string>
+            readonly expectedTaskIds: ReadonlySet<TaskId>
+            readonly latestEvaluation: DeliveryRuntimeEvaluation | undefined
+            readonly membersByAppendIdentity: ReadonlyMap<string, string>
+          }
+        | { readonly _tag: "Released" }
+      const executorReportBatchGate = yield* Ref.make<ExecutorReportBatchGate>({ _tag: "Inactive" })
+      const executorReportRendezvousMemberKey = (input: {
+        readonly attemptId: AttemptId
+        readonly request: ExecutorReportRequest
+        readonly taskId: TaskId
+      }): string => `${input.taskId}:${input.attemptId}:${input.request}`
+      const executorReportAppendIdentity = (input: {
+        readonly attemptId: AttemptId
+        readonly request: ExecutorReportRequest
+      }): string => `${input.attemptId}:${input.request}`
       const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
         Option.Option<{
           readonly attemptId: AttemptId
@@ -1466,6 +1527,19 @@ const runAuthoredScenarioCassetteWith = (request: {
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
+      const durableExecutorReportKey = (requirement: DurableExecutorReportRequirement): string =>
+        `${runId}:${requirement.attemptId}:${requirement.ordinal}:${requirement.reportShape}`
+      const awaitDurableExecutorReport = Effect.fn("AuthoredCassette.awaitDurableExecutorReport")(function* (
+        requirement: DurableExecutorReportRequirement
+      ) {
+        const key = durableExecutorReportKey(requirement)
+        if ((yield* SubscriptionRef.get(durableExecutorReports)).has(key)) return
+        yield* SubscriptionRef.changes(durableExecutorReports).pipe(
+          Stream.filter((reports) => reports.has(key)),
+          Stream.take(1),
+          Stream.runDrain
+        )
+      })
       const coordinatorLifecycleBoundaryCount = cassette.story.filter(
         (item) => item._tag === "CoordinatorActivationReturned" || item._tag === "CoordinatorProcessDies"
       ).length
@@ -1650,6 +1724,41 @@ const runAuthoredScenarioCassetteWith = (request: {
               sharedJournal.append(requestedRunId, key, event).pipe(
                 Effect.tap(() =>
                   Effect.gen(function* () {
+                    if (
+                      event._tag === "PlannedAttemptExecutorWorkReported" &&
+                      requestedRunId === runId &&
+                      event.report.correlation.runId === runId
+                    ) {
+                      const observed = durableExecutorReportKey({
+                        attemptId: event.report.correlation.attemptId,
+                        ordinal: event.ordinal,
+                        reportShape: executorReportShape(event.report)
+                      })
+                      yield* SubscriptionRef.update(durableExecutorReports, (reports) =>
+                        reports.has(observed) ? reports : new Set([...reports, observed])
+                      )
+                      const request = event.report._tag === "SafelySuspended" ? "Suspend" : "StartOrContinue"
+                      const appendIdentity = executorReportAppendIdentity({
+                        attemptId: event.report.correlation.attemptId,
+                        request
+                      })
+                      const gate = yield* Ref.get(executorReportBatchGate)
+                      if (gate._tag === "Holding") {
+                        const member = gate.membersByAppendIdentity.get(appendIdentity)
+                        if (member === undefined) {
+                          return yield* Effect.die(
+                            `executor-report batch gate does not name durable append ${appendIdentity}`
+                          )
+                        }
+                        if (gate.durablyAppended.has(member)) {
+                          return yield* Effect.die(`executor-report batch gate observed duplicate durable append ${member}`)
+                        }
+                        yield* Ref.set(executorReportBatchGate, {
+                          ...gate,
+                          durablyAppended: new Set([...gate.durablyAppended, member])
+                        })
+                      }
+                    }
                     const taskClaimHandled = yield* handleAuthoredTaskClaimJournalEvent({
                       acquisitionTaskIds,
                       authoredInteractionFailure,
@@ -2539,8 +2648,36 @@ const runAuthoredScenarioCassetteWith = (request: {
               Effect.asVoid,
               Effect.orDie
             )
-            const driveTaskWorkSpecificationReadBoundaryRelease =
-              cursor.consumeTaskWorkSpecificationReadBoundaryRelease.pipe(Effect.asVoid, Effect.orDie)
+            const driveExecutorReportBatchGate = Effect.gen(function* () {
+              const authored = yield* cursor.consumeExecutorProgressAdmissionBatchGate
+              /* v8 ignore start -- @preserve The direct-item dispatcher invokes this exact non-empty synchronization item once. */
+              if (Option.isNone(authored)) return
+              if ((yield* Ref.get(executorReportBatchGate))._tag !== "Inactive") {
+                return yield* Effect.die("an executor-report batch gate is already active")
+              }
+              /* v8 ignore stop -- @preserve */
+              yield* Ref.set(
+                executorReportBatchGate,
+                {
+                  _tag: "Holding",
+                  durablyAppended: new Set<string>(),
+                  expectedTaskIds: new Set<TaskId>(authored.value.members.map(({ taskId }) => taskId)),
+                  latestEvaluation: undefined,
+                  membersByAppendIdentity: new Map<string, string>(
+                    authored.value.members.map((member) => [
+                      executorReportAppendIdentity(member),
+                      executorReportRendezvousMemberKey(member)
+                    ])
+                  )
+                }
+              )
+            }).pipe(Effect.orDie)
+            const driveTaskWorkSpecificationReadBoundaryRelease = Effect.gen(function* () {
+              const storyPosition = yield* cursor.storyPosition
+              const durableReport = durableReportBeforeSpecificationRelease.get(storyPosition)
+              if (durableReport !== undefined) yield* awaitDurableExecutorReport(durableReport)
+              yield* cursor.consumeTaskWorkSpecificationReadBoundaryRelease
+            }).pipe(Effect.asVoid, Effect.orDie)
             type DirectlyDrivenStoryItem = Extract<
               AuthoredCassetteStoryItem,
               {
@@ -2551,6 +2688,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   | "OperatorAppliesRunCancellation"
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
                   | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
+                  | "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady"
                   | "CassetteReleasesHeldPlannedAttemptSuspension"
                   | "CassetteReleasesHeldPlannedAttemptContinuation"
                   | "CassetteReleasesHeldTargetPromotionReconciliationRead"
@@ -2576,6 +2714,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               "OperatorAppliesRunCancellation",
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
               "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
+              "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
               "CassetteReleasesHeldPlannedAttemptSuspension",
               "CassetteReleasesHeldPlannedAttemptContinuation",
               "CassetteReleasesHeldTargetPromotionReconciliationRead",
@@ -2606,6 +2745,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                   drivePlannedSuspensionExecutorBoundaryHold,
                 CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: () =>
                   drivePlannedContinuationExecutorBoundaryHold,
+                DalphHoldsExecutorProgressAdmissionUntilReportBatchReady: () =>
+                  driveExecutorReportBatchGate,
                 CassetteReleasesHeldPlannedAttemptSuspension: () => drivePlannedSuspensionExecutorBoundaryRelease,
                 CassetteReleasesHeldPlannedAttemptContinuation: () => drivePlannedContinuationExecutorBoundaryRelease,
                 CassetteReleasesHeldTargetPromotionReconciliationRead: () =>
@@ -2717,6 +2858,40 @@ const runAuthoredScenarioCassetteWith = (request: {
           } satisfies DeliveryActionExecutorService
         })
 
+      const gateInitialExecutorProgressEvaluations: ControlledDeliveryRuntimeInputTransform = (input) => {
+        const admit = (evaluation: DeliveryRuntimeEvaluation) =>
+          Effect.gen(function* () {
+            const gate = yield* Ref.get(executorReportBatchGate)
+            if (gate._tag !== "Holding" || evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") {
+              return Option.some(evaluation)
+            }
+            const expectedTaskIds = gate.expectedTaskIds
+            const progressCoverage = evaluation.proposedActions.proposals
+              .flatMap(({ route }) =>
+                route._tag === "TrackerGraphReadRoute" && route.purpose === "CheckExecutorProgress"
+                  ? [route.explicitlyCoveredTaskIds]
+                  : []
+              )
+              .find((coveredTaskIds) => coveredTaskIds.some((taskId) => expectedTaskIds.has(taskId)))
+            if (progressCoverage === undefined) {
+              return Option.some(evaluation)
+            }
+            yield* Ref.set(executorReportBatchGate, { ...gate, latestEvaluation: evaluation })
+            if (gate.durablyAppended.size !== gate.membersByAppendIdentity.size) return Option.none()
+            const covered = new Set(progressCoverage)
+            if ([...expectedTaskIds].some((taskId) => !covered.has(taskId))) return Option.none()
+            yield* Ref.set(executorReportBatchGate, { _tag: "Released" })
+            return Option.some(evaluation)
+          })
+        return currentSignalFromCurrentFirstStream(
+          input.changes.pipe(
+            Stream.mapEffect(admit),
+            Stream.filter(Option.isSome),
+            Stream.map(Option.getOrThrow)
+          )
+        )
+      }
+
       const initialControlPolicyEvaluations = yield* Ref.make(0)
       const initialControlPolicySource = Ref.updateAndGet(initialControlPolicyEvaluations, (count) => count + 1).pipe(
         Effect.flatMap((evaluationCount) =>
@@ -2735,7 +2910,8 @@ const runAuthoredScenarioCassetteWith = (request: {
                 initialControlPolicySource,
                 runId,
                 controlledExecutorFactory,
-                false
+                false,
+                gateInitialExecutorProgressEvaluations
               ).pipe(Effect.provide(planningLayer(activationOrdinal)))
             )
           )
@@ -2823,8 +2999,20 @@ const runAuthoredScenarioCassetteWith = (request: {
       const guardedCoordinatorExecution = cassette.name.startsWith("DS01-17")
         ? Effect.raceFirst(coordinatorExecution, authoredProgressWatchdog)
         : coordinatorExecution
+      const assertExecutorReportBatchGateClosed = Ref.get(executorReportBatchGate).pipe(
+        Effect.flatMap((gate) =>
+          gate._tag !== "Holding"
+            ? Effect.void
+            : Effect.die(
+                `executor-report batch gate ended with missing durable appends: ${[...gate.membersByAppendIdentity.values()]
+                  .filter((member) => !gate.durablyAppended.has(member))
+                  .join(", ")}`
+              )
+        )
+      )
       const execution = yield* Effect.scoped(
         guardedCoordinatorExecution.pipe(
+          Effect.ensuring(assertExecutorReportBatchGateClosed),
           Effect.provide(application),
           Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
           Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)

@@ -26,3 +26,23 @@ it("rejects a skipped step in the authored completion-finality boundary chronolo
     /must be an exact prefix of read Active, replace, read Completion, and delete/u
   )
 })
+
+const withExecutorReportRendezvous = (members: ReadonlyArray<unknown>) => ({
+  ...deliveryFinalitySpineAuthoredCassette,
+  story: [
+    ...deliveryFinalitySpineAuthoredCassette.story.slice(0, 2),
+    { _tag: "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady", members },
+    ...deliveryFinalitySpineAuthoredCassette.story.slice(2)
+  ]
+})
+
+it("rejects an empty executor-report rendezvous", () => {
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withExecutorReportRendezvous([]))).toThrow()
+})
+
+it("rejects duplicate exact members in an executor-report rendezvous", () => {
+  const member = { attemptId: "attempt:A:0", request: "StartOrContinue", taskId: "A" }
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)(withExecutorReportRendezvous([member, member]))
+  ).toThrow(/must name unique exact task, attempt, and request identities/u)
+})

@@ -56,7 +56,7 @@ export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFre
           predecessorOperationIds: route.predecessorOperationIds
         }
       case "CheckExecutorProgress":
-        return { explicitlyCoveredTaskIds: [], predecessorOperationIds: [] }
+        return { explicitlyCoveredTaskIds: route.explicitlyCoveredTaskIds, predecessorOperationIds: [] }
       default: {
         const unreachableRoute: never = route
         return unreachableRoute

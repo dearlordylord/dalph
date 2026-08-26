@@ -30,6 +30,7 @@ import { delivery } from "../delivery/delivery.js"
 import { deliveryRuntimeFrom } from "../delivery/delivery-runtime-adapter.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../delivery/delivery-action-executor.js"
 import { makeLiveDeliveryActionExecutor } from "../delivery/live-delivery-action-executor.js"
+import type { DeliveryRuntimeInput } from "../delivery/run-delivery-runtime.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
 import {
   DeliveryRuntimeResources,
@@ -270,7 +271,8 @@ const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
 >(
   target: TrackerTarget,
   relationsEffect: Effect.Effect<Relations, ERelations, RRelations>,
-  executorOf: (relations: Relations) => Effect.Effect<DeliveryActionExecutorService, EExecutor, RExecutor>
+  executorOf: (relations: Relations) => Effect.Effect<DeliveryActionExecutorService, EExecutor, RExecutor>,
+  transformRuntimeInput: ControlledDeliveryRuntimeInputTransform
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -278,7 +280,7 @@ const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
       return yield* Effect.gen(function* () {
         const executor = yield* executorOf(relations)
         const consequences = yield* delivery
-        const relation = yield* deliveryRuntimeFrom(consequences)
+        const relation = transformRuntimeInput(yield* deliveryRuntimeFrom(consequences))
 
         return yield* runStabilizedDelivery(target, relation).pipe(
           Effect.provideService(DeliveryActionExecutor, executor)
@@ -294,6 +296,10 @@ export type ControlledDeliveryActionExecutorFactory<E = never, R = never> = (
   target: TrackerTarget
 ) => Effect.Effect<DeliveryActionExecutorService, E, R>
 
+/** Harness-only current-signal transform; production uses the identity transform. */
+export type ControlledDeliveryRuntimeInputTransform = <E>(input: DeliveryRuntimeInput<E>) => DeliveryRuntimeInput<E>
+const identityDeliveryRuntimeInput: ControlledDeliveryRuntimeInputTransform = (input) => input
+
 /** Evaluated and decoded by Run establishment only when the exact Run has no history. */
 export type InitialControlPolicySource<E = never, R = never> = Effect.Effect<InitialControlPolicy, E, R>
 
@@ -304,7 +310,8 @@ const runJournaledDelivery = <E, R>(
   runId: RunId,
   target: TrackerTarget,
   executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
-  activateCleanup: boolean
+  activateCleanup: boolean,
+  transformRuntimeInput: ControlledDeliveryRuntimeInputTransform
 ) => {
   if (activateCleanup) {
     return Effect.gen(function* () {
@@ -314,13 +321,19 @@ const runJournaledDelivery = <E, R>(
       // same loop.
       const cleanup = yield* DispositionCleanupActivation
       yield* cleanup.run
-      return yield* runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
-        executorFactory(runId, target)
+      return yield* runDeliveryComposition(
+        target,
+        makeJournaledDeliveryRelations(runId, target),
+        () => executorFactory(runId, target),
+        transformRuntimeInput
       )
     })
   }
-  return runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
-    executorFactory(runId, target)
+  return runDeliveryComposition(
+    target,
+    makeJournaledDeliveryRelations(runId, target),
+    () => executorFactory(runId, target),
+    transformRuntimeInput
   )
 }
 
@@ -330,7 +343,8 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: AllocatedWorkflowRunId,
   executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
-  activateCleanup = true
+  activateCleanup = true,
+  transformRuntimeInput: ControlledDeliveryRuntimeInputTransform = identityDeliveryRuntimeInput
 ) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
@@ -338,7 +352,7 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
       target,
       initialControlPolicySource,
       runId,
-      runJournaledDelivery(runId, target, executorFactory, activateCleanup)
+      runJournaledDelivery(runId, target, executorFactory, activateCleanup, transformRuntimeInput)
     )
   })
 

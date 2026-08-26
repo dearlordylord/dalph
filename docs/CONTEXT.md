@@ -641,6 +641,21 @@ ordered proposal frontier. It performs no action, admits no resource, allocates
 no identity, and owns no fiber.
 _Avoid_: Delivery runtime relation, action execution, action controller
 
+**Executor-progress graph-read requirement**:
+The process-local requirement reconstructed when one or more exact accepted
+`Running` reports could otherwise lead to another executor `startOrContinue`
+call. One later complete Run graph read must explicitly cover every pending
+task and begin after every covered report; the requirement is never persisted
+as a workflow fact.
+_Avoid_: Poll, finality reconfirmation, persisted refresh request
+
+**Refresh current graph after claim**:
+The ordinary complete tracker-graph read that follows observation of one exact
+task claim. Its intent explicitly covers the claimed task and causally names
+the claim operation before Dalph reads authored instructions, plans an attempt,
+or starts executor work; it is neither claim authority nor a stored frontier.
+_Avoid_: Claim acknowledgement, cached graph update, finality read
+
 **Delivery live action ownership**:
 The process-local owner, exact admission reservation, and scoped fiber for one
 admitted delivery action proposal. It prevents a second start for that exact

@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Option } from "effect"
 import { expect } from "vitest"
+import { TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
 import type { JournalRecord, WorkflowJournalEvent } from "@dalph/orchestrator"
 import {
   maintainedAuthoredCassetteCatalog,
@@ -210,6 +211,7 @@ const normalizeCorrelationForCapture = <
 
 const capstoneTimeout = 600_000
 const authoredAcceptanceManifestDigest = "1111111111111111111111111111111111111111111111111111111111111111"
+const plannedBaseSha = "1111111111111111111111111111111111111111"
 const cachedRun = Effect.runSync(
   Effect.cached(
     runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone).pipe(
@@ -232,6 +234,150 @@ it.effect(
       expect(storyTags).toContain("OperatorContinuesAttempt")
       expect(storyTags).toContain("OperatorAppliesIntegrationQuarantineDirection")
       expect(storyTags).toContain("CompletionClaimDeletionApplied")
+
+      const heldTaskIds = (frame: (typeof run.deliveryFrames)[number]) =>
+        frame.heldPositions
+          .map(({ taskId }) => String(taskId))
+          .toSorted()
+          .join(",")
+      const retainedTaskIds = (frame: (typeof run.deliveryFrames)[number]) => {
+        const held = new Set(frame.heldPositions.map(({ taskId }) => taskId))
+        return frame.deliveries
+          .filter(({ obligations, taskId }) => obligations.length > 0 && !held.has(taskId))
+          .map(({ taskId }) => String(taskId))
+          .toSorted()
+          .join(",")
+      }
+      const frameFor = (input: {
+        readonly activationAtLeast?: number
+        readonly capacity: number
+        readonly graph?: "Established" | "NotEstablished"
+        readonly held: string
+        readonly retained: string
+      }) =>
+        run.deliveryFrames.find(
+          (frame) =>
+            frame.capacity === input.capacity &&
+            heldTaskIds(frame) === input.held &&
+            retainedTaskIds(frame) === input.retained &&
+            (input.activationAtLeast === undefined || frame.activationOrdinal >= input.activationAtLeast) &&
+            (input.graph === undefined || frame.graph._tag === input.graph)
+        )
+      const capacityChronology = [
+        frameFor({ capacity: 3, held: "A,B,C", retained: "" }),
+        frameFor({ capacity: 3, held: "A,C", retained: "B" }),
+        frameFor({ capacity: 3, held: "A,C,D", retained: "B" }),
+        frameFor({ capacity: 2, held: "A,C,D", retained: "B" }),
+        frameFor({ activationAtLeast: 2, capacity: 2, graph: "NotEstablished", held: "A,C,D", retained: "B" })
+      ]
+      expect(capacityChronology.every((frame) => frame !== undefined)).toBe(true)
+      const chronologyPositions = capacityChronology.flatMap((frame) =>
+        frame === undefined ? [] : [frame.storyPosition]
+      )
+      expect(chronologyPositions).toHaveLength(capacityChronology.length)
+      expect(chronologyPositions).toEqual(chronologyPositions.toSorted((left, right) => left - right))
+
+      const expectedAttempts = [
+        {
+          attemptId: "attempt:A:0",
+          branch: "refs/heads/dalph/attempt-A-0",
+          taskId: "A",
+          worktree: "/dalph/cassettes/ds-probe/attempt-A-0"
+        },
+        {
+          attemptId: "attempt:B:1",
+          branch: "refs/heads/dalph/attempt-B-1",
+          taskId: "B",
+          worktree: "/dalph/cassettes/ds-probe/attempt-B-1"
+        },
+        {
+          attemptId: "attempt:C:2",
+          branch: "refs/heads/dalph/attempt-C-2",
+          taskId: "C",
+          worktree: "/dalph/cassettes/ds-probe/attempt-C-2"
+        },
+        {
+          attemptId: "attempt:D:3",
+          branch: "refs/heads/dalph/attempt-D-3",
+          taskId: "D",
+          worktree: "/dalph/cassettes/ds-probe/attempt-D-3"
+        }
+      ] as const
+      const plannedRecords = recordsFor(run.records, "TaskAttemptPlanned")
+      const claimIntents = recordsFor(run.records, "TaskClaimAcquisitionIntended")
+      const claims = recordsFor(run.records, "TaskClaimAcquired")
+      const worktreeIntents = recordsFor(run.records, "TaskWorktreeReconciliationIntended")
+      const worktrees = recordsFor(run.records, "TaskWorktreeReady")
+      for (const expected of expectedAttempts) {
+        const plan = exactlyOne(
+          plannedRecords.filter(({ event }) => event.operation.plannedAttempt.attemptId === expected.attemptId),
+          `${expected.taskId} exact planned attempt`
+        ).event.operation.plannedAttempt
+        expect(plan).toMatchObject({
+          attemptId: expected.attemptId,
+          baseSha: plannedBaseSha,
+          branch: expected.branch,
+          executor: "executor:ds-probe",
+          runId: run.runId,
+          taskId: expected.taskId,
+          worktree: expected.worktree
+        })
+        const claimIntent = exactlyOne(
+          claimIntents.filter(({ event }) => event.operation.acquisition.taskId === expected.taskId),
+          `${expected.taskId} exact claim intent`
+        ).event.operation.acquisition
+        const claim = exactlyOne(
+          claims.filter(({ event }) => event.claim.taskId === expected.taskId),
+          `${expected.taskId} exact acquired claim`
+        ).event.claim
+        expect(claim).toEqual({
+          _tag: "ActiveTaskClaim",
+          operationId: claimIntent.operationId,
+          owner: "ds-probe-owner",
+          taskId: expected.taskId,
+          token: `ds-probe-claim:${expected.taskId}:${claimIntent.operationId}`
+        })
+        const worktreeIntent = exactlyOne(
+          worktreeIntents.filter(({ event }) => event.operation.plannedAttempt.attemptId === expected.attemptId),
+          `${expected.taskId} exact worktree intent`
+        )
+        const ready = exactlyOne(
+          worktrees.filter(({ event }) => event.operationId === worktreeIntent.event.operation.operationId),
+          `${expected.taskId} exact ready worktree`
+        ).event.proof
+        expect(ready).toEqual({
+          _tag: "PlannedWorktreeReady",
+          baseSha: plannedBaseSha,
+          branch: expected.branch,
+          headSha: plannedBaseSha,
+          worktree: expected.worktree
+        })
+      }
+
+      const plannedB = exactlyOne(
+        plannedRecords.filter(({ event }) => event.operation.plannedAttempt.attemptId === "attempt:B:1"),
+        "B planned fingerprint"
+      ).event.operation.plannedAttempt.taskRevision
+      const originalB = makeTaskWorkSpecification({
+        body: "Implement task B.",
+        taskId: TaskId.make("B"),
+        title: "Implement B"
+      })
+      const changedB = makeTaskWorkSpecification({
+        body: "Alice changed task B instructions.",
+        taskId: TaskId.make("B"),
+        title: "Changed B"
+      })
+      expect(plannedB).toBe(originalB.fingerprint)
+      expect(changedB.fingerprint).not.toBe(originalB.fingerprint)
+      expect(
+        recordsFor(run.records, "TaskTrackerFactsObserved").some(
+          ({ event }) =>
+            event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+            event.observation.factFamily.taskId === "B" &&
+            event.observation.factFamily.fingerprint === changedB.fingerprint
+        )
+      ).toBe(true)
     }),
   capstoneTimeout
 )

@@ -36,7 +36,7 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
-import { responsibilityStillOwnsTask } from "./fresh-workflow.js"
+import { latestRunningExecutorReportRecordFor, responsibilityStillOwnsTask } from "./fresh-workflow.js"
 
 const runId = RunId.make("fresh-workflow-no-successor-run")
 const taskId = TaskId.make("fresh-workflow-no-successor-task")
@@ -50,6 +50,25 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskId,
   taskRevision: plannedSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/fresh-workflow-no-successor")
+})
+
+it("models a missing positioned Running report as absence instead of inventing journal position zero", () => {
+  expect(latestRunningExecutorReportRecordFor([], plannedAttempt)).toBeUndefined()
+
+  const record = {
+    event: PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      report: PlannedAttemptExecutorReport.cases.Running.make({
+        correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+      }),
+      version: workflowJournalEventVersion
+    }),
+    key: JournalRecordKey.make("fresh-workflow-positioned-running-report"),
+    position: JournalPosition.make(1),
+    runId
+  }
+
+  expect(latestRunningExecutorReportRecordFor([record], plannedAttempt)?.position).toBe(JournalPosition.make(1))
 })
 
 it("keeps a Running responsibility in the current-facts chain after a progress graph observation", () => {

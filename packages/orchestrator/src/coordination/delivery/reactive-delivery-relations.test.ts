@@ -827,9 +827,12 @@ it.effect("coalesces an accepted Running report behind one later complete graph 
         proposals: [{ route: { transition: { _tag: "ContinuePlannedAttemptExecutorWork" } } }]
       })
 
-      const progressRead = makeTrackerGraphObservationOperation(OperationId.make("progress-complete-graph"), target, [
-        graphOperation.operationId
-      ])
+      const progressRead = makeTrackerGraphObservationOperation(
+        OperationId.make("progress-complete-graph"),
+        target,
+        [graphOperation.operationId],
+        [recoveredAttempt.taskId]
+      )
       yield* journal.append(runId, intentRecordKey(progressRead.operationId), taskTrackerReadIntent(progressRead))
       yield* journal.append(
         runId,

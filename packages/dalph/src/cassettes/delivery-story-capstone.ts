@@ -211,6 +211,14 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     worktree("D", "attempt:D:3"),
     worktree("E", "attempt:E:4"),
     {
+      _tag: "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
+      members: initialAttempts.map(({ attemptId, taskId }) => ({
+        attemptId,
+        request: "StartOrContinue" as const,
+        taskId
+      }))
+    },
+    {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "StartOrContinue"
@@ -225,26 +233,32 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       report: { _tag: "Running", attemptId: "attempt:C:2" },
       request: "StartOrContinue"
     },
+    { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "B" },
+    { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "A" },
     ...graphReadG1,
-    ...specRead("A"),
-    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "B" } },
-    { _tag: "TaskWorkSpecificationReadReturned" as const, ...changedSpecification },
     ...specRead("C"),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:C:2" },
       request: "StartOrContinue"
     },
+    ...graphReadG1,
+    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "B" },
+    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "B" } },
+    { _tag: "TaskWorkSpecificationReadReturned" as const, ...changedSpecification },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "SafelySuspended", attemptId: "attempt:B:1" },
       request: "Suspend"
     },
+    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "A" },
+    ...specRead("A"),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "StartOrContinue"
     },
+    ...graphReadG1,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:D:3" },
@@ -294,6 +308,7 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       report: { _tag: "Running", attemptId: "attempt:C:2" },
       request: "StartOrContinue"
     },
+    ...graphReadG1,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:D:3" },

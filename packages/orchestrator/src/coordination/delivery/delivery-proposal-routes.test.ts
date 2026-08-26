@@ -2938,6 +2938,63 @@ describe("delivery proposal route matrix", () => {
     })
   )
 
+  effectIt.effect("materializes one executor-progress graph read with every exact pending task subject", () =>
+    Effect.gen(function* () {
+      const taskA = TaskId.make("progress-task-A")
+      const taskB = TaskId.make("progress-task-B")
+      const correlationA = plannedAttemptExecutorCorrelation({ ...plannedAttempt, taskId: taskA })
+      const correlationB = plannedAttemptExecutorCorrelation({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("progress-attempt-B"),
+        taskId: taskB
+      })
+      const proposal = trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(3),
+        purpose: "CheckExecutorProgress",
+        requirement: {
+          _tag: "ExecutorProgressGraphReadRequirement",
+          explicitlyCoveredTaskIds: [taskA, taskB],
+          pendingReports: [
+            { acceptedAt: JournalPosition.make(1), correlation: correlationA, taskId: taskA },
+            { acceptedAt: JournalPosition.make(2), correlation: correlationB, taskId: taskB }
+          ],
+          runId,
+          target,
+          unresolvedReadOperationId: null
+        },
+        runId,
+        target
+      })
+      const projected = projectTrackerSnapshot({ revision: "progress-batch-coverage", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die(projected)
+      const observedOperation = yield* Ref.make<ReturnType<typeof makeTrackerGraphObservationOperation> | null>(null)
+
+      yield* executeFreshTrackerGraphRead(
+        { _tag: "FreshOperationAction", operationId: OperationId.make("progress-batch-read"), proposal },
+        proposal.route,
+        inertLease
+      ).pipe(
+        Effect.provideService(
+          WorkflowInterpreter,
+          WorkflowInterpreter.of({
+            acquireTaskClaim: () => Effect.die("unused claim acquisition"),
+            readTaskClaim: () => Effect.die("unused claim read"),
+            readTaskWorktree: () => Effect.die("unused worktree read"),
+            readTargetLineage: () => Effect.die("unused lineage read"),
+            readTrackerGraph: (operation) => Ref.set(observedOperation, operation).pipe(Effect.as(projected.snapshot)),
+            readTaskWorkSpecification: () => Effect.die("unused specification read"),
+            reconcileTaskWorktree: () => Effect.die("unused worktree reconciliation"),
+            recordTaskAttemptPlan: () => Effect.die("unused attempt planning"),
+            releaseTaskClaim: () => Effect.die("unused claim release")
+          })
+        ),
+        Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+      )
+
+      expect((yield* Ref.get(observedOperation))?.readShape.explicitlyCoveredTaskIds).toEqual([taskA, taskB])
+    })
+  )
+
   effectIt.effect("retains the task position while a continued executor still reports running", () =>
     Effect.gen(function* () {
       const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
