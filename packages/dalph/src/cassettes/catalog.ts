@@ -4421,24 +4421,50 @@ const integrationPositionsForDiamondTask = (
 ): DoubleDiamondIntegrationPositions =>
   fiveTaskDiamond ? fiveTaskDiamondIntegrationPositions[taskId] : doubleDiamondIntegrationPositions[taskId]
 
+type DoubleDiamondIntegrationFinalityOptions = readonly [
+  claimsToRead?: ReadonlyArray<{ readonly taskId: (typeof doubleDiamondTaskIds)[number] }>,
+  continueQueuedIntegration?: boolean,
+  lineageTasks?: ReadonlyArray<{ readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] }>,
+  repository?: string,
+  interleavedAfterGitObservation?: ReadonlyArray<unknown>,
+  interleavedExecutorReportsAfterPromotion?: ReadonlyArray<unknown>,
+  interleavedGraphReadsAfterCompletionRequest?: ReadonlyArray<unknown>,
+  interleavedFocusedSpecificationsAfterCompletion?: ReadonlyArray<unknown>
+]
+
+const doubleDiamondIntegrationCoreOptions = (
+  attempt: { readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] },
+  options: DoubleDiamondIntegrationFinalityOptions
+) => ({
+  claimsToRead: options[0] ?? [attempt],
+  continueQueuedIntegration: options[1] ?? false,
+  lineageTasks: options[2] ?? [attempt],
+  repository: options[3] ?? "/dalph/cassettes/double-diamond.git"
+})
+
+const doubleDiamondIntegrationInterleavings = (options: DoubleDiamondIntegrationFinalityOptions) => ({
+  interleavedAfterGitObservation: options[4] ?? [],
+  interleavedExecutorReportsAfterPromotion: options[5] ?? [],
+  interleavedFocusedSpecificationsAfterCompletion: options[7] ?? [],
+  interleavedGraphReadsAfterCompletionRequest: options[6] ?? []
+})
+
 /** Every accepted executor result crosses the ordinary integration and completion-finality boundaries. */
 const doubleDiamondIntegrationFinality = (
   attempt: { readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] },
   graphBeforeCompletion: DoubleDiamondGraph,
-  claimsToRead: ReadonlyArray<{ readonly taskId: (typeof doubleDiamondTaskIds)[number] }> = [attempt],
-  continueQueuedIntegration = false,
-  lineageTasks: ReadonlyArray<{
-    readonly attemptId: string
-    readonly taskId: (typeof doubleDiamondTaskIds)[number]
-  }> = [attempt],
-  repository = "/dalph/cassettes/double-diamond.git",
-  // This seam intentionally accepts raw fixture fragments; the enclosing
-  // cassette schema remains the single runtime/type validation boundary.
-  interleavedAfterGitObservation: ReadonlyArray<unknown> = [],
-  interleavedExecutorReportsAfterPromotion: ReadonlyArray<unknown> = [],
-  interleavedGraphReadsAfterCompletionRequest: ReadonlyArray<unknown> = [],
-  interleavedFocusedSpecificationsAfterCompletion: ReadonlyArray<unknown> = []
+  ...options: DoubleDiamondIntegrationFinalityOptions
 ) => {
+  const { claimsToRead, continueQueuedIntegration, lineageTasks, repository } = doubleDiamondIntegrationCoreOptions(
+    attempt,
+    options
+  )
+  const {
+    interleavedAfterGitObservation,
+    interleavedExecutorReportsAfterPromotion,
+    interleavedFocusedSpecificationsAfterCompletion,
+    interleavedGraphReadsAfterCompletionRequest
+  } = doubleDiamondIntegrationInterleavings(options)
   const acceptedResultCommit = doubleDiamondAcceptedCommit(attempt.taskId)
   const candidateCommit = doubleDiamondCandidateCommit(attempt.taskId)
   const expectedTargetHead = "2222222222222222222222222222222222222222"

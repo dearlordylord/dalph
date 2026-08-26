@@ -1,3 +1,4 @@
+import type { Exit } from "effect"
 import { Deferred, Effect, Layer, Match, Option, Ref, Schema } from "effect"
 import {
   PlannedAttemptExecutorCommandFailure,
@@ -303,6 +304,11 @@ export const controlledExecutorLayer = (
     plannedAttempt: PlannedTaskAttempt,
     request: "StartOrContinue" | "Suspend",
     report: PlannedAttemptExecutorReport
+  ) => Effect.Effect<void> = () => Effect.void,
+  onReportExit: (
+    plannedAttempt: PlannedTaskAttempt,
+    request: "StartOrContinue" | "Suspend",
+    exit: Exit.Exit<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
   ) => Effect.Effect<void> = () => Effect.void
 ) => {
   const reports = survivingReports
@@ -355,7 +361,10 @@ export const controlledExecutorLayer = (
         return yield* Effect.never
       }
       return report
-    }).pipe(Effect.ensuring(cursor.endExecutorReportRequest(request, plannedAttempt.attemptId)))
+    }).pipe(
+      Effect.onExit((exit) => onReportExit(plannedAttempt, request, exit)),
+      Effect.ensuring(cursor.endExecutorReportRequest(request, plannedAttempt.attemptId))
+    )
   })
   return Layer.succeed(
     PlannedAttemptExecutor,

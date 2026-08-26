@@ -379,9 +379,41 @@ it("distinguishes every semantic progress batch and initial establishment from r
     target,
     waitsForLiveOperationId: OperationId.make("establishment-intent")
   })
+  const anotherRestart = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(99),
+    establishment: {
+      _tag: "RestartGraphReestablishment",
+      predecessorOperationIds: [OperationId.make("another-accepted-establishment")]
+    },
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target
+  })
+  const multiPredecessorRestart = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(99),
+    establishment: {
+      _tag: "RestartGraphReestablishment",
+      predecessorOperationIds: [OperationId.make("accepted-establishment"), OperationId.make("second-establishment")]
+    },
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target
+  })
+  const permutedRestart = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(99),
+    establishment: {
+      _tag: "RestartGraphReestablishment",
+      predecessorOperationIds: [OperationId.make("second-establishment"), OperationId.make("accepted-establishment")]
+    },
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target
+  })
 
   expect(new Set([ac.id, changedPosition.id, changedCorrelation.id, changedCoverage.id, d.id])).toHaveLength(5)
   expect(establishment.id).not.toBe(laterEstablishment.id)
+  expect(laterEstablishment.id).not.toBe(anotherRestart.id)
+  expect(multiPredecessorRestart.id).toBe(permutedRestart.id)
   expect(establishment.id).not.toBe(ac.id)
   expect(
     proposalOwnerIsRepresented({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [d] }, ac.id, null)

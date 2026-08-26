@@ -704,8 +704,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
     request: Schema.Literals(["StartOrContinue", "Suspend"]),
     taskId: TaskId
   },
-  /** Harness synchronization: hold progress-read admission until all named genuine executor reports are durably accepted. */
-  DalphHoldsExecutorProgressAdmissionUntilReportBatchReady: {
+  /** Harness-only rendezvous: release the named provider responses together, then let recovery project their ordinary appends. */
+  CassetteRendezvousesExecutorReportsBeforeJournalAppend: {
     members: Schema.NonEmptyArray(
       Schema.Struct({ attemptId: AttemptId, request: Schema.Literals(["StartOrContinue", "Suspend"]), taskId: TaskId })
     )
@@ -908,7 +908,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptContinuation",
     "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
-    "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
+    "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary",
@@ -1326,7 +1326,7 @@ const admittedContinuationHoldHasExactAttemptChoiceClosure = Schema.makeFilter(
 const executorReportRendezvousMembersAreUnique = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
     for (const item of cassette.story) {
-      if (item._tag !== "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady") continue
+      if (item._tag !== "CassetteRendezvousesExecutorReportsBeforeJournalAppend") continue
       const identities = item.members.map(({ attemptId, request, taskId }) => `${taskId}:${attemptId}:${request}`)
       const appendIdentities = item.members.map(({ attemptId, request }) => `${attemptId}:${request}`)
       if (!item.members.some(({ request }) => request === "StartOrContinue")) {

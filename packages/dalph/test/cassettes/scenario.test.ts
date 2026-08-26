@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -9,11 +9,13 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  makeTaskWorkSpecification,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelationKey,
   RunId,
   TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
   TaskRevision,
   WorktreeLocator
@@ -190,6 +192,7 @@ import {
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 import {
+  appendThenCompleteExecutorReportRendezvous,
   evaluateAuthoredDeliveryPublication,
   type AuthoredDeliveryPublication
 } from "../../src/cassettes/authored-runner.js"
@@ -509,6 +512,104 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
       expected: correlation,
       observed: { correlation: { attemptId: correlation.attemptId, runId: foreignRunId } }
     })
+  })
+)
+
+it.effect("notifies the report rendezvous when a provider fails or is cancelled", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("coverage-executor-rendezvous-run")
+    const taskId = TaskId.make("A")
+    const specification = makeTaskWorkSpecification({ body: "Test executor rendezvous.", taskId, title: "Test A" })
+    const plannedAttempt = {
+      attemptId: AttemptId.make("coverage-executor-rendezvous-attempt"),
+      baseSha: GitCommitSha.make("1".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/coverage-executor-rendezvous"),
+      executor: TaskExecutorLocator.make("executor:coverage"),
+      runId,
+      taskId,
+      taskRevision: specification.fingerprint,
+      worktree: WorktreeLocator.make("/tmp/coverage-executor-rendezvous")
+    }
+    const storyItem = {
+      _tag: "PlannedAttemptExecutorWorkReported" as const,
+      report: { _tag: "Running" as const, attemptId: plannedAttempt.attemptId },
+      request: "StartOrContinue" as const
+    }
+    const runWithBoundary = Effect.fn("Test.runExecutorWithReportBoundary")(function* (
+      beforeReportReturn: Effect.Effect<void>,
+      exits: Ref.Ref<number>
+    ) {
+      const cursor = yield* makeStoryCursor([storyItem])
+      const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+      const unresolved = yield* Ref.make<ReadonlySet<string>>(new Set())
+      return yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        return yield* executor.startOrContinue({ plannedAttempt, specification })
+      }).pipe(
+        Effect.provide(
+          controlledExecutorLayer(
+            cursor,
+            runId,
+            () => Effect.void,
+            reports,
+            unresolved,
+            Effect.succeed,
+            () => beforeReportReturn,
+            () => Ref.update(exits, (count) => count + 1)
+          )
+        )
+      )
+    })
+
+    const failedExits = yield* Ref.make(0)
+    const failed = yield* runWithBoundary(Effect.die("provider failed"), failedExits).pipe(Effect.exit)
+    expect(Exit.isFailure(failed)).toBe(true)
+    expect(yield* Ref.get(failedExits)).toBe(1)
+
+    const cancelledExits = yield* Ref.make(0)
+    const providerEntered = yield* Deferred.make<void>()
+    const cancelledFiber = yield* runWithBoundary(
+      Deferred.succeed(providerEntered, undefined).pipe(Effect.andThen(Effect.never)),
+      cancelledExits
+    ).pipe(Effect.forkChild)
+    yield* Deferred.await(providerEntered)
+    yield* Fiber.interrupt(cancelledFiber)
+    expect(yield* Ref.get(cancelledExits)).toBe(1)
+  })
+)
+
+it.effect("fails an interrupted append and completes a successful append before cancellation escapes", () =>
+  Effect.gen(function* () {
+    const failed = yield* Ref.make(0)
+    const completed = yield* Ref.make(0)
+    const appendEntered = yield* Deferred.make<void>()
+    const interruptedAppend = yield* appendThenCompleteExecutorReportRendezvous(
+      Deferred.succeed(appendEntered, undefined).pipe(Effect.andThen(Effect.never)),
+      Ref.update(completed, (count) => count + 1),
+      Ref.update(failed, (count) => count + 1)
+    ).pipe(Effect.forkChild)
+    yield* Deferred.await(appendEntered)
+    yield* Fiber.interrupt(interruptedAppend)
+    expect(yield* Ref.get(failed)).toBe(1)
+    expect(yield* Ref.get(completed)).toBe(0)
+
+    const completionEntered = yield* Deferred.make<void>()
+    const releaseCompletion = yield* Deferred.make<void>()
+    const successfulAppend = yield* appendThenCompleteExecutorReportRendezvous(
+      Effect.succeed("durable"),
+      Deferred.succeed(completionEntered, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseCompletion)),
+        Effect.andThen(Ref.update(completed, (count) => count + 1))
+      ),
+      Ref.update(failed, (count) => count + 1)
+    ).pipe(Effect.forkChild)
+    yield* Deferred.await(completionEntered)
+    const interruption = yield* Fiber.interrupt(successfulAppend).pipe(Effect.forkChild)
+    yield* Effect.yieldNow
+    expect(yield* Ref.get(completed)).toBe(0)
+    yield* Deferred.succeed(releaseCompletion, undefined)
+    yield* Fiber.join(interruption)
+    expect(yield* Ref.get(completed)).toBe(1)
   })
 )
 

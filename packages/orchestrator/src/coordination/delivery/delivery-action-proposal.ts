@@ -22,6 +22,7 @@ import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import type { TransitionForRoute } from "./delivery-transition-policy.js"
 import type { ExecutorProgressGraphReadRequirement } from "../executor-progress-graph-read.js"
+import { canonicalDeliveryProposal } from "./canonical-delivery-proposal.js"
 
 /** Stable structural identity of one exact proposed action; it is not a journal OperationId. */
 export const DeliveryProposalId = Schema.NonEmptyString.pipe(Schema.brand("DeliveryProposalId"))
@@ -82,10 +83,7 @@ export type TaskWorkPositionRequirement =
   | { readonly _tag: "TaskWorkPositionRequired"; readonly mode: "Existing"; readonly taskId: TaskId }
   | { readonly _tag: "TaskWorkPositionRequired"; readonly mode: "ReserveOrReuse"; readonly taskId: TaskId }
 
-/**
- * Process-local exclusion between executor commands and a Stop decision that may abandon the same exact attempt.
- * It is neither executor authority nor a task-work capacity position and disappears on process loss.
- */
+/** Process-local exclusion between executor commands and Stop; not executor authority or capacity, and lost with the process. */
 export type PlannedAttemptProtocolRequirement =
   | { readonly _tag: "NoPlannedAttemptProtocol" }
   | { readonly _tag: "PlannedAttemptProtocolRequired"; readonly correlation: PlannedAttemptExecutorCorrelation }
@@ -215,11 +213,7 @@ export type FreshOperationOnlyRoute =
   | { readonly _tag: "RecoveredNewActionRoute"; readonly action: NewRecoveredWorkflowAction }
   | TrackerGraphReadRoute
 
-/**
- * One fresh tracker graph boundary carries the exact evidence needed by its
- * purpose. A post-claim refresh cannot silently fall back to an empty causal
- * predecessor or an unscoped task coverage list.
- */
+/** A fresh graph boundary carries purpose-specific evidence; post-claim refresh requires causal predecessors and coverage. */
 export type TrackerGraphReadRoute =
   | {
       readonly _tag: "TrackerGraphReadRoute"
@@ -393,18 +387,6 @@ export type TrackerGraphReadProposalInput =
       readonly target: TrackerTarget
     }
 
-const canonical = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonical)
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonical(entry)])
-    )
-  }
-  return value
-}
-
 export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal["route"]): DeliveryProposalId => {
   // Establishment reads retain one process-local identity. Each progress-read
   // batch retains its own accepted-report identity so a settled owner for an
@@ -414,7 +396,13 @@ export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal
       ? route.purpose === "EstablishCurrentGraph"
         ? {
             _tag: route._tag,
-            establishment: { _tag: route.establishment._tag },
+            establishment:
+              route.establishment._tag === "InitialGraphEstablishment"
+                ? { _tag: route.establishment._tag }
+                : {
+                    _tag: route.establishment._tag,
+                    predecessorOperationIds: [...route.establishment.predecessorOperationIds].toSorted()
+                  },
             purpose: route.purpose,
             target: route.target
           }
@@ -438,7 +426,9 @@ export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal
             }
           : route
       : route
-  return DeliveryProposalId.make(`delivery:${JSON.stringify(canonical({ route: identityRoute, runId }))}`)
+  return DeliveryProposalId.make(
+    `delivery:${JSON.stringify(canonicalDeliveryProposal({ route: identityRoute, runId }))}`
+  )
 }
 
 /** Describes one fresh complete-graph read without allocating or recording its OperationId. */

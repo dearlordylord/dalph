@@ -211,7 +211,7 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     worktree("D", "attempt:D:3"),
     worktree("E", "attempt:E:4"),
     {
-      _tag: "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
+      _tag: "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
       members: initialAttempts.map(({ attemptId, taskId }) => ({
         attemptId,
         request: "StartOrContinue" as const,
@@ -237,7 +237,7 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "A" },
     ...graphReadG1,
     {
-      _tag: "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
+      _tag: "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
       members: [
         { attemptId: "attempt:C:2", request: "StartOrContinue", taskId: "C" },
         { attemptId: "attempt:B:1", request: "Suspend", taskId: "B" },
