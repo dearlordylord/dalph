@@ -112,7 +112,7 @@ run_stressed() (
       worker_status_ok=1
       if [ "$worker_marker_status" = "complete" ] && [ "$worker_wait_status" -eq 0 ]; then
         worker_status_ok=0
-      elif [ "$worker_alive_status" -eq 0 ] && [ "$worker_kill_status" -eq 0 ] && [ "$worker_wait_status" -ne 0 ]; then
+      elif [ "$worker_alive_status" -eq 0 ] && [ "$worker_kill_status" -eq 0 ] && [ "$worker_wait_status" -eq 143 ]; then
         worker_status_ok=0
       fi
       if [ "$worker_status_ok" -ne 0 ] && [ "$test_status" -eq 0 ]; then
@@ -139,6 +139,11 @@ run_stressed node@22.22.2
 run_stressed node@24.15.0
 ```
 
+Cleanup accepts an already-running worker only when the explicit `kill` succeeds
+and Bash reports exactly `143` from `wait` (the SIGTERM status); every other
+nonzero status fails closed. Natural completion is accepted only with the
+`complete` marker and wait status `0`.
+
 This harmless negative probe must fail closed because the worker exits before
 writing its completion marker; the probe itself succeeds only when the early
 worker failure is detected:
@@ -150,7 +155,8 @@ worker failure is detected:
   worker_pid=$!
   worker_status=0
   wait "$worker_pid" || worker_status=$?
-  test "$worker_status" -ne 0
+  test "$worker_status" -eq 7
+  test "$worker_status" -ne 143
   test ! -s "$marker"
   rm -f "$marker"
 )
