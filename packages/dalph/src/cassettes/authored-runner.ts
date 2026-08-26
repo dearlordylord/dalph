@@ -1805,16 +1805,31 @@ const runAuthoredScenarioCassetteWith = (request: {
         /* v8 ignore next -- @preserve The controlled executor starts only after installing the bootstrap cancellation control. */
         () => Effect.die("run cancellation control is not installed")
       )
-      const activePauseObservationResults = yield* Ref.make<
-        Option.Option<Queue.Dequeue<AuthoredPauseObservationResult>>
-      >(Option.none())
       const authoredRunScope = yield* Scope.Scope
       interface ActiveAuthoredPauseObservation {
-        readonly fiber: Fiber.Fiber<void | boolean, never>
+        readonly fiber: Fiber.Fiber<void, never>
         readonly results: Queue.Dequeue<AuthoredPauseObservationResult>
         readonly subject: (typeof AuthoredCassetteStoryItem.cases.OperatorStartsPauseObservation.Type)["subject"]
       }
       const activePauseObservation = yield* Ref.make<Option.Option<ActiveAuthoredPauseObservation>>(Option.none())
+
+      /** Takes one queued Pause result, rechecking the queue after observer completion wins the race. */
+      const takePauseObservationResult = Effect.fn("AuthoredCassette.takePauseObservationResult")(function* (
+        active: ActiveAuthoredPauseObservation
+      ) {
+        const completed = Fiber.await(active.fiber).pipe(
+          Effect.flatMap((exit) =>
+            Effect.gen(function* () {
+              const queued = yield* Queue.poll(active.results)
+              if (Option.isSome(queued)) return queued.value
+              if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
+              return yield* Effect.die("authored Pause observation completed without a queued result")
+            })
+          )
+        )
+        const result = yield* Effect.raceFirst(Queue.take(active.results), completed)
+        return result
+      })
 
       const awaitPlannedSuspensionBoundary = Effect.fn("AuthoredCassette.awaitPlannedSuspensionBoundary")(function* (
         plannedAttempt: PlannedTaskAttempt,
@@ -1832,11 +1847,11 @@ const runAuthoredScenarioCassetteWith = (request: {
         expectedResults: ReadonlyArray<AuthoredPauseObservationResult>
       ) {
         if (expectedResults.length === 0) return
-        const results = yield* Ref.get(activePauseObservationResults)
+        const active = yield* Ref.get(activePauseObservation)
         /* v8 ignore start -- @preserve In-flight Unpause closure requires one active observation and its exact queued results. */
-        if (Option.isNone(results)) return yield* Effect.die("no authored Pause observation is active")
+        if (Option.isNone(active)) return yield* Effect.die("no authored Pause observation is active")
         for (const expected of expectedResults) {
-          const actual = yield* Queue.take(results.value)
+          const actual = yield* takePauseObservationResult(active.value)
           if (!pauseObservationResultMatches(actual, expected)) {
             return yield* Effect.die(
               `authored Pause observation expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`
@@ -2389,7 +2404,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               active: ActiveAuthoredPauseObservation,
               expected: AuthoredPauseObservationResult
             ) {
-              const actual = yield* Queue.take(active.results)
+              const actual = yield* takePauseObservationResult(active)
               /* v8 ignore start -- @preserve Maintained authored cassettes assert the exact process-local view; the mismatch is only a generic authoring diagnostic. */
               if (!pauseObservationResultMatches(actual, expected)) {
                 return yield* Effect.die(
@@ -2701,6 +2716,14 @@ const runAuthoredScenarioCassetteWith = (request: {
               }
               /* v8 ignore stop -- @preserve */
               const observed = yield* Queue.unbounded<AuthoredPauseObservationResult>()
+              const firstEmission = yield* Deferred.make<void>()
+              const offerObservationResult = (result: AuthoredPauseObservationResult) =>
+                Effect.uninterruptible(
+                  Effect.gen(function* () {
+                    yield* Queue.offer(observed, result)
+                    yield* Deferred.succeed(firstEmission, undefined)
+                  })
+                )
               const item = authored.value
               const subject =
                 item.subject._tag === "Run"
@@ -2709,21 +2732,39 @@ const runAuthoredScenarioCassetteWith = (request: {
               const fiber = yield* bootstrap.operatorControl.observePause(subject).pipe(
                 Stream.runForEach((view) => {
                   const result = pauseObservationResultOf(view, runId)
-                  return Queue.offer(observed, result)
+                  return offerObservationResult(result)
                 }),
-                Effect.catch((failure) => {
+                Effect.catchTag("PauseNotApplied", () => {
                   const absence = { _tag: "PauseNotApplied" } as const
-                  /* v8 ignore next -- @preserve Pause observation exposes only the closed PauseNotApplied failure. */
-                  return failure._tag === "PauseNotApplied"
-                    ? Queue.offer(observed, absence)
-                    : Effect.die("authored Pause observation failed with an unexpected error")
+                  return offerObservationResult(absence)
                 }),
+                Effect.orDie,
                 Effect.forkIn(authoredRunScope, {
                   startImmediately: authored.value._tag === "OperatorStartsPauseObservation"
                 })
               )
               yield* Ref.set(activePauseObservation, Option.some({ fiber, results: observed, subject: item.subject }))
-              yield* Ref.set(activePauseObservationResults, Option.some(observed))
+              if (item._tag === "OperatorStartsPauseObservation") {
+                yield* Effect.raceFirst(
+                  Deferred.await(firstEmission),
+                  Fiber.await(fiber).pipe(
+                    Effect.flatMap((exit) =>
+                      Deferred.poll(firstEmission).pipe(
+                        Effect.flatMap((ready) => {
+                          if (Option.isSome(ready)) return Effect.void
+                          if (Exit.isFailure(exit)) {
+                            if (Cause.hasInterruptsOnly(exit.cause)) {
+                              return Effect.die("authored Pause observation was interrupted before its first result")
+                            }
+                            return Effect.failCause(exit.cause)
+                          }
+                          return Effect.die("authored Pause observation completed before its first result")
+                        })
+                      )
+                    )
+                  )
+                )
+              }
               yield* Deferred.succeed(initialPauseObservationConsumed, undefined)
             }).pipe(Effect.orDie)
             const drivePauseProgressObservedCancelledAndReconnected = Effect.gen(function* () {
@@ -2734,14 +2775,13 @@ const runAuthoredScenarioCassetteWith = (request: {
               const active = yield* requireActivePauseObservation(authored.value.subject)
               yield* takeExpectedPauseResult(active, authored.value.result)
               const journalLengthBeforeCancel = (yield* sharedJournal.read(runId)).length
-              yield* Fiber.interrupt(active.fiber).pipe(Effect.forkScoped)
+              yield* Fiber.interrupt(active.fiber)
               /* v8 ignore start -- @preserve The passive observer has no journal capability; the maintained cassette separately asserts that no Pause-progress event exists. */
               if ((yield* sharedJournal.read(runId)).length !== journalLengthBeforeCancel) {
                 return yield* Effect.die("ending the process-local Pause observation appended a workflow record")
               }
               /* v8 ignore stop -- @preserve */
               yield* Ref.set(activePauseObservation, Option.none())
-              yield* Ref.set(activePauseObservationResults, Option.none())
               yield* reconnectPauseObservation(authored.value)
             }).pipe(Effect.orDie)
             const drivePauseProgressObserved = Effect.gen(function* () {
@@ -2753,7 +2793,6 @@ const runAuthoredScenarioCassetteWith = (request: {
               const actual = yield* takeExpectedPauseResult(active, authored.value.result)
               /* v8 ignore start -- @preserve Maintained standalone result items observe nonterminal Waiting; terminal values are consumed by the contiguous await and reconnect chronologies. */
               if (actual._tag !== "PauseWaiting") yield* Ref.set(activePauseObservation, Option.none())
-              if (actual._tag !== "PauseWaiting") yield* Ref.set(activePauseObservationResults, Option.none())
               /* v8 ignore stop -- @preserve */
             }).pipe(Effect.orDie)
             const drivePauseProgressAwait = Effect.gen(function* () {
@@ -2774,7 +2813,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               }
               /* v8 ignore stop -- @preserve */
               for (const expected of expectations) {
-                const actual = yield* Queue.take(active.value.results)
+                const actual = yield* takePauseObservationResult(active.value)
                 /* v8 ignore start -- @preserve Maintained authored cassettes assert the exact queued result; this mismatch is only a generic authoring diagnostic. */
                 if (!pauseObservationResultMatches(actual, expected.result)) {
                   return yield* Effect.die(
@@ -2784,7 +2823,6 @@ const runAuthoredScenarioCassetteWith = (request: {
                 /* v8 ignore stop -- @preserve */
                 if (actual._tag !== "PauseWaiting") {
                   yield* Ref.set(activePauseObservation, Option.none())
-                  yield* Ref.set(activePauseObservationResults, Option.none())
                 }
               }
             }).pipe(Effect.orDie)
@@ -2804,6 +2842,17 @@ const runAuthoredScenarioCassetteWith = (request: {
               if (Option.isNone(authored)) return
               /* v8 ignore stop -- @preserve */
               yield* plannedSuspensionExecutorBoundaryGates.release({
+                attemptId: authored.value.attemptId,
+                request: "Suspend",
+                taskId: authored.value.taskId
+              })
+            }).pipe(Effect.orDie)
+            const drivePlannedSuspensionExecutorBoundaryReady = Effect.gen(function* () {
+              const authored = yield* cursor.consumePlannedAttemptSuspensionExecutorBoundaryReady
+              /* v8 ignore start -- @preserve The direct-item dispatcher and closure guarantee this exact held correlation. */
+              if (Option.isNone(authored)) return
+              /* v8 ignore stop -- @preserve */
+              yield* plannedSuspensionExecutorBoundaryGates.awaitReady({
                 attemptId: authored.value.attemptId,
                 request: "Suspend",
                 taskId: authored.value.taskId
@@ -2948,6 +2997,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   | "OperatorAppliesIntegrationQuarantineDirection"
                   | "OperatorAppliesRunCancellation"
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
+                  | "CassetteAwaitsHeldPlannedAttemptSuspensionBoundary"
                   | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
                   | "CassetteRendezvousesExecutorReportsBeforeJournalAppend"
                   | "CassetteReleasesHeldPlannedAttemptSuspension"
@@ -2974,6 +3024,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               "OperatorAppliesIntegrationQuarantineDirection",
               "OperatorAppliesRunCancellation",
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+              "CassetteAwaitsHeldPlannedAttemptSuspensionBoundary",
               "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
               "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
               "CassetteReleasesHeldPlannedAttemptSuspension",
@@ -3004,6 +3055,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 OperatorAppliesRunCancellation: () => driveRunCancellation,
                 CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: () =>
                   drivePlannedSuspensionExecutorBoundaryHold,
+                CassetteAwaitsHeldPlannedAttemptSuspensionBoundary: () => drivePlannedSuspensionExecutorBoundaryReady,
                 CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: () =>
                   drivePlannedContinuationExecutorBoundaryHold,
                 CassetteRendezvousesExecutorReportsBeforeJournalAppend: () => driveExecutorReportBatchGate,

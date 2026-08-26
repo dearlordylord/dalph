@@ -18,6 +18,7 @@ interface PlannedSuspensionBoundaryGate {
 interface PlannedSuspensionBoundaryGates {
   readonly arm: (correlation: AuthoredPlannedSuspensionBoundaryCorrelation) => Effect.Effect<void>
   readonly awaitBoundary: (correlation: AuthoredPlannedSuspensionBoundaryCorrelation) => Effect.Effect<void>
+  readonly awaitReady: (correlation: AuthoredPlannedSuspensionBoundaryCorrelation) => Effect.Effect<void>
   readonly release: (correlation: AuthoredPlannedSuspensionBoundaryCorrelation) => Effect.Effect<void>
 }
 
@@ -71,6 +72,15 @@ export const makePlannedSuspensionBoundaryGates: Effect.Effect<PlannedSuspension
       )
     })
 
-    return { arm, awaitBoundary, release }
+    const awaitReady = Effect.fn("PlannedSuspensionBoundaryGates.awaitReady")(function* (
+      correlation: AuthoredPlannedSuspensionBoundaryCorrelation
+    ) {
+      const key = authoredPlannedSuspensionBoundaryKeyOf(correlation)
+      const gate = (yield* Ref.get(state)).get(key)
+      if (gate === undefined) return yield* Effect.die(`no held planned suspension matches ${key}`)
+      yield* Deferred.await(gate.ready)
+    })
+
+    return { arm, awaitBoundary, awaitReady, release }
   }
 )

@@ -236,6 +236,10 @@ export interface StoryCursor {
       typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary.Type
     >
   >
+  /** Consume one exact wait for a held Suspend to reach its boundary without releasing it. */
+  readonly consumePlannedAttemptSuspensionExecutorBoundaryReady: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsHeldPlannedAttemptSuspensionBoundary.Type>
+  >
   readonly consumePlannedAttemptContinuationExecutorBoundaryHold: Effect.Effect<
     Option.Option<
       typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary.Type
@@ -464,6 +468,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
+    "CassetteReleasesHeldPlannedAttemptContinuation",
     "CassetteReleasesHeldTargetPromotionReconciliationRead",
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
     "CassetteReleasesHeldTaskWorkSpecificationRead",
@@ -705,6 +710,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current hold tag. */
     if (claimed._tag === "Mismatch") return Option.none()
     return Option.some(claimed.item)
+  })
+  const consumePlannedAttemptSuspensionExecutorBoundaryReady = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsHeldPlannedAttemptSuspensionBoundary.Type =>
+        item?._tag === "CassetteAwaitsHeldPlannedAttemptSuspensionBoundary"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current wait tag. */
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
   })
   const consumeExecutorProgressAdmissionBatchGate = Effect.gen(function* () {
     const claimed = yield* claimNext(
@@ -1551,6 +1564,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeAdmittedContinuationExecutorIntentHold,
     consumeExecutorProgressAdmissionBatchGate,
     consumePlannedAttemptSuspensionExecutorBoundaryHold,
+    consumePlannedAttemptSuspensionExecutorBoundaryReady,
     consumePlannedAttemptContinuationExecutorBoundaryHold,
     consumePlannedAttemptContinuationExecutorBoundaryRelease,
     consumePlannedAttemptSuspensionExecutorBoundaryRelease,

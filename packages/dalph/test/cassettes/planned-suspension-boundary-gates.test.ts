@@ -18,13 +18,16 @@ it.effect("waits for exact boundary readiness and releases no sibling gate", () 
     yield* gates.arm(a)
     yield* gates.arm(d)
 
-    const earlyReleaseA = yield* gates.release(a).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    expect(earlyReleaseA.pollUnsafe()).toBeUndefined()
-
     const boundaryA = yield* gates.awaitBoundary(a).pipe(Effect.forkChild)
+    yield* gates.awaitReady(a)
+    expect(boundaryA.pollUnsafe()).toBeUndefined()
+
+    const bReady = yield* gates.awaitReady(d).pipe(Effect.forkChild)
+    yield* Effect.yieldNow
+    expect(bReady.pollUnsafe()).toBeUndefined()
     const boundaryD = yield* gates.awaitBoundary(d).pipe(Effect.forkChild)
-    yield* Fiber.join(earlyReleaseA)
+    yield* Fiber.join(bReady)
+    yield* gates.release(a)
     yield* Fiber.join(boundaryA)
     expect(boundaryD.pollUnsafe()).toBeUndefined()
 

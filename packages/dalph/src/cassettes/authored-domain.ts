@@ -703,6 +703,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   CassetteReleasesHeldPlannedAttemptContinuation: { attemptId: AttemptId, taskId: TaskId },
   /** Harness synchronization: hold this exact admitted Suspend before calling the execution substrate. */
   CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: { attemptId: AttemptId, taskId: TaskId },
+  /** Harness observation only: wait until this exact held Suspend reaches the execution boundary without releasing it. */
+  CassetteAwaitsHeldPlannedAttemptSuspensionBoundary: { attemptId: AttemptId, taskId: TaskId },
   /** Harness synchronization: release the exact admitted Suspend named by its paired hold. */
   CassetteReleasesHeldPlannedAttemptSuspension: { attemptId: AttemptId, taskId: TaskId },
   /** Harness synchronization: hold the exact post-loss Git reconciliation read before it consumes an observation. */
@@ -927,6 +929,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
     "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+    "CassetteAwaitsHeldPlannedAttemptSuspensionBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary",
     "CassetteKillsCoordinatorAtTargetPromotionReconciliationRead",
@@ -1365,6 +1368,7 @@ const plannedSuspensionBoundaryHoldsAreExactlyPaired = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
     const closure = cassette.story.reduce<{
       readonly active: ReadonlySet<string>
+      readonly awaited: ReadonlySet<string>
       readonly configured: ReadonlySet<string>
       readonly issue: string | undefined
     }>(
@@ -1372,6 +1376,7 @@ const plannedSuspensionBoundaryHoldsAreExactlyPaired = Schema.makeFilter(
         if (
           state.issue !== undefined ||
           (item._tag !== "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary" &&
+            item._tag !== "CassetteAwaitsHeldPlannedAttemptSuspensionBoundary" &&
             item._tag !== "CassetteReleasesHeldPlannedAttemptSuspension")
         ) {
           return state
@@ -1389,15 +1394,27 @@ const plannedSuspensionBoundaryHoldsAreExactlyPaired = Schema.makeFilter(
               }
             : {
                 active: new Set([...state.active, key]),
+                awaited: state.awaited,
                 configured: new Set([...state.configured, key]),
                 issue: undefined
               }
+        }
+        if (item._tag === "CassetteAwaitsHeldPlannedAttemptSuspensionBoundary") {
+          if (!state.active.has(key)) {
+            return {
+              ...state,
+              issue: `planned suspension boundary wait ${key} must match one earlier unreleased exact hold`
+            }
+          }
+          return state.awaited.has(key)
+            ? { ...state, issue: `planned suspension boundary wait ${key} must occur at most once for its exact hold` }
+            : { ...state, awaited: new Set([...state.awaited, key]) }
         }
         return state.active.has(key)
           ? { ...state, active: new Set([...state.active].filter((candidate) => candidate !== key)) }
           : { ...state, issue: `planned suspension release ${key} must match one earlier unreleased exact hold` }
       },
-      { active: new Set(), configured: new Set(), issue: undefined }
+      { active: new Set(), awaited: new Set(), configured: new Set(), issue: undefined }
     )
     if (closure.issue !== undefined) return closure.issue
     const missingRelease = closure.active.values().next().value

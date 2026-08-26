@@ -230,6 +230,35 @@ it("correlates concurrent operation selections before advancing the authored sto
   )
 })
 
+it("keeps a dependent executor report waiting while a continuation release is current", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const story = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story
+      const releaseIndex = story.findIndex((item) => item._tag === "CassetteReleasesHeldPlannedAttemptContinuation")
+      const release = story[releaseIndex]
+      const report = story[releaseIndex + 1]
+      if (
+        release?._tag !== "CassetteReleasesHeldPlannedAttemptContinuation" ||
+        report?._tag !== "PlannedAttemptExecutorWorkReported"
+      ) {
+        return yield* Effect.die("missing continuation-release and dependent executor-report fixtures")
+      }
+
+      const cursor = yield* makeStoryCursor([release, report])
+      const reportConsumer = yield* cursor
+        .consumeExecutorReportFor(report.request, report.report.attemptId)
+        .pipe(Effect.forkChild)
+
+      for (let turn = 0; turn < 16; turn += 1) yield* Effect.yieldNow
+
+      expect(reportConsumer.pollUnsafe()).toBeUndefined()
+      expect(yield* cursor.storyPosition).toBe(0)
+      expect((yield* cursor.consumePlannedAttemptContinuationExecutorBoundaryRelease)._tag).toBe("Some")
+      expect((yield* Fiber.join(reportConsumer))._tag).toBe("PlannedAttemptExecutorWorkReported")
+    })
+  )
+})
+
 it("waits for a later sibling selection after its predecessor result advances", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {

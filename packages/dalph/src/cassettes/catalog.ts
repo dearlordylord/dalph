@@ -1034,13 +1034,6 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the accepted singleton behavior.",
-      taskId: "A",
-      title: "Implement singleton"
-    },
     { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:A:0", taskId: "A" },
     { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "D" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
@@ -1052,6 +1045,7 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     },
     { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" } },
     { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
+    { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:D:1", taskId: "D" },
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -1073,36 +1067,7 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the grouping descendant behavior.",
-      taskId: "D",
-      title: "Implement grouping descendant"
-    },
-    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" },
-    {
-      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
-      direction: "Unpause",
-      duringAttemptId: "attempt:A:0",
-      outcome: { _tag: "Applied" },
-      subject: { _tag: "Task", taskId: "A" }
-    },
-    ...taskControlMembershipRead(pauseGroupingIndependentG1),
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
-      request: "Suspend"
-    },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the prerequisite behavior.",
-      taskId: "A",
-      title: "Implement prerequisite"
-    },
+    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:D:1", taskId: "D" },
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Unpause",
@@ -1129,6 +1094,29 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:1", taskId: "D" } },
+    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" },
+    {
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+      direction: "Unpause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
+      subject: { _tag: "Task", taskId: "A" }
+    },
+    ...taskControlMembershipRead(pauseGroupingIndependentG1),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the prerequisite behavior.",
+      taskId: "A",
+      title: "Implement prerequisite"
+    },
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -3073,13 +3061,6 @@ const pauseExecutorAndPromotionSuspendA = {
   taskId: "A"
 } as const
 
-const pauseExecutorAndPromotionContinueA = {
-  _tag: "FreshExecutorWorkflowRoute",
-  attemptId: "attempt:A:0",
-  proposalId: '["FreshExecutorWorkflowRoute","ContinuePlannedAttemptExecutorWork","attempt:A:0","A"]',
-  taskId: "A"
-} as const
-
 const pauseExecutorAndPromotionRunD = {
   _tag: "IdentityFreeWorkflowRoute",
   correlation: {
@@ -3103,29 +3084,16 @@ const pauseExecutorResponsibilityA = {
 const pausePromotionResponsibilityD = {
   _tag: "StartedIntegration",
   attemptId: "attempt:D:0",
-  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 72, pausedTaskId: "A" },
+  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 81, pausedTaskId: "A" },
   queuedAt: 22,
   startedAt: 23,
   taskId: "D"
 } as const
 
 const pauseExecutorSafeA = { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" } as const
-const pauseContinueLiveA = {
-  _tag: "LiveDeliveryAction",
-  owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionContinueA }
-} as const
-const pauseContinuePendingA = {
-  _tag: "AcceptedOutcomePublicationPending",
-  proposal: pauseExecutorAndPromotionContinueA
-} as const
-const pauseSuspendProposedA = { _tag: "ProposedDeliveryAction", proposal: pauseExecutorAndPromotionSuspendA } as const
 const pauseSuspendLiveA = {
   _tag: "LiveDeliveryAction",
   owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionSuspendA }
-} as const
-const pauseSuspendPendingA = {
-  _tag: "AcceptedOutcomePublicationPending",
-  proposal: pauseExecutorAndPromotionSuspendA
 } as const
 const pausePromotionRequiredD = {
   _tag: "TargetPromotionResultRequired",
@@ -3310,21 +3278,15 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
     { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
     { _tag: "TaskWorkSpecificationReadReturned", body: "Keep executor A running.", taskId: "A", title: "Run A" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
-    { _tag: "TaskWorkSpecificationReadReturned", body: "Keep independent C running.", taskId: "C", title: "Run C" },
     {
-      _tag: "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
+      duringAttemptId: "attempt:A:0",
+      outcome: { _tag: "Applied" },
       subject: { _tag: "Task", taskId: "A" }
     },
     ...taskControlMembershipRead(pauseExecutorAndPromotionG1),
-    { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
     { _tag: "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary", attemptId: "attempt:C:1", taskId: "C" },
-    { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:A:0", taskId: "A" },
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseSuspendProposedA, pauseContinueLiveA],
-      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
-    ),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:A:0" },
@@ -3332,47 +3294,44 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-    { _tag: "TaskWorkSpecificationReadReturned", body: "Keep executor A running.", taskId: "A", title: "Run A" },
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseContinueLiveA],
-      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
-    ),
-    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" },
     {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
-      request: "Suspend"
+      _tag: "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
+      attemptId: "attempt:A:0",
+      request: "Suspend",
+      taskId: "A"
     },
+    { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
     pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseContinuePendingA],
+      [pauseExecutorSafeA, pauseSuspendLiveA],
       [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
     ),
-    { _tag: "CassetteReleasesHeldTargetPromotionReconciliationRead", request: pauseExecutorAndPromotionRequestD },
-    targetPromotionGitReadReturned("/dalph/cassettes/pause-boundaries.git", promotionCandidateCommit, {
-      _tag: "CandidateCurrent",
-      currentHeadSha: promotionCandidateCommit
-    }),
     { _tag: "CassetteReleasesHeldPlannedAttemptContinuation", attemptId: "attempt:C:1", taskId: "C" },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:C:1", result: { _tag: "Completed" } },
       request: "StartOrContinue"
     },
+    { _tag: "CassetteReleasesHeldTargetPromotionReconciliationRead", request: pauseExecutorAndPromotionRequestD },
+    targetPromotionGitReadReturned("/dalph/cassettes/pause-boundaries.git", promotionCandidateCommit, {
+      _tag: "CandidateCurrent",
+      currentHeadSha: promotionCandidateCommit
+    }),
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA],
-      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
-    ),
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseSuspendProposedA],
-      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
-    ),
     pauseExecutorAndPromotionWaiting(
       [pauseExecutorSafeA, pauseSuspendLiveA],
       [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
     ),
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendLiveA],
+      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionLiveD]
+    ),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
+    { _tag: "TaskWorkSpecificationReadReturned", body: "Keep independent C running.", taskId: "C", title: "Run C" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "C" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "C" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:C:1", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:C:1", taskId: "C" } },
     pauseExecutorAndPromotionWaiting(
       [pauseExecutorSafeA, pauseSuspendLiveA],
       [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionLiveD]
@@ -3382,30 +3341,20 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
       [pausePromotionRequiredD, pausePromotionLiveD]
     ),
     pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseSuspendPendingA],
-      [pausePromotionRequiredD, pausePromotionLiveD]
+      [pauseExecutorSafeA, pauseSuspendLiveA],
+      [pausePromotionRequiredD, pausePromotionPendingD]
     ),
-    pauseExecutorAndPromotionWaiting([pauseExecutorSafeA], [pausePromotionRequiredD, pausePromotionLiveD]),
-    pauseExecutorAndPromotionWaiting([pauseExecutorSafeA], [pausePromotionRequiredD, pausePromotionPendingD]),
-    pauseExecutorAtBoundaryAndPromotionWaiting([
-      pausePromotionRequiredD,
-      pausePromotionHeldD,
-      pausePromotionActiveD,
-      pausePromotionLiveD
-    ]),
     {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
     },
+    pauseExecutorAtBoundaryAndPromotionWaiting([pausePromotionRequiredD, pausePromotionLiveD]),
     {
       _tag: "PauseProgressObserved",
       result: { _tag: "PauseConfirmed", atBoundary: [pauseExecutorResponsibilityA, pausePromotionResponsibilityD] },
       subject: { _tag: "Task", taskId: "A" }
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
     {
       _tag: "ExpectedBehavior",
       orchestration: null,

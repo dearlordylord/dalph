@@ -41,6 +41,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       DalphHoldsExecutorRequestThroughNextDeliveryPublication: noLandmark,
       CassetteRendezvousesExecutorReportsBeforeJournalAppend: noLandmark,
       CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: noLandmark,
+      CassetteAwaitsHeldPlannedAttemptSuspensionBoundary: noLandmark,
       CassetteReleasesHeldPlannedAttemptSuspension: noLandmark,
       CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary: noLandmark,
       CassetteKillsCoordinatorAtTargetPromotionReconciliationRead: noLandmark,
@@ -441,7 +442,9 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       CassetteRendezvousesExecutorReportsBeforeJournalAppend: (item) =>
         `The cassette rendezvouses ${item.members.length} exact executor provider responses before their ordinary journal appends begin.`,
       CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: (item) =>
-        `The cassette holds exact Suspend for task ${item.taskId} attempt ${item.attemptId} before calling the executor, then acknowledges that boundary is ready.`,
+        `The cassette arms the exact Suspend hold for task ${item.taskId} attempt ${item.attemptId} before calling the executor; a later story item may separately observe when that boundary is ready.`,
+      CassetteAwaitsHeldPlannedAttemptSuspensionBoundary: (item) =>
+        `The cassette observes exact held Suspend for task ${item.taskId} attempt ${item.attemptId} reach the executor boundary without releasing it.`,
       CassetteReleasesHeldPlannedAttemptSuspension: (item) =>
         `The cassette waits for and releases exact held Suspend for task ${item.taskId} attempt ${item.attemptId}.`,
       CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary: () =>
@@ -491,7 +494,7 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       OperatorStartsPauseObservation: (item) =>
         `Alice asks to observe Pause progress for ${
           item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
-        }.`,
+        }. The start boundary waits until its first result is queued.`,
       OperatorSubscribesToPauseObservation: (item) =>
         `Alice subscribes to Pause progress for ${item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`} before the held boundary publishes.`,
       OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting: (item) =>
