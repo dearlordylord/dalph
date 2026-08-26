@@ -1002,7 +1002,11 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   )((candidateText) =>
     Effect.acquireUseRelease(
       SubscriptionRef.update(activeIntegratorGitObservations, (current) => [...current, candidateText]),
-      () => consumeIntegratorGitObservationLoop(candidateText),
+      () =>
+        Effect.gen(function* () {
+          const result = yield* consumeIntegratorGitObservationLoop(candidateText)
+          return result
+        }),
       () =>
         SubscriptionRef.update(activeIntegratorGitObservations, (current) => {
           const index = current.indexOf(candidateText)
@@ -1088,7 +1092,12 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeTargetPromotionGitRead = Effect.fn("AuthoredCassette.consumeTargetPromotionGitRead")(
     (repository: GitRepositoryLocator, candidateCommit: GitCommitSha) =>
       Ref.update(activeTargetPromotionGitRequests, (current) => [...current, { candidateCommit, repository }]).pipe(
-        Effect.andThen(consumeTargetPromotionGitReadLoop(repository, candidateCommit)),
+        Effect.andThen(
+          Effect.gen(function* () {
+            const result = yield* consumeTargetPromotionGitReadLoop(repository, candidateCommit)
+            return result
+          })
+        ),
         Effect.ensuring(
           Ref.update(activeTargetPromotionGitRequests, (current) => {
             const index = current.findIndex((request) => gitRequestMatches(request, repository, candidateCommit))

@@ -132,6 +132,8 @@ type NewReleaseOperation<Operation extends TaskClaimReleaseOperation> = {
   readonly predecessorOperationIds: Operation["predecessorOperationIds"]
   readonly release: Omit<Operation["release"], "operationId">
 }
+type NonEmptyOperationIds = readonly [OperationId, ...ReadonlyArray<OperationId>]
+type NonEmptyTaskIds = readonly [TaskId, ...ReadonlyArray<TaskId>]
 
 /** Exact fields of a new authority action before its OperationId is allocated. */
 export type NewRecoveredWorkflowAction =
@@ -202,9 +204,24 @@ type FreshWorkflowOperationStep = Exclude<FreshOperationStep, FreshAttemptPlanni
 export type FreshOperationOnlyRoute =
   | { readonly _tag: "FreshWorkflowRoute"; readonly step: FreshWorkflowOperationStep }
   | { readonly _tag: "RecoveredNewActionRoute"; readonly action: NewRecoveredWorkflowAction }
+  | TrackerGraphReadRoute
+
+/**
+ * One fresh tracker graph boundary carries the exact evidence needed by its
+ * purpose. A post-claim refresh cannot silently fall back to an empty causal
+ * predecessor or an unscoped task coverage list.
+ */
+export type TrackerGraphReadRoute =
   | {
       readonly _tag: "TrackerGraphReadRoute"
       readonly purpose: "EstablishCurrentGraph"
+      readonly target: TrackerTarget
+    }
+  | {
+      readonly _tag: "TrackerGraphReadRoute"
+      readonly explicitlyCoveredTaskIds: NonEmptyTaskIds
+      readonly predecessorOperationIds: NonEmptyOperationIds
+      readonly purpose: "RefreshCurrentGraph"
       readonly target: TrackerTarget
     }
   | {
@@ -292,7 +309,7 @@ export type DeliveryActionProposal =
 /** The tracker relation can propose only one typed graph-read route it owns. */
 export type TrackerGraphActionProposal = FreshIdentityDeliveryProposal & {
   readonly owner: "TrackerGraph"
-  readonly route: Extract<FreshOperationRoute, { readonly _tag: "TrackerGraphReadRoute" }>
+  readonly route: TrackerGraphReadRoute
 }
 
 export interface DeliveryProposalContributions {
@@ -349,6 +366,14 @@ export type TrackerGraphReadProposalInput =
     }
   | {
       readonly acceptedAt: JournalPosition | null
+      readonly explicitlyCoveredTaskIds: NonEmptyTaskIds
+      readonly predecessorOperationIds: NonEmptyOperationIds
+      readonly purpose: "RefreshCurrentGraph"
+      readonly runId: RunId
+      readonly target: TrackerTarget
+    }
+  | {
+      readonly acceptedAt: JournalPosition | null
       readonly purpose: "CheckExecutorProgress"
       readonly requirement: ExecutorProgressGraphReadRequirement
       readonly runId: RunId
@@ -369,9 +394,13 @@ const canonical = (value: unknown): unknown => {
 
 export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal["route"]): DeliveryProposalId => {
   // Establishment and progress-check reads are the same one-at-a-time graph
-  // boundary.  Keep their process-local identity coalesced while preserving
-  // the purpose on the executable route for diagnostics and policy.
-  const identityRoute = route._tag === "TrackerGraphReadRoute" ? { _tag: route._tag, target: route.target } : route
+  // boundary. Keep those process-local identities coalesced while preserving
+  // one exact post-claim refresh identity so its causal read cannot be hidden
+  // behind an earlier graph owner.
+  const identityRoute =
+    route._tag === "TrackerGraphReadRoute" && route.purpose !== "RefreshCurrentGraph"
+      ? { _tag: route._tag, target: route.target }
+      : route
   return DeliveryProposalId.make(`delivery:${JSON.stringify(canonical({ route: identityRoute, runId }))}`)
 }
 
@@ -380,13 +409,21 @@ export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput)
   const route: FreshOperationRoute =
     input.purpose === "EstablishCurrentGraph"
       ? { _tag: "TrackerGraphReadRoute", purpose: input.purpose, target: input.target }
-      : {
-          _tag: "TrackerGraphReadRoute",
-          pendingReports: input.requirement.pendingReports,
-          purpose: input.purpose,
-          unresolvedReadOperationId: input.requirement.unresolvedReadOperationId,
-          target: input.target
-        }
+      : input.purpose === "CheckExecutorProgress"
+        ? {
+            _tag: "TrackerGraphReadRoute",
+            pendingReports: input.requirement.pendingReports,
+            purpose: input.purpose,
+            unresolvedReadOperationId: input.requirement.unresolvedReadOperationId,
+            target: input.target
+          }
+        : {
+            _tag: "TrackerGraphReadRoute",
+            explicitlyCoveredTaskIds: input.explicitlyCoveredTaskIds,
+            predecessorOperationIds: input.predecessorOperationIds,
+            purpose: input.purpose,
+            target: input.target
+          }
   return {
     _tag: "DeliveryActionProposal",
     actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } },
@@ -402,6 +439,8 @@ export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput)
     waitsForLiveOperationId:
       input.purpose === "CheckExecutorProgress"
         ? input.requirement.unresolvedReadOperationId
-        : (input.waitsForLiveOperationId ?? null)
+        : input.purpose === "EstablishCurrentGraph"
+          ? (input.waitsForLiveOperationId ?? null)
+          : null
   }
 }

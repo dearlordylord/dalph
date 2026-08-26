@@ -55,15 +55,25 @@ export class DeliveryActionPlanningInputs extends Context.Service<
 
 const frontierKey = (frontier: DeliveryProposalFrontier): string => JSON.stringify(frontier)
 
+const trackerGraphRouteIsCurrent = (graph: TrackerGraphState, route: TrackerGraphActionProposal["route"]): boolean => {
+  switch (route.purpose) {
+    case "EstablishCurrentGraph":
+      return graph._tag === "GraphNotEstablished"
+    case "RefreshCurrentGraph":
+    case "CheckExecutorProgress":
+      return graph._tag === "GraphEstablished"
+    default: {
+      const unreachablePurpose: never = route
+      return unreachablePurpose
+    }
+  }
+}
+
 const trackerGraphRequirementsFor = (
   graph: TrackerGraphState,
   proposals: ReadonlyArray<TrackerGraphActionProposal>
 ): ReadonlyArray<TrackerGraphActionProposal> =>
-  proposals.filter(({ route }) =>
-    graph._tag === "GraphNotEstablished"
-      ? route.purpose === "EstablishCurrentGraph"
-      : route.purpose === "CheckExecutorProgress"
-  )
+  proposals.filter(({ route }) => trackerGraphRouteIsCurrent(graph, route))
 
 const frontierOf = (delivery: DeliveryConsequences, input: DeliveryActionPlanningInput): DeliveryProposalFrontier =>
   deliveryProposalFrontierOf(

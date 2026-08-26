@@ -29,6 +29,7 @@ type AcceptedObservationTransition = Extract<
       | "ObserveStoppedAttemptClaim"
       | "ObserveCancelledAttemptClaim"
       | "ObservePlannedAttemptContinuationGraph"
+      | "RefreshCurrentGraphAfterClaim"
       | "ObservePlannedAttemptContinuationSpecification"
       | "ObservePlannedAttemptContinuationTargetLineage"
       | "ObservePlannedAttemptContinuationWorktree"
@@ -140,6 +141,12 @@ const executeAcceptedObservation = Effect.fn("DeliveryAction.executeAcceptedObse
         lease.recordIntent(operation.operationId),
         interruptibleBoundaryOf(lease)
       ),
+    RefreshCurrentGraphAfterClaim: ({ operation }) =>
+      interpreter.readTrackerGraph(
+        operation,
+        lease.recordIntent(operation.operationId),
+        interruptibleBoundaryOf(lease)
+      ),
     ObservePlannedAttemptContinuationSpecification: ({ operation }) =>
       interpreter.readTaskWorkSpecification(
         operation,
@@ -234,6 +241,7 @@ export const executeAcceptedWorkflowAction = Effect.fn("DeliveryAction.executeAc
     ObserveStoppedAttemptClaim: (transition) => executeAcceptedObservation(transition, lease),
     ObserveCancelledAttemptClaim: (transition) => executeAcceptedObservation(transition, lease),
     ObservePlannedAttemptContinuationGraph: (transition) => executeAcceptedObservation(transition, lease),
+    RefreshCurrentGraphAfterClaim: (transition) => executeAcceptedObservation(transition, lease),
     ObservePlannedAttemptContinuationSpecification: (transition) => executeAcceptedObservation(transition, lease),
     ObservePlannedAttemptContinuationTargetLineage: (transition) => executeAcceptedObservation(transition, lease),
     ObservePlannedAttemptContinuationWorktree: (transition) => executeAcceptedObservation(transition, lease)

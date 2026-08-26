@@ -467,6 +467,7 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
     { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
     ...graphReadG3,
+    ...graphReadG3,
     {
       _tag: "ExpectedBehavior",
       orchestration: null,

@@ -234,7 +234,8 @@ const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPre
   } else {
     // The run-bound read intent is durable before Git can produce an ambiguous outcome.
     yield* appendRunGitReadIntentIfNeeded(journal, run, result.candidateText, currentRecords)
-    observation = yield* (yield* IntegratorGit).readCandidate(run.session.integrationTarget, result.candidateText)
+    const integratorGit = yield* IntegratorGit
+    observation = yield* integratorGit.readCandidate(run.session.integrationTarget, result.candidateText)
   }
   if (observation.candidateText !== result.candidateText) {
     return yield* new IntegratorJournalContradiction({

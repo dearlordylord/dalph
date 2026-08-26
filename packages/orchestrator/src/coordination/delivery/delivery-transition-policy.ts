@@ -29,6 +29,7 @@ export const deliveryTransitionPolicy = {
   ObservePlannedAttemptContinuationExecutor: policy("IdentityFree", "PlannedAttempt"),
   ObserveAttemptStoppageExecutor: policy("IdentityFree", "StopSubject"),
   ObserveCancelledAttemptClaim: policy("Observation", "None"),
+  RefreshCurrentGraphAfterClaim: policy("Observation", "None"),
   FixIntegratorSuccessorSession: policy("IdentityFree", "None"),
   RecordChangedHeadRetryQuarantine: policy("IdentityFree", "None"),
   RecordInitialConclusiveIntegrationQuarantine: policy("IdentityFree", "None"),

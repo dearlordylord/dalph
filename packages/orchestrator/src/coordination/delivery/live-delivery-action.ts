@@ -24,6 +24,7 @@ type RecoveredTransition = Extract<
 const attemptBoundRecoveredReadTransitions = [
   "ObservePlannedAttemptContinuationClaim",
   "ObservePlannedAttemptContinuationGraph",
+  "RefreshCurrentGraphAfterClaim",
   "ObservePlannedAttemptContinuationSpecification",
   "ObservePlannedAttemptContinuationTargetLineage",
   "ObservePlannedAttemptContinuationWorktree",

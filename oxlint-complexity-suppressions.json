@@ -4,11 +4,6 @@
       "count": 6
     }
   },
-  "packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/coordination/run/fresh-workflow.ts": {
     "complexity": {
       "count": 1

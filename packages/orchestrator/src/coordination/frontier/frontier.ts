@@ -61,6 +61,20 @@ import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/
 import type { ChangedHeadRetryQuarantineInput } from "../../workflow/protocols/integration-quarantine/changed-head-retry.js"
 import type { PromotionStaleIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 
+type TrackerGraphOperation = typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+type CompleteTargetClosureReadShape = Extract<
+  TrackerGraphOperation["readShape"],
+  { readonly _tag: "CompleteTargetClosure" }
+>
+
+/** A claim-causal graph refresh cannot be represented with empty provenance or coverage. */
+export type TrackerGraphRefreshOperation = Omit<TrackerGraphOperation, "predecessorOperationIds" | "readShape"> & {
+  readonly predecessorOperationIds: readonly [OperationId, ...ReadonlyArray<OperationId>]
+  readonly readShape: Omit<CompleteTargetClosureReadShape, "explicitlyCoveredTaskIds"> & {
+    readonly explicitlyCoveredTaskIds: readonly [TaskId, ...ReadonlyArray<TaskId>]
+  }
+}
+
 export { ResponsibilityDisposition, type ResponsibilityFreshFacts } from "./fresh-facts.js"
 export { deriveRunFinalityDecision, RunFinalityDecision, type RunFinalityProof } from "./run-finality.js"
 
@@ -108,6 +122,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
   }
   ObservePlannedAttemptContinuationGraph: {
     readonly operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+    readonly plannedAttempt: PlannedTaskAttempt
+  }
+  /** Re-reads the exact target closure after a focused claim observation made the prior graph too old. */
+  RefreshCurrentGraphAfterClaim: {
+    readonly operation: TrackerGraphRefreshOperation
     readonly plannedAttempt: PlannedTaskAttempt
   }
   ObservePlannedAttemptContinuationSpecification: {
@@ -328,6 +347,7 @@ const transitionTrackerGraphRequirements = {
   ObserveAttemptStoppageExecutor: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationExecutor: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationGraph: "AcceptedHistorySufficient",
+  RefreshCurrentGraphAfterClaim: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationSpecification: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationTargetLineage: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationWorktree: "AcceptedHistorySufficient",

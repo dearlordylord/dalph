@@ -46,7 +46,29 @@ export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFre
   route: Extract<FreshOperationOnlyRoute, { readonly _tag: "TrackerGraphReadRoute" }>,
   lease: DeliveryActionExecutionLease
 ) {
-  const operation = makeTrackerGraphObservationOperation(action.operationId, route.target)
+  const causalGraphReadShape = (() => {
+    switch (route.purpose) {
+      case "EstablishCurrentGraph":
+        return { explicitlyCoveredTaskIds: [], predecessorOperationIds: [] }
+      case "RefreshCurrentGraph":
+        return {
+          explicitlyCoveredTaskIds: route.explicitlyCoveredTaskIds,
+          predecessorOperationIds: route.predecessorOperationIds
+        }
+      case "CheckExecutorProgress":
+        return { explicitlyCoveredTaskIds: [], predecessorOperationIds: [] }
+      default: {
+        const unreachableRoute: never = route
+        return unreachableRoute
+      }
+    }
+  })()
+  const operation = makeTrackerGraphObservationOperation(
+    action.operationId,
+    route.target,
+    causalGraphReadShape.predecessorOperationIds,
+    causalGraphReadShape.explicitlyCoveredTaskIds
+  )
   return yield* executeTrackerGraphRead(operation, lease).pipe(
     Effect.map((snapshot) => ({
       _tag: "TrackerGraphObservationPublished" as const,
