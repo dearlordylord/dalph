@@ -1185,7 +1185,8 @@ describe("delivery proposal route matrix", () => {
         proposals: [
           {
             actionIdentity: { _tag: "FreshOperationIdRequired" },
-            route: { _tag: "RecoveredNewActionRoute", action: { _tag: actionTag } }
+            route: { _tag: "RecoveredNewActionRoute", action: { _tag: actionTag } },
+            waitsForLiveOperationId: null
           }
         ]
       })
@@ -1193,7 +1194,11 @@ describe("delivery proposal route matrix", () => {
       expect(accepted).toMatchObject({
         issues: [],
         proposals: [
-          { actionIdentity: { _tag: "ExistingOperationId" }, route: { _tag: "AcceptedWorkflowRoute", transition } }
+          {
+            actionIdentity: { _tag: "ExistingOperationId" },
+            route: { _tag: "AcceptedWorkflowRoute", transition },
+            waitsForLiveOperationId: operationId
+          }
         ]
       })
     }

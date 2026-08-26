@@ -845,6 +845,7 @@ const proposalActionLabels = {
   ReconcileTaskClaim: "Check the tracker after an ambiguous task-claim request",
   ReconcileTaskClaimRelease: "Check the tracker after an ambiguous claim-release request",
   ReconcileTaskWorktree: "Check or create the exact Git worktree",
+  RefreshCurrentGraphAfterClaim: "Refresh the current tracker graph after observing the task claim",
   RecordChangedHeadRetryQuarantine: "Record that Retry observed a changed integration-target head",
   RecordInitialConclusiveIntegrationQuarantine: "Record the exact conclusive Integrator result as quarantined",
   RecordPromotionStaleIntegrationQuarantine: "Record the exact stale promotion as quarantined",

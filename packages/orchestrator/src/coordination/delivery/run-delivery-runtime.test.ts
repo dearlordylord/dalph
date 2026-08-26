@@ -845,6 +845,100 @@ it.effect("does not start a causal successor before its accepted operation owner
   }).pipe(Effect.scoped)
 )
 
+it.effect("does not restart one settled operation through its accepted-route proposal", () =>
+  Effect.gen(function* () {
+    const operationId = OperationId.make("accepted-representation-operation")
+    const first = proposal(0, plannedAttempt.taskId)
+    const acceptedDerived = recoveredProposalFor(
+      RunnableFrontierTransition.CheckTaskClaim({ operationId, taskId: plannedAttempt.taskId }),
+      new Set([operationId])
+    )
+    const accepted = {
+      ...acceptedDerived,
+      admission: { ...acceptedDerived.admission, taskWorkPosition: { _tag: "NoTaskWorkPosition" as const } }
+    }
+    const initial = withProposals(yield* baseEvaluation, [first])
+    const relation = yield* dynamicEvaluationSignal(initial)
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+    const firstStarted = yield* Deferred.make<void>()
+    const firstSettled = yield* Deferred.make<void>()
+    const acceptedStarted = yield* Deferred.make<void>()
+    const finishFirst = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        action.proposal.id === first.id
+          ? Deferred.succeed(firstStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishFirst)),
+              Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
+            )
+          : Deferred.succeed(acceptedStarted, undefined).pipe(
+              Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
+            )
+    })
+    const trace = DeliverySemanticTrace.of({
+      emit: (event) =>
+        event._tag === "ActionOutcome" && event.result.proposalId === first.id
+          ? Deferred.succeed(firstSettled, undefined)
+          : Effect.void
+    })
+    const allocator = OperationIdAllocator.of({ allocate: () => Effect.succeed(operationId) })
+
+    const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+      Effect.provide(plannerLayer),
+      Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
+      Effect.provideService(OperationIdAllocator, allocator),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.provideService(DeliverySemanticTrace, trace),
+      Effect.forkChild
+    )
+    yield* Deferred.await(firstStarted)
+    const acceptedPublished = yield* capabilities.resources.runtimeObservation.changes.pipe(
+      Stream.filter(
+        (state) =>
+          state._tag === "Ready" &&
+          state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
+          state.evaluation.proposedActions.proposals.some(({ id }) => id === accepted.id)
+      ),
+      Stream.runHead,
+      Effect.forkChild
+    )
+    yield* relation.publish(withProposals(initial, [accepted], 2))
+    yield* Fiber.join(acceptedPublished)
+    const settledOwnerPublished = yield* capabilities.resources.runtimeObservation.changes.pipe(
+      Stream.filter(
+        (state) =>
+          state._tag === "Ready" &&
+          state.liveOwners.some(
+            (owner) =>
+              owner._tag === "SettledMaterializedDeliveryAction" &&
+              owner.operationId === operationId &&
+              owner.proposal.id === first.id
+          )
+      ),
+      Stream.runHead,
+      Effect.forkChild
+    )
+    yield* Deferred.succeed(finishFirst, undefined)
+    yield* Deferred.await(firstSettled)
+    yield* Fiber.join(settledOwnerPublished)
+    yield* Effect.yieldNow
+    const retained = yield* capabilities.resources.runtimeObservation.get
+    if (retained._tag !== "Ready") return expect.fail("runtime must retain its settled exact-operation owner")
+    expect(retained.liveOwners).toContainEqual({
+      _tag: "SettledMaterializedDeliveryAction",
+      intent: "IntentNotRecorded",
+      operationId,
+      proposal: first
+    })
+    expect(yield* Deferred.isDone(acceptedStarted)).toBe(false)
+
+    yield* relation.publish(withProposals(initial, [], 3))
+    expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+  }).pipe(Effect.scoped)
+)
+
 it.effect("admits independent fresh work while a recovered action remains live", () =>
   Effect.gen(function* () {
     const recovered = recoveredProposalFor(

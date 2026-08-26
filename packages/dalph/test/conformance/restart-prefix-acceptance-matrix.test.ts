@@ -51,7 +51,7 @@ import { DeliveryRelationPublicationObserver } from "../../../orchestrator/src/c
 import { makeLiveDeliveryActionExecutor } from "../../../orchestrator/src/coordination/delivery/live-delivery-action-executor.js"
 import { makeJournal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
-import { runDeliveryRuntime } from "../../../orchestrator/src/coordination/delivery/run-delivery-runtime.js"
+import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
 import { DeliveryRuntimeObservationObserver } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-observation.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/src/coordination/run/required-planned-attempt-positions.js"
@@ -664,10 +664,92 @@ const assertRestartActionTrace = (
     expect(
       [
         ["ObservePlannedAttemptContinuationTargetLineage", "Recovered:ReadTargetLineage"],
-        ["ObservePlannedAttemptContinuationWorktree", "Recovered:ReadTaskWorktree"]
+        ["ObservePlannedAttemptContinuationWorktree", "Recovered:ReadTaskWorktree"],
+        ["Recovered:ReadTrackerGraph", "RefreshCurrentGraphAfterClaim"]
       ].some((allowed) => JSON.stringify(allowed.toSorted()) === JSON.stringify(tags)),
       label + " shared operation identity " + operationId
     ).toBe(true)
+    if (
+      JSON.stringify(["Recovered:ReadTrackerGraph", "RefreshCurrentGraphAfterClaim"].toSorted()) ===
+      JSON.stringify(tags)
+    ) {
+      expect(prefix.cut, label + " graph refresh shared identity cut").toBe("DirectionApplied")
+      const responsibility = deriveIntegrationAdmission(prefix.records).responsibilities.find(
+        (candidate) => candidate._tag === "StartedIntegrationResponsibility"
+      )
+      if (responsibility?._tag !== "StartedIntegrationResponsibility") {
+        expect.fail(label + " graph refresh shared identity lacks its started responsibility")
+        return
+      }
+      const taskId = responsibility.plannedAttempt.taskId
+      const claimObservation = activation.records.findLast(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          (event.observation._tag === "FocusedTaskClaimFacts" ||
+            event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+          String(event.observation.coverage.taskId) === String(taskId)
+      )
+      if (
+        claimObservation?.event._tag !== "TaskTrackerFactsObserved" ||
+        (claimObservation.event.observation._tag !== "FocusedTaskClaimFacts" &&
+          claimObservation.event.observation._tag !== "FocusedTaskClaimFactsUnreadable")
+      ) {
+        expect.fail(label + " graph refresh shared identity lacks its focused claim observation")
+        return
+      }
+      const claimObservationOperationId = claimObservation.event.operationId
+      const claimIntent = activation.records.findLast(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTaskClaim" &&
+          String(event.operation.operationId) === String(claimObservationOperationId)
+      )
+      if (
+        claimIntent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
+        claimIntent.event.operation._tag !== "ReadTaskClaim"
+      ) {
+        expect.fail(label + " graph refresh shared identity lacks its claim intent")
+        return
+      }
+      const expectedOperationId = OperationId.make(`responsibility:${taskId}:after:${claimObservation.position}:graph`)
+      const graphIntent = exactlyOne(
+        activation.records.filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph" &&
+            event.operation.operationId === expectedOperationId
+        ),
+        label + " exact post-claim graph refresh intent"
+      )
+      if (
+        graphIntent.event._tag !== "TaskTrackerReadIntentRecorded" ||
+        graphIntent.event.operation._tag !== "ReadTrackerGraph"
+      ) {
+        expect.fail(label + " graph refresh shared identity lacks its typed graph intent")
+      } else {
+        expect(operationId, label + " exact post-claim graph refresh identity").toBe(String(expectedOperationId))
+        expect(graphIntent.position, label + " graph refresh follows its claim observation").toBeGreaterThan(
+          claimObservation.position
+        )
+        expect(claimObservation.position, label + " claim observation follows its read intent").toBeGreaterThan(
+          claimIntent.position
+        )
+        expect(
+          graphIntent.event.operation.predecessorOperationIds,
+          label + " graph refresh predecessor cardinality"
+        ).toEqual([claimIntent.event.operation.operationId])
+        expect(graphIntent.event.operation.readShape._tag, label + " graph refresh read shape").toBe(
+          "CompleteTargetClosure"
+        )
+        expect(
+          graphIntent.event.operation.readShape.explicitlyCoveredTaskIds,
+          label + " graph refresh task coverage"
+        ).toEqual([taskId])
+        expect(graphIntent.event.operation.target, label + " graph refresh target").toEqual(
+          claimObservation.event.observation.target
+        )
+      }
+    }
     correlatedContinuationOperationIds.add(operationId)
   }
   expect(operationIds.length - actionsByOperation.size, label + " operation identity duplicate accounting").toBe(
@@ -1654,7 +1736,7 @@ const runOrdinaryRestartActivation = Effect.fn("RestartPrefix.runOrdinaryRestart
         )
       }
     })
-    return yield* runDeliveryRuntime(relation).pipe(
+    return yield* runStabilizedDelivery(target, relation).pipe(
       Effect.provideService(DeliveryActionExecutor, bounded),
       Effect.provideService(DeliverySemanticTrace, semanticTrace),
       Effect.exit
@@ -2564,6 +2646,42 @@ it.effect(
                 : []
           )
           if (prefix.cut === "SuccessorFixed") {
+            const successorRunStarted = exactlyOne(
+              suffix.filter(({ event }) => event._tag === "IntegratorRunStarted"),
+              prefix.cut + " / " + lane + " successor Integrator start"
+            )
+            const stabilizationRead = suffix.findLast(
+              ({ event, position }) =>
+                position < successorRunStarted.position &&
+                event._tag === "TaskTrackerReadIntentRecorded" &&
+                event.operation._tag === "ReadTrackerGraph"
+            )
+            if (
+              stabilizationRead?.event._tag !== "TaskTrackerReadIntentRecorded" ||
+              stabilizationRead.event.operation._tag !== "ReadTrackerGraph"
+            ) {
+              expect.fail(prefix.cut + " / " + lane + " lacks its G2 tracker graph read")
+            } else {
+              const stabilizationOperationId = stabilizationRead.event.operation.operationId
+              const stabilizationObservation = exactlyOne(
+                suffix.filter(
+                  ({ event, position }) =>
+                    position > stabilizationRead.position &&
+                    position < successorRunStarted.position &&
+                    event._tag === "TaskTrackerFactsObserved" &&
+                    event.operationId === stabilizationOperationId
+                ),
+                prefix.cut + " / " + lane + " G2 tracker graph observation"
+              )
+              expect(
+                stabilizationRead.event.operation.readShape._tag,
+                prefix.cut + " / " + lane + " G2 tracker graph read shape"
+              ).toBe("CompleteTargetClosure")
+              expect(
+                stabilizationObservation.position,
+                prefix.cut + " / " + lane + " G2 observation before phase two"
+              ).toBeLessThan(successorRunStarted.position)
+            }
             expect(result.first.boundaryCalls.integrator, prefix.cut + " / " + lane + " Integrator request").toEqual([
               { correlation: matrix.successorRunStarted.event.run.session }
             ])

@@ -2,7 +2,11 @@ import type { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import { Schema } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
-import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
+import {
+  acceptedWorkflowTransitionOperationId,
+  type DeliveryActionProposal,
+  type DeliveryProposalId
+} from "./delivery-action-proposal.js"
 import type { DeliveryProposalFrontier } from "./relations.js"
 
 /**
@@ -174,3 +178,19 @@ export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId
   frontier._tag === "DeliveryProposalsAvailable"
     ? frontier.proposals.some(({ id }) => id === proposalId)
     : frontier.conflicts.some(({ id }) => id === proposalId)
+
+/** A settled owner remains represented by either its proposal or an accepted route for its exact operation. */
+export const proposalOwnerIsRepresented = (
+  frontier: DeliveryProposalFrontier,
+  proposalId: DeliveryProposalId,
+  operationId: OperationId | null
+): boolean =>
+  proposalIsPresent(frontier, proposalId) ||
+  (operationId !== null &&
+    frontier._tag === "DeliveryProposalsAvailable" &&
+    frontier.proposals.some(
+      (proposal) =>
+        proposal.route._tag === "AcceptedWorkflowRoute" &&
+        proposal.waitsForLiveOperationId === operationId &&
+        acceptedWorkflowTransitionOperationId(proposal.route.transition) === operationId
+    ))

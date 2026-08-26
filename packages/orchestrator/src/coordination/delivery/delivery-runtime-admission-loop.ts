@@ -10,8 +10,8 @@ import type { DeliveryRuntimeLiveOwnerSource } from "./delivery-runtime-observat
 import {
   liveActionKeyOf,
   type LiveDeliveryActionKey,
-  proposalIsAvailable,
-  proposalIsPresent
+  proposalOwnerIsRepresented,
+  proposalIsAvailable
 } from "./live-delivery-action.js"
 import type { DeliveryProposalFrontier, DeliveryRuntimeEvaluation } from "./relations.js"
 
@@ -165,8 +165,12 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
   ) {
     const current = yield* Ref.get(owners)
     const removable = (yield* Effect.forEach(current.values(), (owner) =>
-      Effect.map(owner.isSettled, (isSettled) =>
-        isSettled && !proposalIsPresent(frontier, owner.proposal.id) ? owner : undefined
+      Effect.all({ isSettled: owner.isSettled, operationId: owner.operationId }).pipe(
+        Effect.map(({ isSettled, operationId }) =>
+          isSettled && !proposalOwnerIsRepresented(frontier, owner.proposal.id, Option.getOrNull(operationId))
+            ? owner
+            : undefined
+        )
       )
     )).filter((owner): owner is LiveOwner => owner !== undefined)
     if (removable.length === 0) return

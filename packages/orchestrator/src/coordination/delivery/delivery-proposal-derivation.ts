@@ -454,6 +454,7 @@ const appendContributionForTransition = (
   const owner: DeliveryProposalOwner = isSettlementTransition(transition, frame.integrationResponsibilities)
     ? "DeliverySettlement"
     : "TicketDelivery"
+  const transitionOperationId = operationIdOf(transition)
   const context: ProposalContext = {
     admission,
     order: orderFor(
@@ -466,7 +467,10 @@ const appendContributionForTransition = (
     ),
     owner,
     runId: frame.runId,
-    waitsForLiveOperationId: runnableTransitionOperationId(transition) ?? null
+    waitsForLiveOperationId:
+      transitionOperationId !== undefined && frame.acceptedOperationIds.has(transitionOperationId)
+        ? transitionOperationId
+        : (runnableTransitionOperationId(transition) ?? null)
   }
   appendDerived(
     contributions,
