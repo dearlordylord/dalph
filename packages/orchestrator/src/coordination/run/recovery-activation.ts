@@ -108,7 +108,7 @@ import {
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
@@ -2855,11 +2855,16 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     completionTaskConfigured,
     taskClaimAuthorityByAttemptId
   })
-  const integrationLineageTransitions = Option.match(integrationTarget, {
+  type IntegrationLineageDecision = {
+    readonly blocksPromotion: boolean
+    readonly responsibility: StartedIntegrationResponsibility
+    readonly transitions: ReadonlyArray<RunnableFrontierTransition>
+  }
+  const integrationLineageDecisions = Option.match(integrationTarget, {
     onNone: () => [],
     onSome: (target) =>
       // eslint-disable-next-line complexity -- Candidate lineage starts only after the exact responsibility passes every current authority gate.
-      integrationResponsibilities.flatMap<RunnableFrontierTransition>((responsibility) => {
+      integrationResponsibilities.flatMap<IntegrationLineageDecision>((responsibility) => {
         if (responsibility._tag !== "StartedIntegrationResponsibility") return []
         const directionState = directionStateByAttemptId.get(responsibility.plannedAttempt.attemptId)
         const quarantineDirection = directionState?.direction
@@ -2894,7 +2899,42 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
         const successorTargetLineageReadIntent =
           successorCandidateGit === undefined
             ? undefined
-            : runState.workflowHistory.records.findLast(
+            : (() => {
+                const expectedPredecessorOperationId = exactDirectionLineage?.intent.event.operation.operationId
+                if (expectedPredecessorOperationId === undefined) return undefined
+                const candidateIntents = runState.workflowHistory.records.filter(
+                  (record) =>
+                    record.position > successorCandidateGit.position &&
+                    record.event._tag === "GitReadIntentRecorded" &&
+                    record.event.operation._tag === "ReadTargetLineage" &&
+                    plannedTaskAttemptEquivalence(
+                      record.event.operation.plannedAttempt,
+                      responsibility.plannedAttempt
+                    ) &&
+                    record.event.operation.integrationTarget.repository ===
+                      responsibility.integrationTarget.repository &&
+                    record.event.operation.integrationTarget.ref === responsibility.integrationTarget.ref
+                )
+                if (candidateIntents.length !== 1) return undefined
+                const candidateIntent = candidateIntents[0]
+                if (
+                  candidateIntent?.event._tag !== "GitReadIntentRecorded" ||
+                  candidateIntent.event.operation._tag !== "ReadTargetLineage"
+                ) {
+                  return undefined
+                }
+                return directionTargetLineageOperationMatches(
+                  candidateIntent.event.operation,
+                  responsibility,
+                  expectedPredecessorOperationId
+                )
+                  ? candidateIntent
+                  : undefined
+              })()
+        const successorTargetLineageReadIntentCandidates =
+          successorCandidateGit === undefined
+            ? []
+            : runState.workflowHistory.records.filter(
                 (record) =>
                   record.position > successorCandidateGit.position &&
                   record.event._tag === "GitReadIntentRecorded" &&
@@ -2903,30 +2943,80 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
                   record.event.operation.integrationTarget.repository === responsibility.integrationTarget.repository &&
                   record.event.operation.integrationTarget.ref === responsibility.integrationTarget.ref
               )
-        const successorTargetLineageReadOperationId =
-          successorTargetLineageReadIntent?.event._tag === "GitReadIntentRecorded"
-            ? successorTargetLineageReadIntent.event.operation.operationId
-            : undefined
-        const successorTargetLineageOperationId =
-          successorTargetLineageReadOperationId ??
-          (successorCandidateGit === undefined || quarantineDirection === undefined
+        const successorTargetLineageFallbackOperationId =
+          successorCandidateGit === undefined || quarantineDirection === undefined
             ? undefined
             : integrationQuarantineSuccessorTargetLineageOperationId(
                 quarantineDirection,
                 responsibility.plannedAttempt,
                 successorCandidateGit.position
-              ))
-        const successorTargetLineageWasObserved =
+              )
+        const sameSuccessorTargetLineageOperationIdRecords =
+          successorTargetLineageFallbackOperationId === undefined || successorCandidateGit === undefined
+            ? []
+            : runState.workflowHistory.records.filter(
+                (record) =>
+                  record.position > successorCandidateGit.position &&
+                  record.event._tag === "GitReadIntentRecorded" &&
+                  record.event.operation.operationId === successorTargetLineageFallbackOperationId
+              )
+        const successorTargetLineageReadIntentIsInvalid =
           successorCandidateGit !== undefined &&
-          successorTargetLineageReadOperationId !== undefined &&
-          runState.workflowHistory.records.some(
-            (record): record is TargetLineageObservationRecord =>
-              record.position > successorCandidateGit.position &&
-              record.event._tag === "TargetLineageObserved" &&
-              record.event.operationId === successorTargetLineageReadOperationId
-          )
+          (successorTargetLineageReadIntentCandidates.length > 0 ||
+            sameSuccessorTargetLineageOperationIdRecords.length > 0) &&
+          successorTargetLineageReadIntent === undefined
+        const successorTargetLineageOperationId =
+          successorTargetLineageReadIntent?.event._tag === "GitReadIntentRecorded"
+            ? successorTargetLineageReadIntent.event.operation.operationId
+            : successorTargetLineageReadIntentIsInvalid
+              ? undefined
+              : successorTargetLineageFallbackOperationId
+        const successorTargetLineageReadIntentEvent =
+          successorTargetLineageReadIntent?.event._tag === "GitReadIntentRecorded"
+            ? successorTargetLineageReadIntent.event
+            : undefined
+        const successorCandidateGitEvent =
+          successorCandidateGit?.event._tag === "IntegratorRunCandidateGitObserved"
+            ? successorCandidateGit.event
+            : undefined
+        const successorCandidateGitPosition = successorCandidateGit?.position
+        const successorTargetLineageObservation =
+          successorTargetLineageReadIntentEvent === undefined ||
+          successorCandidateGitEvent === undefined ||
+          successorCandidateGitPosition === undefined
+            ? undefined
+            : (() => {
+                const observations = runState.workflowHistory.records.filter(
+                  (record): record is TargetLineageObservationRecord =>
+                    record.position > successorCandidateGitPosition &&
+                    record.event._tag === "TargetLineageObserved" &&
+                    record.event.operationId === successorTargetLineageReadIntentEvent.operation.operationId
+                )
+                if (observations.length !== 1) return undefined
+                const observation = observations.at(0)
+                if (observation === undefined) return undefined
+                if (!plannedTaskAttemptEquivalence(observation.event.plannedAttempt, responsibility.plannedAttempt)) {
+                  return undefined
+                }
+                const exact = exactTargetLineageRecord(
+                  runState.workflowHistory.records,
+                  {
+                    expectedTargetHead: successorCandidateGitEvent.run.session.expectedTargetHead,
+                    integrationTarget: responsibility.integrationTarget,
+                    plannedAttempt: responsibility.plannedAttempt,
+                    targetLineageObservedAt: observation.position
+                  },
+                  { afterPosition: successorCandidateGitPosition }
+                )
+                return exact?.observation === observation ? observation : undefined
+              })()
+        const successorTargetLineageWasObserved =
+          successorCandidateGit !== undefined && successorTargetLineageObservation !== undefined
+        const blocksPromotion = successorCandidateGit !== undefined && !successorTargetLineageWasObserved
         const successorTargetLineageReadIsRequired =
-          successorCandidateGit !== undefined && !successorTargetLineageWasObserved
+          successorCandidateGit !== undefined &&
+          !successorTargetLineageWasObserved &&
+          !successorTargetLineageReadIntentIsInvalid
         const targetLineageReadIsRequired =
           quarantineDirection === undefined
             ? !targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) ||
@@ -2939,6 +3029,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           graphWasCheckedAfterClaim &&
           claimIsExact &&
           !pendingAttemptIds.has(responsibility.plannedAttempt.attemptId) &&
+          !successorTargetLineageReadIntentIsInvalid &&
           targetLineageReadIsRequired &&
           !integration.transitions.some(
             (transition) =>
@@ -2950,42 +3041,61 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               transition.responsibility.queuedAt === responsibility.queuedAt
           )
         if (quarantineDirection !== undefined && !targetIsHeld && lineageReadIsReady) {
-          return integration.transitions.some(
-            (transition) =>
-              transition._tag === "AcquireStartedIntegrationTarget" &&
-              transition.responsibility.queuedAt === responsibility.queuedAt
-          )
-            ? []
-            : [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+          return [
+            {
+              blocksPromotion,
+              responsibility,
+              transitions: integration.transitions.some(
+                (transition) =>
+                  transition._tag === "AcquireStartedIntegrationTarget" &&
+                  transition.responsibility.queuedAt === responsibility.queuedAt
+              )
+                ? []
+                : [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+            }
+          ]
         }
-        return targetIsHeld && lineageReadIsReady
-          ? [
-              RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
-                operation: makeTargetLineageObservationOperation({
-                  integrationTarget: target,
-                  operationId:
-                    successorTargetLineageOperationId ??
-                    directionLineageOperationId ??
-                    OperationId.make(
-                      `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(requiredFreshnessBaseline, () => 0)}:target-lineage`
-                    ),
-                  plannedAttempt: responsibility.plannedAttempt,
-                  predecessorOperationIds:
-                    quarantineDirection === undefined
-                      ? []
-                      : [
-                          successorTargetLineageReadIsRequired
-                            ? (exactDirectionLineage?.intent.event.operation.operationId ??
-                              quarantineDirection.predecessorOperationId)
-                            : quarantineDirection.predecessorOperationId
-                        ]
-                }),
-                plannedAttempt: responsibility.plannedAttempt
-              })
-            ]
-          : []
+        return [
+          {
+            blocksPromotion,
+            responsibility,
+            transitions:
+              targetIsHeld && lineageReadIsReady
+                ? [
+                    RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+                      operation: makeTargetLineageObservationOperation({
+                        integrationTarget: target,
+                        operationId:
+                          successorTargetLineageOperationId ??
+                          directionLineageOperationId ??
+                          OperationId.make(
+                            `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${responsibility.startedAt}:activation:${Option.getOrElse(requiredFreshnessBaseline, () => 0)}:target-lineage`
+                          ),
+                        plannedAttempt: responsibility.plannedAttempt,
+                        predecessorOperationIds:
+                          quarantineDirection === undefined
+                            ? []
+                            : [
+                                successorTargetLineageReadIsRequired
+                                  ? (exactDirectionLineage?.intent.event.operation.operationId ??
+                                    quarantineDirection.predecessorOperationId)
+                                  : quarantineDirection.predecessorOperationId
+                              ]
+                      }),
+                      plannedAttempt: responsibility.plannedAttempt
+                    })
+                  ]
+                : []
+          }
+        ]
       })
   })
+  const integrationLineageTransitions = integrationLineageDecisions.flatMap(({ transitions }) => transitions)
+  const blockedPromotionResponsibilityPositions = new Set(
+    integrationLineageDecisions.flatMap(({ blocksPromotion, responsibility }) =>
+      blocksPromotion ? [responsibility.queuedAt] : []
+    )
+  )
   const unobservedClaimTaskIds = [...ordinary.explanations, ...integration.explanations].flatMap((explanation) =>
     (explanation._tag === "WorkflowOperationTaskClaimConstraint" ||
       explanation._tag === "IntegrationTaskClaimConstraint") &&
@@ -3016,27 +3126,19 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     onNone: () => false,
     onSome: (baseline) => runBeganPosition !== undefined && baseline > runBeganPosition
   })
-  const graphRefreshIntentMatches = (
-    record: JournalRecord,
-    expected: {
-      readonly claimOperationId: OperationId
-      readonly explicitlyCoveredTaskIds: ReadonlyArray<TaskId>
-      readonly target: TrackerTarget
-    }
-  ): boolean => {
-    if (record.event._tag !== "TaskTrackerReadIntentRecorded") return false
-    const operation = record.event.operation
-    return (
-      operation._tag === "ReadTrackerGraph" &&
-      taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(expected.target) &&
-      operation.predecessorOperationIds.length === 1 &&
-      operation.predecessorOperationIds[0] === expected.claimOperationId &&
-      operation.readShape.explicitlyCoveredTaskIds.length === expected.explicitlyCoveredTaskIds.length &&
-      operation.readShape.explicitlyCoveredTaskIds.every(
-        (taskId, index) => taskId === expected.explicitlyCoveredTaskIds[index]
-      )
-    )
+  type GraphRefreshFacts = {
+    readonly graphObservation: CurrentGraphObservation
+    readonly claimObservation: TrackerFactsRecord
   }
+  type GraphRefreshResolution =
+    | { readonly _tag: "Absent" }
+    | { readonly _tag: "Invalid" }
+    | { readonly _tag: "Pending"; readonly facts: GraphRefreshFacts; readonly operation: TrackerGraphRefreshOperation }
+    | { readonly _tag: "Settled"; readonly facts: GraphRefreshFacts; readonly operation: TrackerGraphRefreshOperation }
+  const isTrackerGraphRefreshOperation = (
+    operation: Extract<WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>
+  ): operation is TrackerGraphRefreshOperation =>
+    operation.predecessorOperationIds.length === 1 && operation.readShape.explicitlyCoveredTaskIds.length === 1
   const claimCausalGraphRefreshOperationFor = (
     operationId: OperationId,
     target: Parameters<typeof makeTrackerGraphObservationOperation>[1],
@@ -3044,15 +3146,12 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     taskId: TaskId
   ): TrackerGraphRefreshOperation | undefined => {
     const operation = makeTrackerGraphObservationOperation(operationId, target, [claimOperationId], [taskId])
-    const isRefreshOperation = (candidate: typeof operation): candidate is TrackerGraphRefreshOperation =>
-      candidate.predecessorOperationIds.length === 1 && candidate.readShape.explicitlyCoveredTaskIds.length === 1
-    return isRefreshOperation(operation) ? operation : undefined
+    return isTrackerGraphRefreshOperation(operation) ? operation : undefined
   }
   const graphRefreshDirectionFor = (
     responsibility: StartedIntegrationResponsibility
   ): IntegrationQuarantineDirectionFacts | undefined => {
     if (!isRestartActivation) return undefined
-    if (taskClaimAuthorityByAttemptId.get(responsibility.plannedAttempt.attemptId)?._tag !== "Exact") return undefined
     const direction = directionStateByAttemptId.get(responsibility.plannedAttempt.attemptId)
     return direction?.direction.direction.fingerprint.direction === "FullRerun" ? direction.direction : undefined
   }
@@ -3080,11 +3179,121 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   const targetLineageIsCurrentFor = (responsibility: StartedIntegrationResponsibility): boolean =>
     targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) &&
     !graphRefreshRequiredAttemptIds.has(responsibility.plannedAttempt.attemptId)
-  const graphRefreshFactsFor = (
+  const graphObservationBefore = (taskId: TaskId, before: JournalPosition): CurrentGraphObservation | undefined => {
+    const record = runState.workflowHistory.records.findLast(
+      ({ event, position }) =>
+        position < before &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "CompleteTaskTrackerFacts" ||
+          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+        event.observation.factFamilies.every(({ coverage }) => coverage.explicitlyCoveredTaskIds.includes(taskId))
+    )
+    return record?.event._tag === "TaskTrackerFactsObserved"
+      ? { event: record.event, position: record.position }
+      : undefined
+  }
+  const claimFactsForOperation = (operationId: OperationId, taskId: TaskId): TrackerFactsRecord | undefined => {
+    const intents = runState.workflowHistory.records.filter(
+      (record) =>
+        record.event._tag === "TaskTrackerReadIntentRecorded" &&
+        record.event.operation._tag === "ReadTaskClaim" &&
+        record.event.operation.operationId === operationId &&
+        record.event.operation.taskId === taskId
+    )
+    if (intents.length !== 1) return undefined
+    const intent = intents[0]
+    if (intent === undefined) return undefined
+    const observations = runState.workflowHistory.records.filter(
+      (record): record is TrackerFactsRecord =>
+        record.position > intent.position &&
+        record.event._tag === "TaskTrackerFactsObserved" &&
+        record.event.operationId === operationId &&
+        record.event.observation._tag === "FocusedTaskClaimFacts" &&
+        record.event.observation.coverage.taskId === taskId
+    )
+    return observations.length === 1 ? observations[0] : undefined
+  }
+  const graphRefreshFactsForRecordedOperation = (
+    operation: TrackerGraphRefreshOperation,
     responsibility: StartedIntegrationResponsibility
-  ):
-    | { readonly graphObservation: CurrentGraphObservation; readonly claimObservation: TrackerFactsRecord }
-    | undefined => {
+  ): GraphRefreshFacts | undefined => {
+    const taskId = responsibility.plannedAttempt.taskId
+    if (operation.readShape.explicitlyCoveredTaskIds[0] !== taskId) return undefined
+    const claimOperationId = operation.predecessorOperationIds[0]
+    const claimObservation = claimFactsForOperation(claimOperationId, taskId)
+    if (claimObservation === undefined) return undefined
+    const graphObservation = graphObservationBefore(taskId, claimObservation.position)
+    if (graphObservation === undefined) return undefined
+    if (taskTrackerTargetKey(operation.target) !== taskTrackerTargetKey(graphObservation.event.observation.target)) {
+      return undefined
+    }
+    if (taskTrackerTargetKey(operation.target) !== taskTrackerTargetKey(claimObservation.event.observation.target)) {
+      return undefined
+    }
+    return { graphObservation, claimObservation }
+  }
+  const graphRefreshResolutionFor = (responsibility: StartedIntegrationResponsibility): GraphRefreshResolution => {
+    const taskId = responsibility.plannedAttempt.taskId
+    const latestClaim = runState.workflowHistory.records.findLast(
+      (record): record is TrackerFactsRecord =>
+        record.event._tag === "TaskTrackerFactsObserved" &&
+        record.event.observation._tag === "FocusedTaskClaimFacts" &&
+        record.event.observation.coverage.taskId === taskId
+    )
+    if (latestClaim === undefined) return { _tag: "Absent" }
+    const expectedOperationId = OperationId.make(`responsibility:${taskId}:after:${latestClaim.position}:graph`)
+    const candidates = runState.workflowHistory.records.filter(
+      (record) =>
+        record.event._tag === "TaskTrackerReadIntentRecorded" &&
+        record.event.operation.operationId === expectedOperationId &&
+        record.position > latestClaim.position
+    )
+    if (candidates.length === 0) return { _tag: "Absent" }
+    if (candidates.length !== 1) return { _tag: "Invalid" }
+    const candidate = candidates[0]
+    if (candidate === undefined || candidate.event._tag !== "TaskTrackerReadIntentRecorded") {
+      return { _tag: "Invalid" }
+    }
+    const operation = candidate.event.operation
+    if (operation._tag !== "ReadTrackerGraph" || !isTrackerGraphRefreshOperation(operation)) {
+      return { _tag: "Invalid" }
+    }
+    if (
+      operation.predecessorOperationIds[0] !== latestClaim.event.operationId ||
+      operation.predecessorOperationIds.length !== 1
+    ) {
+      return { _tag: "Invalid" }
+    }
+    const facts = graphRefreshFactsForRecordedOperation(operation, responsibility)
+    if (facts === undefined || facts.claimObservation.position !== latestClaim.position) {
+      return { _tag: "Invalid" }
+    }
+    const outcomes = runState.workflowHistory.records.filter(
+      (record) => record.event._tag === "TaskTrackerFactsObserved" && record.event.operationId === operation.operationId
+    )
+    if (outcomes.length > 1) return { _tag: "Invalid" }
+    const outcome = outcomes[0]
+    if (outcome !== undefined && outcome.event._tag === "TaskTrackerFactsObserved") {
+      const compatible =
+        outcome.event.observation._tag === "TaskTrackerFactsReadFailed"
+          ? taskTrackerTargetKey(outcome.event.observation.target) === taskTrackerTargetKey(operation.target)
+          : (outcome.event.observation._tag === "CompleteTaskTrackerFacts" ||
+              outcome.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+            outcome.event.observation.factFamilies.some(({ coverage }) =>
+              coverage.explicitlyCoveredTaskIds.includes(taskId)
+            ) &&
+            taskTrackerTargetKey(outcome.event.observation.target) === taskTrackerTargetKey(operation.target) &&
+            outcome.event.observation.factFamilies.every(
+              ({ coverage }) =>
+                taskTrackerTargetKey(coverage.target) === taskTrackerTargetKey(operation.target) &&
+                coverage.explicitlyCoveredTaskIds.length === 1 &&
+                coverage.explicitlyCoveredTaskIds[0] === taskId
+            )
+      if (!compatible) return { _tag: "Invalid" }
+    }
+    return outcomes.length === 0 ? { _tag: "Pending", facts, operation } : { _tag: "Settled", facts, operation }
+  }
+  const graphRefreshFactsFor = (responsibility: StartedIntegrationResponsibility): GraphRefreshFacts | undefined => {
     if (successorAlreadyStartedFor(responsibility)) return undefined
     if (!integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt)) return undefined
     const graphObservation = currentGraphObservationForTask(responsibility.plannedAttempt.taskId)
@@ -3096,19 +3305,6 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     if (targetLineageIsCurrentFor(responsibility)) return undefined
     return { graphObservation, claimObservation }
   }
-  const graphRefreshReadAlreadyRecordedFor = (
-    facts: { readonly graphObservation: CurrentGraphObservation; readonly claimObservation: TrackerFactsRecord },
-    responsibility: StartedIntegrationResponsibility
-  ): boolean =>
-    runState.workflowHistory.records.some(
-      (record) =>
-        record.position > facts.claimObservation.position &&
-        graphRefreshIntentMatches(record, {
-          claimOperationId: facts.claimObservation.event.operationId,
-          explicitlyCoveredTaskIds: [responsibility.plannedAttempt.taskId],
-          target: facts.graphObservation.event.observation.target
-        })
-    )
   /**
    * A claim reread can make a previously observed graph too old for an
    * integration decision. Re-read the exact target closure through the normal
@@ -3117,13 +3313,26 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   const graphRefreshTransitions = integrationResponsibilities.flatMap<RunnableFrontierTransition>((responsibility) => {
     if (responsibility._tag !== "StartedIntegrationResponsibility") return []
     if (graphRefreshDirectionFor(responsibility) === undefined) return []
+    const recordedResolution = graphRefreshResolutionFor(responsibility)
+    if (recordedResolution._tag === "Invalid" || recordedResolution._tag === "Settled") return []
+    if (recordedResolution._tag === "Pending") {
+      return integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt) &&
+        !successorAlreadyStartedFor(responsibility) &&
+        taskLifecycleIsOpenFor(responsibility)
+        ? [
+            RunnableFrontierTransition.RefreshCurrentGraphAfterClaim({
+              operation: recordedResolution.operation,
+              plannedAttempt: responsibility.plannedAttempt
+            })
+          ]
+        : []
+    }
     const facts = graphRefreshFactsFor(responsibility)
-    if (facts === undefined || graphRefreshReadAlreadyRecordedFor(facts, responsibility)) return []
-    const graphReadOperationId = OperationId.make(
-      `responsibility:${responsibility.plannedAttempt.taskId}:after:${facts.claimObservation.position}:graph`
-    )
+    if (facts === undefined) return []
     const graphReadOperation = claimCausalGraphRefreshOperationFor(
-      graphReadOperationId,
+      OperationId.make(
+        `responsibility:${responsibility.plannedAttempt.taskId}:after:${facts.claimObservation.position}:graph`
+      ),
       facts.graphObservation.event.observation.target,
       facts.claimObservation.event.operationId,
       responsibility.plannedAttempt.taskId
@@ -3170,7 +3379,11 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           transition._tag !== "ObservePlannedAttemptContinuationTargetLineage" ||
           !unresolvedGitReadOperationIds.has(transition.operation.operationId)
       ),
-      ...integration.transitions
+      ...integration.transitions.filter(
+        (transition) =>
+          transition._tag !== "RunTargetPromotion" ||
+          !blockedPromotionResponsibilityPositions.has(transition.responsibility.queuedAt)
+      )
     ]
   }
   const pendingGitReadReconciliations = new Set<RunnableFrontierTransition>(pendingGitReadTransitions)

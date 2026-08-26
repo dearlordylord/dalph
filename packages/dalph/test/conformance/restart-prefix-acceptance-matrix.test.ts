@@ -10,6 +10,8 @@ import {
   makeTaskWorkSpecification,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorReport,
+  type TaskId,
   TaskExecutorLocator,
   WorktreeLocator
 } from "@dalph/contracts"
@@ -53,7 +55,10 @@ import { runDeliveryRuntime } from "../../../orchestrator/src/coordination/deliv
 import { DeliveryRuntimeObservationObserver } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-observation.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/src/coordination/run/required-planned-attempt-positions.js"
-import { deriveIntegrationAdmission } from "../../../orchestrator/src/workflow/protocols/integration-admission/protocol.js"
+import {
+  deriveIntegrationAdmission,
+  type StartedIntegrationResponsibility
+} from "../../../orchestrator/src/workflow/protocols/integration-admission/protocol.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
 import {
   expectedRecoveryPrefix,
@@ -111,11 +116,13 @@ import {
 } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/plan.js"
 import { TaskClaimAcquisitionPlanner } from "../../../orchestrator/src/workflow/protocols/task-claim-acquisition/plan.js"
 import {
+  makeTrackerGraphObservationOperation,
   makeTargetLineageObservationOperation,
   type WorkflowOperation
 } from "../../../orchestrator/src/workflow/registry/operation.js"
-import { GitReadIntentRecordedEvent } from "../../../orchestrator/src/workflow/registry/event.js"
+import { GitReadIntentRecordedEvent, taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
 import { intentRecordKey } from "../../../orchestrator/src/workflow-journal/record-key.js"
+import { JournalPosition } from "../../../orchestrator/src/workflow-journal/identity.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import type { JournalStore } from "../../../orchestrator/src/workflow-journal/store.js"
 import { GitTargetLineageReadFailure } from "../../../orchestrator/src/authorities/git/target-lineage.js"
@@ -133,6 +140,14 @@ import {
   type CompletionTaskRequest
 } from "../../../orchestrator/src/workflow/protocols/integration-finality/events.js"
 import { latestPlannedAttemptExecutorEvidence } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/evidence.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent
+} from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
+import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
 import { TrackerRevision } from "../../../orchestrator/src/authorities/task-tracker/task.js"
 import { UnclaimedTask } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 import { controlledCompletionClaimBoundaryLayerFrom } from "../../../orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.js"
@@ -439,6 +454,7 @@ interface BoundaryCalls {
   readonly targetPromotion: ReadonlyArray<TargetPromotionBoundaryCall>
   readonly integrator: ReadonlyArray<IntegratorRequest>
   readonly integratorGit: ReadonlyArray<IntegratorGitBoundaryCall>
+  readonly trackerGraphReadOperationIds: ReadonlyArray<OperationId>
 }
 
 interface ResourceCallLog {
@@ -873,8 +889,9 @@ const disabledTargetPromotionRuntime: TargetPromotionRuntimeInput = {
 
 interface ProductionRestartProjection {
   readonly snapshot: RunRecoveryProjectionSnapshot
-  readonly beforeAcquire: RunRecoveryProjectionSnapshot
-  readonly afterAcquire: RunRecoveryProjectionSnapshot
+  readonly beforeAcquire: IntegrationTargetResourceSnapshot
+  readonly afterAcquire: IntegrationTargetResourceSnapshot
+  readonly resourceCalls: ResourceCallLog
   readonly records: ReadonlyArray<JournalRecord>
 }
 
@@ -891,7 +908,8 @@ const runOrdinaryRestartActivation = Effect.fn("RestartPrefix.runOrdinaryRestart
   resources: IntegrationTargetResourceController,
   foreignOperation?: Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" }>,
   allowQuiescenceWithoutExpectedAction = false,
-  stopAfterGraphRead = false
+  stopAfterGraphRead = false,
+  initialHeldResponsibility?: StartedIntegrationResponsibility
 ): Effect.fn.Return<OrdinaryActivation, unknown, Scope.Scope> {
   const runId = prefix.records[0].runId
   const began = prefix.records[0]
@@ -917,7 +935,12 @@ const runOrdinaryRestartActivation = Effect.fn("RestartPrefix.runOrdinaryRestart
     releaseAllCount: 0,
     releasePositions: []
   })
+  if (initialHeldResponsibility !== undefined) {
+    yield* resources.acquire(initialHeldResponsibility)
+    yield* resources.publishAcceptedOwnership(initialHeldResponsibility)
+  }
   const executorBoundaryCalls = yield* Ref.make({ project: 0, requestSuspension: 0, startOrContinue: 0 })
+  const trackerGraphReadCalls = yield* Ref.make<ReadonlyArray<OperationId>>([])
   const observedResources: IntegrationTargetResourceController = {
     ...resources,
     acquire: (responsibility) =>
@@ -1320,16 +1343,20 @@ const runOrdinaryRestartActivation = Effect.fn("RestartPrefix.runOrdinaryRestart
   }
   const interpreter = WorkflowInterpreter.of({
     acquireTaskClaim: () => Effect.die("restart-prefix action does not read a task claim"),
-    readTrackerGraph: () =>
-      inRunJournal
-        .read(runId)
-        .pipe(
-          Effect.map((records) =>
-            records.some(({ event }) => event._tag === "IntegrationFinalitySettled")
-              ? matrix.completedGraph
-              : graphForRuntime
-          )
-        ),
+    readTrackerGraph: (operation) =>
+      Ref.update(trackerGraphReadCalls, (operationIds) => [...operationIds, operation.operationId]).pipe(
+        Effect.andThen(
+          inRunJournal
+            .read(runId)
+            .pipe(
+              Effect.map((records) =>
+                records.some(({ event }) => event._tag === "IntegrationFinalitySettled")
+                  ? matrix.completedGraph
+                  : graphForRuntime
+              )
+            )
+        )
+      ),
     readTaskClaim: (operation) => {
       const claim = initial.records.findLast(
         ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === operation.taskId
@@ -1393,7 +1420,12 @@ const runOrdinaryRestartActivation = Effect.fn("RestartPrefix.runOrdinaryRestart
             const isExpectedAction =
               observed.value.semanticTag === expectedRestartActionTags[prefix.cut] &&
               (expectedAttemptId === undefined || observed.value.plannedAttemptId === expectedAttemptId)
-            if (isExpectedAction || (stopAfterGraphRead && observed.value.semanticTag === "TrackerGraphReadRoute")) {
+            if (
+              isExpectedAction ||
+              (stopAfterGraphRead &&
+                (observed.value.semanticTag === "TrackerGraphReadRoute" ||
+                  observed.value.semanticTag === "RefreshCurrentGraphAfterClaim"))
+            ) {
               yield* Ref.set(targetReached, true)
               yield* Deferred.succeed(actionReached, undefined)
               // The production wrapper releases process-local integration
@@ -1713,7 +1745,8 @@ const runOrdinaryRestartActivation = Effect.fn("RestartPrefix.runOrdinaryRestart
     boundaryCalls: {
       targetPromotion: yield* Ref.get(targetPromotionCalls),
       integrator: yield* Ref.get(integratorCalls),
-      integratorGit: yield* Ref.get(integratorGitCalls)
+      integratorGit: yield* Ref.get(integratorGitCalls),
+      trackerGraphReadOperationIds: yield* Ref.get(trackerGraphReadCalls)
     },
     ownership: yield* Ref.get(ownership),
     resourceCalls: yield* Ref.get(resourceCalls),
@@ -1785,19 +1818,197 @@ const productionRestartProjection = <Cut extends string>(
         return yield* Effect.die("restart prefix has no predecessor IntegratorSessionFixed authority")
       }
       const resources = yield* makeIntegrationTargetResourceController()
+      const resourceCalls = yield* Ref.make<ResourceCallLog>({
+        acquireCount: 0,
+        acceptedPublicationCount: 0,
+        releaseCount: 0,
+        releaseAllCount: 0,
+        releasePositions: []
+      })
+      const observedResources: IntegrationTargetResourceController = {
+        ...resources,
+        acquire: (responsibility) =>
+          Ref.update(resourceCalls, (current) => ({ ...current, acquireCount: current.acquireCount + 1 })).pipe(
+            Effect.andThen(resources.acquire(responsibility))
+          ),
+        publishAcceptedOwnership: (responsibility) =>
+          Ref.update(resourceCalls, (current) => ({
+            ...current,
+            acceptedPublicationCount: current.acceptedPublicationCount + 1
+          })).pipe(Effect.andThen(resources.publishAcceptedOwnership(responsibility))),
+        release: (responsibility) =>
+          Ref.update(resourceCalls, (current) => ({
+            ...current,
+            releaseCount: current.releaseCount + 1,
+            releasePositions: [...current.releasePositions, responsibility.queuedAt]
+          })).pipe(Effect.andThen(resources.release(responsibility))),
+        releaseAll: Ref.update(resourceCalls, (current) => ({
+          ...current,
+          releaseAllCount: current.releaseAllCount + 1
+        })).pipe(Effect.andThen(resources.releaseAll))
+      }
       const journal = InRunJournal.of({ append: storage.append, read: storage.read })
       const recovery = yield* makeRunRecoveryProjection(
         runId,
         session.event.correlation.integrationTarget,
-        resources,
+        observedResources,
         disabledTargetPromotionRuntime,
         true,
         true
       ).pipe(Effect.provideService(InRunJournal, journal))
+      const beforeAcquire = yield* observedResources.snapshot
       const snapshot = yield* recovery.readDeliveryProjection
-      return { snapshot, beforeAcquire: snapshot, afterAcquire: snapshot, records: yield* storage.read(runId) }
+      const afterAcquire = yield* observedResources.snapshot
+      return {
+        snapshot,
+        beforeAcquire,
+        afterAcquire,
+        resourceCalls: yield* Ref.get(resourceCalls),
+        records: yield* storage.read(runId)
+      }
     })
   )
+
+type RefreshCurrentGraphOperation = Extract<WorkflowOperation, { readonly _tag: "ReadTrackerGraph" }>
+
+const graphRefreshOperationFor = (
+  prefix: RecoveryPrefix<RestartPrefixCutLabel>,
+  taskId: TaskId
+): RefreshCurrentGraphOperation => {
+  const graph = prefix.records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      (event.observation._tag === "CompleteTaskTrackerFacts" ||
+        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+      event.observation.factFamilies.every(({ coverage }) => coverage.explicitlyCoveredTaskIds.includes(taskId))
+  )
+  const claim = prefix.records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      (event.observation._tag === "FocusedTaskClaimFacts" ||
+        event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+      event.observation.coverage.taskId === taskId
+  )
+  if (
+    graph?.event._tag !== "TaskTrackerFactsObserved" ||
+    claim?.event._tag !== "TaskTrackerFactsObserved" ||
+    (graph.event.observation._tag !== "CompleteTaskTrackerFacts" &&
+      graph.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed") ||
+    (claim.event.observation._tag !== "FocusedTaskClaimFacts" &&
+      claim.event.observation._tag !== "FocusedTaskClaimFactsUnreadable")
+  ) {
+    return expect.fail("restart-prefix fixture lacks graph and focused-claim facts for refresh")
+  }
+  return makeTrackerGraphObservationOperation(
+    OperationId.make(`responsibility:${taskId}:after:${claim.position}:graph`),
+    graph.event.observation.target,
+    [claim.event.operationId],
+    [taskId]
+  )
+}
+
+const intentOnlyGraphRefreshPrefix = (
+  prefix: RecoveryPrefix<RestartPrefixCutLabel>,
+  operation: RefreshCurrentGraphOperation
+): RecoveryPrefix<RestartPrefixCutLabel> => {
+  const first = prefix.records[0]
+  const last = prefix.records.at(-1)
+  const intent: JournalRecord = {
+    event: taskTrackerReadIntent(operation),
+    key: intentRecordKey(operation.operationId),
+    position: JournalPosition.make(Number(last.position) + 1),
+    runId: first.runId
+  }
+  return { ...prefix, records: [first, ...prefix.records.slice(1), intent] }
+}
+
+const runningExecutorAfter = (
+  prefix: RecoveryPrefix<RestartPrefixCutLabel>,
+  plannedAttempt: StartedIntegrationResponsibility["plannedAttempt"]
+): RecoveryPrefix<RestartPrefixCutLabel> => {
+  const first = prefix.records[0]
+  const last = prefix.records.at(-1)
+  const isOpenResponsibility = (record: JournalRecord): boolean => {
+    if (record.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return false
+    return !prefix.records.some(
+      (candidate) =>
+        candidate.position > record.position &&
+        candidate.event._tag === "PlannedAttemptExecutorWorkReported" &&
+        candidate.event.report._tag === "Terminal" &&
+        candidate.event.report.correlation.attemptId === record.event.plannedAttempt.attemptId
+    )
+  }
+  const requestedResponsibility = prefix.records.find(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      event.plannedAttempt.attemptId === plannedAttempt.attemptId
+  )
+  const openResponsibility =
+    requestedResponsibility !== undefined && isOpenResponsibility(requestedResponsibility)
+      ? requestedResponsibility
+      : prefix.records.findLast(isOpenResponsibility)
+  if (openResponsibility?.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") {
+    return expect.fail("pending Running fixture lacks an open executor responsibility")
+  }
+  const pendingAttempt = openResponsibility.event.plannedAttempt
+  const attemptRecords = prefix.records.filter(
+    ({ event }) =>
+      (event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+        event.plannedAttempt.attemptId === pendingAttempt.attemptId) ||
+      (event._tag === "PlannedAttemptExecutorCommandIntended" &&
+        event.plannedAttempt.attemptId === pendingAttempt.attemptId) ||
+      (event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report.correlation.attemptId === pendingAttempt.attemptId)
+  )
+  const hasTerminalResult = attemptRecords.some(
+    ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+  )
+  if (hasTerminalResult) {
+    return expect.fail("pending Running fixture cannot append after a terminal executor result")
+  }
+  const priorCommandOrdinals = attemptRecords.flatMap(({ event }) =>
+    event._tag === "PlannedAttemptExecutorCommandIntended" ? [Number(event.ordinal)] : []
+  )
+  const commandOrdinal = Math.max(0, ...priorCommandOrdinals) + 1
+  const command = PlannedAttemptExecutorCommandIntendedEvent.make({
+    command: "StartOrContinue",
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    ordinal: PlannedAttemptExecutorCommandOrdinal.make(commandOrdinal),
+    plannedAttempt: pendingAttempt,
+    version: workflowJournalEventVersion
+  })
+  const priorReports = attemptRecords.flatMap(({ event }) =>
+    event._tag === "PlannedAttemptExecutorWorkReported" ? [Number(event.ordinal)] : []
+  )
+  const reportOrdinal = Math.max(0, ...priorReports) + 1
+  const report = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(reportOrdinal),
+    report: PlannedAttemptExecutorReport.cases.Running.make({
+      correlation: { attemptId: pendingAttempt.attemptId, runId: pendingAttempt.runId }
+    }),
+    version: workflowJournalEventVersion
+  })
+  return {
+    ...prefix,
+    records: [
+      first,
+      ...prefix.records.slice(1),
+      {
+        event: command,
+        key: describeJournalEvent(command).expectedKey,
+        position: JournalPosition.make(Number(last.position) + 1),
+        runId: first.runId
+      },
+      {
+        event: report,
+        key: describeJournalEvent(report).expectedKey,
+        position: JournalPosition.make(Number(last.position) + 2),
+        runId: first.runId
+      }
+    ]
+  }
+}
 
 const resumeFreshTargetLineage = dispatchPrefixNextAction
 const prefixAt = (matrix: RestartPrefixMatrix, cut: RestartPrefixCutLabel): RecoveryPrefix<RestartPrefixCutLabel> => {
@@ -1966,10 +2177,121 @@ it.effect(
         expect(projection.afterAcquire, prefix.cut + " projection must not acquire resources").toEqual(
           projection.beforeAcquire
         )
-        expect(
-          projection.beforeAcquire.frontier.transitions.some(({ _tag }) => _tag === "AcquireStartedIntegrationTarget"),
-          prefix.cut + " resource acquisition remains an ordinary dispatched action"
-        ).toBe(false)
+        expect(projection.beforeAcquire, prefix.cut + " projection starts with an empty resource owner").toEqual({
+          activeResponsibilityPositions: new Set(),
+          heldResponsibilityPositions: new Set()
+        })
+        expect(projection.afterAcquire, prefix.cut + " projection leaves the resource owner empty").toEqual({
+          activeResponsibilityPositions: new Set(),
+          heldResponsibilityPositions: new Set()
+        })
+        expect(projection.resourceCalls, prefix.cut + " projection must not call resource boundaries").toEqual({
+          acquireCount: 0,
+          acceptedPublicationCount: 0,
+          releaseCount: 0,
+          releaseAllCount: 0,
+          releasePositions: []
+        })
+      }
+    }),
+  restartAcceptanceTimeout
+)
+
+/**
+ * Scenario mapping DS14–DS17 / DirectionApplied cut: after a focused claim
+ * reread makes the graph stale, a process restart may retain only the exact
+ * graph-read intent. Both memory and SQLite must replay that intent by its
+ * existing operation identity, exact claim predecessor, and one-task coverage;
+ * the resulting graph facts must settle before fresh lineage/successor work.
+ */
+it.effect(
+  "replays an intent-only post-claim graph refresh with exact identity in both journal lanes",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* sourceRun()
+      const matrix = restartPrefixesFrom(run.records)
+      const directionPrefix = prefixAt(matrix, "DirectionApplied")
+      const heldResponsibility = deriveIntegrationAdmission(directionPrefix.records).responsibilities.find(
+        (responsibility): responsibility is StartedIntegrationResponsibility =>
+          responsibility._tag === "StartedIntegrationResponsibility"
+      )
+      if (heldResponsibility === undefined) {
+        return yield* Effect.die("intent-only graph refresh fixture lacks its started responsibility")
+      }
+      const refreshOperation = graphRefreshOperationFor(directionPrefix, heldResponsibility.plannedAttempt.taskId)
+      expect(refreshOperation.predecessorOperationIds).toHaveLength(1)
+      expect(refreshOperation.readShape._tag).toBe("CompleteTargetClosure")
+      expect(refreshOperation.readShape.explicitlyCoveredTaskIds).toEqual([heldResponsibility.plannedAttempt.taskId])
+      for (const lane of lanes) {
+        const intentOnlyPrefix = intentOnlyGraphRefreshPrefix(directionPrefix, refreshOperation)
+        const replayCuts = [
+          { label: "idle executor", prefix: intentOnlyPrefix },
+          {
+            label: "pending Running executor",
+            prefix: runningExecutorAfter(intentOnlyPrefix, heldResponsibility.plannedAttempt)
+          }
+        ] as const
+        for (const replayCut of replayCuts) {
+          const activation = yield* withRecoveryPrefixStore(replayCut.prefix, lane, (storage) =>
+            Effect.gen(function* () {
+              const resources = yield* makeIntegrationTargetResourceController()
+              return yield* runOrdinaryRestartActivation(
+                replayCut.prefix,
+                matrix,
+                storage,
+                resources,
+                undefined,
+                false,
+                true,
+                heldResponsibility
+              )
+            })
+          )
+          const refreshActions = activation.invokedActions.filter(
+            ({ operationId }) => operationId === refreshOperation.operationId
+          )
+          expect(
+            activation.invokedActions.filter(({ semanticTag }) => semanticTag === "TrackerGraphReadRoute"),
+            "intent-only refresh suppresses generic graph route / " + lane + " / " + replayCut.label
+          ).toHaveLength(0)
+          expect(
+            refreshActions,
+            "intent-only refresh has one accepted route / " + lane + " / " + replayCut.label
+          ).toHaveLength(1)
+          expect(refreshActions[0]).toMatchObject({
+            materializedTag: "AcceptedOperationAction",
+            operationId: refreshOperation.operationId,
+            routeTag: "AcceptedWorkflowRoute",
+            semanticTag: "RefreshCurrentGraphAfterClaim"
+          })
+          expect(
+            activation.boundaryCalls.trackerGraphReadOperationIds.filter(
+              (operationId) => operationId === refreshOperation.operationId
+            ),
+            "one exact tracker provider call / " + lane + " / " + replayCut.label
+          ).toHaveLength(1)
+          const graphFacts = activation.records.filter(
+            ({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" && event.operationId === refreshOperation.operationId
+          )
+          expect(
+            graphFacts,
+            "intent-only refresh reconciles one exact graph outcome / " + lane + " / " + replayCut.label
+          ).toHaveLength(1)
+
+          const settledFirst = replayCut.prefix.records[0]
+          const settledPrefix: RecoveryPrefix<RestartPrefixCutLabel> = {
+            ...replayCut.prefix,
+            records: [settledFirst, ...activation.records.slice(1)]
+          }
+          const settledProjection = yield* productionRestartProjection(settledPrefix, lane)
+          expect(
+            settledProjection.snapshot.frontier.transitions.filter(
+              ({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim"
+            ),
+            "settled graph refresh is not redelivered / " + lane + " / " + replayCut.label
+          ).toHaveLength(0)
+        }
       }
     }),
   restartAcceptanceTimeout

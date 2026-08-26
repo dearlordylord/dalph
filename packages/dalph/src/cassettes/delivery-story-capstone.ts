@@ -165,6 +165,9 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
         plannedBaseSha: expectedHead,
         targetHeadSha: expectedHead
       })),
+      // DS17 performs one fresh H2 read for the applied FullRerun direction
+      // and one more after the distinct successor candidate is observed.
+      { plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: expectedHead, targetHeadSha: staleTargetHead },
       { plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: expectedHead, targetHeadSha: staleTargetHead }
     ],
     worktreeObservation: { _tag: "PlannedWorktreeAbsent" }

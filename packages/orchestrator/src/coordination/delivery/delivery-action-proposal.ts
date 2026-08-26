@@ -140,6 +140,10 @@ export type NewRecoveredWorkflowAction =
   | {
       readonly _tag: "ReadTrackerGraph"
       readonly operation: Omit<TrackerGraphReadOperation, "operationId">
+      /** Fresh recovery may carry a deterministic operation identity without treating it as accepted journal evidence. */
+      readonly operationIdSource:
+        | { readonly _tag: "Allocate" }
+        | { readonly _tag: "DeterministicOperationId"; readonly operationId: OperationId }
       readonly plannedAttempt: PlannedTaskAttempt
     }
   | {
@@ -274,6 +278,7 @@ type FreshOperationIdentity = {
   readonly _tag: "FreshOperationIdRequired"
   readonly source:
     | { readonly _tag: "Allocate" }
+    | { readonly _tag: "DeterministicOperationId"; readonly operationId: OperationId }
     | { readonly _tag: "ExternalSuccessReleaseClaim"; readonly claimOperationId: OperationId }
     | { readonly _tag: "TaskClaimReacquisitionRequest"; readonly requestId: TaskClaimReacquisitionRequestId }
 }

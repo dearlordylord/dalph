@@ -122,7 +122,7 @@ const executorContinuationCorrelationOf = (
 }
 
 const isGraphReconfirmationTransition = (transition: RunnableFrontierTransition): boolean =>
-  transition._tag === "ObservePlannedAttemptContinuationGraph" || transition._tag === "RefreshCurrentGraphAfterClaim"
+  transition._tag === "ObservePlannedAttemptContinuationGraph"
 
 const executorProgressBlocked = (
   transition: RunnableFrontierTransition,
@@ -182,26 +182,6 @@ const latestUnresolvedGraphReadOperationIdOf = (
     .filter(({ observation }) => observation._tag === "Unresolved")
     .toSorted((left, right) => Number(right.intentAt) - Number(left.intentAt))[0]?.operationId
 
-const trackerGraphRefreshProposalOf = (
-  journal: JournalProjection,
-  recoveredTransitions: ReadonlyArray<RunnableFrontierTransition>,
-  runId: RunId,
-  target: TrackerTarget
-): TrackerGraphActionProposal | undefined => {
-  if (journal.graph._tag !== "GraphEstablished") return undefined
-  const refreshCurrentGraph = recoveredTransitions.find(isPostClaimGraphRefresh)
-  if (refreshCurrentGraph === undefined) return undefined
-  const operation = refreshCurrentGraph.operation
-  return trackerGraphReadProposalOf({
-    acceptedAt: journal.position,
-    explicitlyCoveredTaskIds: operation.readShape.explicitlyCoveredTaskIds,
-    predecessorOperationIds: operation.predecessorOperationIds,
-    purpose: "RefreshCurrentGraph",
-    runId,
-    target
-  })
-}
-
 const trackerGraphEstablishmentRequired = (
   journal: JournalProjection,
   progressRequirement: ExecutorProgressGraphReadRequirement | undefined,
@@ -256,32 +236,27 @@ const trackerGraphProposalsOf = (
   unresolvedGraphReadOperationId: ReturnType<typeof latestUnresolvedGraphReadOperationIdOf>
 ): ReadonlyArray<TrackerGraphActionProposal> => {
   if (runIsPaused) return []
-  const refreshProposal = trackerGraphRefreshProposalOf(journal, recoveredTransitions, runId, target)
-  return refreshProposal === undefined
-    ? trackerGraphProposalsWithoutRefresh(
-        journal,
-        recoveredTransitions,
-        runId,
-        target,
-        progressRequirement,
-        unresolvedGraphReadOperationId
-      )
-    : [refreshProposal]
+  return trackerGraphProposalsWithoutRefresh(
+    journal,
+    recoveredTransitions,
+    runId,
+    target,
+    progressRequirement,
+    unresolvedGraphReadOperationId
+  )
 }
 
 const recoveredTransitionAllowed = (
   transition: RunnableFrontierTransition,
   progressRequirement: ExecutorProgressGraphReadRequirement | undefined,
   records: ReadonlyArray<JournalRecord>,
-  establishCurrentGraph: boolean,
-  refreshCurrentGraph: boolean
+  establishCurrentGraph: boolean
 ): boolean =>
   !executorProgressBlocked(transition, progressRequirement) &&
   ((transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
     transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts") ||
     executorContinuationWithinLimit(transition, records)) &&
-  !(establishCurrentGraph && transition._tag === "ObservePlannedAttemptContinuationGraph") &&
-  !(refreshCurrentGraph && isPostClaimGraphRefresh(transition))
+  !(establishCurrentGraph && transition._tag === "ObservePlannedAttemptContinuationGraph")
 
 /**
  * Keeps one effectful reconciliation subscription hot while all exposed
@@ -335,10 +310,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         !recoveredContinuationBlocksFreshExecutorWork(recoveredCandidates, transition)
     )
     const establishCurrentGraph = trackerGraphEstablishmentRequired(journal, progressRequirement, recoveredCandidates)
-    const refreshCurrentGraph =
-      journal.graph._tag === "GraphEstablished" && recoveredCandidates.some(isPostClaimGraphRefresh)
     const recovered = recoveredCandidates.filter((transition) =>
-      recoveredTransitionAllowed(transition, progressRequirement, records, establishCurrentGraph, refreshCurrentGraph)
+      recoveredTransitionAllowed(transition, progressRequirement, records, establishCurrentGraph)
     )
     const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
@@ -353,15 +326,21 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
     const runIsPaused = journal.reconstructed.pause.run._tag === "RunPaused"
-    const trackerGraphProposals = trackerGraphProposalsOf(
-      journal,
-      establishCurrentGraph || refreshCurrentGraph ? recoveredCandidates : recovered,
-      runIsPaused,
-      runId,
-      target,
-      progressRequirement,
-      unresolvedGraphReadOperationId
+    const acceptedRefreshInFlight = recovered.some(
+      (transition) =>
+        isPostClaimGraphRefresh(transition) && acceptedOperationIdsOf(records).has(transition.operation.operationId)
     )
+    const trackerGraphProposals = acceptedRefreshInFlight
+      ? []
+      : trackerGraphProposalsOf(
+          journal,
+          recovered,
+          runIsPaused,
+          runId,
+          target,
+          progressRequirement,
+          unresolvedGraphReadOperationId
+        )
     return {
       actionInputs: {
         proposalContributions,

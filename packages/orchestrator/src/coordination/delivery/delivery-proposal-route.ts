@@ -34,11 +34,13 @@ const recoveredObservationActionOf = (transition: ObservationTransition): NewRec
     ObservePlannedAttemptContinuationGraph: (transition): NewRecoveredWorkflowAction => ({
       _tag: "ReadTrackerGraph",
       operation: withoutOperationId(transition.operation),
+      operationIdSource: { _tag: "Allocate" },
       plannedAttempt: transition.plannedAttempt
     }),
     RefreshCurrentGraphAfterClaim: (transition): NewRecoveredWorkflowAction => ({
       _tag: "ReadTrackerGraph",
       operation: withoutOperationId(transition.operation),
+      operationIdSource: { _tag: "DeterministicOperationId", operationId: transition.operation.operationId },
       plannedAttempt: transition.plannedAttempt
     }),
     ObservePlannedAttemptContinuationClaim: (transition): NewRecoveredWorkflowAction => ({

@@ -45,6 +45,7 @@ import {
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
   makeFocusedTaskWorkSpecificationFactsObserved,
+  TaskTrackerFactsReadFailed,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
@@ -62,7 +63,10 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  deriveIntegrationAdmission,
+  StartedIntegrationResponsibility
+} from "../../workflow/protocols/integration-admission/protocol.js"
 import {
   TargetPromotionIntendedEvent,
   targetPromotionCorrelationFor
@@ -75,11 +79,16 @@ import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
   IntegratorResult,
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
-  IntegratorSessionId as OuterIntegratorSessionId
+  IntegratorSessionId as OuterIntegratorSessionId,
+  IntegratorSuccessorSessionFixedEvent,
+  firstFullRerunSuccessorGeneration,
+  IntegratorGitObservation
 } from "../../workflow/protocols/integrator/events.js"
 import {
   IntegrationQuarantineBasis,
@@ -96,6 +105,12 @@ import {
   IntegrationStartedEvent
 } from "../../workflow/protocols/integration-admission/events.js"
 import { integratorResponsibilityFactsFromCorrelation } from "../../workflow/protocols/integrator/state.js"
+import {
+  integratorRunCorrelationForSession,
+  integratorSuccessorCorrelationFor,
+  IntegratorSuccessorPreparationInput
+} from "../../workflow/protocols/integrator/session.js"
+import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 import { evaluateIntegratorRetryAuthorization } from "../../workflow/protocols/integrator/retry-authorization.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import {
@@ -565,6 +580,291 @@ const directionProjectionFixture = (direction: "Retry" | "FullRerun", graphAfter
   }
 }
 
+/**
+ * A later focused claim read makes the last complete graph observation stale.
+ * The expected graph refresh identity is kept explicit so malformed records
+ * can retain that same ID while changing exactly one causal field.
+ */
+const postClaimGraphRefreshFixture = () => {
+  const fixture = directionProjectionFixture("FullRerun")
+  const began = makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy)
+  const claimIntentPosition = JournalPosition.make(24)
+  const claimPosition = JournalPosition.make(25)
+  const claimOperation = makeTaskClaimObservationOperation(
+    OperationId.make("recovery-activation-post-claim-refresh-claim"),
+    coverageTarget,
+    coverageAttempt.taskId,
+    [coverageGraphOperation.operationId]
+  )
+  const claimRecord = coverageRecord(
+    Number(claimPosition),
+    taskTrackerFactsObservedEvent(
+      claimOperation.operationId,
+      makeFocusedTaskClaimFactsObserved(claimOperation, coverageClaim)
+    )
+  )
+  const operation = makeTrackerGraphObservationOperation(
+    OperationId.make(`responsibility:${coverageAttempt.taskId}:after:${claimPosition}:graph`),
+    coverageTarget,
+    [claimOperation.operationId],
+    [coverageAttempt.taskId]
+  )
+  const state: ReconstructedRunState = {
+    ...fixture.reconstructed,
+    appliedThrough: claimPosition,
+    workflowHistory: {
+      records: [
+        began,
+        ...fixture.reconstructed.workflowHistory.records,
+        coverageRecord(Number(claimIntentPosition), taskTrackerReadIntent(claimOperation)),
+        claimRecord
+      ]
+    }
+  }
+  return { fixture, claimOperation, claimRecord, claimIntentPosition, operation, state }
+}
+
+const appendCoverageRecord = (
+  state: ReconstructedRunState,
+  position: number,
+  event: JournalRecord["event"]
+): ReconstructedRunState => {
+  const record = coverageRecord(position, event)
+  return {
+    ...state,
+    appliedThrough: record.position,
+    workflowHistory: { records: [...state.workflowHistory.records, record] }
+  }
+}
+
+const heldIntegrationResponsibilityFor = (state: ReconstructedRunState): StartedIntegrationResponsibility => {
+  const responsibility = deriveIntegrationAdmission(state.workflowHistory.records).responsibilities.find(
+    (candidate): candidate is StartedIntegrationResponsibility =>
+      candidate._tag === "StartedIntegrationResponsibility" &&
+      candidate.plannedAttempt.attemptId === coverageAttempt.attemptId
+  )
+  if (responsibility === undefined) {
+    throw new Error("expected the coverage fixture to retain its integration responsibility")
+  }
+  return responsibility
+}
+
+const restartCoverageProjectionJournal = (state: ReconstructedRunState) => {
+  const began = makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy)
+  const baselineGraphOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("recovery-activation-restart-baseline-graph"),
+    coverageTarget,
+    [],
+    [coverageAttempt.taskId]
+  )
+  const baselineGraphIntent = coverageRecord(2, taskTrackerReadIntent(baselineGraphOperation))
+  const baselineGraphObservation = coverageRecord(
+    3,
+    makeTaskTrackerFactsObservedFromRead([], baselineGraphOperation, coverageGraph)
+  )
+  const journal = InRunJournal.of({
+    append: () => Effect.die("projection coverage does not append"),
+    read: () => Effect.succeed([began, baselineGraphIntent, baselineGraphObservation])
+  })
+  return Object.assign(journal, { state: { get: Effect.succeed({ reconstructed: state }) } })
+}
+
+const readHeldCoverageProjection = (
+  state: ReconstructedRunState,
+  integrationTarget: IntegrationTarget,
+  targetPromotion?: TargetPromotionRuntimeInput
+) =>
+  Effect.gen(function* () {
+    const resources = yield* makeIntegrationTargetResourceController()
+    const responsibility = heldIntegrationResponsibilityFor(state)
+    yield* resources.acquire(responsibility)
+    yield* resources.publishAcceptedOwnership(responsibility)
+    const recovery = yield* makeRunRecoveryProjection(
+      coverageRunId,
+      integrationTarget,
+      resources,
+      targetPromotion
+    ).pipe(Effect.provideService(InRunJournal, restartCoverageProjectionJournal(state)))
+    return yield* recovery.readDeliveryProjection
+  })
+
+/**
+ * Builds the exact FullRerun successor prefix through its candidate Git proof
+ * and one post-successor current-head lineage read. The malformed cases below
+ * alter only that final read pair or its observation, never an opaque ID.
+ */
+const postSuccessorLineageFixture = () => {
+  const fixture = directionProjectionFixture("FullRerun")
+  const began = makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy)
+  const sessionRecord = fixture.reconstructed.workflowHistory.records.find(
+    ({ event }) => event._tag === "IntegratorSessionFixed"
+  )
+  const directionRecord = fixture.directionRecord
+  if (sessionRecord?.event._tag !== "IntegratorSessionFixed") {
+    throw new Error("expected the FullRerun fixture to retain its predecessor session")
+  }
+  const successorHead = GitCommitSha.make("d".repeat(40))
+  const directionLineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: fixture.integrationTarget,
+    operationId: OperationId.make("recovery-activation-successor-direction-lineage"),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: [fixture.lineageOperation.operationId]
+  })
+  const directionLineageIntent = coverageRecord(
+    24,
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: directionLineageOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const directionLineageObservation = coverageRecord(
+    25,
+    TargetLineageObservedEvent.make({
+      observation: TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: coverageAttempt.baseSha,
+        targetHeadSha: successorHead
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: directionLineageOperation.operationId,
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const successorInput = IntegratorSuccessorPreparationInput.make({
+    directionAppliedAt: directionRecord.position,
+    predecessor: sessionRecord.event.correlation,
+    quarantineAt: JournalPosition.make(17),
+    targetLineage:
+      directionLineageObservation.event._tag === "TargetLineageObserved"
+        ? directionLineageObservation.event.observation
+        : TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: coverageAttempt.baseSha,
+            targetHeadSha: successorHead
+          }),
+    targetLineageObservedAt: directionLineageObservation.position
+  })
+  const successor = integratorSuccessorCorrelationFor(successorInput)
+  const successorFixed = coverageRecord(
+    26,
+    IntegratorSuccessorSessionFixedEvent.make({
+      direction: "FullRerun",
+      directionAppliedAt: directionRecord.position,
+      predecessor: sessionRecord.event.correlation,
+      quarantineAt: JournalPosition.make(17),
+      successor,
+      successorGeneration: firstFullRerunSuccessorGeneration,
+      version: workflowJournalEventVersion
+    })
+  )
+  const successorRun = integratorRunCorrelationForSession(successor, IntegratorRunOrdinal.make(1))
+  const successorRunStarted = coverageRecord(
+    27,
+    IntegratorRunStartedEvent.make({ run: successorRun, version: workflowJournalEventVersion })
+  )
+  const candidateText = IntegratorCandidateText.make("refs/candidates/recovery-activation-successor")
+  const candidateResult = IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: successor })
+  const candidateRunResult = coverageRecord(
+    28,
+    IntegratorRunResultRecordedEvent.make({
+      result: candidateResult,
+      run: successorRun,
+      version: workflowJournalEventVersion
+    })
+  )
+  const candidateReadIntent = coverageRecord(
+    29,
+    IntegratorRunCandidateGitReadIntendedEvent.make({
+      candidateText,
+      run: successorRun,
+      version: workflowJournalEventVersion
+    })
+  )
+  const candidateCommit = GitCommitSha.make("e".repeat(40))
+  const candidateObservation = IntegratorGitObservation.cases.Commit.make({
+    candidateText,
+    commit: candidateCommit,
+    directParents: [successorHead, successor.acceptedResult.commit]
+  })
+  const candidateGitObserved = coverageRecord(
+    30,
+    IntegratorRunCandidateGitObservedEvent.make({
+      candidateText,
+      observation: candidateObservation,
+      run: successorRun,
+      version: workflowJournalEventVersion
+    })
+  )
+  const successorLineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: fixture.integrationTarget,
+    operationId: OperationId.make("recovery-activation-successor-current-head-lineage"),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: [directionLineageOperation.operationId]
+  })
+  const successorLineageIntent = coverageRecord(
+    31,
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: successorLineageOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const successorLineageObservation = coverageRecord(
+    32,
+    TargetLineageObservedEvent.make({
+      observation: TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: coverageAttempt.baseSha,
+        targetHeadSha: successorHead
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: successorLineageOperation.operationId,
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const records = [
+    began,
+    ...fixture.reconstructed.workflowHistory.records,
+    directionLineageIntent,
+    directionLineageObservation,
+    successorFixed,
+    successorRunStarted,
+    candidateRunResult,
+    candidateReadIntent,
+    candidateGitObserved,
+    successorLineageIntent,
+    successorLineageObservation
+  ]
+  const state: ReconstructedRunState = {
+    ...fixture.reconstructed,
+    appliedThrough: successorLineageObservation.position,
+    workflowHistory: { records }
+  }
+  return {
+    candidateGitObserved,
+    candidateObservation,
+    directionLineageOperation,
+    fixture,
+    state,
+    successor,
+    successorLineageIntent,
+    successorLineageObservation,
+    successorLineageOperation
+  }
+}
+
+const noCrossingTargetPromotionRuntime: TargetPromotionRuntimeInput = {
+  git: {
+    compareAndSet: () => Effect.die("target promotion projection must not cross Git"),
+    read: () => Effect.die("target promotion projection must not cross Git")
+  }
+}
+
 effectIt.effect(
   "acquires the target before a fresh direction-bound lineage read and reuses the read after restart",
   () =>
@@ -814,6 +1114,410 @@ effectIt.effect("requests a fresh direction-bound lineage read for FullRerun bef
     }
     expect(read.operation.predecessorOperationIds).toEqual([fixture.lineageOperation.operationId])
     expect(read.operation.operationId).toContain(`d:${Number(fixture.directionRecord.position)}`)
+  })
+)
+
+effectIt.effect("replays and settles one exact post-claim graph refresh without redelivery", () =>
+  Effect.gen(function* () {
+    const { claimOperation, claimRecord, fixture, operation, state } = postClaimGraphRefreshFixture()
+    const initial = yield* readHeldCoverageProjection(state, fixture.integrationTarget)
+    const first = initial.frontier.transitions.find(({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim")
+    if (first?._tag !== "RefreshCurrentGraphAfterClaim") {
+      return yield* Effect.die(
+        `expected the stale claim to request a graph refresh; got ${initial.frontier.transitions.map(({ _tag }) => _tag).join(",")}`
+      )
+    }
+    expect(first.operation.operationId).toBe(operation.operationId)
+    expect(first.operation.predecessorOperationIds).toEqual([claimOperation.operationId])
+    expect(first.operation.target).toEqual(operation.target)
+    expect(first.operation.readShape.explicitlyCoveredTaskIds).toEqual([coverageAttempt.taskId])
+
+    const intentState = appendCoverageRecord(state, Number(claimRecord.position) + 1, taskTrackerReadIntent(operation))
+    const replay = yield* readHeldCoverageProjection(intentState, fixture.integrationTarget)
+    const replayed = replay.frontier.transitions.find(({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim")
+    expect(replayed).toEqual(first)
+
+    const settledState = appendCoverageRecord(
+      intentState,
+      Number(claimRecord.position) + 2,
+      makeTaskTrackerFactsObservedFromRead(intentState.workflowHistory.records, operation, coverageGraph)
+    )
+    const settled = yield* readHeldCoverageProjection(settledState, fixture.integrationTarget)
+    expect(settled.frontier.transitions.some(({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim")).toBe(false)
+    expect(
+      settled.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage")
+    ).toHaveLength(1)
+  })
+)
+
+effectIt.effect("does not orphan an unresolved graph refresh behind an unrelated later graph observation", () =>
+  Effect.gen(function* () {
+    const { claimRecord, fixture, operation, state } = postClaimGraphRefreshFixture()
+    const intentState = appendCoverageRecord(state, Number(claimRecord.position) + 1, taskTrackerReadIntent(operation))
+    const unrelatedOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("recovery-activation-unrelated-later-graph"),
+      coverageTarget,
+      [],
+      [coverageAttempt.taskId]
+    )
+    const unrelatedState = appendCoverageRecord(
+      intentState,
+      Number(claimRecord.position) + 2,
+      makeTaskTrackerFactsObservedFromRead(intentState.workflowHistory.records, unrelatedOperation, coverageGraph)
+    )
+    const projection = yield* readHeldCoverageProjection(unrelatedState, fixture.integrationTarget)
+    const refresh = projection.frontier.transitions.find(({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim")
+    if (refresh?._tag !== "RefreshCurrentGraphAfterClaim") {
+      return yield* Effect.die(
+        `unrelated graph evidence orphaned the unresolved refresh; got ${projection.frontier.transitions.map(({ _tag }) => _tag).join(",")}`
+      )
+    }
+    expect(refresh.operation.operationId).toBe(operation.operationId)
+    expect(refresh.operation.predecessorOperationIds).toEqual(operation.predecessorOperationIds)
+    expect(refresh.operation.target).toEqual(operation.target)
+    expect(refresh.operation.readShape.explicitlyCoveredTaskIds).toEqual(operation.readShape.explicitlyCoveredTaskIds)
+  })
+)
+
+effectIt.effect("fails closed when a newer claim refresh keeps the older claim as its predecessor", () =>
+  Effect.gen(function* () {
+    const { claimOperation, claimRecord, fixture, state } = postClaimGraphRefreshFixture()
+    const newerClaimOperation = makeTaskClaimObservationOperation(
+      OperationId.make("recovery-activation-post-claim-refresh-newer-claim"),
+      coverageTarget,
+      coverageAttempt.taskId,
+      [claimOperation.operationId]
+    )
+    const newerClaimIntentState = appendCoverageRecord(
+      state,
+      Number(claimRecord.position) + 1,
+      taskTrackerReadIntent(newerClaimOperation)
+    )
+    const newerClaimState = appendCoverageRecord(
+      newerClaimIntentState,
+      Number(claimRecord.position) + 2,
+      taskTrackerFactsObservedEvent(
+        newerClaimOperation.operationId,
+        makeFocusedTaskClaimFactsObserved(newerClaimOperation, coverageClaim)
+      )
+    )
+    const newerClaimPosition = Number(claimRecord.position) + 2
+    const refreshNamedForNewerClaim = makeTrackerGraphObservationOperation(
+      OperationId.make(`responsibility:${coverageAttempt.taskId}:after:${newerClaimPosition}:graph`),
+      coverageTarget,
+      [claimOperation.operationId],
+      [coverageAttempt.taskId]
+    )
+    const malformedState = appendCoverageRecord(
+      newerClaimState,
+      newerClaimPosition + 1,
+      taskTrackerReadIntent(refreshNamedForNewerClaim)
+    )
+    const projection = yield* readHeldCoverageProjection(malformedState, fixture.integrationTarget)
+    expect(projection.frontier.transitions.some(({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim")).toBe(false)
+  })
+)
+
+effectIt.effect("fails closed for malformed and duplicate post-claim graph refresh records", () =>
+  Effect.gen(function* () {
+    const { claimOperation, claimRecord, fixture, operation, state } = postClaimGraphRefreshFixture()
+    const foreignTask = TaskId.make("recovery-activation-foreign-refresh-task")
+    const foreignTarget = FixtureTarget.make("recovery-activation-foreign-refresh-target")
+    const malformedOperations = [
+      [
+        "wrong predecessor",
+        makeTrackerGraphObservationOperation(
+          operation.operationId,
+          operation.target,
+          [OperationId.make("recovery-activation-foreign-refresh-predecessor")],
+          [coverageAttempt.taskId]
+        )
+      ],
+      [
+        "wrong target",
+        makeTrackerGraphObservationOperation(
+          operation.operationId,
+          foreignTarget,
+          [claimOperation.operationId],
+          [coverageAttempt.taskId]
+        )
+      ],
+      [
+        "wrong covered task",
+        makeTrackerGraphObservationOperation(
+          operation.operationId,
+          operation.target,
+          [claimOperation.operationId],
+          [foreignTask]
+        )
+      ],
+      [
+        "wrong read shape",
+        makeTrackerGraphObservationOperation(operation.operationId, operation.target, [claimOperation.operationId], [])
+      ]
+    ] as const
+
+    for (const [label, malformedOperation] of malformedOperations) {
+      const malformedState = appendCoverageRecord(
+        state,
+        Number(claimRecord.position) + 1,
+        taskTrackerReadIntent(malformedOperation)
+      )
+      const projection = yield* readHeldCoverageProjection(malformedState, fixture.integrationTarget)
+      expect(
+        projection.frontier.transitions.some(({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim"),
+        label
+      ).toBe(false)
+      expect(
+        projection.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"),
+        label + " must not allocate downstream lineage"
+      ).toBe(false)
+      expect(
+        projection.frontier.transitions.some(
+          ({ _tag }) => _tag === "FixIntegratorSuccessorSession" || _tag === "RunTargetPromotion"
+        ),
+        label + " must not allocate a successor or promotion"
+      ).toBe(false)
+    }
+
+    const duplicateIntentState = appendCoverageRecord(
+      state,
+      Number(claimRecord.position) + 1,
+      taskTrackerReadIntent(operation)
+    )
+    const duplicateIntentStateAgain = appendCoverageRecord(
+      duplicateIntentState,
+      Number(claimRecord.position) + 2,
+      taskTrackerReadIntent(operation)
+    )
+    const duplicateIntentProjection = yield* readHeldCoverageProjection(
+      duplicateIntentStateAgain,
+      fixture.integrationTarget
+    )
+    expect(
+      duplicateIntentProjection.frontier.transitions.some(({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim")
+    ).toBe(false)
+    expect(
+      duplicateIntentProjection.frontier.transitions.some(
+        ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+      )
+    ).toBe(false)
+    expect(
+      duplicateIntentProjection.frontier.transitions.some(
+        ({ _tag }) => _tag === "FixIntegratorSuccessorSession" || _tag === "RunTargetPromotion"
+      )
+    ).toBe(false)
+
+    const unreadableOutcome = taskTrackerFactsObservedEvent(
+      operation.operationId,
+      TaskTrackerFactsReadFailed.make({
+        completeness: "Unreadable",
+        failure: { _tag: "TrackerReadError", detail: "duplicate refresh outcome" },
+        operationId: operation.operationId,
+        target: operation.target
+      })
+    )
+    const duplicateOutcomeState = appendCoverageRecord(
+      appendCoverageRecord(state, Number(claimRecord.position) + 1, taskTrackerReadIntent(operation)),
+      Number(claimRecord.position) + 2,
+      unreadableOutcome
+    )
+    const duplicateOutcomeStateAgain = appendCoverageRecord(
+      duplicateOutcomeState,
+      Number(claimRecord.position) + 3,
+      unreadableOutcome
+    )
+    const duplicateOutcomeProjection = yield* readHeldCoverageProjection(
+      duplicateOutcomeStateAgain,
+      fixture.integrationTarget
+    )
+    expect(
+      duplicateOutcomeProjection.frontier.transitions.some(({ _tag }) => _tag === "RefreshCurrentGraphAfterClaim")
+    ).toBe(false)
+    expect(
+      duplicateOutcomeProjection.frontier.transitions.some(
+        ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+      )
+    ).toBe(false)
+    expect(
+      duplicateOutcomeProjection.frontier.transitions.some(
+        ({ _tag }) => _tag === "FixIntegratorSuccessorSession" || _tag === "RunTargetPromotion"
+      )
+    ).toBe(false)
+  })
+)
+
+effectIt.effect("requires one exact post-successor current-head lineage witness before target promotion", () =>
+  Effect.gen(function* () {
+    const valid = postSuccessorLineageFixture()
+    const projection = yield* readHeldCoverageProjection(
+      valid.state,
+      valid.fixture.integrationTarget,
+      noCrossingTargetPromotionRuntime
+    )
+    const promotion = projection.frontier.transitions.find(({ _tag }) => _tag === "RunTargetPromotion")
+    if (promotion?._tag !== "RunTargetPromotion") {
+      return yield* Effect.die(
+        `expected exact post-successor current-head evidence to permit promotion; got ${projection.frontier.transitions.map(({ _tag }) => _tag).join(",")}`
+      )
+    }
+    expect(promotion.candidate.candidateCommit).toBe(valid.candidateObservation.commit)
+
+    const foreignTask = TaskId.make("recovery-activation-successor-foreign-task")
+    const foreignTarget = IntegrationTarget.make({
+      ref: IntegrationTargetRef.make("refs/heads/foreign"),
+      repository: GitRepositoryLocator.make("/repositories/recovery-activation-successor-foreign.git")
+    })
+    const foreignPredecessorOperation = OperationId.make("recovery-activation-successor-foreign-predecessor")
+    const replaceSuccessorLineageIntent = (
+      state: ReconstructedRunState,
+      operation: ReturnType<typeof makeTargetLineageObservationOperation>
+    ): ReconstructedRunState => ({
+      ...state,
+      workflowHistory: {
+        records: state.workflowHistory.records.map((record) =>
+          record === valid.successorLineageIntent
+            ? coverageRecord(
+                Number(record.position),
+                GitReadIntentRecordedEvent.make({
+                  initiatedBy: { _tag: "DalphCoordinator" },
+                  occurrenceClassification: "InitiatedAction",
+                  operation,
+                  version: workflowJournalEventVersion
+                })
+              )
+            : record
+        )
+      }
+    })
+    const replaceSuccessorLineageObservation = (
+      state: ReconstructedRunState,
+      observation: TargetLineageObservation,
+      plannedAttempt = coverageAttempt
+    ): ReconstructedRunState => ({
+      ...state,
+      workflowHistory: {
+        records: state.workflowHistory.records.map((record) =>
+          record === valid.successorLineageObservation
+            ? coverageRecord(
+                Number(record.position),
+                TargetLineageObservedEvent.make({
+                  observation,
+                  occurrenceClassification: "NonActionOccurrence",
+                  operationId: valid.successorLineageOperation.operationId,
+                  plannedAttempt,
+                  version: workflowJournalEventVersion
+                })
+              )
+            : record
+        )
+      }
+    })
+    const malformedCases = [
+      [
+        "foreign predecessor",
+        replaceSuccessorLineageIntent(
+          valid.state,
+          makeTargetLineageObservationOperation({
+            integrationTarget: valid.fixture.integrationTarget,
+            operationId: valid.successorLineageOperation.operationId,
+            plannedAttempt: coverageAttempt,
+            predecessorOperationIds: [foreignPredecessorOperation]
+          })
+        )
+      ],
+      ["duplicate exact intent", appendCoverageRecord(valid.state, 33, valid.successorLineageIntent.event)],
+      [
+        "wrong target",
+        replaceSuccessorLineageIntent(
+          valid.state,
+          makeTargetLineageObservationOperation({
+            integrationTarget: foreignTarget,
+            operationId: valid.successorLineageOperation.operationId,
+            plannedAttempt: coverageAttempt,
+            predecessorOperationIds: [valid.directionLineageOperation.operationId]
+          })
+        )
+      ],
+      [
+        "wrong head",
+        replaceSuccessorLineageObservation(
+          valid.state,
+          TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: coverageAttempt.baseSha,
+            targetHeadSha: GitCommitSha.make("f".repeat(40))
+          })
+        )
+      ],
+      [
+        "wrong planned Base SHA",
+        replaceSuccessorLineageObservation(
+          valid.state,
+          TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: GitCommitSha.make("f".repeat(40)),
+            targetHeadSha: valid.successor.expectedTargetHead
+          })
+        )
+      ],
+      [
+        "planned Base is not an ancestor",
+        replaceSuccessorLineageObservation(
+          valid.state,
+          TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: false,
+            plannedBaseSha: coverageAttempt.baseSha,
+            targetHeadSha: valid.successor.expectedTargetHead
+          })
+        )
+      ],
+      [
+        "wrong attempt",
+        replaceSuccessorLineageObservation(
+          valid.state,
+          TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: coverageAttempt.baseSha,
+            targetHeadSha: valid.successor.expectedTargetHead
+          }),
+          PlannedTaskAttempt.make({
+            ...coverageAttempt,
+            attemptId: AttemptId.make("recovery-activation-successor-foreign-attempt"),
+            taskId: foreignTask
+          })
+        )
+      ],
+      [
+        "wrong attempt on intent",
+        replaceSuccessorLineageIntent(
+          valid.state,
+          makeTargetLineageObservationOperation({
+            integrationTarget: valid.fixture.integrationTarget,
+            operationId: valid.successorLineageOperation.operationId,
+            plannedAttempt: PlannedTaskAttempt.make({
+              ...coverageAttempt,
+              attemptId: AttemptId.make("recovery-activation-successor-foreign-intent-attempt"),
+              taskId: foreignTask
+            }),
+            predecessorOperationIds: [valid.directionLineageOperation.operationId]
+          })
+        )
+      ],
+      ["duplicate observation", appendCoverageRecord(valid.state, 33, valid.successorLineageObservation.event)]
+    ] as const
+
+    for (const [label, malformedState] of malformedCases) {
+      const malformedProjection = yield* readHeldCoverageProjection(
+        malformedState,
+        valid.fixture.integrationTarget,
+        noCrossingTargetPromotionRuntime
+      )
+      expect(
+        malformedProjection.frontier.transitions.some(({ _tag }) => _tag === "RunTargetPromotion"),
+        label
+      ).toBe(false)
+    }
   })
 )
 

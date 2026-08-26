@@ -39,6 +39,7 @@ const operationIdFor = Effect.fn("DeliveryRuntime.materializeOperationId")(funct
   if (source._tag === "ExternalSuccessReleaseClaim") {
     return OperationId.make(`external-success-release:${source.claimOperationId}`)
   }
+  if (source._tag === "DeterministicOperationId") return source.operationId
   return yield* (yield* OperationIdAllocator).allocate()
 })
 
