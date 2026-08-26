@@ -589,6 +589,8 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette: ScenarioCasse
     },
     ...taskControlMembershipRead(twoEligibleTasksGraph),
     singletonRunningExecutorReport,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: twoEligibleTasksGraph },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
@@ -614,6 +616,15 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette: ScenarioCasse
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Running", attemptId: "attempt:B:1" },
       request: "StartOrContinue"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: twoEligibleTasksGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the second eligible behavior.",
+      taskId: "B",
+      title: "Implement second task"
     },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
@@ -941,6 +952,8 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "StartOrContinue"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -954,6 +967,8 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "StartOrContinue"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
     { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:A:0", taskId: "A" },
     { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "D" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
@@ -984,6 +999,8 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
       report: { _tag: "Running", attemptId: "attempt:D:1" },
       request: "StartOrContinue"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
     { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" },
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
@@ -1046,6 +1063,8 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
       report: { _tag: "Running", attemptId: "attempt:D:1" },
       request: "StartOrContinue"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingAddedG2 },
     { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
@@ -1887,6 +1906,8 @@ export const changedAttemptRestartRemainsUnprovedAuthoredCassette: ScenarioCasse
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
@@ -1991,6 +2012,8 @@ export const changedAttemptStopLostThirdSuspensionAuthoredCassette: ScenarioCass
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
@@ -2000,6 +2023,8 @@ export const changedAttemptStopLostThirdSuspensionAuthoredCassette: ScenarioCass
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -2253,6 +2278,8 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette: ScenarioCa
       report: { _tag: "Running", attemptId: "attempt:C:0" },
       request: "StartOrContinue"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: independentPostDeathGraph },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "Terminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } },
@@ -2312,8 +2339,8 @@ const targetPromotionGitReadReturned = (repository: string, candidateCommit: str
 })
 
 const pipelineIntegrationPositions = {
-  A: { queuedAt: 20, startedAt: 21, targetLineageObservedAt: 31 },
-  B: { queuedAt: 75, startedAt: 76, targetLineageObservedAt: 86 }
+  A: { queuedAt: 24, startedAt: 25, targetLineageObservedAt: 35 },
+  B: { queuedAt: 83, startedAt: 84, targetLineageObservedAt: 94 }
 } as const
 
 const pipelineIntegrationFinality = (
@@ -2446,6 +2473,9 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "StartOrContinue"
     },
+    ...pipelineGraphRead(blockedPipelineGraph),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    { _tag: "TaskWorkSpecificationReadReturned", body: "Complete task A.", taskId: "A", title: "Complete A" },
     pipelineAcceptedReport("attempt:A:0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     ...pipelineGraphRead(blockedPipelineGraph),
     {
@@ -2479,6 +2509,9 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
       report: { _tag: "Running", attemptId: "attempt:B:0" },
       request: "StartOrContinue"
     },
+    ...pipelineGraphRead(releasedPipelineGraph),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
+    { _tag: "TaskWorkSpecificationReadReturned", body: "Complete task B after A.", taskId: "B", title: "Complete B" },
     pipelineAcceptedReport("attempt:B:0", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
     ...pipelineGraphRead(releasedPipelineGraph),
     {

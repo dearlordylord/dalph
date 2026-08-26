@@ -2065,18 +2065,7 @@ it.effect("applies an authored operator direction through the production control
         return [
           withExpectedProtocol,
           ...(index === firstRunning
-            ? [
-                { _tag: "OperatorAppliesControlDirection" as const, direction: "Unpause" as const, subject },
-                ...(subject._tag === "Task"
-                  ? [
-                      {
-                        _tag: "DalphSelects" as const,
-                        operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
-                      },
-                      { _tag: "TrackerGraphReadReturned" as const, graph: singleton.startingFacts.trackerGraph }
-                    ]
-                  : [])
-              ]
+            ? [{ _tag: "OperatorAppliesControlDirection" as const, direction: "Unpause" as const, subject }]
             : [])
         ]
       })
@@ -2094,7 +2083,7 @@ it.effect("applies an authored operator direction through the production control
     )
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain("Operator applies Unpause to the Run.")
 
-    const taskRun = yield* runAuthoredScenarioCassette(cassetteWith({ _tag: "Task", taskId: TaskId.make("A") }))
+    const taskRun = yield* runAuthoredScenarioCassette(taskUnpauseAfterSafeSuspensionAuthoredCassette)
     expect(taskRun.observedBehavior.protocolEvidence).toContainEqual({
       _tag: "ControlDirectionApplied",
       direction: "Unpause",
@@ -4158,6 +4147,10 @@ it.effect("runs the maintained singleton through production activation and descr
       "PlannedAttemptExecutorWorkResponsibilityBegan",
       "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorWorkReported",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
       "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorWorkReported",
       "TaskTrackerReadIntentRecorded",
@@ -5514,24 +5507,21 @@ it.effect("reconstructs the same Run and attempt after typed cassette death befo
     const responsibility = run.records.find(
       ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
     )
-    const authorization = run.records.find(
-      (
-        record
-      ): record is JournalRecord & {
-        readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptContinuationAuthorized" }>
-      } => record.event._tag === "PlannedAttemptContinuationAuthorized"
-    )
+    const authorization = run.records.find(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")
     const firstCommand = run.records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
     expect(responsibility).toBeDefined()
     expect(authorization).toBeDefined()
     expect(firstCommand).toBeDefined()
     expect(responsibility?.position).toBeLessThan(authorization?.position ?? 0)
     expect(authorization?.position).toBeLessThan(firstCommand?.position ?? 0)
-    if (authorization === undefined) return yield* Effect.die("missing continuation authorization")
+    if (authorization?.event._tag !== "PlannedAttemptContinuationAuthorized") {
+      return yield* Effect.die("missing continuation authorization")
+    }
+    const authorizationWitness = authorization.event.witness
     const graph = run.records.find(
       ({ event }) =>
         event._tag === "TaskTrackerFactsObserved" &&
-        event.operationId === authorization.event.witness.activeTaskContinuationRead.graphObservationOperationId
+        event.operationId === authorizationWitness.activeTaskContinuationRead.graphObservationOperationId
     )
     expect(graph?.event._tag === "TaskTrackerFactsObserved" ? graph.event.observation._tag : undefined).toBe(
       "UnchangedTaskTrackerFactsReconfirmed"
@@ -5569,12 +5559,6 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
     )
     const preCommandRecords = run.records.slice(0, firstCommandIndex)
-    type TaskFactsRecord = JournalRecord & {
-      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>
-    }
-    type WorktreeRecord = JournalRecord & {
-      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptWorktreeObserved" }>
-    }
     const journalFor = (records: ReadonlyArray<JournalRecord>) =>
       InRunJournal.of({
         append: () => Effect.die("continuation authorization rejection test must not append"),
@@ -5629,11 +5613,11 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
           : record
       )
     const claimOutcome = preCommandRecords.find(
-      (record): record is TaskFactsRecord =>
-        record.event._tag === "TaskTrackerFactsObserved" &&
-        record.event.operationId === witness.activeTaskContinuationRead.taskClaimObservationOperationId
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId === witness.activeTaskContinuationRead.taskClaimObservationOperationId
     )
-    if (claimOutcome === undefined) {
+    if (claimOutcome?.event._tag !== "TaskTrackerFactsObserved") {
       return yield* Effect.die("continuation cassette did not produce claim outcome")
     }
     const claimObservation = claimOutcome.event.observation
@@ -5646,11 +5630,11 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       operationId
     })
     const graphOutcome = preCommandRecords.find(
-      (record): record is TaskFactsRecord =>
-        record.event._tag === "TaskTrackerFactsObserved" &&
-        record.event.operationId === witness.activeTaskContinuationRead.graphObservationOperationId
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId === witness.activeTaskContinuationRead.graphObservationOperationId
     )
-    if (graphOutcome === undefined) {
+    if (graphOutcome?.event._tag !== "TaskTrackerFactsObserved") {
       return yield* Effect.die("continuation cassette did not produce graph outcome")
     }
     const idempotent = yield* authorizePlannedAttemptContinuation(plannedAttempt, witness).pipe(
@@ -5717,11 +5701,11 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
     })
 
     const specificationOutcome = preCommandRecords.find(
-      (record): record is TaskFactsRecord =>
-        record.event._tag === "TaskTrackerFactsObserved" &&
-        record.event.operationId === witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId === witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
     )
-    if (specificationOutcome === undefined) {
+    if (specificationOutcome?.event._tag !== "TaskTrackerFactsObserved") {
       return yield* Effect.die("continuation cassette did not produce specification outcome")
     }
     const staleSpecification = yield* rejectWith(
@@ -5837,16 +5821,14 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       reason: "MissingWitness",
       witness: "PlannedAttemptWorktree"
     })
-    const worktreeOutcome = preCommandRecords.find(
-      (record): record is WorktreeRecord => record.event._tag === "PlannedAttemptWorktreeObserved"
-    )
-    if (worktreeOutcome === undefined) {
+    const worktreeOutcome = preCommandRecords.find(({ event }) => event._tag === "PlannedAttemptWorktreeObserved")
+    if (worktreeOutcome?.event._tag !== "PlannedAttemptWorktreeObserved") {
       return yield* Effect.die("continuation cassette did not produce worktree outcome")
     }
+    const worktreeOperationId = worktreeOutcome.event.operationId
     const staleWorktree = yield* rejectWith(
       preCommandRecords.map((record) =>
-        record.event._tag === "PlannedAttemptWorktreeObserved" &&
-        record.event.operationId === worktreeOutcome.event.operationId
+        record.event._tag === "PlannedAttemptWorktreeObserved" && record.event.operationId === worktreeOperationId
           ? { ...record, position: claimOutcome.position }
           : record
       ),
@@ -7461,7 +7443,7 @@ it.effect("labels the 100-task four-read encoding experiment as a baseline", () 
     const measurement = measureTrackerObservationEncoding(run.records, recorded)
 
     expect(measurement.changedGraphObservations.occurrenceCount).toBe(1)
-    expect(measurement.unchangedGraphReconfirmations.occurrenceCount).toBe(3)
+    expect(measurement.unchangedGraphReconfirmations.occurrenceCount).toBe(4)
     expect(measurement.changedGraphObservations.journalBytes).toBeGreaterThan(0)
   })
 )

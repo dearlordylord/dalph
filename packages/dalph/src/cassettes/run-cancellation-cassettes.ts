@@ -163,6 +163,8 @@ export const runningAttemptRunCancellationAuthoredCassette = Schema.decodeUnknow
       report: { _tag: "Running", attemptId: "attempt:A:0" },
       request: "StartOrContinue"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonCancellationGraph },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
       report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
