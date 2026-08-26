@@ -5,6 +5,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutor,
+  type PlannedAttemptExecutorService,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   type RunId,
@@ -372,7 +373,8 @@ const runtimeLayer = (
   runId: RunId,
   graph: TaskDagSnapshot,
   calls: Ref.Ref<BoundaryCalls>,
-  reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"]
+  reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"],
+  plannedAttemptExecutor?: PlannedAttemptExecutorService
 ) =>
   Layer.mergeAll(
     Layer.effect(InRunJournal, InRunJournal),
@@ -380,13 +382,15 @@ const runtimeLayer = (
     controlDirectionApplicationLayer,
     Layer.succeed(
       PlannedAttemptExecutor,
-      PlannedAttemptExecutor.of({
-        project: () => increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor projection"))),
-        requestSuspension: () =>
-          increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor suspension"))),
-        startOrContinue: () =>
-          increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor continuation")))
-      })
+      plannedAttemptExecutor ??
+        PlannedAttemptExecutor.of({
+          project: () =>
+            increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor projection"))),
+          requestSuspension: () =>
+            increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor suspension"))),
+          startOrContinue: () =>
+            increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor continuation")))
+        })
     ),
     Layer.mock(RunRecoveryProjection, {
       _tag: "AuthoritativeRunRecoveryProjection",
@@ -437,13 +441,14 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
   graph: TaskDagSnapshot,
   storage: JournalStore["Service"],
   calls: Ref.Ref<BoundaryCalls>,
-  reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"]
+  reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"],
+  plannedAttemptExecutor?: PlannedAttemptExecutorService
 ) {
   const capabilities = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
   const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
   const application = journaledRunBootstrapLayer(
     runId,
-    ({ runId }) => runtimeLayer(runId, graph, calls, reconcileTaskWorktree),
+    ({ runId }) => runtimeLayer(runId, graph, calls, reconcileTaskWorktree, plannedAttemptExecutor),
     yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void }),
     noopJournalMaintenanceObservation
   ).pipe(
@@ -659,6 +664,105 @@ it.effect("shows Alice the exact Suspend changing from proposed to live before i
               : undefined
         ).toEqual(proposal)
       }
+      yield* Fiber.interrupt(activation)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("immediately shows Alice an exact Suspend owner that was already live when she subscribed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const runId = yield* freshWorkflowRunId(target)
+      const graph = snapshot("pause-public-current-live-owner", null)
+      const calls = yield* Ref.make(noBoundaryCalls)
+      const memory = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
+      const attempt = plannedAttempt(runId, TaskId.make("A"))
+      const executorEntered = yield* Deferred.make<void>()
+      const plannedExecutor = PlannedAttemptExecutor.of({
+        project: () => Effect.die("the live Suspend must not project executor state"),
+        requestSuspension: () => Deferred.succeed(executorEntered, undefined).pipe(Effect.andThen(Effect.never)),
+        startOrContinue: () => Effect.die("the live Suspend must not continue executor work")
+      })
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        graph,
+        countingStore(memory, calls),
+        calls,
+        undefined,
+        plannedExecutor
+      )
+      const durableAttemptReady = yield* Deferred.make<void>()
+      const startRuntime = yield* Deferred.make<void>()
+      const activation = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const journal = yield* Journal
+            yield* appendRunningAttempt(journal, attempt)
+            const graphRead = makeTrackerGraphObservationOperation(
+              OperationId.make("pause-public-current-live-owner-G1"),
+              target
+            )
+            yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+            yield* journal.append(
+              runId,
+              outcomeRecordKey(graphRead.operationId),
+              makeTaskTrackerFactsObservedFromRead(yield* journal.read(runId), graphRead, graph)
+            )
+            yield* Deferred.succeed(durableAttemptReady, undefined)
+            yield* Deferred.await(startRuntime)
+            const resources = yield* DeliveryRuntimeResources
+            const recovery = yield* makeRunRecoveryProjection(runId, undefined, resources.integrationTargets)
+            const relations = yield* makeReactiveDeliveryRelationsLayer(
+              runId,
+              target,
+              journal,
+              recovery,
+              resources.integrationTargets
+            )
+            const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+            const executor = yield* makeLiveDeliveryActionExecutor(runId, target).pipe(
+              Effect.provide(relations),
+              Effect.provideService(
+                TaskClaimAcquisitionPlanner,
+                TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unexpected claim planning") })
+              )
+            )
+            yield* runDeliveryRuntime(relation).pipe(Effect.provideService(DeliveryActionExecutor, executor))
+            return {
+              acceptedAt: JournalPosition.make(1),
+              decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+            }
+          })
+        )
+        .pipe(Effect.provide(plannedAttemptLayer(runId)), Effect.forkChild)
+      yield* Deferred.await(durableAttemptReady)
+      yield* bootstrap.operatorControl.applyControlDirection({
+        direction: "Pause",
+        subject: { _tag: "Task", runId, taskId: TaskId.make("A") }
+      })
+      yield* Deferred.succeed(startRuntime, undefined)
+      yield* Effect.raceFirst(
+        Deferred.await(executorEntered),
+        Fiber.join(activation).pipe(Effect.andThen(Effect.die("activation ended before the Suspend executor")))
+      )
+
+      const [view] = Array.from(
+        yield* bootstrap.operatorControl
+          .observePause({ _tag: "Task", runId, taskId: TaskId.make("A") })
+          .pipe(Stream.take(1), Stream.runCollect)
+      )
+      expect(view).toMatchObject({
+        _tag: "PauseWaiting",
+        preventing: [
+          {
+            blockers: [{ _tag: "ExecutorSafeSuspensionRequired" }, { _tag: "LiveDeliveryAction" }],
+            responsibility: { taskId: "A" }
+          }
+        ]
+      })
       yield* Fiber.interrupt(activation)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
