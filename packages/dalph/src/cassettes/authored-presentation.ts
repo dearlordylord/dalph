@@ -441,9 +441,9 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       CassetteRendezvousesExecutorReportsBeforeJournalAppend: (item) =>
         `The cassette rendezvouses ${item.members.length} exact executor provider responses before their ordinary journal appends begin.`,
       CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: (item) =>
-        `The cassette holds Suspend for task ${item.taskId} attempt ${item.attemptId} before calling the executor.`,
+        `The cassette holds exact Suspend for task ${item.taskId} attempt ${item.attemptId} before calling the executor, then acknowledges that boundary is ready.`,
       CassetteReleasesHeldPlannedAttemptSuspension: (item) =>
-        `The cassette releases the held Suspend for task ${item.taskId} attempt ${item.attemptId}.`,
+        `The cassette waits for and releases exact held Suspend for task ${item.taskId} attempt ${item.attemptId}.`,
       CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary: () =>
         "The cassette holds the exact post-loss target-promotion reconciliation read before Git returns its observation.",
       CassetteKillsCoordinatorAtTargetPromotionReconciliationRead: () =>

@@ -89,6 +89,22 @@ export const AuthoredCassetteDecision = Schema.TaggedUnion({
 export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
 
 /**
+ * Harness-only identity of one exact planned-attempt Suspend call held before
+ * the execution-substrate boundary. The request discriminator prevents this
+ * synchronization identity from being reused for StartOrContinue.
+ */
+export interface AuthoredPlannedSuspensionBoundaryCorrelation {
+  readonly attemptId: AttemptId
+  readonly request: "Suspend"
+  readonly taskId: TaskId
+}
+
+/** Collision-free structural key for one exact authored suspension boundary. */
+export const authoredPlannedSuspensionBoundaryKeyOf = (
+  correlation: AuthoredPlannedSuspensionBoundaryCorrelation
+): string => JSON.stringify([correlation.taskId, correlation.attemptId, correlation.request])
+
+/**
  * Executor reports in authored input name the attempt but never a RunId.
  * Dalph adds the RunId it created when the ordinary executor boundary is used.
  */
@@ -1345,6 +1361,52 @@ const executorReportRendezvousMembersAreUnique = Schema.makeFilter(
   }
 )
 
+const plannedSuspensionBoundaryHoldsAreExactlyPaired = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    const closure = cassette.story.reduce<{
+      readonly active: ReadonlySet<string>
+      readonly configured: ReadonlySet<string>
+      readonly issue: string | undefined
+    }>(
+      (state, item) => {
+        if (
+          state.issue !== undefined ||
+          (item._tag !== "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary" &&
+            item._tag !== "CassetteReleasesHeldPlannedAttemptSuspension")
+        ) {
+          return state
+        }
+        const key = authoredPlannedSuspensionBoundaryKeyOf({
+          attemptId: item.attemptId,
+          request: "Suspend",
+          taskId: item.taskId
+        })
+        if (item._tag === "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary") {
+          return state.configured.has(key)
+            ? {
+                ...state,
+                issue: `planned suspension hold ${key} must configure one unique exact task, attempt, and Suspend identity`
+              }
+            : {
+                active: new Set([...state.active, key]),
+                configured: new Set([...state.configured, key]),
+                issue: undefined
+              }
+        }
+        return state.active.has(key)
+          ? { ...state, active: new Set([...state.active].filter((candidate) => candidate !== key)) }
+          : { ...state, issue: `planned suspension release ${key} must match one earlier unreleased exact hold` }
+      },
+      { active: new Set(), configured: new Set(), issue: undefined }
+    )
+    if (closure.issue !== undefined) return closure.issue
+    const missingRelease = closure.active.values().next().value
+    return missingRelease === undefined
+      ? undefined
+      : `planned suspension hold ${missingRelease} must have one later exact release`
+  }
+)
+
 const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   exactlyOneAt("InitialControlPolicy", () => 0, "one InitialControlPolicy must be the first story item")
 )
@@ -1365,5 +1427,6 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactAttemptChoiceClosure)
   .check(executorReportRendezvousMembersAreUnique)
+  .check(plannedSuspensionBoundaryHoldsAreExactlyPaired)
 export const AuthoredScenarioCassette: typeof AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteSchema
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

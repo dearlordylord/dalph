@@ -64,3 +64,62 @@ it("rejects an executor-report progress rendezvous without a Running-capable rep
     )
   ).toThrow(/must name at least one StartOrContinue report/u)
 })
+
+const withSuspensionItems = (items: ReadonlyArray<unknown>) => ({
+  ...deliveryFinalitySpineAuthoredCassette,
+  story: [
+    ...deliveryFinalitySpineAuthoredCassette.story.slice(0, -1),
+    ...items,
+    deliveryFinalitySpineAuthoredCassette.story.at(-1)
+  ]
+})
+
+const suspensionHold = {
+  _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+  attemptId: "attempt:A:0",
+  taskId: "A"
+}
+const suspensionRelease = {
+  _tag: "CassetteReleasesHeldPlannedAttemptSuspension",
+  attemptId: "attempt:A:0",
+  taskId: "A"
+}
+
+it("accepts independently paired exact suspension gates", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)(
+      withSuspensionItems([
+        suspensionHold,
+        { ...suspensionHold, attemptId: "attempt:D:0", taskId: "D" },
+        suspensionRelease,
+        { ...suspensionRelease, attemptId: "attempt:D:0", taskId: "D" }
+      ])
+    )
+  ).not.toThrow()
+})
+
+it("rejects duplicate exact suspension holds", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)(
+      withSuspensionItems([suspensionHold, suspensionHold, suspensionRelease])
+    )
+  ).toThrow(/must configure one unique exact task, attempt, and Suspend identity/u)
+})
+
+it("rejects a suspension release for a foreign exact gate", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)(
+      withSuspensionItems([
+        suspensionHold,
+        { ...suspensionRelease, attemptId: "attempt:D:0", taskId: "D" },
+        suspensionRelease
+      ])
+    )
+  ).toThrow(/must match one earlier unreleased exact hold/u)
+})
+
+it("rejects a suspension hold without its exact release", () => {
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withSuspensionItems([suspensionHold]))).toThrow(
+    /must have one later exact release/u
+  )
+})

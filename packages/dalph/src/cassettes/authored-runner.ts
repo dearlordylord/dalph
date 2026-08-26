@@ -147,6 +147,7 @@ import {
   type ExecutorReportRendezvousRequest,
   executorReportRendezvousKeyOf
 } from "./executor-report-rendezvous.js"
+import { makePlannedSuspensionBoundaryGates } from "./planned-suspension-boundary-gates.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -1521,13 +1522,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         )
         return member === undefined ? undefined : gate.readyByMember.get(executorReportRendezvousMemberKey(member))
       }
-      const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
-        Option.Option<{
-          readonly attemptId: AttemptId
-          readonly release: Deferred.Deferred<void>
-          readonly taskId: TaskId
-        }>
-      >(Option.none())
+      const plannedSuspensionExecutorBoundaryGates = yield* makePlannedSuspensionBoundaryGates
       const plannedContinuationExecutorBoundaryGate = yield* Ref.make<
         ReadonlyMap<
           string,
@@ -1825,16 +1820,12 @@ const runAuthoredScenarioCassetteWith = (request: {
         plannedAttempt: PlannedTaskAttempt,
         request: "StartOrContinue" | "Suspend"
       ) {
-        const hold = yield* Ref.get(plannedSuspensionExecutorBoundaryGate)
-        if (
-          Option.isNone(hold) ||
-          plannedAttempt.attemptId !== hold.value.attemptId ||
-          plannedAttempt.taskId !== hold.value.taskId
-        ) {
-          return
-        }
         if (request !== "Suspend") return
-        yield* Deferred.await(hold.value.release)
+        yield* plannedSuspensionExecutorBoundaryGates.awaitBoundary({
+          attemptId: plannedAttempt.attemptId,
+          request,
+          taskId: plannedAttempt.taskId
+        })
       })
 
       const verifyExpectedPauseResults = Effect.fn("AuthoredCassette.verifyExpectedPauseResults")(function* (
@@ -2811,19 +2802,12 @@ const runAuthoredScenarioCassetteWith = (request: {
               const authored = yield* cursor.consumePlannedAttemptSuspensionExecutorBoundaryRelease
               /* v8 ignore start -- @preserve The direct-item dispatcher and paired-hold closure guarantee this exact release and correlation. */
               if (Option.isNone(authored)) return
-              const gate = yield* Ref.get(plannedSuspensionExecutorBoundaryGate)
-              if (
-                Option.isNone(gate) ||
-                gate.value.attemptId !== authored.value.attemptId ||
-                gate.value.taskId !== authored.value.taskId
-              ) {
-                return yield* Effect.die(
-                  `no held planned suspension matches ${authored.value.taskId}/${authored.value.attemptId}`
-                )
-              }
               /* v8 ignore stop -- @preserve */
-              yield* Deferred.succeed(gate.value.release, undefined)
-              yield* Ref.set(plannedSuspensionExecutorBoundaryGate, Option.none())
+              yield* plannedSuspensionExecutorBoundaryGates.release({
+                attemptId: authored.value.attemptId,
+                request: "Suspend",
+                taskId: authored.value.taskId
+              })
             }).pipe(Effect.orDie)
             const drivePlannedContinuationExecutorBoundaryRelease = Effect.gen(function* () {
               const authored = yield* cursor.consumePlannedAttemptContinuationExecutorBoundaryRelease
@@ -2865,15 +2849,12 @@ const runAuthoredScenarioCassetteWith = (request: {
               const authored = yield* cursor.consumePlannedAttemptSuspensionExecutorBoundaryHold
               /* v8 ignore start -- @preserve The direct-item dispatcher invokes this exact hold once; closure rejects an overlapping hold. */
               if (Option.isNone(authored)) return
-              if (Option.isSome(yield* Ref.get(plannedSuspensionExecutorBoundaryGate))) {
-                return yield* Effect.die("a planned suspension executor-boundary hold is already armed")
-              }
               /* v8 ignore stop -- @preserve */
-              const release = yield* Deferred.make<void>()
-              yield* Ref.set(
-                plannedSuspensionExecutorBoundaryGate,
-                Option.some({ attemptId: authored.value.attemptId, release, taskId: authored.value.taskId })
-              )
+              yield* plannedSuspensionExecutorBoundaryGates.arm({
+                attemptId: authored.value.attemptId,
+                request: "Suspend",
+                taskId: authored.value.taskId
+              })
             }).pipe(Effect.orDie)
             const driveTargetPromotionReconciliationReadBoundaryRelease = Effect.gen(function* () {
               const authored = yield* cursor.consumeTargetPromotionReconciliationReadBoundaryRelease

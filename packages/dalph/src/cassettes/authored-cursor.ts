@@ -230,6 +230,7 @@ export interface StoryCursor {
   readonly consumeAdmittedContinuationExecutorIntentHold: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent.Type>
   >
+  /** Consume one exact task/attempt Suspend hold before its ready acknowledgement. */
   readonly consumePlannedAttemptSuspensionExecutorBoundaryHold: Effect.Effect<
     Option.Option<
       typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary.Type
@@ -243,6 +244,7 @@ export interface StoryCursor {
   readonly consumePlannedAttemptContinuationExecutorBoundaryRelease: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPlannedAttemptContinuation.Type>
   >
+  /** Consume the paired exact release; the runner still waits for boundary readiness before opening it. */
   readonly consumePlannedAttemptSuspensionExecutorBoundaryRelease: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPlannedAttemptSuspension.Type>
   >
