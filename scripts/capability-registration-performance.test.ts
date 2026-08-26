@@ -10,22 +10,35 @@ import {
 
 const repositorySources = repositoryCapabilitySourceFiles()
 
-const sourceWithPath = (path: string): CapabilitySourceFile => {
-  const source = repositorySources.find((file) => file.path === path)
-  if (source === undefined) throw new Error(`benchmark source is missing: ${path}`)
-  return source
+const capabilityStageBoundMilliseconds = 60_000
+
+interface MeasurementExpectation {
+  readonly compilerDiagnosticCount: number
+  readonly issueCount: number
+  readonly issueIncludes?: string
+  readonly rebuiltPaths: ReadonlyArray<string>
+  readonly reusedSourceCount: number
 }
 
 const measured = (
   name: string,
   inventory: typeof capabilityRegistrationInventory,
-  sources: ReadonlyArray<CapabilitySourceFile>
+  sources: ReadonlyArray<CapabilitySourceFile>,
+  expected: MeasurementExpectation
 ) => {
   const startedAt = performance.now()
   const issues = runCapabilityRegistrationGate(inventory, sources)
   const elapsedMilliseconds = performance.now() - startedAt
   const diagnostics = inspectCapabilitySourceProgram(sources)
+  expect(elapsedMilliseconds).toBeLessThan(capabilityStageBoundMilliseconds)
+  expect(issues).toHaveLength(expected.issueCount)
+  expect(diagnostics.compilerDiagnostics).toHaveLength(expected.compilerDiagnosticCount)
+  expect(diagnostics.rebuiltSourcePaths).toHaveLength(expected.rebuiltPaths.length)
+  expect(diagnostics.rebuiltSourcePaths).toEqual(expect.arrayContaining([...expected.rebuiltPaths]))
+  expect(new Set(diagnostics.reusedSourcePaths).size).toBe(expected.reusedSourceCount)
+  if (expected.issueIncludes !== undefined) expect(issues.join("\n")).toContain(expected.issueIncludes)
   return {
+    compilerDiagnosticCount: diagnostics.compilerDiagnostics.length,
     elapsedMilliseconds: Math.round(elapsedMilliseconds),
     issueCount: issues.length,
     name,
@@ -37,14 +50,18 @@ const measured = (
 describe("capability registration performance evidence", () => {
   it("reports named source-audit rows and their tree reuse counters", () => {
     const baseline = repositorySources.map((file) => ({ ...file }))
-    const mutationPath = "packages/contracts/src/index.ts"
-    const mutationSource = sourceWithPath(mutationPath)
-    const samePathMutation = baseline.map((file) =>
-      file.path === mutationPath ? { ...file, source: `${file.source}\n// issue-262 benchmark mutation` } : file
-    )
+    const samePath = "scripts/fixtures/issue-262-benchmark-semantic.ts"
+    const validSamePathSource: CapabilitySourceFile = {
+      path: samePath,
+      source: 'export const semanticValue: string = "valid"'
+    }
+    const samePathMutation: CapabilitySourceFile = { path: samePath, source: "export const semanticValue: string = 1" }
     const addedLayer: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-262-benchmark-layer.ts",
-      source: "export const benchmarkLayer = Layer.succeed(UnknownService, {})"
+      source: [
+        "declare const Layer: { succeed: (...args: ReadonlyArray<unknown>) => unknown }",
+        "export const benchmarkLayer = Layer.succeed(undefined, {})"
+      ].join("\n")
     }
     const addedReexport: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-262-benchmark-reexport.ts",
@@ -64,7 +81,12 @@ describe("capability registration performance evidence", () => {
     }
     const providerLayer: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-262-benchmark-provider-layer.ts",
-      source: 'export const benchmarkProviderLayer = Layer.effect(Provider, () => fetch("https://provider.invalid"))'
+      source: [
+        "declare const Layer: { effect: (...args: ReadonlyArray<unknown>) => unknown }",
+        "declare const Provider: unique symbol",
+        "declare function fetch(url: string): unknown",
+        'export const benchmarkProviderLayer = Layer.effect(Provider, () => fetch("https://provider.invalid"))'
+      ].join("\n")
     }
     const providerComposition: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-262-benchmark-provider-composition.ts",
@@ -78,19 +100,56 @@ describe("capability registration performance evidence", () => {
         { role: "production" as const, source: providerComposition.path }
       ]
     }
+    const baselineRow = measured("baseline", capabilityRegistrationInventory, baseline, {
+      compilerDiagnosticCount: 0,
+      issueCount: 0,
+      rebuiltPaths: repositorySources.map(({ path }) => path),
+      reusedSourceCount: 0
+    })
+    const identicalSources = baseline.map((file) => ({ ...file }))
+    const identicalDiagnostics = inspectCapabilitySourceProgram(identicalSources)
+    expect(inspectCapabilitySourceProgram(identicalSources)).toBe(identicalDiagnostics)
+    expect(identicalDiagnostics.compilerDiagnostics).toHaveLength(0)
+    expect(identicalDiagnostics.rebuiltSourcePaths).toHaveLength(0)
+    expect(new Set(identicalDiagnostics.reusedSourcePaths).size).toBe(repositorySources.length)
+
+    inspectCapabilitySourceProgram([...baseline, validSamePathSource])
+    const samePathRow = measured(
+      "same-path mutation",
+      capabilityRegistrationInventory,
+      [...baseline, samePathMutation],
+      {
+        compilerDiagnosticCount: 1,
+        issueCount: 1,
+        issueIncludes: `in ${samePath}:`,
+        rebuiltPaths: [samePath],
+        reusedSourceCount: repositorySources.length
+      }
+    )
     const rows = [
-      measured("baseline", capabilityRegistrationInventory, baseline),
-      measured("same-path mutation", capabilityRegistrationInventory, samePathMutation),
-      measured("added/re-export roots", addedRootsInventory, [
-        ...samePathMutation,
-        addedLayer,
-        addedReexport,
-        addedComposition
-      ]),
-      measured("provider-text roots", providerInventory, [...samePathMutation, providerLayer, providerComposition])
+      baselineRow,
+      samePathRow,
+      measured(
+        "added/re-export roots",
+        addedRootsInventory,
+        [...baseline, addedLayer, addedReexport, addedComposition],
+        {
+          compilerDiagnosticCount: 0,
+          issueCount: 1,
+          issueIncludes: "production uses unregistered exported Layer reexportedLayer",
+          rebuiltPaths: [addedLayer.path, addedReexport.path, addedComposition.path],
+          reusedSourceCount: repositorySources.length
+        }
+      ),
+      measured("provider-text roots", providerInventory, [...baseline, providerLayer, providerComposition], {
+        compilerDiagnosticCount: 0,
+        issueCount: 1,
+        issueIncludes: "production uses unregistered exported Layer benchmarkProviderLayer",
+        rebuiltPaths: [providerLayer.path, providerComposition.path],
+        reusedSourceCount: repositorySources.length
+      })
     ]
 
-    expect(mutationSource.source).toBeDefined()
     expect(rows).toHaveLength(4)
     for (const row of rows) console.log(JSON.stringify(row))
   }, 120_000)

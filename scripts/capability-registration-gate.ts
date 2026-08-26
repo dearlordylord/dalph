@@ -46,12 +46,20 @@ interface CapabilitySourceProgram {
   readonly diagnostics: CapabilitySourceProgramDiagnostics
 }
 
+interface CapabilityCompilerDiagnostic {
+  readonly category: ts.DiagnosticCategory
+  readonly code: number
+  readonly message: string
+  readonly path: string
+}
+
 /**
  * Source-tree events recorded while one semantic audit Program is built. The
  * paths are virtual-source paths, not evidence that any source module was
  * imported or evaluated.
  */
 interface CapabilitySourceProgramDiagnostics {
+  readonly compilerDiagnostics: ReadonlyArray<CapabilityCompilerDiagnostic>
   readonly rebuiltSourcePaths: ReadonlyArray<string>
   readonly reusedSourcePaths: ReadonlyArray<string>
 }
@@ -62,6 +70,45 @@ const normalizedVirtualPath = (path: string): string => resolve(path).replaceAll
 
 const sourceProgramCache = new WeakMap<object, CapabilitySourceProgram>()
 let latestSourceProgram: CapabilitySourceProgram | undefined
+
+const diagnosticMessage = (diagnostic: ts.Diagnostic): string =>
+  ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+
+const isRepositorySourcePath = (path: string): boolean =>
+  sourceRoots.some((root) => path === root || path.startsWith(`${root}/`))
+
+const compilerDiagnostics = (
+  program: ts.Program,
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>,
+  previous: CapabilitySourceProgram | undefined
+): ReadonlyArray<CapabilityCompilerDiagnostic> => {
+  const optionsIssues = program
+    .getOptionsDiagnostics()
+    .map((diagnostic) => ({
+      category: diagnostic.category,
+      code: diagnostic.code,
+      message: diagnosticMessage(diagnostic),
+      path: "<compiler-options>"
+    }))
+  const sourceIssues = sourceFiles.flatMap((file) => {
+    const { path } = file
+    const source = program.getSourceFile(virtualPath(path))
+    if (source === undefined) return []
+    const previousSource = previous?.sourceByPath.get(path)
+    const shouldCheckSourceDiagnostics =
+      previousSource !== undefined ? previousSource.source !== file.source : !isRepositorySourcePath(path)
+    if (!shouldCheckSourceDiagnostics) return []
+    const diagnostics = [...program.getSyntacticDiagnostics(source), ...program.getSemanticDiagnostics(source)]
+    return diagnostics.map((diagnostic) => ({
+      category: diagnostic.category,
+      code: diagnostic.code,
+      message: diagnosticMessage(diagnostic),
+      path
+    }))
+  })
+  return [...optionsIssues, ...sourceIssues]
+}
+
 const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): CapabilitySourceProgram => {
   const cached = sourceProgramCache.get(sourceFiles)
   if (cached !== undefined) return cached
@@ -70,6 +117,17 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   const virtualSources = new Map(
     sourceFiles.map((file) => [normalizedVirtualPath(virtualPath(file.path)), file] as const)
   )
+  /* eslint-disable functional/immutable-data -- this local index is built once for the mutable TypeScript host. */
+  const virtualDirectories = new Set<string>([virtualRoot])
+  for (const fileName of virtualSources.keys()) {
+    let directory = fileName.slice(0, fileName.lastIndexOf("/"))
+    while (directory.length >= virtualRoot.length) {
+      virtualDirectories.add(directory)
+      if (directory === virtualRoot) break
+      directory = directory.slice(0, directory.lastIndexOf("/"))
+    }
+  }
+  /* eslint-enable functional/immutable-data */
   // TypeScript can incrementally construct a Program with a different root
   // set. The host below is the compatibility boundary: it returns an old
   // tree only when the exact path and complete source text still match.
@@ -121,10 +179,7 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   }
   host.directoryExists = (directoryName) => {
     const normalized = normalizedVirtualPath(directoryName)
-    return (
-      [...virtualSources.keys()].some((fileName) => fileName.startsWith(`${normalized}/`)) ||
-      (defaultDirectoryExists?.(directoryName) ?? false)
-    )
+    return virtualDirectories.has(normalized) || (defaultDirectoryExists?.(directoryName) ?? false)
   }
   host.resolveModuleNames = (moduleNames, containingFile) =>
     moduleNames.map((moduleName) => ts.resolveModuleName(moduleName, containingFile, options, host).resolvedModule)
@@ -136,7 +191,11 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   )
   const indexed = {
     checker: program.getTypeChecker(),
-    diagnostics: { rebuiltSourcePaths, reusedSourcePaths },
+    diagnostics: {
+      compilerDiagnostics: compilerDiagnostics(program, sourceFiles, previous),
+      rebuiltSourcePaths,
+      reusedSourcePaths
+    },
     program,
     sourceByPath
   }
@@ -153,6 +212,12 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
 export const inspectCapabilitySourceProgram = (
   sourceFiles: ReadonlyArray<CapabilitySourceFile>
 ): CapabilitySourceProgramDiagnostics => sourceProgram(sourceFiles).diagnostics
+
+const compilerDiagnosticIssues = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): ReadonlyArray<string> =>
+  sourceProgram(sourceFiles).diagnostics.compilerDiagnostics.map(
+    ({ category, code, message, path }) =>
+      `source audit TypeScript diagnostic (${ts.DiagnosticCategory[category]} TS${code}) in ${path}: ${message}`
+  )
 
 const sourcePathFromVirtualPath = (path: string): string => relative(virtualRoot, path).replaceAll("\\", "/")
 
@@ -773,6 +838,7 @@ export const runCapabilityRegistrationGate = (
   sourceFiles: ReadonlyArray<CapabilitySourceFile> = repositoryCapabilitySourceFiles()
 ): ReadonlyArray<string> => [
   ...capabilityRegistrationIssues(inventory),
+  ...compilerDiagnosticIssues(sourceFiles),
   ...implementationSourceIssues(inventory, sourceFiles),
   ...supportBindingSourceIssues(inventory, sourceFiles),
   ...compositionReferenceIssues(inventory, sourceFiles)
