@@ -752,6 +752,48 @@ describe("capability registration gate", () => {
     expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2307"))).toBe(true)
   })
 
+  it("fails closed when a changed import-type dependency removes an exported type", () => {
+    const dependencyPath = "scripts/fixtures/issue-262-import-type-dependency.ts"
+    const consumerPath = "scripts/fixtures/issue-262-import-type-consumer.ts"
+    const dependency: CapabilitySourceFile = {
+      path: dependencyPath,
+      source: "export interface DependencyShape { readonly value: number }"
+    }
+    const consumer: CapabilitySourceFile = {
+      path: consumerPath,
+      source:
+        'type DependencyShape = import("./issue-262-import-type-dependency.js").DependencyShape\nexport const consumerValue: DependencyShape = { value: 1 }'
+    }
+    const changedDependency: CapabilitySourceFile = {
+      path: dependencyPath,
+      source: "export interface ReplacementShape { readonly value: number }"
+    }
+
+    inspectCapabilitySourceProgram([dependency, consumer])
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [changedDependency, consumer])
+
+    expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2694"))).toBe(true)
+  })
+
+  it("fails closed when a removed triple-slash dependency remains referenced", () => {
+    const dependencyPath = "scripts/fixtures/issue-262-triple-reference-dependency.ts"
+    const consumerPath = "scripts/fixtures/issue-262-triple-reference-consumer.ts"
+    const dependency: CapabilitySourceFile = {
+      path: dependencyPath,
+      source: "type TripleReferenceShape = { readonly value: number }"
+    }
+    const consumer: CapabilitySourceFile = {
+      path: consumerPath,
+      source:
+        '/// <reference path="./issue-262-triple-reference-dependency.ts" />\nexport const consumerValue: TripleReferenceShape = { value: 1 }'
+    }
+
+    inspectCapabilitySourceProgram([dependency, consumer])
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [consumer])
+
+    expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2304"))).toBe(true)
+  })
+
   it("keeps exact source-array identity caching for repeated audits", () => {
     const source = [{ path: "scripts/fixtures/issue-262-cache-identity.ts", source: "export const cached = 1" }]
 
