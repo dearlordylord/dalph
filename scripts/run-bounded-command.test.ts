@@ -62,6 +62,27 @@ test("attaches captured output when a command exits outside the accepted set", a
   })
 })
 
+test("attaches captured output and line counts when a command times out", async () => {
+  await expect(
+    runBoundedCommand({
+      args: [
+        "-e",
+        "process.stdout.write('timed output\\n'); process.stderr.write('timed detail'); setInterval(() => {}, 1000)"
+      ],
+      captureOutput: true,
+      executable: process.execPath,
+      forwardOutput: false,
+      name: "captured timeout fixture",
+      terminationGraceMilliseconds: 100,
+      timeoutMilliseconds: 500
+    })
+  ).rejects.toMatchObject({
+    message: "captured timeout fixture exceeded 0.5 seconds",
+    output: "timed output\ntimed detail",
+    outputLineCount: 2
+  })
+})
+
 test("passes a controlled environment to the bounded child", async () => {
   const result = await runBoundedCommand({
     args: ["-e", "process.stdout.write(process.env.DALPH_BOUNDED_COMMAND_FIXTURE ?? 'absent')"],

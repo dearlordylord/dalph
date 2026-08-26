@@ -33,6 +33,7 @@ export const runQuintGateFamily = async ({ commands, concurrency = quintGateFami
   }
   if (commands.length === 0) return []
 
+  const effectiveConcurrency = Math.min(concurrency, quintGateFamilyConcurrency)
   const controller = new AbortController()
   const outcomes = new Array(commands.length)
   let nextIndex = 0
@@ -62,7 +63,7 @@ export const runQuintGateFamily = async ({ commands, concurrency = quintGateFami
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(concurrency, commands.length) }, () => worker()))
+  await Promise.all(Array.from({ length: Math.min(effectiveConcurrency, commands.length) }, () => worker()))
 
   if (failureState.occurred) throw attachBatchResults(failureState.error, outcomes)
   return outcomes.map((outcome) => outcome.value)

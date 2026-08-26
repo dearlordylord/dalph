@@ -16,6 +16,7 @@ export interface QuintGateTiming {
   readonly measure: <A>(args: {
     readonly kind: QuintCommandKind
     readonly name: string
+    readonly order?: number
     readonly run: () => Promise<A> | A
   }) => Promise<A>
   readonly records: () => ReadonlyArray<QuintTimingRecord>
