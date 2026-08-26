@@ -54,8 +54,8 @@ dependency, syntax error, and semantic error.
 ## Complete focused suite
 
 The main focused command retains all 33 accepted capability positives and
-negative controls and adds three cache contracts plus nine compiler-diagnostic
-contracts. The current focused command has 45 tests; final Node22/Node24 rows
+negative controls and adds three cache contracts plus eleven compiler-diagnostic
+contracts. The current focused command has 47 tests; final Node22/Node24 rows
 will be refreshed after the compiler-complete dependency rerun:
 
 ```sh
@@ -65,10 +65,10 @@ mise exec node@24.15.0 -- pnpm test:capability-registration -- --reporter=dot
 
 | Node | Run | Workload | Wall time | Result |
 | --- | --- | --- | ---: | --- |
-| 22.22.2 | dedicated | none | pending 45-test profile | pending |
-| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | pending 45-test profile | pending |
-| 24.15.0 | dedicated | none | pending 45-test profile | pending |
-| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | pending 45-test profile | pending |
+| 22.22.2 | dedicated | none | pending 47-test profile | pending |
+| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | pending 47-test profile | pending |
+| 24.15.0 | dedicated | none | pending 47-test profile | pending |
+| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | pending 47-test profile | pending |
 
 The existing capability-registration quality stage remains bounded at 60s;
 that bounded runner contract is the stage verdict. The benchmark test reports
@@ -78,7 +78,7 @@ and the bounded quality-gate stage enforce and profile the 60-second contract.
 The virtual compiler host precomputes its virtual directory set once per
 Program. This avoids scanning all 624 virtual file names for every TypeScript
 `directoryExists` lookup while retaining the same source-only resolution
-boundary. The final 45-test observation will replace the earlier 41-test
+boundary. The final 47-test observation will replace the earlier 41-test
 observation before integration. The stressed command uses exact cleanup and
 reaping for its fixed competing workload:
 
@@ -86,16 +86,40 @@ reaping for its fixed competing workload:
 run_stressed() (
   node_version="$1"
   stress_pid=""
+  worker_marker=""
   previous_exit_trap=$(trap -p EXIT)
   previous_int_trap=$(trap -p INT)
   previous_term_trap=$(trap -p TERM)
   cleanup() {
     test_status=$?
     trap - EXIT INT TERM
+    worker_alive_status=1
+    worker_kill_status=0
+    worker_wait_status=1
     if [ -n "$stress_pid" ]; then
-      kill "$stress_pid" 2>/dev/null || true
-      wait "$stress_pid" 2>/dev/null || true
+      if kill -0 "$stress_pid" 2>/dev/null; then worker_alive_status=0; fi
+      if [ "$worker_alive_status" -eq 0 ]; then
+        if kill "$stress_pid" 2>/dev/null; then worker_kill_status=0; else worker_kill_status=$?; fi
+      else
+        worker_kill_status=1
+      fi
+      if wait "$stress_pid" 2>/dev/null; then
+        worker_wait_status=0
+      else
+        worker_wait_status=$?
+      fi
+      worker_marker_status=$(cat "$worker_marker" 2>/dev/null || true)
+      worker_status_ok=1
+      if [ "$worker_marker_status" = "complete" ] && [ "$worker_wait_status" -eq 0 ]; then
+        worker_status_ok=0
+      elif [ "$worker_alive_status" -eq 0 ] && [ "$worker_kill_status" -eq 0 ] && [ "$worker_wait_status" -ne 0 ]; then
+        worker_status_ok=0
+      fi
+      if [ "$worker_status_ok" -ne 0 ] && [ "$test_status" -eq 0 ]; then
+        test_status=1
+      fi
     fi
+    if [ -n "$worker_marker" ]; then rm -f "$worker_marker"; fi
     if [ -n "$previous_exit_trap" ]; then eval "$previous_exit_trap"; else trap - EXIT; fi
     if [ -n "$previous_int_trap" ]; then eval "$previous_int_trap"; else trap - INT; fi
     if [ -n "$previous_term_trap" ]; then eval "$previous_term_trap"; else trap - TERM; fi
@@ -104,13 +128,32 @@ run_stressed() (
   trap cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  taskset -c 11 mise exec "$node_version" -- node -e 'const end = Date.now() + 70000; let value = 0; while (Date.now() < end) value = (value + 1) % 1000003' &
+  if ! worker_marker=$(mktemp); then exit 1; fi
+  taskset -c 11 mise exec "$node_version" -- node -e 'const fs = require("node:fs"); const marker = process.argv[1]; const end = Date.now() + 70000; let value = 0; while (Date.now() < end) value = (value + 1) % 1000003; fs.writeFileSync(marker, "complete")' "$worker_marker" &
   stress_pid=$!
+  if ! kill -0 "$stress_pid" 2>/dev/null; then exit 1; fi
   mise exec "$node_version" -- pnpm test:capability-registration -- --reporter=dot
 )
 
 run_stressed node@22.22.2
 run_stressed node@24.15.0
+```
+
+This harmless negative probe must fail closed because the worker exits before
+writing its completion marker; the probe itself succeeds only when the early
+worker failure is detected:
+
+```sh
+(
+  marker=$(mktemp)
+  taskset -c 11 mise exec node@22.22.2 -- node -e 'process.exit(7)' "$marker" &
+  worker_pid=$!
+  worker_status=0
+  wait "$worker_pid" || worker_status=$?
+  test "$worker_status" -ne 0
+  test ! -s "$marker"
+  rm -f "$marker"
+)
 ```
 
 The background child was terminated and reaped after each completed run. An
@@ -125,8 +168,9 @@ the final implementation checks only changed or newly added relevant sources.
 | A maintainer runs the complete quality gate and the 33 accepted controls remain source-only | `capability-registration.test.ts` existing 33 tests; `is part of check:all`; complete-suite rows above |
 | A negative fixture changes one existing source | `rebuilds a source whose complete text changes instead of reusing its old tree`; semantic diagnostic contract; same-path mutation row |
 | A fixture adds virtual/re-export roots | `reuses unchanged source trees when a later audit adds a virtual root`; added/re-export row |
-| A dependency export changes or a dependency root is removed | `fails closed when a changed dependency removes an imported export`; `fails closed when a removed dependency remains imported` |
+| A dependency export changes or a dependency root is removed | `fails closed when a changed dependency removes an imported export`; `fails closed when a removed dependency remains imported`; `rechecks an unchanged consumer after a changed ordinary require call dependency`; `rechecks an unchanged consumer after an ordinary require call dependency is removed` |
 | A type-only import dependency changes or a triple-slash dependency is removed | `fails closed when a changed import-type dependency removes an exported type`; `fails closed when a removed triple-slash dependency remains referenced` |
+| A dynamic import or ordinary require dependency changes or is removed | `fails closed when a changed dynamic-import dependency removes an exported value`; `rechecks an unchanged consumer after a changed ordinary require call dependency`; `rechecks an unchanged consumer after an ordinary require call dependency is removed` |
 | An added source uses a repository source prefix | `fails closed for a first-audit virtual source under a repository source root` |
 | An added or changed source has a TypeScript syntax or semantic error | `fails closed on syntax diagnostics from an added virtual source without exposing repository diagnostics`; `fails closed on semantic diagnostics from a changed virtual source` |
 | A source contains a provider expression | `audits source text without loading or invoking a live provider`; provider-text row |
