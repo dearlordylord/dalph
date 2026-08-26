@@ -701,7 +701,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   })
   const consumeExecutorProgressAdmissionBatchGate = Effect.gen(function* () {
     const claimed = yield* claimNext(
-      (item): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorProgressAdmissionUntilReportBatchReady.Type =>
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorProgressAdmissionUntilReportBatchReady.Type =>
         item?._tag === "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady"
     )
     /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current synchronization item. */
