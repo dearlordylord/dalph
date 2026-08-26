@@ -43,6 +43,7 @@ import {
   AuthoredStopAttemptResult
 } from "./authored-attempt-choice.js"
 import { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
+import { executorReportRendezvousKeyOf } from "./executor-report-rendezvous.js"
 export { AuthoredProtocolEvidence } from "./authored-protocol-evidence.js"
 
 const AuthoredTrackerTask = Schema.Struct({
@@ -1327,8 +1328,12 @@ const executorReportRendezvousMembersAreUnique = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
     for (const item of cassette.story) {
       if (item._tag !== "CassetteRendezvousesExecutorReportsBeforeJournalAppend") continue
-      const identities = item.members.map(({ attemptId, request, taskId }) => `${taskId}:${attemptId}:${request}`)
-      const appendIdentities = item.members.map(({ attemptId, request }) => `${attemptId}:${request}`)
+      const identities = item.members.map(({ attemptId, request, taskId }) =>
+        executorReportRendezvousKeyOf({ _tag: "ExactMember", attemptId, request, taskId })
+      )
+      const appendIdentities = item.members.map(({ attemptId, request }) =>
+        executorReportRendezvousKeyOf({ _tag: "ProviderCommand", attemptId, request })
+      )
       if (!item.members.some(({ request }) => request === "StartOrContinue")) {
         return "an executor-report progress rendezvous must name at least one StartOrContinue report"
       }

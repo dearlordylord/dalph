@@ -47,6 +47,16 @@ it("rejects duplicate exact members in an executor-report rendezvous", () => {
   ).toThrow(/must name unique exact task, attempt, and request identities/u)
 })
 
+it("keeps structurally distinct rendezvous members distinct when IDs contain colons", () => {
+  const formerlyColliding = [
+    { attemptId: "c", request: "StartOrContinue", taskId: "a:b" },
+    { attemptId: "b:c", request: "StartOrContinue", taskId: "a" }
+  ]
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)(withExecutorReportRendezvous(formerlyColliding))
+  ).not.toThrow()
+})
+
 it("rejects an executor-report progress rendezvous without a Running-capable report", () => {
   expect(() =>
     Schema.decodeUnknownSync(AuthoredScenarioCassette)(
