@@ -2352,7 +2352,10 @@ it.effect("keeps an unfinished Integrator session dormant when a blocker appears
           ({ contentIdentity }) => contentIdentity === "issue-138-pre-promotion-blocker"
         )
     )
-    if (blockerOutcome?.event._tag !== "TaskTrackerFactsObserved") {
+    if (
+      blockerOutcome?.event._tag !== "TaskTrackerFactsObserved" ||
+      blockerOutcome.event.observation._tag !== "CompleteTaskTrackerFacts"
+    ) {
       return yield* Effect.die("missing blocker observation")
     }
     const blockerOperationId = blockerOutcome.event.operationId
@@ -2363,7 +2366,34 @@ it.effect("keeps an unfinished Integrator session dormant when a blocker appears
     if (blockerIntent?.event._tag !== "TaskTrackerReadIntentRecorded") {
       return yield* Effect.die("missing blocker read intent")
     }
-    const unfinished = [blockerIntent.event, blockerOutcome.event].reduce<ReadonlyArray<JournalRecord>>(
+    if (blockerIntent.event.operation._tag !== "ReadTrackerGraph") {
+      return yield* Effect.die("blocker intent is not a complete tracker graph read")
+    }
+    const preparedLineage = prepared.records
+      .slice(0, runStartedAt + 1)
+      .findLast(({ event }) => event._tag === "TargetLineageObserved")?.event
+    if (preparedLineage?._tag !== "TargetLineageObserved") {
+      return yield* Effect.die("missing prepared-Run target-lineage predecessor")
+    }
+    const blockerRead = makeTrackerGraphObservationOperation(
+      OperationId.make(`scenario:post-loss-blocker:${prepared.runId}`),
+      blockerIntent.event.operation.target,
+      [preparedLineage.operationId],
+      blockerIntent.event.operation.readShape.explicitlyCoveredTaskIds
+    )
+    const blockerObservation = yield* Schema.decodeUnknownEffect(TaskTrackerFactsObservedEvent)({
+      ...blockerOutcome.event,
+      observation: {
+        ...blockerOutcome.event.observation,
+        factFamilies: blockerOutcome.event.observation.factFamilies.map((family) => ({
+          ...family,
+          freshness: { ...family.freshness, operationId: blockerRead.operationId }
+        })),
+        operationId: blockerRead.operationId
+      },
+      operationId: blockerRead.operationId
+    })
+    const unfinished = [taskTrackerReadIntent(blockerRead), blockerObservation].reduce<ReadonlyArray<JournalRecord>>(
       (records, event) => [
         ...records,
         {
