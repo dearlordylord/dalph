@@ -834,6 +834,42 @@ describe("capability registration gate", () => {
     expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2339"))).toBe(true)
   })
 
+  it("rechecks an unchanged consumer after a changed ordinary require call dependency", () => {
+    const dependencyPath = "scripts/fixtures/issue-262-require-call-dependency.ts"
+    const consumerPath = "scripts/fixtures/issue-262-require-call-consumer.ts"
+    const dependency: CapabilitySourceFile = { path: dependencyPath, source: "export const requiredValue = 1" }
+    const consumer: CapabilitySourceFile = {
+      path: consumerPath,
+      source:
+        'declare function require(path: string): unknown\nconst dependency = require("./issue-262-require-call-dependency.js")\nconst latentError: string = 1\nexport const consumerValue = dependency'
+    }
+    const changedDependency: CapabilitySourceFile = {
+      path: dependencyPath,
+      source: "export const replacementValue = 1"
+    }
+
+    inspectCapabilitySourceProgram([dependency, consumer])
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [changedDependency, consumer])
+
+    expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2322"))).toBe(true)
+  })
+
+  it("rechecks an unchanged consumer after an ordinary require call dependency is removed", () => {
+    const dependencyPath = "scripts/fixtures/issue-262-require-call-removed-dependency.ts"
+    const consumerPath = "scripts/fixtures/issue-262-require-call-removed-consumer.ts"
+    const dependency: CapabilitySourceFile = { path: dependencyPath, source: "export const requiredValue = 1" }
+    const consumer: CapabilitySourceFile = {
+      path: consumerPath,
+      source:
+        'declare function require(path: string): unknown\nconst dependency = require("./issue-262-require-call-removed-dependency.js")\nconst latentError: string = 1\nexport const consumerValue = dependency'
+    }
+
+    inspectCapabilitySourceProgram([dependency, consumer])
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [consumer])
+
+    expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2322"))).toBe(true)
+  })
+
   it("keeps exact source-array identity caching for repeated audits", () => {
     const source = [{ path: "scripts/fixtures/issue-262-cache-identity.ts", source: "export const cached = 1" }]
 
