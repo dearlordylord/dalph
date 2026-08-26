@@ -140,6 +140,13 @@ import {
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
+import {
+  ExecutorReportRendezvousClosure,
+  ExecutorReportRendezvousFailure,
+  type ExecutorReportRendezvousKey,
+  type ExecutorReportRendezvousRequest,
+  executorReportRendezvousKeyOf
+} from "./executor-report-rendezvous.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -1150,8 +1157,6 @@ export const evaluateAuthoredObservationCapture: (
 
 const latestArrayElementIndex = -1
 const authoredSettlementYieldTurns = 10
-/** A maintained authored run must either consume a story item or fail with its exact stalled boundary. */
-const authoredProgressWatchdogTurns = 100_000
 
 const operatorControlFailureMatches = (
   failure: unknown,
@@ -1468,7 +1473,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
       const lastRuntimeOwners = yield* Ref.make<string | null>(null)
       const durableExecutorReports = yield* SubscriptionRef.make<ReadonlySet<string>>(new Set())
-      type ExecutorReportRequest = "StartOrContinue" | "Suspend"
+      type ExecutorReportRequest = ExecutorReportRendezvousRequest
       interface ExecutorReportBatchMember {
         readonly attemptId: AttemptId
         readonly ordinal: number
@@ -1479,13 +1484,16 @@ const runAuthoredScenarioCassetteWith = (request: {
         | { readonly _tag: "Inactive" }
         | {
             readonly _tag: "Configured" | "Armed"
-            readonly completed: ReadonlySet<string>
-            readonly executorReady: ReadonlySet<string>
-            readonly executorRelease: Deferred.Deferred<void, Error>
+            readonly completed: ReadonlySet<ExecutorReportRendezvousKey>
+            readonly executorReady: ReadonlySet<ExecutorReportRendezvousKey>
+            readonly executorRelease: Deferred.Deferred<void, ExecutorReportRendezvousFailure>
             readonly members: ReadonlyArray<ExecutorReportBatchMember>
-            readonly membersByAppendIdentity: ReadonlyMap<string, ExecutorReportBatchMember>
-            readonly readyByMember: ReadonlyMap<string, Deferred.Deferred<void, Error>>
-            readonly release: Deferred.Deferred<void, Error>
+            readonly membersByAppendIdentity: ReadonlyMap<ExecutorReportRendezvousKey, ExecutorReportBatchMember>
+            readonly readyByMember: ReadonlyMap<
+              ExecutorReportRendezvousKey,
+              Deferred.Deferred<void, ExecutorReportRendezvousFailure>
+            >
+            readonly release: Deferred.Deferred<ExecutorReportRendezvousClosure, ExecutorReportRendezvousFailure>
           }
         | { readonly _tag: "Released" }
       const executorReportBatchGate = yield* Ref.make<ExecutorReportBatchGate>({ _tag: "Inactive" })
@@ -1493,17 +1501,17 @@ const runAuthoredScenarioCassetteWith = (request: {
         readonly attemptId: AttemptId
         readonly request: ExecutorReportRequest
         readonly taskId: TaskId
-      }): string => `${input.taskId}:${input.attemptId}:${input.request}`
+      }): ExecutorReportRendezvousKey => executorReportRendezvousKeyOf({ _tag: "ExactMember", ...input })
       const executorReportAppendIdentity = (input: {
         readonly attemptId: AttemptId
         readonly ordinal: number
         readonly request: ExecutorReportRequest
-      }): string => `${input.attemptId}:${input.request}:${input.ordinal}`
+      }): ExecutorReportRendezvousKey => executorReportRendezvousKeyOf({ _tag: "JournalAppend", ...input })
       const batchReadySignalFor = (
         gate: ExecutorReportBatchGate,
         durableReport: DurableExecutorReportRequirement,
         request: ExecutorReportRequest
-      ): Deferred.Deferred<void, Error> | undefined => {
+      ): Deferred.Deferred<void, ExecutorReportRendezvousFailure> | undefined => {
         if (gate._tag !== "Configured" && gate._tag !== "Armed") return undefined
         const member = gate.members.find(
           (candidate) =>
@@ -2078,12 +2086,16 @@ const runAuthoredScenarioCassetteWith = (request: {
         | { readonly _tag: "NotBatched" }
         | {
             readonly _tag: "Registered"
-            readonly appendIdentity: string
+            readonly appendIdentity: ExecutorReportRendezvousKey
             readonly attemptId: AttemptId
-            readonly release: Deferred.Deferred<void, Error>
+            readonly release: Deferred.Deferred<ExecutorReportRendezvousClosure, ExecutorReportRendezvousFailure>
             readonly taskId: TaskId
           }
-        | { readonly _tag: "Rejected"; readonly detail: string; readonly release: Deferred.Deferred<void, Error> }
+        | {
+            readonly _tag: "Rejected"
+            readonly detail: string
+            readonly release: Deferred.Deferred<ExecutorReportRendezvousClosure, ExecutorReportRendezvousFailure>
+          }
       const registerExecutorReportBatchAppend = Effect.fn("AuthoredCassette.registerExecutorReportBatchAppend")(
         function* (event: JournalRecord["event"]) {
           if (event._tag !== "PlannedAttemptExecutorWorkReported") {
@@ -2137,7 +2149,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         }
       )
       const completeExecutorReportBatchAppend = Effect.fn("AuthoredCassette.completeExecutorReportBatchAppend")(
-        function* (appendIdentity: string) {
+        function* (appendIdentity: ExecutorReportRendezvousKey) {
           const completion = yield* Ref.modify(executorReportBatchGate, (gate) => {
             if (gate._tag !== "Armed") return [undefined, gate] as const
             const member = gate.membersByAppendIdentity.get(appendIdentity)
@@ -2147,24 +2159,29 @@ const runAuthoredScenarioCassetteWith = (request: {
               ? [gate.release, { _tag: "Released" as const }]
               : [undefined, { ...gate, completed }]
           })
-          if (completion !== undefined) yield* Deferred.succeed(completion, undefined)
+          if (completion !== undefined) {
+            yield* Deferred.succeed(completion, ExecutorReportRendezvousClosure.make({}))
+          }
         }
       )
       const failExecutorReportBatch = Effect.fn("AuthoredCassette.failExecutorReportBatch")(function* (
-        release: Deferred.Deferred<void, Error>,
+        release: Deferred.Deferred<ExecutorReportRendezvousClosure, ExecutorReportRendezvousFailure>,
         detail: string
       ) {
         const deferreds = yield* Ref.modify(executorReportBatchGate, (gate) =>
           (gate._tag === "Configured" || gate._tag === "Armed") && gate.release === release
             ? ([
-                [gate.release, gate.executorRelease, ...gate.readyByMember.values()],
+                { release: gate.release, voidDeferreds: [gate.executorRelease, ...gate.readyByMember.values()] },
                 { _tag: "Released" as const }
               ] as const)
             : ([undefined, gate] as const)
         )
         if (deferreds === undefined) return
-        const failure = new Error(detail)
-        yield* Effect.forEach(deferreds, (deferred) => Deferred.fail(deferred, failure), { discard: true })
+        const failure = new ExecutorReportRendezvousFailure({ detail })
+        yield* Deferred.fail(deferreds.release, failure)
+        yield* Effect.forEach(deferreds.voidDeferreds, (deferred) => Deferred.fail(deferred, failure), {
+          discard: true
+        })
       })
       const failExecutorReportBatchOnProviderExit = Effect.fn("AuthoredCassette.failExecutorReportBatchOnProviderExit")(
         function* (
@@ -2907,22 +2924,22 @@ const runAuthoredScenarioCassetteWith = (request: {
                 },
                 { members: [], nextOrdinalByAttempt: new Map() }
               )
-              const release = yield* Deferred.make<void, Error>()
-              const executorRelease = yield* Deferred.make<void, Error>()
+              const release = yield* Deferred.make<ExecutorReportRendezvousClosure, ExecutorReportRendezvousFailure>()
+              const executorRelease = yield* Deferred.make<void, ExecutorReportRendezvousFailure>()
               const readyByMember = new Map(
                 yield* Effect.forEach(members, (member) =>
-                  Deferred.make<void, Error>().pipe(
+                  Deferred.make<void, ExecutorReportRendezvousFailure>().pipe(
                     Effect.map((ready) => [executorReportRendezvousMemberKey(member), ready] as const)
                   )
                 )
               )
               yield* Ref.set(executorReportBatchGate, {
                 _tag: "Configured",
-                completed: new Set<string>(),
-                executorReady: new Set<string>(),
+                completed: new Set<ExecutorReportRendezvousKey>(),
+                executorReady: new Set<ExecutorReportRendezvousKey>(),
                 executorRelease,
                 members,
-                membersByAppendIdentity: new Map<string, ExecutorReportBatchMember>(
+                membersByAppendIdentity: new Map<ExecutorReportRendezvousKey, ExecutorReportBatchMember>(
                   members.map((member) => [executorReportAppendIdentity(member), member])
                 ),
                 readyByMember,
@@ -3201,31 +3218,6 @@ const runAuthoredScenarioCassetteWith = (request: {
         if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossActivations
         return yield* runSingleActivation
       })
-      const authoredProgressWatchdog = Effect.gen(function* () {
-        let lastPosition = yield* cursor.storyPosition
-        let stagnantTurns = 0
-        for (;;) {
-          yield* Effect.yieldNow
-          const position = yield* cursor.storyPosition
-          if (position !== lastPosition) {
-            lastPosition = position
-            stagnantTurns = 0
-            continue
-          }
-          stagnantTurns += 1
-          if (stagnantTurns < authoredProgressWatchdogTurns) continue
-          const current = yield* cursor.currentStoryItem
-          return yield* Effect.die(
-            `authored scenario progress stalled at story position ${position}: ${JSON.stringify(current ?? "EndOfStory")}`
-          )
-        }
-      })
-      // The maintained DS01-17 capstone is the long-running concurrency
-      // witness; keep its bounded progress assertion local so ordinary
-      // authored cassettes retain their existing asynchronous boundaries.
-      const guardedCoordinatorExecution = cassette.name.startsWith("DS01-17")
-        ? Effect.raceFirst(coordinatorExecution, authoredProgressWatchdog)
-        : coordinatorExecution
       const assertExecutorReportBatchGateClosed = Ref.get(executorReportBatchGate).pipe(
         Effect.flatMap((gate) =>
           gate._tag === "Inactive" || gate._tag === "Released"
@@ -3241,7 +3233,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         )
       )
       const execution = yield* Effect.scoped(
-        guardedCoordinatorExecution.pipe(
+        coordinatorExecution.pipe(
           Effect.onExit((exit) => (Exit.isSuccess(exit) ? assertExecutorReportBatchGateClosed : Effect.void)),
           Effect.provide(application),
           Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),

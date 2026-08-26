@@ -219,6 +219,32 @@ const cachedRun = Effect.runSync(
     )
   )
 )
+const renamedRendezvousRun = Effect.runSync(
+  Effect.cached(
+    runAuthoredScenarioCassette({
+      ...maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone,
+      name: "renamed non-DS executor-report rendezvous chronology"
+    }).pipe(Effect.provide(NodeCrypto.layer))
+  )
+)
+
+it.effect(
+  "closes the executor-report rendezvous for a renamed non-DS cassette",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* renamedRendezvousRun
+      expect(run.cassette.name).toBe("renamed non-DS executor-report rendezvous chronology")
+      expect(
+        run.observationCaptures.filter(
+          (capture) =>
+            capture._tag === "AuthoredStoryOccurrenceCaptured" &&
+            capture.occurrence._tag === "CassetteRendezvousesExecutorReportsBeforeJournalAppend"
+        )
+      ).toHaveLength(2)
+      expect(run.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
+    }),
+  capstoneTimeout
+)
 
 it.effect(
   "executes DS01 through DS13 in one maintained chronology",
