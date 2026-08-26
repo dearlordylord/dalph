@@ -26,14 +26,14 @@ the latest compatible Program is supplied as TypeScript's old Program.
 
 | Node | Row | Wall time | Compiler diagnostics | Rebuilt virtual trees | Reused virtual trees | Issues |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 22.22.2 | baseline | 2.139s | 0 | 624 | 0 | 0 |
-| 22.22.2 | same-path semantic mutation | 0.614s | 1 | 1 | 624 | 1 |
-| 22.22.2 | added/re-export roots | 0.807s | 0 | 3 | 624 | 1 |
-| 22.22.2 | provider-text roots | 0.720s | 0 | 2 | 624 | 1 |
-| 24.15.0 | baseline | 2.928s | 0 | 624 | 0 | 0 |
-| 24.15.0 | same-path semantic mutation | 1.161s | 1 | 1 | 624 | 1 |
-| 24.15.0 | added/re-export roots | 1.208s | 0 | 3 | 624 | 1 |
-| 24.15.0 | provider-text roots | 1.005s | 0 | 2 | 624 | 1 |
+| 22.22.2 | baseline | 4.043s | 0 | 624 | 0 | 0 |
+| 22.22.2 | same-path semantic mutation | 1.042s | 1 | 1 | 624 | 1 |
+| 22.22.2 | added/re-export roots | 1.300s | 0 | 3 | 624 | 1 |
+| 22.22.2 | provider-text roots | 1.155s | 0 | 2 | 624 | 1 |
+| 24.15.0 | baseline | 2.555s | 0 | 624 | 0 | 0 |
+| 24.15.0 | same-path semantic mutation | 0.967s | 1 | 1 | 624 | 1 |
+| 24.15.0 | added/re-export roots | 1.365s | 0 | 3 | 624 | 1 |
+| 24.15.0 | provider-text roots | 1.158s | 0 | 2 | 624 | 1 |
 
 The added and provider rows intentionally report one unregistered production
 Layer issue. Their source text is parsed and bound; no provider expression is
@@ -42,18 +42,20 @@ executed. The same-path row changes a valid virtual source to
 the changed tree is rebuilt while all 624 unchanged repository trees are reused.
 
 The scanner asks TypeScript for compiler-option diagnostics on every new
-Program. It asks for syntax and semantic diagnostics for every changed source
-and every newly added virtual source; unchanged repository roots are not
-rechecked on every negative fixture, so unrelated baseline diagnostics cannot
-be surfaced by a fixture. The focused syntax and semantic negative contracts
-prove that an invalid added or changed virtual source fails closed and that the
-diagnostic path identifies only that source.
+Program. It computes the current and previous module dependency graphs, then
+checks syntax and semantic diagnostics for each changed, added, or removed
+source and the reverse dependency closure. An unchanged repository source is
+also checked when its source text differs from the physical repository file;
+unchanged physical repository roots are not rechecked for a virtual fixture, so
+unrelated baseline diagnostics cannot be surfaced by a fixture. The focused
+contracts cover a first-audit added root, changed dependency export, removed
+dependency, syntax error, and semantic error.
 
 ## Complete focused suite
 
 The main focused command retains all 33 accepted capability positives and
-negative controls and adds three cache contracts plus two compiler-diagnostic
-contracts. All 38 tests passed in each final dedicated or stressed run below:
+negative controls and adds three cache contracts plus five compiler-diagnostic
+contracts. All 41 tests passed in each final dedicated or stressed run below:
 
 ```sh
 mise exec node@22.22.2 -- pnpm test:capability-registration -- --reporter=dot
@@ -62,25 +64,41 @@ mise exec node@24.15.0 -- pnpm test:capability-registration -- --reporter=dot
 
 | Node | Run | Workload | Wall time | Result |
 | --- | --- | --- | ---: | --- |
-| 22.22.2 | dedicated | none | 27.987s | 38/38 passed |
-| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | 27.678s | 38/38 passed |
-| 24.15.0 | dedicated | none | 23.221s | 38/38 passed |
-| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | 24.667s | 38/38 passed |
+| 22.22.2 | dedicated | none | 33.470s | 41/41 passed |
+| 22.22.2 | stressed | one fixed CPU worker, CPU 11, 70s | 31.527s | 41/41 passed |
+| 24.15.0 | dedicated | none | 55.650s | 41/41 passed |
+| 24.15.0 | stressed | one fixed CPU worker, CPU 11, 70s | 29.109s | 41/41 passed |
 
-The existing capability-registration quality stage remains bounded at 60s.
+The existing capability-registration quality stage remains bounded at 60s;
+that bounded runner contract is the stage verdict. The benchmark test reports
+elapsed observations and deterministic source-tree/diagnostic assertions but
+does not fail on ambient wall-clock time. The explicit benchmark commands above
+and the bounded quality-gate stage enforce and profile the 60-second contract.
 The virtual compiler host precomputes its virtual directory set once per
 Program. This avoids scanning all 624 virtual file names for every TypeScript
 `directoryExists` lookup while retaining the same source-only resolution
-boundary. The maximum final observation is 27.987s, leaving 32.013s of
-measured margin; the bound was not raised. The stressed command ran this exact fixed competing
-workload concurrently with the unrestricted test command:
+boundary. The maximum final observation is 55.650s, leaving 4.350s of measured
+margin; the bound was not raised. The stressed command uses exact cleanup and
+reaping for its fixed competing workload:
 
 ```sh
-taskset -c 11 mise exec node@22.22.2 -- node -e 'const end = Date.now() + 70000; let value = 0; while (Date.now() < end) value = (value + 1) % 1000003' &
-mise exec node@22.22.2 -- pnpm test:capability-registration -- --reporter=dot
+run_stressed() {
+  local node_version="$1"
+  local stress_pid=""
+  cleanup() {
+    if [ -n "$stress_pid" ]; then
+      kill "$stress_pid" 2>/dev/null || true
+      wait "$stress_pid" 2>/dev/null || true
+    fi
+  }
+  trap cleanup EXIT INT TERM
+  taskset -c 11 mise exec "$node_version" -- node -e 'const end = Date.now() + 70000; let value = 0; while (Date.now() < end) value = (value + 1) % 1000003' &
+  stress_pid=$!
+  mise exec "$node_version" -- pnpm test:capability-registration -- --reporter=dot
+}
 
-taskset -c 11 mise exec node@24.15.0 -- node -e 'const end = Date.now() + 70000; let value = 0; while (Date.now() < end) value = (value + 1) % 1000003' &
-mise exec node@24.15.0 -- pnpm test:capability-registration -- --reporter=dot
+run_stressed node@22.22.2
+run_stressed node@24.15.0
 ```
 
 The background child was terminated and reaped after each completed run. An
@@ -95,6 +113,8 @@ the final implementation checks only changed or newly added relevant sources.
 | A maintainer runs the complete quality gate and the 33 accepted controls remain source-only | `capability-registration.test.ts` existing 33 tests; `is part of check:all`; complete-suite rows above |
 | A negative fixture changes one existing source | `rebuilds a source whose complete text changes instead of reusing its old tree`; semantic diagnostic contract; same-path mutation row |
 | A fixture adds virtual/re-export roots | `reuses unchanged source trees when a later audit adds a virtual root`; added/re-export row |
+| A dependency export changes or a dependency root is removed | `fails closed when a changed dependency removes an imported export`; `fails closed when a removed dependency remains imported` |
+| An added source uses a repository source prefix | `fails closed for a first-audit virtual source under a repository source root` |
 | An added or changed source has a TypeScript syntax or semantic error | `fails closed on syntax diagnostics from an added virtual source without exposing repository diagnostics`; `fails closed on semantic diagnostics from a changed virtual source` |
 | A source contains a provider expression | `audits source text without loading or invoking a live provider`; provider-text row |
 | Measurements set the finite stage bound | this report, the benchmark test, and the bounded runner contract in `capability-registration.test.ts` |

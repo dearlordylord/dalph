@@ -18,6 +18,15 @@ const issuesFor = (inventory: CapabilityRegistrationInventory): ReadonlyArray<st
   runCapabilityRegistrationGate(inventory, sourceFiles)
 
 describe("capability registration gate", () => {
+  it("fails closed for a first-audit virtual source under a repository source root", () => {
+    const path = "packages/contracts/src/issue-262-invalid-added-root.ts"
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      { path, source: "export const = 1" }
+    ])
+
+    expect(issues.some((issue) => issue.includes(`in ${path}:`) && issue.includes("TS1134"))).toBe(true)
+  })
+
   it("runs every registered controlled and production implementation through its named contract family", () => {
     expect(issuesFor(capabilityRegistrationInventory)).toEqual([])
 
@@ -708,6 +717,39 @@ describe("capability registration gate", () => {
         .filter((issue) => issue.startsWith("source audit TypeScript diagnostic"))
         .every((issue) => issue.includes(`in ${path}:`))
     ).toBe(true)
+  })
+
+  it("fails closed when a changed dependency removes an imported export", () => {
+    const dependencyPath = "scripts/fixtures/issue-262-dependency.ts"
+    const consumerPath = "scripts/fixtures/issue-262-dependency-consumer.ts"
+    const consumer: CapabilitySourceFile = {
+      path: consumerPath,
+      source:
+        'import { dependencyValue } from "./issue-262-dependency.js"\nexport const consumerValue = dependencyValue'
+    }
+    const validDependency: CapabilitySourceFile = { path: dependencyPath, source: "export const dependencyValue = 1" }
+    const removedExport: CapabilitySourceFile = { path: dependencyPath, source: "export const replacementValue = 1" }
+
+    inspectCapabilitySourceProgram([validDependency, consumer])
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [removedExport, consumer])
+
+    expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2305"))).toBe(true)
+  })
+
+  it("fails closed when a removed dependency remains imported", () => {
+    const dependencyPath = "scripts/fixtures/issue-262-removed-dependency.ts"
+    const consumerPath = "scripts/fixtures/issue-262-removed-dependency-consumer.ts"
+    const dependency: CapabilitySourceFile = { path: dependencyPath, source: "export const dependencyValue = 1" }
+    const consumer: CapabilitySourceFile = {
+      path: consumerPath,
+      source:
+        'import { dependencyValue } from "./issue-262-removed-dependency.js"\nexport const consumerValue = dependencyValue'
+    }
+
+    inspectCapabilitySourceProgram([dependency, consumer])
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [consumer])
+
+    expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2307"))).toBe(true)
   })
 
   it("keeps exact source-array identity caching for repeated audits", () => {

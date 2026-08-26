@@ -41,6 +41,7 @@ export const repositoryCapabilitySourceFiles = (repositoryRoot = process.cwd()):
 
 interface CapabilitySourceProgram {
   readonly checker: ts.TypeChecker
+  readonly dependenciesByPath: ReadonlyMap<string, ReadonlyArray<string>>
   readonly program: ts.Program
   readonly sourceByPath: ReadonlyMap<string, CapabilitySourceFile>
   readonly diagnostics: CapabilitySourceProgramDiagnostics
@@ -67,6 +68,7 @@ interface CapabilitySourceProgramDiagnostics {
 const virtualRoot = "/__dalph_capability_registration__"
 const virtualPath = (path: string): string => join(virtualRoot, path).replaceAll("\\", "/")
 const normalizedVirtualPath = (path: string): string => resolve(path).replaceAll("\\", "/")
+const sourcePathFromVirtualPath = (path: string): string => relative(virtualRoot, path).replaceAll("\\", "/")
 
 const sourceProgramCache = new WeakMap<object, CapabilitySourceProgram>()
 let latestSourceProgram: CapabilitySourceProgram | undefined
@@ -77,10 +79,97 @@ const diagnosticMessage = (diagnostic: ts.Diagnostic): string =>
 const isRepositorySourcePath = (path: string): boolean =>
   sourceRoots.some((root) => path === root || path.startsWith(`${root}/`))
 
+const isUnchangedRepositorySource = (file: CapabilitySourceFile): boolean =>
+  isRepositorySourcePath(file.path) &&
+  existsSync(resolve(file.path)) &&
+  readFileSync(resolve(file.path), "utf8") === file.source
+
+const sourceModuleSpecifierTexts = (source: ts.SourceFile): ReadonlyArray<string> =>
+  source.statements.flatMap((statement) => {
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteralLike(statement.moduleSpecifier)) {
+      return [statement.moduleSpecifier.text]
+    }
+    if (ts.isExportDeclaration(statement) && statement.moduleSpecifier !== undefined) {
+      return ts.isStringLiteralLike(statement.moduleSpecifier) ? [statement.moduleSpecifier.text] : []
+    }
+    if (
+      ts.isImportEqualsDeclaration(statement) &&
+      statement.moduleReference.kind === ts.SyntaxKind.ExternalModuleReference &&
+      ts.isStringLiteralLike(statement.moduleReference.expression)
+    ) {
+      return [statement.moduleReference.expression.text]
+    }
+    return []
+  })
+
+const sourceDependencyPaths = (
+  program: ts.Program,
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>,
+  options: ts.CompilerOptions,
+  host: ts.CompilerHost
+): ReadonlyMap<string, ReadonlyArray<string>> => {
+  const sourcePaths = new Set(sourceFiles.map(({ path }) => path))
+  return new Map(
+    sourceFiles.map((file) => {
+      const source = program.getSourceFile(virtualPath(file.path))
+      const dependencies =
+        source === undefined
+          ? []
+          : sourceModuleSpecifierTexts(source)
+              .flatMap((text) => {
+                const resolved = ts.resolveModuleName(text, source.fileName, options, host).resolvedModule
+                return resolved === undefined ? [] : [sourcePathFromVirtualPath(resolved.resolvedFileName)]
+              })
+              .filter((path) => path !== file.path && sourcePaths.has(path))
+      return [file.path, dependencies] as const
+    })
+  )
+}
+
+const affectedSourcePaths = (
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>,
+  previous: CapabilitySourceProgram | undefined,
+  dependenciesByPath: ReadonlyMap<string, ReadonlyArray<string>>,
+  changedPaths: ReadonlyArray<string>,
+  removedPaths: ReadonlyArray<string>
+): ReadonlySet<string> => {
+  /* eslint-disable functional/immutable-data -- local reverse-dependency closure. */
+  const reverseDependencies = new Map<string, Set<string>>()
+  const addReverseDependencies = (dependencies: ReadonlyMap<string, ReadonlyArray<string>>): void => {
+    for (const [sourcePath, dependencyPaths] of dependencies) {
+      for (const dependencyPath of dependencyPaths) {
+        const dependents = reverseDependencies.get(dependencyPath) ?? new Set<string>()
+        dependents.add(sourcePath)
+        reverseDependencies.set(dependencyPath, dependents)
+      }
+    }
+  }
+  addReverseDependencies(dependenciesByPath)
+  if (previous !== undefined) addReverseDependencies(previous.dependenciesByPath)
+
+  const affected = new Set([...changedPaths, ...removedPaths])
+  const pending = [...affected]
+  for (let index = 0; index < pending.length; index += 1) {
+    const pendingPath = pending[index]
+    if (pendingPath === undefined) continue
+    const dependents = reverseDependencies.get(pendingPath)
+    if (dependents === undefined) continue
+    for (const dependent of dependents) {
+      if (affected.has(dependent)) continue
+      affected.add(dependent)
+      pending.push(dependent)
+    }
+  }
+  /* eslint-enable functional/immutable-data */
+  const currentPaths = new Set(sourceFiles.map(({ path }) => path))
+  return new Set([...affected].filter((path) => currentPaths.has(path)))
+}
+
 const compilerDiagnostics = (
   program: ts.Program,
   sourceFiles: ReadonlyArray<CapabilitySourceFile>,
-  previous: CapabilitySourceProgram | undefined
+  previous: CapabilitySourceProgram | undefined,
+  dependenciesByPath: ReadonlyMap<string, ReadonlyArray<string>>
 ): ReadonlyArray<CapabilityCompilerDiagnostic> => {
   const optionsIssues = program
     .getOptionsDiagnostics()
@@ -90,14 +179,25 @@ const compilerDiagnostics = (
       message: diagnosticMessage(diagnostic),
       path: "<compiler-options>"
     }))
+  const sourceByPath = new Map(sourceFiles.map((file) => [file.path, file] as const))
+  const changedPaths = sourceFiles.flatMap(({ path, source }) => {
+    const previousSource = previous?.sourceByPath.get(path)
+    return previousSource === undefined
+      ? isUnchangedRepositorySource({ path, source })
+        ? []
+        : [path]
+      : previousSource.source === source
+        ? []
+        : [path]
+  })
+  const removedPaths =
+    previous === undefined ? [] : [...previous.sourceByPath.keys()].filter((path) => !sourceByPath.has(path))
+  const affectedPaths = affectedSourcePaths(sourceFiles, previous, dependenciesByPath, changedPaths, removedPaths)
   const sourceIssues = sourceFiles.flatMap((file) => {
     const { path } = file
+    if (!affectedPaths.has(path)) return []
     const source = program.getSourceFile(virtualPath(path))
     if (source === undefined) return []
-    const previousSource = previous?.sourceByPath.get(path)
-    const shouldCheckSourceDiagnostics =
-      previousSource !== undefined ? previousSource.source !== file.source : !isRepositorySourcePath(path)
-    if (!shouldCheckSourceDiagnostics) return []
     const diagnostics = [...program.getSyntacticDiagnostics(source), ...program.getSemanticDiagnostics(source)]
     return diagnostics.map((diagnostic) => ({
       category: diagnostic.category,
@@ -189,10 +289,13 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
     host,
     previous?.program
   )
+  const checker = program.getTypeChecker()
+  const dependenciesByPath = sourceDependencyPaths(program, sourceFiles, options, host)
   const indexed = {
-    checker: program.getTypeChecker(),
+    checker,
+    dependenciesByPath,
     diagnostics: {
-      compilerDiagnostics: compilerDiagnostics(program, sourceFiles, previous),
+      compilerDiagnostics: compilerDiagnostics(program, sourceFiles, previous, dependenciesByPath),
       rebuiltSourcePaths,
       reusedSourcePaths
     },
@@ -218,8 +321,6 @@ const compilerDiagnosticIssues = (sourceFiles: ReadonlyArray<CapabilitySourceFil
     ({ category, code, message, path }) =>
       `source audit TypeScript diagnostic (${ts.DiagnosticCategory[category]} TS${code}) in ${path}: ${message}`
   )
-
-const sourcePathFromVirtualPath = (path: string): string => relative(virtualRoot, path).replaceAll("\\", "/")
 
 const parsedSource = (file: CapabilitySourceFile, indexed: CapabilitySourceProgram): ts.SourceFile => {
   const parsed = indexed.program.getSourceFile(virtualPath(file.path))

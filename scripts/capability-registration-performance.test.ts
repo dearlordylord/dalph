@@ -10,14 +10,12 @@ import {
 
 const repositorySources = repositoryCapabilitySourceFiles()
 
-const capabilityStageBoundMilliseconds = 60_000
-
 interface MeasurementExpectation {
   readonly compilerDiagnosticCount: number
   readonly issueCount: number
   readonly issueIncludes?: string
   readonly rebuiltPaths: ReadonlyArray<string>
-  readonly reusedSourceCount: number
+  readonly reusedPaths: ReadonlyArray<string>
 }
 
 const measured = (
@@ -30,12 +28,11 @@ const measured = (
   const issues = runCapabilityRegistrationGate(inventory, sources)
   const elapsedMilliseconds = performance.now() - startedAt
   const diagnostics = inspectCapabilitySourceProgram(sources)
-  expect(elapsedMilliseconds).toBeLessThan(capabilityStageBoundMilliseconds)
   expect(issues).toHaveLength(expected.issueCount)
   expect(diagnostics.compilerDiagnostics).toHaveLength(expected.compilerDiagnosticCount)
   expect(diagnostics.rebuiltSourcePaths).toHaveLength(expected.rebuiltPaths.length)
   expect(diagnostics.rebuiltSourcePaths).toEqual(expect.arrayContaining([...expected.rebuiltPaths]))
-  expect(new Set(diagnostics.reusedSourcePaths).size).toBe(expected.reusedSourceCount)
+  expect(new Set(diagnostics.reusedSourcePaths)).toEqual(new Set(expected.reusedPaths))
   if (expected.issueIncludes !== undefined) expect(issues.join("\n")).toContain(expected.issueIncludes)
   return {
     compilerDiagnosticCount: diagnostics.compilerDiagnostics.length,
@@ -104,14 +101,14 @@ describe("capability registration performance evidence", () => {
       compilerDiagnosticCount: 0,
       issueCount: 0,
       rebuiltPaths: repositorySources.map(({ path }) => path),
-      reusedSourceCount: 0
+      reusedPaths: []
     })
     const identicalSources = baseline.map((file) => ({ ...file }))
     const identicalDiagnostics = inspectCapabilitySourceProgram(identicalSources)
     expect(inspectCapabilitySourceProgram(identicalSources)).toBe(identicalDiagnostics)
     expect(identicalDiagnostics.compilerDiagnostics).toHaveLength(0)
     expect(identicalDiagnostics.rebuiltSourcePaths).toHaveLength(0)
-    expect(new Set(identicalDiagnostics.reusedSourcePaths).size).toBe(repositorySources.length)
+    expect(new Set(identicalDiagnostics.reusedSourcePaths)).toEqual(new Set(repositorySources.map(({ path }) => path)))
 
     inspectCapabilitySourceProgram([...baseline, validSamePathSource])
     const samePathRow = measured(
@@ -123,7 +120,7 @@ describe("capability registration performance evidence", () => {
         issueCount: 1,
         issueIncludes: `in ${samePath}:`,
         rebuiltPaths: [samePath],
-        reusedSourceCount: repositorySources.length
+        reusedPaths: repositorySources.map(({ path }) => path)
       }
     )
     const rows = [
@@ -138,7 +135,7 @@ describe("capability registration performance evidence", () => {
           issueCount: 1,
           issueIncludes: "production uses unregistered exported Layer reexportedLayer",
           rebuiltPaths: [addedLayer.path, addedReexport.path, addedComposition.path],
-          reusedSourceCount: repositorySources.length
+          reusedPaths: repositorySources.map(({ path }) => path)
         }
       ),
       measured("provider-text roots", providerInventory, [...baseline, providerLayer, providerComposition], {
@@ -146,7 +143,7 @@ describe("capability registration performance evidence", () => {
         issueCount: 1,
         issueIncludes: "production uses unregistered exported Layer benchmarkProviderLayer",
         rebuiltPaths: [providerLayer.path, providerComposition.path],
-        reusedSourceCount: repositorySources.length
+        reusedPaths: repositorySources.map(({ path }) => path)
       })
     ]
 
