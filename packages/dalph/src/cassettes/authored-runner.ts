@@ -155,10 +155,25 @@ export interface AuthoredScenarioCassetteRun {
   readonly traceHistories: ReadonlyArray<TraceAtCursor>
 }
 
+/** Harness-only atomic handoff from one ordinary append result to its rendezvous bookkeeping. */
+export const appendThenCompleteExecutorReportRendezvous = <A, E, R>(
+  prepareAndAppend: Effect.Effect<A, E, R>,
+  complete: Effect.Effect<void>,
+  fail: Effect.Effect<void>
+): Effect.Effect<A, E, R> =>
+  Effect.uninterruptibleMask((restore) =>
+    restore(prepareAndAppend).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? complete : Effect.void)))
+  ).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? fail : Effect.void)))
+
 interface AuthoredTaggedDiagnostic {
   readonly kind: string
   readonly exact: string
 }
+
+type AuthoredAppendableJournalEvent = Exclude<
+  JournalRecord["event"],
+  { readonly _tag: "WorkflowRunBegan" | "WorkflowRunTerminated" }
+>
 
 interface AuthoredActionPlanningFact extends AuthoredTaggedDiagnostic {
   readonly attemptId: AttemptId | null
@@ -1484,6 +1499,20 @@ const runAuthoredScenarioCassetteWith = (request: {
         readonly ordinal: number
         readonly request: ExecutorReportRequest
       }): string => `${input.attemptId}:${input.request}:${input.ordinal}`
+      const batchReadySignalFor = (
+        gate: ExecutorReportBatchGate,
+        durableReport: DurableExecutorReportRequirement,
+        request: ExecutorReportRequest
+      ): Deferred.Deferred<void, Error> | undefined => {
+        if (gate._tag !== "Configured" && gate._tag !== "Armed") return undefined
+        const member = gate.members.find(
+          (candidate) =>
+            candidate.attemptId === durableReport.attemptId &&
+            candidate.ordinal === durableReport.ordinal &&
+            candidate.request === request
+        )
+        return member === undefined ? undefined : gate.readyByMember.get(executorReportRendezvousMemberKey(member))
+      }
       const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
         Option.Option<{
           readonly attemptId: AttemptId
@@ -2121,8 +2150,48 @@ const runAuthoredScenarioCassetteWith = (request: {
           if (completion !== undefined) yield* Deferred.succeed(completion, undefined)
         }
       )
-      const failExecutorReportBatch = (release: Deferred.Deferred<void, Error>, detail: string) =>
-        Deferred.fail(release, new Error(detail))
+      const failExecutorReportBatch = Effect.fn("AuthoredCassette.failExecutorReportBatch")(function* (
+        release: Deferred.Deferred<void, Error>,
+        detail: string
+      ) {
+        const deferreds = yield* Ref.modify(executorReportBatchGate, (gate) =>
+          (gate._tag === "Configured" || gate._tag === "Armed") && gate.release === release
+            ? ([
+                [gate.release, gate.executorRelease, ...gate.readyByMember.values()],
+                { _tag: "Released" as const }
+              ] as const)
+            : ([undefined, gate] as const)
+        )
+        if (deferreds === undefined) return
+        const failure = new Error(detail)
+        yield* Effect.forEach(deferreds, (deferred) => Deferred.fail(deferred, failure), { discard: true })
+      })
+      const failExecutorReportBatchOnProviderExit = Effect.fn("AuthoredCassette.failExecutorReportBatchOnProviderExit")(
+        function* (
+          plannedAttempt: PlannedTaskAttempt,
+          request: ExecutorReportRequest,
+          exit: Exit.Exit<PlannedAttemptExecutorReport, unknown>
+        ) {
+          if (Exit.isSuccess(exit)) return
+          const release = yield* Ref.get(executorReportBatchGate).pipe(
+            Effect.map((gate) => {
+              if (gate._tag !== "Configured" && gate._tag !== "Armed") return undefined
+              const member = gate.members.find(
+                (candidate) =>
+                  candidate.attemptId === plannedAttempt.attemptId &&
+                  candidate.request === request &&
+                  candidate.taskId === plannedAttempt.taskId
+              )
+              return member === undefined ? undefined : gate.release
+            })
+          )
+          if (release === undefined) return
+          yield* failExecutorReportBatch(
+            release,
+            `executor-report provider failed before batch append for ${plannedAttempt.taskId}:${plannedAttempt.attemptId}:${request}`
+          )
+        }
+      )
       const awaitExecutorReportBatchReady = Effect.fn("AuthoredCassette.awaitExecutorReportBatchReady")(function* (
         plannedAttempt: PlannedTaskAttempt,
         request: ExecutorReportRequest
@@ -2165,6 +2234,37 @@ const runAuthoredScenarioCassetteWith = (request: {
           InRunJournal,
           Effect.gen(function* () {
             const journal = yield* InRunJournal
+            const appendRegisteredExecutorReport = Effect.fn("AuthoredCassette.appendRegisteredExecutorReport")(
+              function* (
+                registration: Extract<ExecutorReportBatchRegistration, { readonly _tag: "Registered" }>,
+                appendRunId: RunId,
+                key: JournalRecord["key"],
+                event: AuthoredAppendableJournalEvent
+              ) {
+                return yield* appendThenCompleteExecutorReportRendezvous(
+                  Effect.gen(function* () {
+                    const records = yield* journal.read(appendRunId)
+                    const responsibilityIsExact = records.some(
+                      ({ event: candidate }) =>
+                        candidate._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+                        candidate.plannedAttempt.attemptId === registration.attemptId &&
+                        candidate.plannedAttempt.taskId === registration.taskId
+                    )
+                    if (!responsibilityIsExact) {
+                      return yield* Effect.die(
+                        `executor-report batch append has no exact responsibility: ${registration.taskId}:${registration.attemptId}`
+                      )
+                    }
+                    return yield* journal.append(appendRunId, key, event)
+                  }),
+                  completeExecutorReportBatchAppend(registration.appendIdentity),
+                  failExecutorReportBatch(
+                    registration.release,
+                    `executor-report batch append failed or was interrupted for ${registration.appendIdentity}`
+                  )
+                )
+              }
+            )
             return InRunJournal.of({
               ...journal,
               append: (appendRunId, key, event) =>
@@ -2174,36 +2274,9 @@ const runAuthoredScenarioCassetteWith = (request: {
                     yield* failExecutorReportBatch(registration.release, registration.detail)
                     return yield* Effect.die(registration.detail)
                   }
-                  if (registration._tag === "Registered") {
-                    const records = yield* journal.read(appendRunId)
-                    const responsibilityIsExact = records.some(
-                      ({ event: candidate }) =>
-                        candidate._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-                        candidate.plannedAttempt.attemptId === registration.attemptId &&
-                        candidate.plannedAttempt.taskId === registration.taskId
-                    )
-                    if (!responsibilityIsExact) {
-                      const detail = `executor-report batch append has no exact responsibility: ${registration.taskId}:${registration.attemptId}`
-                      yield* failExecutorReportBatch(registration.release, detail)
-                      return yield* Effect.die(detail)
-                    }
-                  }
-                  const appended = yield* journal
-                    .append(appendRunId, key, event)
-                    .pipe(
-                      Effect.onExit((exit) =>
-                        registration._tag === "Registered" && Exit.isFailure(exit)
-                          ? failExecutorReportBatch(
-                              registration.release,
-                              `executor-report batch append failed for ${registration.appendIdentity}`
-                            )
-                          : Effect.void
-                      )
-                    )
-                  if (registration._tag === "Registered") {
-                    yield* completeExecutorReportBatchAppend(registration.appendIdentity)
-                  }
-                  return appended
+                  return yield* registration._tag === "Registered"
+                    ? appendRegisteredExecutorReport(registration, appendRunId, key, event)
+                    : journal.append(appendRunId, key, event)
                 })
             })
           })
@@ -2215,7 +2288,8 @@ const runAuthoredScenarioCassetteWith = (request: {
           survivingExecutorReports,
           unresolvedLostExecutorResponses,
           prepareExecutorReport,
-          (plannedAttempt, request) => awaitExecutorReportBatchReady(plannedAttempt, request)
+          (plannedAttempt, request) => awaitExecutorReportBatchReady(plannedAttempt, request),
+          failExecutorReportBatchOnProviderExit
         ).pipe(Layer.provide(controlPolicyLayer))
         const activationLayer = validatedRunActivationLayer(
           runId,
@@ -2861,19 +2935,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               if (durableReport !== undefined) {
                 const gate = yield* Ref.get(executorReportBatchGate)
                 const request = durableReport.reportShape === "SafelySuspended" ? "Suspend" : "StartOrContinue"
-                const batchedMember =
-                  gate._tag === "Configured" || gate._tag === "Armed"
-                    ? gate.members.find(
-                        (member) =>
-                          member.attemptId === durableReport.attemptId &&
-                          member.ordinal === durableReport.ordinal &&
-                          member.request === request
-                      )
-                    : undefined
-                const memberReady =
-                  batchedMember === undefined || (gate._tag !== "Configured" && gate._tag !== "Armed")
-                    ? undefined
-                    : gate.readyByMember.get(executorReportRendezvousMemberKey(batchedMember))
+                const memberReady = batchReadySignalFor(gate, durableReport, request)
                 if (memberReady === undefined) yield* awaitDurableExecutorReport(durableReport)
                 else yield* Deferred.await(memberReady).pipe(Effect.orDie)
               }
@@ -2889,7 +2951,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   | "OperatorAppliesRunCancellation"
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
                   | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
-                  | "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady"
+                  | "CassetteRendezvousesExecutorReportsBeforeJournalAppend"
                   | "CassetteReleasesHeldPlannedAttemptSuspension"
                   | "CassetteReleasesHeldPlannedAttemptContinuation"
                   | "CassetteReleasesHeldTargetPromotionReconciliationRead"
@@ -2915,7 +2977,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               "OperatorAppliesRunCancellation",
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
               "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
-              "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
+              "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
               "CassetteReleasesHeldPlannedAttemptSuspension",
               "CassetteReleasesHeldPlannedAttemptContinuation",
               "CassetteReleasesHeldTargetPromotionReconciliationRead",
@@ -2946,7 +3008,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   drivePlannedSuspensionExecutorBoundaryHold,
                 CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: () =>
                   drivePlannedContinuationExecutorBoundaryHold,
-                DalphHoldsExecutorProgressAdmissionUntilReportBatchReady: () => driveExecutorReportBatchGate,
+                CassetteRendezvousesExecutorReportsBeforeJournalAppend: () => driveExecutorReportBatchGate,
                 CassetteReleasesHeldPlannedAttemptSuspension: () => drivePlannedSuspensionExecutorBoundaryRelease,
                 CassetteReleasesHeldPlannedAttemptContinuation: () => drivePlannedContinuationExecutorBoundaryRelease,
                 CassetteReleasesHeldTargetPromotionReconciliationRead: () =>

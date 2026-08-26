@@ -31,7 +31,7 @@ const withExecutorReportRendezvous = (members: ReadonlyArray<unknown>) => ({
   ...deliveryFinalitySpineAuthoredCassette,
   story: [
     ...deliveryFinalitySpineAuthoredCassette.story.slice(0, 2),
-    { _tag: "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady", members },
+    { _tag: "CassetteRendezvousesExecutorReportsBeforeJournalAppend", members },
     ...deliveryFinalitySpineAuthoredCassette.story.slice(2)
   ]
 })

@@ -175,6 +175,12 @@ const selectionCanWaitAfterClaim = (
   (item?._tag === "DalphSelects" &&
     activeSelections.some((selection) => cassetteDecisionMatches(selection, item.operation)))
 
+const expectedSelectionAt = (item: StoryItem | undefined): string => {
+  if (item?._tag === "DalphSelects") return JSON.stringify(item.operation)
+  if (item?._tag === "ExpectedBehavior") return item._tag
+  return item?._tag ?? "EndOfStory"
+}
+
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
@@ -264,7 +270,7 @@ export interface StoryCursor {
     Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type>
   >
   readonly consumeExecutorProgressAdmissionBatchGate: Effect.Effect<
-    Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorProgressAdmissionUntilReportBatchReady.Type>
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteRendezvousesExecutorReportsBeforeJournalAppend.Type>
   >
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
@@ -453,7 +459,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     new Map()
   )
   const cursorDriverBarrierTags: ReadonlySet<StoryItem["_tag"]> = new Set([
-    "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
+    "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteReleasesHeldTargetPromotionReconciliationRead",
@@ -630,31 +636,30 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   )(function* (operation) {
     const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation))
     if (claimed._tag === "Claimed") return claimed.item
-    const activeRequests = yield* SubscriptionRef.get(activeExecutorReportRequests)
-    const activeIntegratorRequests = yield* SubscriptionRef.get(activeIntegratorGitObservations)
-    const activeSelections = yield* SubscriptionRef.get(activeDalphSelections)
-    if (selectionCanWaitAfterClaim(claimed.item, activeRequests, activeIntegratorRequests, activeSelections)) {
-      yield* awaitsLaterStoryItem(position, claimed.index)
-      return yield* consumeDalphSelectionForLoop(operation)
-    }
-    if (yield* awaitOwnedStoryItemImmediatelyBeforeSelection(claimed.item, claimed.index, operation)) {
-      return yield* consumeDalphSelectionForLoop(operation)
-    }
-    // Concurrent production fibers can request a later authored selection
-    // before the operation occupying the current selection/response has
-    // registered. Wait for one bounded registration window; if no owner
-    // advances the story, this remains a fail-closed authored mismatch.
-    if (yield* awaitFutureAuthoredSelectionOrAdvance(claimed.index, operation)) {
-      return yield* consumeDalphSelectionForLoop(operation)
-    }
+    const shouldRetry = yield* Effect.gen(function* () {
+      const activeRequests = yield* SubscriptionRef.get(activeExecutorReportRequests)
+      const activeIntegratorRequests = yield* SubscriptionRef.get(activeIntegratorGitObservations)
+      const activeSelections = yield* SubscriptionRef.get(activeDalphSelections)
+      if (selectionCanWaitAfterClaim(claimed.item, activeRequests, activeIntegratorRequests, activeSelections)) {
+        yield* awaitsLaterStoryItem(position, claimed.index)
+        return true
+      }
+      if (yield* awaitOwnedStoryItemImmediatelyBeforeSelection(claimed.item, claimed.index, operation)) {
+        return true
+      }
+      // Concurrent production fibers can request a later authored selection
+      // before the operation occupying the current selection/response has
+      // registered. Wait for one bounded registration window; if no owner
+      // advances the story, this remains a fail-closed authored mismatch.
+      if (yield* awaitFutureAuthoredSelectionOrAdvance(claimed.index, operation)) {
+        return true
+      }
+      return false
+    })
+    if (shouldRetry) return yield* consumeDalphSelectionForLoop(operation)
     return yield* new AuthoredCassetteInteractionMismatch({
       actual: JSON.stringify(operation),
-      expected:
-        claimed.item?._tag === "DalphSelects"
-          ? JSON.stringify(claimed.item.operation)
-          : claimed.item?._tag === "ExpectedBehavior"
-            ? claimed.item._tag
-            : (claimed.item?._tag ?? "EndOfStory"),
+      expected: expectedSelectionAt(claimed.item),
       storyPosition: claimed.index
     })
   })
@@ -703,8 +708,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     const claimed = yield* claimNext(
       (
         item
-      ): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorProgressAdmissionUntilReportBatchReady.Type =>
-        item?._tag === "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady"
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteRendezvousesExecutorReportsBeforeJournalAppend.Type =>
+        item?._tag === "CassetteRendezvousesExecutorReportsBeforeJournalAppend"
     )
     /* v8 ignore next -- @preserve The direct-item dispatcher calls this consumer only for its exact current synchronization item. */
     return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
@@ -865,7 +870,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     }
     const currentReport = executorReportImmediatelyBefore(claimed.item, story[claimed.index + 1], request, attemptId)
-    if (currentReport !== null) {
+    const retryAfterCurrentReport = yield* Effect.gen(function* () {
+      if (currentReport === null) return false
       if (!(yield* awaitOwnedExecutorReport(currentReport, claimed.index))) {
         return yield* new AuthoredCassetteInteractionMismatch({
           actual: `${request}/${attemptId}`,
@@ -873,12 +879,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           storyPosition: claimed.index
         })
       }
-      return yield* consumeExecutorReportForLoop(request, attemptId)
-    }
+      return true
+    })
+    if (retryAfterCurrentReport) return yield* consumeExecutorReportForLoop(request, attemptId)
     const matchingReportIndex = story.findIndex(
       (candidate, index) => index > claimed.index && authoredExecutorReportMatches(candidate, request, attemptId)
     )
-    if (matchingReportIndex > claimed.index) {
+    const retryAfterOwnedPredecessor = yield* Effect.gen(function* () {
+      if (matchingReportIndex <= claimed.index) return false
       if (!(yield* awaitOwnedStoryItemBeforeExecutorReport(claimed.item, claimed.index))) {
         return yield* new AuthoredCassetteInteractionMismatch({
           actual: `${request}/${attemptId}`,
@@ -887,8 +895,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         })
       }
       yield* awaitsLaterStoryItem(position, claimed.index)
-      return yield* consumeExecutorReportForLoop(request, attemptId)
-    }
+      return true
+    })
+    if (retryAfterOwnedPredecessor) return yield* consumeExecutorReportForLoop(request, attemptId)
     return yield* new AuthoredCassetteInteractionMismatch({
       actual: `${request}/${attemptId}`,
       expected: claimed.item?._tag ?? "EndOfStory",
@@ -1317,7 +1326,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   })
   const inFlightOperatorTags: ReadonlySet<StoryItem["_tag"]> = new Set([
-    "DalphHoldsExecutorProgressAdmissionUntilReportBatchReady",
+    "CassetteRendezvousesExecutorReportsBeforeJournalAppend",
     "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptSuspension",
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",

@@ -39,7 +39,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: noLandmark,
       CassetteReleasesHeldPlannedAttemptContinuation: noLandmark,
       DalphHoldsExecutorRequestThroughNextDeliveryPublication: noLandmark,
-      DalphHoldsExecutorProgressAdmissionUntilReportBatchReady: noLandmark,
+      CassetteRendezvousesExecutorReportsBeforeJournalAppend: noLandmark,
       CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: noLandmark,
       CassetteReleasesHeldPlannedAttemptSuspension: noLandmark,
       CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary: noLandmark,
@@ -382,19 +382,37 @@ const controlDirectionOperatorLyric = (item: ControlDirectionOperatorItem): stri
         : ""
   }.`
 
+type BasicOperatorStoryItem = Extract<
+  OperatorStoryItem,
+  {
+    readonly _tag:
+      | "OperatorAppliesRunCancellation"
+      | "OperatorAppliesRunCancellationWhileExecutorRequestInFlight"
+      | "OperatorControlDirectionFailed"
+      | "SetTaskExecutionCapacity"
+  }
+>
+
+const isBasicOperatorStoryItem = (item: OperatorStoryItem): item is BasicOperatorStoryItem =>
+  item._tag === "OperatorAppliesRunCancellation" ||
+  item._tag === "OperatorAppliesRunCancellationWhileExecutorRequestInFlight" ||
+  item._tag === "OperatorControlDirectionFailed" ||
+  item._tag === "SetTaskExecutionCapacity"
+
+const basicOperatorLyric = (item: BasicOperatorStoryItem): string =>
+  Match.value(item).pipe(
+    Match.tagsExhaustive({
+      OperatorAppliesRunCancellation: () => "Operator applies whole-Run cancellation.",
+      OperatorAppliesRunCancellationWhileExecutorRequestInFlight: (item) =>
+        `Operator applies whole-Run cancellation while executor attempt ${item.duringAttemptId} is in flight.`,
+      OperatorControlDirectionFailed: (item) =>
+        `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`,
+      SetTaskExecutionCapacity: (item) => `Operator applies task-execution capacity ${item.capacity} to the Run.`
+    })
+  )
+
 const operatorLyric = (item: OperatorStoryItem): string => {
-  if (item._tag === "SetTaskExecutionCapacity") {
-    return `Operator applies task-execution capacity ${item.capacity} to the Run.`
-  }
-  if (item._tag === "OperatorControlDirectionFailed") {
-    return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
-  }
-  if (item._tag === "OperatorAppliesRunCancellation") {
-    return "Operator applies whole-Run cancellation."
-  }
-  if (item._tag === "OperatorAppliesRunCancellationWhileExecutorRequestInFlight") {
-    return `Operator applies whole-Run cancellation while executor attempt ${item.duringAttemptId} is in flight.`
-  }
+  if (isBasicOperatorStoryItem(item)) return basicOperatorLyric(item)
   if (item._tag === "OperatorAppliesIntegrationQuarantineDirection") {
     return `Alice applies ${item.request.fingerprint.direction} to the Integrator quarantine at ${item.request.fingerprint.quarantineAt}.`
   }
@@ -406,7 +424,6 @@ const operatorLyric = (item: OperatorStoryItem): string => {
   return `Operator request ${item.requestId} directs Dalph to reacquire the claim for task ${item.taskId}.`
 }
 
-// eslint-disable-next-line complexity -- Every remaining authored story variant is rendered at this exhaustive presentation boundary.
 const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string => {
   if (isOperatorStoryItem(item)) return operatorLyric(item)
   return Match.value(item).pipe(
@@ -421,8 +438,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `The cassette releases the held continuation for task ${item.taskId} attempt ${item.attemptId}.`,
       DalphHoldsExecutorRequestThroughNextDeliveryPublication: (item) =>
         `The cassette keeps ${item.request} for task ${item.taskId} attempt ${item.attemptId} in flight until the next ordinary delivery fact publishes.`,
-      DalphHoldsExecutorProgressAdmissionUntilReportBatchReady: (item) =>
-        `The cassette withholds progress-read admission until ${item.members.length} exact executor reports are durably accepted.`,
+      CassetteRendezvousesExecutorReportsBeforeJournalAppend: (item) =>
+        `The cassette rendezvouses ${item.members.length} exact executor provider responses before their ordinary journal appends begin.`,
       CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: (item) =>
         `The cassette holds Suspend for task ${item.taskId} attempt ${item.attemptId} before calling the executor.`,
       CassetteReleasesHeldPlannedAttemptSuspension: (item) =>
