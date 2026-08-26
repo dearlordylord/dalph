@@ -63,6 +63,7 @@ const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt
 const continuationProposal = {
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(1),
+    establishment: { _tag: "InitialGraphEstablishment" },
     purpose: "EstablishCurrentGraph",
     runId: plannedAttempt.runId,
     target: FixtureTarget.make("planned-attempt-executor-model")

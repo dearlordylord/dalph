@@ -382,6 +382,7 @@ const isGraphRefreshProgress = (candidate: { readonly _tag: string; readonly tas
 const continuationProposal = {
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(1),
+    establishment: { _tag: "InitialGraphEstablishment" },
     purpose: "EstablishCurrentGraph",
     runId,
     target

@@ -340,7 +340,7 @@ it("gives one exact progress-report batch a canonical stable proposal identity",
   expect(cThenA.id).toBe(aThenC.id)
 })
 
-it("distinguishes every semantic progress batch while keeping establishment coalesced", () => {
+it("distinguishes every semantic progress batch and initial establishment from restart", () => {
   const ac = progressGraphProposal([
     { acceptedAt: 20, attemptId: "attempt-A", taskId: "A" },
     { acceptedAt: 21, attemptId: "attempt-C", taskId: "C" }
@@ -363,12 +363,17 @@ it("distinguishes every semantic progress batch while keeping establishment coal
   const d = progressGraphProposal([{ acceptedAt: 30, attemptId: "attempt-D", taskId: "D" }])
   const establishment = trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(1),
+    establishment: { _tag: "InitialGraphEstablishment" },
     purpose: "EstablishCurrentGraph",
     runId,
     target
   })
   const laterEstablishment = trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(99),
+    establishment: {
+      _tag: "RestartGraphReestablishment",
+      predecessorOperationIds: [OperationId.make("accepted-establishment")]
+    },
     purpose: "EstablishCurrentGraph",
     runId,
     target,
@@ -376,7 +381,7 @@ it("distinguishes every semantic progress batch while keeping establishment coal
   })
 
   expect(new Set([ac.id, changedPosition.id, changedCorrelation.id, changedCoverage.id, d.id])).toHaveLength(5)
-  expect(establishment.id).toBe(laterEstablishment.id)
+  expect(establishment.id).not.toBe(laterEstablishment.id)
   expect(establishment.id).not.toBe(ac.id)
   expect(
     proposalOwnerIsRepresented({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [d] }, ac.id, null)
@@ -2959,7 +2964,13 @@ describe("delivery proposal route matrix", () => {
 
   effectIt.effect("normalizes fresh graph-read failures while preserving boundary-decode errors", () =>
     Effect.gen(function* () {
-      const proposal = trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
+      const proposal = trackerGraphReadProposalOf({
+        acceptedAt: null,
+        establishment: { _tag: "InitialGraphEstablishment" },
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
       if (!isFreshTrackerGraphProposal(proposal)) {
         return yield* Effect.die("missing fresh tracker graph-read proposal")
       }

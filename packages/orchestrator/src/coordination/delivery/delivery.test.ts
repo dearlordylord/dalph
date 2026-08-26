@@ -519,6 +519,7 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
     Effect.gen(function* () {
       const proposal = trackerGraphReadProposalOf({
         acceptedAt: JournalPosition.make(1),
+        establishment: { _tag: "InitialGraphEstablishment" },
         purpose: "EstablishCurrentGraph",
         runId: RunId.make("causal-tracker-proposal"),
         target: FixtureTarget.make("causal-tracker-proposal-target")
@@ -698,6 +699,7 @@ it.effect("fails closed when two owners claim one proposal identity", () =>
   Effect.gen(function* () {
     const proposal = trackerGraphReadProposalOf({
       acceptedAt: JournalPosition.make(1),
+      establishment: { _tag: "InitialGraphEstablishment" },
       purpose: "EstablishCurrentGraph",
       runId: RunId.make("proposal-conflict"),
       target: FixtureTarget.make("proposal-conflict-target")
@@ -739,6 +741,7 @@ it.effect("combines every proposal owner in accepted order", () =>
     ) => ({
       ...trackerGraphReadProposalOf({
         acceptedAt: JournalPosition.make(ordinal + 2),
+        establishment: { _tag: "InitialGraphEstablishment" },
         purpose: "EstablishCurrentGraph",
         runId: RunId.make("proposal-composition"),
         target: FixtureTarget.make(`proposal-composition-target-${ordinal}`)
@@ -755,6 +758,7 @@ it.effect("combines every proposal owner in accepted order", () =>
     })
     const tracker = trackerGraphReadProposalOf({
       acceptedAt: JournalPosition.make(1),
+      establishment: { _tag: "InitialGraphEstablishment" },
       purpose: "EstablishCurrentGraph",
       runId: RunId.make("proposal-composition"),
       target

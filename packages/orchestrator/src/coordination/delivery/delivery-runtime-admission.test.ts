@@ -76,6 +76,7 @@ it.effect("executor start reserves an exact planned-attempt position", () =>
       const proposal = {
         ...trackerGraphReadProposalOf({
           acceptedAt: JournalPosition.make(1),
+          establishment: { _tag: "InitialGraphEstablishment" },
           purpose: "EstablishCurrentGraph",
           runId,
           target: FixtureTarget.make("admission-target")
@@ -160,6 +161,7 @@ it.effect("a successful claim action releases its temporary task-work reservatio
       const proposal = {
         ...trackerGraphReadProposalOf({
           acceptedAt: JournalPosition.make(1),
+          establishment: { _tag: "InitialGraphEstablishment" },
           purpose: "EstablishCurrentGraph",
           runId,
           target: FixtureTarget.make("admission-target")
@@ -204,6 +206,7 @@ it.effect("Exit rolls back delivery reservations prepared before owner registrat
       const proposal = {
         ...trackerGraphReadProposalOf({
           acceptedAt: JournalPosition.make(1),
+          establishment: { _tag: "InitialGraphEstablishment" },
           purpose: "EstablishCurrentGraph",
           runId,
           target: FixtureTarget.make("exit-racing-admission-target")
@@ -283,6 +286,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
       )
       const proposalBase = trackerGraphReadProposalOf({
         acceptedAt: JournalPosition.make(1),
+        establishment: { _tag: "InitialGraphEstablishment" },
         purpose: "EstablishCurrentGraph",
         runId,
         target: FixtureTarget.make("admission-exhaustive-target")

@@ -617,6 +617,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
 
     const graphReadProposal = trackerGraphReadProposalOf({
       acceptedAt: null,
+      establishment: { _tag: "InitialGraphEstablishment" },
       purpose: "EstablishCurrentGraph",
       runId: fixture.runId,
       target: fixture.target

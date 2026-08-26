@@ -53,8 +53,6 @@ import {
   type DeliveryConsequences,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
-  type ControlledDeliveryRuntimeInputTransform,
-  currentSignalFromCurrentFirstStream,
   type DeliveryRuntimeLiveOwnerSnapshot,
   deliveryProposalOrderTaskId,
   type JournaledTrackerGraphObservation,
@@ -73,6 +71,7 @@ import {
   type JournalRecord,
   type JournalPosition,
   OperationId,
+  InRunJournal,
   JournalStore,
   noopJournalMaintenanceObservation,
   journalStoreCapabilities,
@@ -88,6 +87,7 @@ import {
   observePlannedAttemptWorktreeThrough,
   observeTargetLineageThrough,
   reduceWorkflowJournalHistory,
+  RunRecoveryProjection,
   runGitWorktreeReconciliation,
   runWorkflowWithControlledDeliveryActionExecutor,
   validatedRunActivationLayer,
@@ -894,16 +894,6 @@ const proposalActionTag = (proposal: DeliveryProposal): ProposalActionTag =>
     IdentityFreeWorkflowRoute: (route) => route.transition._tag
   })
 
-const executorReportRequestOf = (proposal: DeliveryProposal): "StartOrContinue" | "Suspend" | undefined => {
-  const action = proposalActionTag(proposal)
-  if (action === "SuspendPlannedAttemptExecutorWork") return "Suspend"
-  return action === "StartPlannedAttemptExecutorWork" ||
-    action === "ContinuePlannedAttemptExecutorWork" ||
-    action === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
-    ? "StartOrContinue"
-    : undefined
-}
-
 const taskWorkAdmissionSummary = (proposal: DeliveryProposal): string => {
   const requirement = proposal.admission.taskWorkPosition
   return Match.valueTags(requirement, {
@@ -1464,45 +1454,26 @@ const runAuthoredScenarioCassetteWith = (request: {
       const lastRuntimeOwners = yield* Ref.make<string | null>(null)
       const durableExecutorReports = yield* SubscriptionRef.make<ReadonlySet<string>>(new Set())
       type ExecutorReportRequest = "StartOrContinue" | "Suspend"
+      interface ExecutorReportBatchMember {
+        readonly attemptId: AttemptId
+        readonly ordinal: number
+        readonly request: ExecutorReportRequest
+        readonly taskId: TaskId
+      }
       type ExecutorReportBatchGate =
         | { readonly _tag: "Inactive" }
         | {
-            readonly _tag: "Holding"
-            readonly durablyAppended: ReadonlySet<string>
-            readonly expectedProgressTaskIds: ReadonlySet<TaskId>
-            readonly latestEvaluation: DeliveryRuntimeEvaluation | undefined
-            readonly members: ReadonlyArray<{
-              readonly attemptId: AttemptId
-              readonly request: ExecutorReportRequest
-              readonly taskId: TaskId
-            }>
-            readonly membersByAppendIdentity: ReadonlyMap<string, string>
+            readonly _tag: "Configured" | "Armed"
+            readonly completed: ReadonlySet<string>
+            readonly executorReady: ReadonlySet<string>
+            readonly executorRelease: Deferred.Deferred<void, Error>
+            readonly members: ReadonlyArray<ExecutorReportBatchMember>
+            readonly membersByAppendIdentity: ReadonlyMap<string, ExecutorReportBatchMember>
+            readonly readyByMember: ReadonlyMap<string, Deferred.Deferred<void, Error>>
+            readonly release: Deferred.Deferred<void, Error>
           }
         | { readonly _tag: "Released" }
       const executorReportBatchGate = yield* Ref.make<ExecutorReportBatchGate>({ _tag: "Inactive" })
-      type ExecutorReportBatchAppend =
-        | { readonly _tag: "AcceptedAppend" }
-        | { readonly _tag: "DuplicateAppend"; readonly member: string }
-        | { readonly _tag: "ForeignAppend" }
-        | { readonly _tag: "GateInactive" }
-      const executorReportBatchEvaluationWakes = yield* Queue.unbounded<DeliveryRuntimeEvaluation>()
-      const runtimeLiveOwners = yield* SubscriptionRef.make<ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>>([])
-      const batchGateOwnsLiveOwner = (
-        gate: Extract<ExecutorReportBatchGate, { readonly _tag: "Holding" }>,
-        owner: DeliveryRuntimeLiveOwnerSnapshot
-      ): boolean => {
-        const requirement = owner.proposal.admission.plannedAttemptProtocol
-        if (requirement._tag !== "PlannedAttemptProtocolRequired") return false
-        const request = executorReportRequestOf(owner.proposal)
-        if (request === undefined) return false
-        const taskId = proposalTaskId(owner.proposal)
-        return gate.members.some(
-          (member) =>
-            member.attemptId === requirement.correlation.attemptId &&
-            member.request === request &&
-            member.taskId === taskId
-        )
-      }
       const executorReportRendezvousMemberKey = (input: {
         readonly attemptId: AttemptId
         readonly request: ExecutorReportRequest
@@ -1510,8 +1481,9 @@ const runAuthoredScenarioCassetteWith = (request: {
       }): string => `${input.taskId}:${input.attemptId}:${input.request}`
       const executorReportAppendIdentity = (input: {
         readonly attemptId: AttemptId
+        readonly ordinal: number
         readonly request: ExecutorReportRequest
-      }): string => `${input.attemptId}:${input.request}`
+      }): string => `${input.attemptId}:${input.request}:${input.ordinal}`
       const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
         Option.Option<{
           readonly attemptId: AttemptId
@@ -1545,16 +1517,6 @@ const runAuthoredScenarioCassetteWith = (request: {
       const runtimeObservationObserver = DeliveryRuntimeObservationObserver.of({
         observe: ({ liveOwners }) =>
           Effect.gen(function* () {
-            yield* SubscriptionRef.set(runtimeLiveOwners, liveOwners)
-            const batchGate = yield* Ref.get(executorReportBatchGate)
-            if (
-              batchGate._tag === "Holding" &&
-              batchGate.latestEvaluation !== undefined &&
-              batchGate.durablyAppended.size === batchGate.membersByAppendIdentity.size &&
-              !liveOwners.some((owner) => batchGateOwnsLiveOwner(batchGate, owner))
-            ) {
-              yield* Queue.offer(executorReportBatchEvaluationWakes, batchGate.latestEvaluation)
-            }
             const identity = JSON.stringify(liveOwners)
             const previous = yield* Ref.get(lastRuntimeOwners)
             if (previous === identity) return
@@ -1781,36 +1743,6 @@ const runAuthoredScenarioCassetteWith = (request: {
                       yield* SubscriptionRef.update(durableExecutorReports, (reports) =>
                         reports.has(observed) ? reports : new Set([...reports, observed])
                       )
-                      const request = event.report._tag === "SafelySuspended" ? "Suspend" : "StartOrContinue"
-                      const appendIdentity = executorReportAppendIdentity({
-                        attemptId: event.report.correlation.attemptId,
-                        request
-                      })
-                      const batchAppend = yield* Ref.modify(
-                        executorReportBatchGate,
-                        (gate): readonly [ExecutorReportBatchAppend, ExecutorReportBatchGate] => {
-                          if (gate._tag !== "Holding") return [{ _tag: "GateInactive" as const }, gate]
-                          const member = gate.membersByAppendIdentity.get(appendIdentity)
-                          if (member === undefined) return [{ _tag: "ForeignAppend" as const }, gate]
-                          if (gate.durablyAppended.has(member)) {
-                            return [{ _tag: "DuplicateAppend" as const, member }, gate]
-                          }
-                          return [
-                            { _tag: "AcceptedAppend" as const },
-                            { ...gate, durablyAppended: new Set([...gate.durablyAppended, member]) }
-                          ]
-                        }
-                      )
-                      if (batchAppend._tag === "ForeignAppend") {
-                        return yield* Effect.die(
-                          `executor-report batch gate does not name durable append ${appendIdentity}`
-                        )
-                      }
-                      if (batchAppend._tag === "DuplicateAppend") {
-                        return yield* Effect.die(
-                          `executor-report batch gate observed duplicate durable append ${batchAppend.member}`
-                        )
-                      }
                     }
                     const taskClaimHandled = yield* handleAuthoredTaskClaimJournalEvent({
                       acquisitionTaskIds,
@@ -2113,15 +2045,177 @@ const runAuthoredScenarioCassetteWith = (request: {
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
       const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
+      type ExecutorReportBatchRegistration =
+        | { readonly _tag: "NotBatched" }
+        | {
+            readonly _tag: "Registered"
+            readonly appendIdentity: string
+            readonly attemptId: AttemptId
+            readonly release: Deferred.Deferred<void, Error>
+            readonly taskId: TaskId
+          }
+        | { readonly _tag: "Rejected"; readonly detail: string; readonly release: Deferred.Deferred<void, Error> }
+      const registerExecutorReportBatchAppend = Effect.fn("AuthoredCassette.registerExecutorReportBatchAppend")(
+        function* (event: JournalRecord["event"]) {
+          if (event._tag !== "PlannedAttemptExecutorWorkReported") {
+            return { _tag: "NotBatched" as const }
+          }
+          const appendIdentity = executorReportAppendIdentity({
+            attemptId: event.report.correlation.attemptId,
+            ordinal: event.ordinal,
+            request: event.report._tag === "SafelySuspended" ? "Suspend" : "StartOrContinue"
+          })
+          return yield* Ref.modify(
+            executorReportBatchGate,
+            (gate): readonly [ExecutorReportBatchRegistration, ExecutorReportBatchGate] => {
+              if (gate._tag === "Inactive" || gate._tag === "Released") {
+                return [{ _tag: "NotBatched" }, gate]
+              }
+              const member = gate.membersByAppendIdentity.get(appendIdentity)
+              if (member === undefined) {
+                return [
+                  {
+                    _tag: "Rejected",
+                    detail: `executor-report batch gate does not name append ${appendIdentity}`,
+                    release: gate.release
+                  },
+                  gate
+                ]
+              }
+              const memberKey = executorReportRendezvousMemberKey(member)
+              if (gate.completed.has(memberKey)) {
+                return [
+                  {
+                    _tag: "Rejected",
+                    detail: `executor-report batch gate observed duplicate append ${memberKey}`,
+                    release: gate.release
+                  },
+                  gate
+                ]
+              }
+              return [
+                {
+                  _tag: "Registered",
+                  appendIdentity,
+                  attemptId: event.report.correlation.attemptId,
+                  release: gate.release,
+                  taskId: member.taskId
+                },
+                { ...gate, _tag: "Armed" }
+              ]
+            }
+          )
+        }
+      )
+      const completeExecutorReportBatchAppend = Effect.fn("AuthoredCassette.completeExecutorReportBatchAppend")(
+        function* (appendIdentity: string) {
+          const completion = yield* Ref.modify(executorReportBatchGate, (gate) => {
+            if (gate._tag !== "Armed") return [undefined, gate] as const
+            const member = gate.membersByAppendIdentity.get(appendIdentity)
+            if (member === undefined) return [undefined, gate] as const
+            const completed = new Set([...gate.completed, executorReportRendezvousMemberKey(member)])
+            return completed.size === gate.membersByAppendIdentity.size
+              ? [gate.release, { _tag: "Released" as const }]
+              : [undefined, { ...gate, completed }]
+          })
+          if (completion !== undefined) yield* Deferred.succeed(completion, undefined)
+        }
+      )
+      const failExecutorReportBatch = (release: Deferred.Deferred<void, Error>, detail: string) =>
+        Deferred.fail(release, new Error(detail))
+      const awaitExecutorReportBatchReady = Effect.fn("AuthoredCassette.awaitExecutorReportBatchReady")(function* (
+        plannedAttempt: PlannedTaskAttempt,
+        request: ExecutorReportRequest
+      ) {
+        const readiness = yield* Ref.modify(executorReportBatchGate, (gate) => {
+          if (gate._tag === "Inactive" || gate._tag === "Released") return [undefined, gate] as const
+          const member = gate.members.find(
+            (candidate) =>
+              candidate.attemptId === plannedAttempt.attemptId &&
+              candidate.request === request &&
+              candidate.taskId === plannedAttempt.taskId
+          )
+          if (member === undefined) return [undefined, gate] as const
+          const memberKey = executorReportRendezvousMemberKey(member)
+          const executorReady = new Set([...gate.executorReady, memberKey])
+          const memberReady = gate.readyByMember.get(memberKey)
+          if (memberReady === undefined) return [undefined, gate] as const
+          return [
+            {
+              allReady: executorReady.size === gate.members.length,
+              executorRelease: gate.executorRelease,
+              memberReady
+            },
+            { ...gate, executorReady }
+          ] as const
+        })
+        if (readiness === undefined) return
+        yield* Deferred.succeed(readiness.memberReady, undefined)
+        if (readiness.allReady) yield* Deferred.succeed(readiness.executorRelease, undefined)
+        yield* Deferred.await(readiness.executorRelease).pipe(Effect.orDie)
+      })
+      const awaitArmedExecutorReportBatch = Ref.get(executorReportBatchGate).pipe(
+        Effect.flatMap((gate) =>
+          gate._tag === "Armed" ? Deferred.await(gate.release).pipe(Effect.orDie) : Effect.void
+        )
+      )
       const runtimeLayerFor = (activationOrdinal: AuthoredRunActivationOrdinalType) => {
         const planning = planningLayer(activationOrdinal)
+        const batchedInRunJournalLayer = Layer.effect(
+          InRunJournal,
+          Effect.gen(function* () {
+            const journal = yield* InRunJournal
+            return InRunJournal.of({
+              ...journal,
+              append: (appendRunId, key, event) =>
+                Effect.gen(function* () {
+                  const registration = yield* registerExecutorReportBatchAppend(event)
+                  if (registration._tag === "Rejected") {
+                    yield* failExecutorReportBatch(registration.release, registration.detail)
+                    return yield* Effect.die(registration.detail)
+                  }
+                  if (registration._tag === "Registered") {
+                    const records = yield* journal.read(appendRunId)
+                    const responsibilityIsExact = records.some(
+                      ({ event: candidate }) =>
+                        candidate._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+                        candidate.plannedAttempt.attemptId === registration.attemptId &&
+                        candidate.plannedAttempt.taskId === registration.taskId
+                    )
+                    if (!responsibilityIsExact) {
+                      const detail = `executor-report batch append has no exact responsibility: ${registration.taskId}:${registration.attemptId}`
+                      yield* failExecutorReportBatch(registration.release, detail)
+                      return yield* Effect.die(detail)
+                    }
+                  }
+                  const appended = yield* journal
+                    .append(appendRunId, key, event)
+                    .pipe(
+                      Effect.onExit((exit) =>
+                        registration._tag === "Registered" && Exit.isFailure(exit)
+                          ? failExecutorReportBatch(
+                              registration.release,
+                              `executor-report batch append failed for ${registration.appendIdentity}`
+                            )
+                          : Effect.void
+                      )
+                    )
+                  if (registration._tag === "Registered") {
+                    yield* completeExecutorReportBatchAppend(registration.appendIdentity)
+                  }
+                  return appended
+                })
+            })
+          })
+        )
         const executorLayer = controlledExecutorLayer(
           cursor,
           runId,
           applyNextControlDirection,
           survivingExecutorReports,
           unresolvedLostExecutorResponses,
-          prepareExecutorReport
+          prepareExecutorReport,
+          (plannedAttempt, request) => awaitExecutorReportBatchReady(plannedAttempt, request)
         ).pipe(Layer.provide(controlPolicyLayer))
         const activationLayer = validatedRunActivationLayer(
           runId,
@@ -2138,11 +2232,21 @@ const runAuthoredScenarioCassetteWith = (request: {
           Layer.provide(controlPolicyLayer),
           Layer.provide(executorLayer),
           Layer.provide(Layer.succeed(WorkflowTrace, trace)),
-          Layer.provide(planning)
+          Layer.provide(planning),
+          Layer.provide(batchedInRunJournalLayer)
         )
         return Layer.effectContext(
           Effect.gen(function* () {
             const context = yield* Layer.build(activationLayer)
+            const recovery = Context.get(context, RunRecoveryProjection)
+            const batchedRecovery = RunRecoveryProjection.of({
+              ...recovery,
+              projectDeliveryFrom: (state) =>
+                awaitArmedExecutorReportBatch.pipe(Effect.andThen(recovery.projectDeliveryFrom(state))),
+              readDeliveryProjection: awaitArmedExecutorReportBatch.pipe(
+                Effect.andThen(recovery.readDeliveryProjection)
+              )
+            })
             yield* Ref.set(beforeCompletionTask, (_request) =>
               Effect.gen(function* () {
                 const item = yield* cursor.currentStoryItem
@@ -2150,7 +2254,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 yield* cursor.consumeCompletionTaskPrerequisiteReopened.pipe(Effect.orDie)
               }).pipe(Effect.orDie)
             )
-            return context
+            return context.pipe(Context.add(RunRecoveryProjection, batchedRecovery))
           })
         )
       }
@@ -2705,32 +2809,74 @@ const runAuthoredScenarioCassetteWith = (request: {
               const authored = yield* cursor.consumeExecutorProgressAdmissionBatchGate
               /* v8 ignore start -- @preserve The direct-item dispatcher invokes this exact non-empty synchronization item once. */
               if (Option.isNone(authored)) return
-              if ((yield* Ref.get(executorReportBatchGate))._tag === "Holding") {
-                return yield* Effect.die("an executor-report batch gate is already active")
+              const currentGate = yield* Ref.get(executorReportBatchGate)
+              if (currentGate._tag !== "Inactive" && currentGate._tag !== "Released") {
+                return yield* Effect.die(`an executor-report batch gate is already ${currentGate._tag}`)
               }
               /* v8 ignore stop -- @preserve */
-              yield* Ref.set(executorReportBatchGate, {
-                _tag: "Holding",
-                durablyAppended: new Set<string>(),
-                expectedProgressTaskIds: new Set<TaskId>(
-                  authored.value.members.flatMap(({ request, taskId }) =>
-                    request === "StartOrContinue" ? [taskId] : []
+              const records = yield* sharedJournal.read(runId)
+              const { members } = authored.value.members.reduce<{
+                readonly members: ReadonlyArray<ExecutorReportBatchMember>
+                readonly nextOrdinalByAttempt: ReadonlyMap<AttemptId, number>
+              }>(
+                ({ members, nextOrdinalByAttempt }, member) => {
+                  const priorCount = records.filter(
+                    ({ event }) =>
+                      event._tag === "PlannedAttemptExecutorWorkReported" &&
+                      event.report.correlation.attemptId === member.attemptId
+                  ).length
+                  const ordinal = nextOrdinalByAttempt.get(member.attemptId) ?? priorCount + 1
+                  return {
+                    members: [...members, { ...member, ordinal }],
+                    nextOrdinalByAttempt: new Map([...nextOrdinalByAttempt, [member.attemptId, ordinal + 1]])
+                  }
+                },
+                { members: [], nextOrdinalByAttempt: new Map() }
+              )
+              const release = yield* Deferred.make<void, Error>()
+              const executorRelease = yield* Deferred.make<void, Error>()
+              const readyByMember = new Map(
+                yield* Effect.forEach(members, (member) =>
+                  Deferred.make<void, Error>().pipe(
+                    Effect.map((ready) => [executorReportRendezvousMemberKey(member), ready] as const)
                   )
-                ),
-                latestEvaluation: undefined,
-                members: authored.value.members,
-                membersByAppendIdentity: new Map<string, string>(
-                  authored.value.members.map((member) => [
-                    executorReportAppendIdentity(member),
-                    executorReportRendezvousMemberKey(member)
-                  ])
                 )
+              )
+              yield* Ref.set(executorReportBatchGate, {
+                _tag: "Configured",
+                completed: new Set<string>(),
+                executorReady: new Set<string>(),
+                executorRelease,
+                members,
+                membersByAppendIdentity: new Map<string, ExecutorReportBatchMember>(
+                  members.map((member) => [executorReportAppendIdentity(member), member])
+                ),
+                readyByMember,
+                release
               })
             }).pipe(Effect.orDie)
             const driveTaskWorkSpecificationReadBoundaryRelease = Effect.gen(function* () {
               const storyPosition = yield* cursor.storyPosition
               const durableReport = durableReportBeforeSpecificationRelease.get(storyPosition)
-              if (durableReport !== undefined) yield* awaitDurableExecutorReport(durableReport)
+              if (durableReport !== undefined) {
+                const gate = yield* Ref.get(executorReportBatchGate)
+                const request = durableReport.reportShape === "SafelySuspended" ? "Suspend" : "StartOrContinue"
+                const batchedMember =
+                  gate._tag === "Configured" || gate._tag === "Armed"
+                    ? gate.members.find(
+                        (member) =>
+                          member.attemptId === durableReport.attemptId &&
+                          member.ordinal === durableReport.ordinal &&
+                          member.request === request
+                      )
+                    : undefined
+                const memberReady =
+                  batchedMember === undefined || (gate._tag !== "Configured" && gate._tag !== "Armed")
+                    ? undefined
+                    : gate.readyByMember.get(executorReportRendezvousMemberKey(batchedMember))
+                if (memberReady === undefined) yield* awaitDurableExecutorReport(durableReport)
+                else yield* Deferred.await(memberReady).pipe(Effect.orDie)
+              }
               yield* cursor.consumeTaskWorkSpecificationReadBoundaryRelease
             }).pipe(Effect.asVoid, Effect.orDie)
             type DirectlyDrivenStoryItem = Extract<
@@ -2912,53 +3058,6 @@ const runAuthoredScenarioCassetteWith = (request: {
           } satisfies DeliveryActionExecutorService
         })
 
-      const gateInitialExecutorProgressEvaluations: ControlledDeliveryRuntimeInputTransform = (input) => {
-        const admit = (evaluation: DeliveryRuntimeEvaluation) =>
-          Effect.gen(function* () {
-            const gate = yield* Ref.get(executorReportBatchGate)
-            if (gate._tag !== "Holding" || evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") {
-              return Option.some(evaluation)
-            }
-            const expectedTaskIds = gate.expectedProgressTaskIds
-            const progressCoverage = evaluation.proposedActions.proposals
-              .flatMap(({ route }) =>
-                route._tag === "TrackerGraphReadRoute" && route.purpose === "CheckExecutorProgress"
-                  ? [route.explicitlyCoveredTaskIds]
-                  : []
-              )
-              .find((coveredTaskIds) => coveredTaskIds.some((taskId) => expectedTaskIds.has(taskId)))
-            if (progressCoverage === undefined) {
-              return Option.some(evaluation)
-            }
-            yield* Ref.set(executorReportBatchGate, { ...gate, latestEvaluation: evaluation })
-            const withoutProgressRead = Option.some({
-              ...evaluation,
-              proposedActions: {
-                ...evaluation.proposedActions,
-                proposals: evaluation.proposedActions.proposals.filter(
-                  ({ route }) => route._tag !== "TrackerGraphReadRoute" || route.purpose !== "CheckExecutorProgress"
-                )
-              }
-            })
-            const liveOwners = yield* SubscriptionRef.get(runtimeLiveOwners)
-            const hasCoveredLiveOwner = liveOwners.some((owner) => batchGateOwnsLiveOwner(gate, owner))
-            if (gate.durablyAppended.size !== gate.membersByAppendIdentity.size || hasCoveredLiveOwner) {
-              return withoutProgressRead
-            }
-            const covered = new Set(progressCoverage)
-            if ([...expectedTaskIds].some((taskId) => !covered.has(taskId))) return withoutProgressRead
-            yield* Ref.set(executorReportBatchGate, { _tag: "Released" })
-            return Option.some(evaluation)
-          })
-        return currentSignalFromCurrentFirstStream(
-          Stream.merge(input.changes, Stream.fromQueue(executorReportBatchEvaluationWakes)).pipe(
-            Stream.mapEffect(admit),
-            Stream.filter(Option.isSome),
-            Stream.map(Option.getOrThrow)
-          )
-        )
-      }
-
       const initialControlPolicyEvaluations = yield* Ref.make(0)
       const initialControlPolicySource = Ref.updateAndGet(initialControlPolicyEvaluations, (count) => count + 1).pipe(
         Effect.flatMap((evaluationCount) =>
@@ -2977,8 +3076,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 initialControlPolicySource,
                 runId,
                 controlledExecutorFactory,
-                false,
-                gateInitialExecutorProgressEvaluations
+                false
               ).pipe(Effect.provide(planningLayer(activationOrdinal)))
             )
           )
@@ -3068,20 +3166,21 @@ const runAuthoredScenarioCassetteWith = (request: {
         : coordinatorExecution
       const assertExecutorReportBatchGateClosed = Ref.get(executorReportBatchGate).pipe(
         Effect.flatMap((gate) =>
-          gate._tag !== "Holding"
+          gate._tag === "Inactive" || gate._tag === "Released"
             ? Effect.void
             : Effect.die(
                 `executor-report batch gate ended with missing durable appends: ${[
                   ...gate.membersByAppendIdentity.values()
                 ]
-                  .filter((member) => !gate.durablyAppended.has(member))
+                  .map(executorReportRendezvousMemberKey)
+                  .filter((member) => !gate.completed.has(member))
                   .join(", ")}`
               )
         )
       )
       const execution = yield* Effect.scoped(
         guardedCoordinatorExecution.pipe(
-          Effect.ensuring(assertExecutorReportBatchGateClosed),
+          Effect.onExit((exit) => (Exit.isSuccess(exit) ? assertExecutorReportBatchGateClosed : Effect.void)),
           Effect.provide(application),
           Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
           Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)

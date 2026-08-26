@@ -143,6 +143,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
 const proposal = (ordinal: number, taskId: TaskId): DeliveryActionProposal => ({
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(ordinal + 1),
+    establishment: { _tag: "InitialGraphEstablishment" },
     purpose: "EstablishCurrentGraph",
     runId,
     target
@@ -1303,6 +1304,7 @@ it.effect("starts one live action while its proposal remains present", () =>
   Effect.gen(function* () {
     const persistent = trackerGraphReadProposalOf({
       acceptedAt: JournalPosition.make(1),
+      establishment: { _tag: "InitialGraphEstablishment" },
       purpose: "EstablishCurrentGraph",
       runId,
       target
@@ -1763,6 +1765,7 @@ it.effect("passes a deferred proposal without reordering the later proposals", (
     const free = {
       ...trackerGraphReadProposalOf({
         acceptedAt: JournalPosition.make(90),
+        establishment: { _tag: "InitialGraphEstablishment" },
         purpose: "EstablishCurrentGraph",
         runId,
         target

@@ -163,6 +163,7 @@ const publication = (aIsSafelySuspended = false) => ({
 const proposalFor = (taskId: TaskId): DeliveryActionProposal => ({
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(5),
+    establishment: { _tag: "InitialGraphEstablishment" },
     purpose: "EstablishCurrentGraph",
     runId,
     target

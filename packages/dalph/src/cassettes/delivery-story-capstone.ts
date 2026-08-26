@@ -51,16 +51,16 @@ const staleTargetHead = "2222222222222222222222222222222222222222"
 const successorCandidateCommit = "dddddddddddddddddddddddddddddddddddddddd"
 const integratorCandidateA = "refs/heads/dalph/integrator-candidate-A"
 const integratorSuccessorCandidateA = "refs/heads/dalph/integrator-candidate-A-successor"
-const initialCandidateTargetLineageObservedAt = 156
-const promotionStaleQuarantineAt = 187
-const successorTargetLineageObservedAt = 234
+const initialCandidateTargetLineageObservedAt = 157
+const promotionStaleQuarantineAt = 188
+const successorTargetLineageObservedAt = 235
 const initialAttempts = [
   { taskId: "A", attemptId: "attempt:A:0" },
   { taskId: "B", attemptId: "attempt:B:1" },
   { taskId: "C", attemptId: "attempt:C:2" }
 ] as const
 const integratorSessionCorrelationA = (targetLineageObservedAt: number) => {
-  const suffix = `$authored-run:attempt:A:0:148:${targetLineageObservedAt}:${expectedHead}:${acceptedCommitA}:/dalph/cassettes/ds-probe.git:refs/heads/master`
+  const suffix = `$authored-run:attempt:A:0:149:${targetLineageObservedAt}:${expectedHead}:${acceptedCommitA}:/dalph/cassettes/ds-probe.git:refs/heads/master`
   return {
     acceptedResult: {
       commit: acceptedCommitA,
@@ -79,14 +79,14 @@ const integratorSessionCorrelationA = (targetLineageObservedAt: number) => {
       taskRevision: makeTaskWorkSpecification(specification("A")).fingerprint,
       worktree: "/dalph/cassettes/ds-probe/attempt-A-0"
     },
-    queuedAt: 141,
+    queuedAt: 142,
     sessionId: `integrator-session:${suffix}`,
-    startedAt: 148,
+    startedAt: 149,
     targetLineageObservedAt
   }
 }
 
-const integratorSuccessorSessionCorrelationA = (targetLineageObservedAt: number, directionAppliedAt = 188) => {
+const integratorSuccessorSessionCorrelationA = (targetLineageObservedAt: number, directionAppliedAt = 189) => {
   const predecessor = integratorSessionCorrelationA(initialCandidateTargetLineageObservedAt)
   const material = [
     "full-rerun-successor",

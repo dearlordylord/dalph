@@ -135,6 +135,11 @@ type NewReleaseOperation<Operation extends TaskClaimReleaseOperation> = {
 type NonEmptyOperationIds = readonly [OperationId, ...ReadonlyArray<OperationId>]
 type NonEmptyTaskIds = readonly [TaskId, ...ReadonlyArray<TaskId>]
 
+/** Whether a complete graph read begins the Run or re-establishes facts after process loss. */
+export type TrackerGraphEstablishment =
+  | { readonly _tag: "InitialGraphEstablishment" }
+  | { readonly _tag: "RestartGraphReestablishment"; readonly predecessorOperationIds: NonEmptyOperationIds }
+
 /** Exact fields of a new authority action before its OperationId is allocated. */
 export type NewRecoveredWorkflowAction =
   | {
@@ -218,8 +223,7 @@ export type FreshOperationOnlyRoute =
 export type TrackerGraphReadRoute =
   | {
       readonly _tag: "TrackerGraphReadRoute"
-      /** The latest accepted graph read when this establishes current facts after restart. */
-      readonly predecessorOperationIds?: NonEmptyOperationIds
+      readonly establishment: TrackerGraphEstablishment
       readonly purpose: "EstablishCurrentGraph"
       readonly target: TrackerTarget
     }
@@ -366,7 +370,7 @@ export interface DeliveryProposalsInput {
 export type TrackerGraphReadProposalInput =
   | {
       readonly acceptedAt: JournalPosition | null
-      readonly predecessorOperationIds?: NonEmptyOperationIds
+      readonly establishment: TrackerGraphEstablishment
       readonly purpose: "EstablishCurrentGraph"
       readonly runId: RunId
       readonly target: TrackerTarget
@@ -408,7 +412,12 @@ export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal
   const identityRoute =
     route._tag === "TrackerGraphReadRoute"
       ? route.purpose === "EstablishCurrentGraph"
-        ? { _tag: route._tag, purpose: route.purpose, target: route.target }
+        ? {
+            _tag: route._tag,
+            establishment: { _tag: route.establishment._tag },
+            purpose: route.purpose,
+            target: route.target
+          }
         : route.purpose === "CheckExecutorProgress"
           ? {
               _tag: route._tag,
@@ -438,9 +447,7 @@ export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput)
     input.purpose === "EstablishCurrentGraph"
       ? {
           _tag: "TrackerGraphReadRoute",
-          ...(input.predecessorOperationIds === undefined
-            ? {}
-            : { predecessorOperationIds: input.predecessorOperationIds }),
+          establishment: input.establishment,
           purpose: input.purpose,
           target: input.target
         }

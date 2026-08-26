@@ -160,6 +160,7 @@ const evaluation = (
 const executorProposal = (attemptTaskId = taskId): DeliveryActionProposal => ({
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(5),
+    establishment: { _tag: "InitialGraphEstablishment" },
     purpose: "EstablishCurrentGraph",
     runId,
     target
@@ -434,6 +435,7 @@ it.effect("ignores an ownership conflict whose order names no covered task", () 
   Effect.sync(() => {
     const unrelated = trackerGraphReadProposalOf({
       acceptedAt: JournalPosition.make(5),
+      establishment: { _tag: "InitialGraphEstablishment" },
       purpose: "EstablishCurrentGraph",
       runId,
       target
@@ -461,6 +463,7 @@ it.effect("ignores an available tracker-graph action because it names no Pause-c
   Effect.sync(() => {
     const graphProposal = trackerGraphReadProposalOf({
       acceptedAt: JournalPosition.make(5),
+      establishment: { _tag: "InitialGraphEstablishment" },
       purpose: "EstablishCurrentGraph",
       runId,
       target

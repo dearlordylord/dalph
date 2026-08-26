@@ -575,7 +575,6 @@ export {
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
   type ControlledDeliveryActionExecutorFactory,
-  type ControlledDeliveryRuntimeInputTransform,
   type RunReactivationControlState,
   type AcceptedRunControlDirection,
   type AcceptedRunControlObserver,
