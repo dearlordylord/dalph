@@ -62,6 +62,34 @@ describe("Quint gate timing", () => {
     expect(timing.aggregates().verify).toEqual({ count: 1, durationMilliseconds: 23 })
   })
 
+  it("reports concurrently completed commands in their reserved identity order", async () => {
+    let now = 0
+    const timing = createQuintGateTiming({ now: () => now })
+    const slow = timing.measure({
+      kind: "verify",
+      name: "first identity",
+      order: 0,
+      run: async () => {
+        await Promise.resolve()
+        now += 30
+      }
+    })
+    const fast = timing.measure({
+      kind: "test",
+      name: "second identity",
+      order: 1,
+      run: async () => {
+        now += 5
+      }
+    })
+
+    await Promise.all([slow, fast])
+    expect(timing.records()).toEqual([
+      { kind: "verify", name: "first identity", durationMilliseconds: 35 },
+      { kind: "test", name: "second identity", durationMilliseconds: 35 }
+    ])
+  })
+
   it("reports accumulated timings in finally while preserving the command failure", async () => {
     let now = 0
     const timing = createQuintGateTiming({ now: () => now })

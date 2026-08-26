@@ -26,10 +26,16 @@ export const runBoundedCommand = ({
   executable,
   forwardOutput = true,
   name,
+  signal,
   terminationGraceMilliseconds = defaultTerminationGraceMilliseconds,
   timeoutMilliseconds
 }) =>
   new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(`${name} cancelled`))
+      return
+    }
+
     const child = spawn(executable, args, {
       detached: process.platform !== "win32",
       env: environment,
@@ -39,7 +45,70 @@ export const runBoundedCommand = ({
     const stderrLineCounter = { endsWithLineBreak: true, lineBreaks: 0, wasWritten: false }
     const outputChunks = []
     let timedOut = false
+    let cancelled = false
+    let settled = false
     let escalationTimer
+    const timer = setTimeout(() => {
+      timedOut = true
+      try {
+        terminate(child, "SIGTERM")
+      } catch (error) {
+        cleanupSignal()
+        finishReject(error)
+        return
+      }
+      if (process.platform === "win32") {
+        cleanupSignal()
+        finishReject(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`))
+        return
+      }
+      escalationTimer = setTimeout(() => {
+        try {
+          terminate(child, "SIGKILL")
+          cleanupSignal()
+          finishReject(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`))
+        } catch (error) {
+          cleanupSignal()
+          finishReject(error)
+        }
+      }, terminationGraceMilliseconds)
+    }, timeoutMilliseconds)
+
+    const finishReject = (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
+    const cleanupSignal = () => signal?.removeEventListener("abort", cancel)
+
+    const cancel = () => {
+      if (timedOut || cancelled || settled) return
+      cancelled = true
+      clearTimeout(timer)
+      try {
+        terminate(child, "SIGTERM")
+      } catch (error) {
+        cleanupSignal()
+        finishReject(error)
+        return
+      }
+      if (process.platform === "win32") {
+        cleanupSignal()
+        finishReject(new Error(`${name} cancelled`))
+        return
+      }
+      escalationTimer = setTimeout(() => {
+        try {
+          terminate(child, "SIGKILL")
+          cleanupSignal()
+          finishReject(new Error(`${name} cancelled`))
+        } catch (error) {
+          cleanupSignal()
+          finishReject(error)
+        }
+      }, terminationGraceMilliseconds)
+    }
 
     const observeOutput = (output, destination, lineCounter) => {
       if (captureOutput) outputChunks.push(output)
@@ -58,44 +127,33 @@ export const runBoundedCommand = ({
       observeOutput(output, process.stderr, stderrLineCounter)
     })
 
-    const timer = setTimeout(() => {
-      timedOut = true
-      try {
-        terminate(child, "SIGTERM")
-      } catch (error) {
-        reject(error)
-        return
-      }
-      if (process.platform === "win32") {
-        reject(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`))
-        return
-      }
-      escalationTimer = setTimeout(() => {
-        try {
-          terminate(child, "SIGKILL")
-          reject(new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`))
-        } catch (error) {
-          reject(error)
-        }
-      }, terminationGraceMilliseconds)
-    }, timeoutMilliseconds)
+    signal?.addEventListener("abort", cancel, { once: true })
+    if (signal?.aborted) cancel()
 
     child.once("error", (error) => {
       clearTimeout(timer)
-      if (!timedOut) {
+      if (!timedOut && !cancelled) {
         clearTimeout(escalationTimer)
-        reject(error)
+        cleanupSignal()
+        finishReject(error)
       }
     })
-    child.once("close", (code, signal) => {
+    child.once("close", (code, childSignal) => {
       clearTimeout(timer)
 
       if (timedOut) {
         return
       }
+      if (cancelled) {
+        clearTimeout(escalationTimer)
+        cleanupSignal()
+        finishReject(new Error(`${name} cancelled`))
+        return
+      }
       clearTimeout(escalationTimer)
+      cleanupSignal()
       if (!acceptedExitCodes.includes(code)) {
-        const error = new Error(`${name} failed with ${signal ?? `exit ${code}`}`)
+        const error = new Error(`${name} failed with ${childSignal ?? `exit ${code}`}`)
         if (captureOutput) {
           error.output = Buffer.concat(outputChunks).toString("utf8")
           error.outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
@@ -104,13 +162,15 @@ export const runBoundedCommand = ({
             0
           )
         }
-        reject(error)
+        finishReject(error)
       } else {
         const outputLineCount = [stdoutLineCounter, stderrLineCounter].reduce(
           (total, lineCounter) =>
             total + lineCounter.lineBreaks + (lineCounter.wasWritten && !lineCounter.endsWithLineBreak ? 1 : 0),
           0
         )
+        if (settled) return
+        settled = true
         resolve(
           captureOutput
             ? { exitCode: code, output: Buffer.concat(outputChunks).toString("utf8"), outputLineCount }

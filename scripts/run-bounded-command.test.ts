@@ -76,6 +76,37 @@ test("passes a controlled environment to the bounded child", async () => {
   expect(result).toEqual({ exitCode: 0, output: "present", outputLineCount: 1 })
 })
 
+test("cancels a running child through its process group", async () => {
+  const controller = new AbortController()
+  const command = runBoundedCommand({
+    args: ["-e", "setInterval(() => {}, 1000)"],
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "cancelled command fixture",
+    signal: controller.signal,
+    terminationGraceMilliseconds: 100,
+    timeoutMilliseconds: 5000
+  })
+
+  setTimeout(() => controller.abort(), 50)
+  await expect(command).rejects.toThrow("cancelled command fixture cancelled")
+})
+
+test("rejects an already-aborted signal without starting a child", async () => {
+  const controller = new AbortController()
+  controller.abort()
+
+  await expect(
+    runBoundedCommand({
+      args: ["-e", "process.exit(99)"],
+      executable: process.execPath,
+      name: "pre-cancelled command fixture",
+      signal: controller.signal,
+      timeoutMilliseconds: 2000
+    })
+  ).rejects.toThrow("pre-cancelled command fixture cancelled")
+})
+
 test.skipIf(process.platform === "win32")(
   "kills a resistant descendant after the process-group leader exits",
   async () => {
