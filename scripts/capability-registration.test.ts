@@ -678,6 +678,38 @@ describe("capability registration gate", () => {
     expect(changed.reusedSourcePaths).not.toContain(path)
   })
 
+  it("fails closed on syntax diagnostics from an added virtual source without exposing repository diagnostics", () => {
+    const path = "scripts/fixtures/issue-262-invalid-syntax.ts"
+    const validSource: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-262-invalid-syntax-base.ts",
+      source: "export const valid = 1"
+    }
+    const invalidSource: CapabilitySourceFile = { path, source: "export const = 1" }
+
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [validSource, invalidSource])
+    const diagnostics = issues.filter((issue) => issue.startsWith("source audit TypeScript diagnostic"))
+
+    expect(diagnostics).toHaveLength(2)
+    expect(diagnostics.every((issue) => issue.includes(`in ${path}:`))).toBe(true)
+    expect(issues).toEqual(expect.arrayContaining(diagnostics))
+  })
+
+  it("fails closed on semantic diagnostics from a changed virtual source", () => {
+    const path = "scripts/fixtures/issue-262-invalid-semantic.ts"
+    const validSource: CapabilitySourceFile = { path, source: 'export const semanticValue: string = "valid"' }
+    const invalidSource: CapabilitySourceFile = { path, source: "export const semanticValue: string = 1" }
+
+    inspectCapabilitySourceProgram([validSource])
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [invalidSource])
+
+    expect(issues.some((issue) => issue.includes(`in ${path}:`) && issue.includes("TS2322"))).toBe(true)
+    expect(
+      issues
+        .filter((issue) => issue.startsWith("source audit TypeScript diagnostic"))
+        .every((issue) => issue.includes(`in ${path}:`))
+    ).toBe(true)
+  })
+
   it("keeps exact source-array identity caching for repeated audits", () => {
     const source = [{ path: "scripts/fixtures/issue-262-cache-identity.ts", source: "export const cached = 1" }]
 
