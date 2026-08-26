@@ -511,6 +511,31 @@ it.effect(
       expect(successorCandidateCapture.captureOrder).toBeGreaterThan(successorRequest.captureOrder)
       expect(successorCandidateCapture.captureOrder).toBeGreaterThan(directionCapture.captureOrder)
 
+      const postCandidateLineageSelection = exactlyOne(
+        capturedOccurrencesFor(captures, "DalphSelects").filter(
+          ({ captureOrder, occurrence }) =>
+            captureOrder > successorCandidateCapture.captureOrder &&
+            occurrence.operation._tag === "ReadTargetLineage" &&
+            occurrence.operation.attemptId === "attempt:A:0"
+        ),
+        "captured post-candidate A target-lineage read"
+      )
+      const postCandidateLineage = exactlyOne(
+        recordsFor(records, "TargetLineageObserved").filter(
+          ({ event, position }) =>
+            position > successorEvidence.candidateGit.position && event.plannedAttempt.attemptId === "attempt:A:0"
+        ),
+        "post-candidate H2 target-lineage observation"
+      )
+      expect(postCandidateLineageSelection.captureOrder).toBeGreaterThan(successorCandidateCapture.captureOrder)
+      expect(postCandidateLineage.event.observation).toEqual({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: initialHead,
+        targetHeadSha: changedHead
+      })
+      expect(postCandidateLineage.event.operationId).not.toBe(freshLineage.event.operationId)
+      expect(postCandidateLineage.position).toBeGreaterThan(successorEvidence.candidateGit.position)
+
       const successorPromotionIntent = exactlyOne(
         recordsFor(records, "TargetPromotionIntended").filter(
           ({ event }) => event.correlation.qualifiedCandidate.run.session.sessionId === successorCorrelation.sessionId

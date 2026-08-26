@@ -19,6 +19,16 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { validSnapshot } from "../../../test/task-dag.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
+import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
+import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
+import { InRunJournal } from "../../workflow-journal/store.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import type { TrackerGraphRefreshOperation } from "../frontier/frontier.js"
+import type { DeliveryActionExecutionLease } from "./delivery-action-executor.js"
+import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
+import { deliveryProposalsOf } from "./delivery-proposal.js"
+import { executeAcceptedWorkflowAction, executeNewRecoveredAction } from "./recovered-delivery-action-adapter.js"
+
 import {
   makeTargetLineageObservationOperation,
   makeTaskClaimObservationOperation,
@@ -26,13 +36,6 @@ import {
   makeTaskWorktreeObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
-import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
-import { RunnableFrontierTransition } from "../frontier/frontier.js"
-import type { TrackerGraphRefreshOperation } from "../frontier/frontier.js"
-import type { DeliveryActionExecutionLease } from "./delivery-action-executor.js"
-import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
-import { deliveryProposalsOf } from "./delivery-proposal.js"
-import { executeAcceptedWorkflowAction, executeNewRecoveredAction } from "./recovered-delivery-action-adapter.js"
 
 const runId = RunId.make("delivery-materialization-run")
 const taskId = TaskId.make("delivery-materialization-task")
@@ -116,7 +119,7 @@ const refreshTransition = RunnableFrontierTransition.RefreshCurrentGraphAfterCla
 const proposalFor = (
   transition: RunnableFrontierTransition,
   acceptedOperationIds: ReadonlySet<OperationId> = new Set()
-) => {
+): ReturnType<typeof deliveryProposalsOf>["ticketDelivery"][number] | undefined => {
   const result = deliveryProposalsOf({
     acceptedOperationIds,
     fresh: [],
@@ -126,14 +129,16 @@ const proposalFor = (
     transitions: [transition]
   })
   const proposal = [...result.ticketDelivery, ...result.deliverySettlement][0]
-  if (proposal === undefined) throw new Error(`expected a delivery proposal for ${transition._tag}`)
   return proposal
 }
 
 const inertLease = (recordIntent: (operationId: OperationId) => Effect.Effect<void>): DeliveryActionExecutionLease => ({
   acceptIntegrationTargetOwnership: Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
-  forwardBoundary: { _tag: "InterruptibleBoundary", execution: { run: (effect) => effect } },
+  forwardBoundary: {
+    _tag: "InterruptibleBoundary",
+    execution: { run: (_intent, effect, recordResult) => effect.pipe(Effect.flatMap(recordResult)) }
+  },
   integrationTargets: {
     acquire: () => Effect.void,
     changes: Stream.empty,
@@ -169,6 +174,8 @@ const observationInterpreter = (observed: Array<typeof refreshOperation>) =>
 effectIt.effect("carries a fresh planned graph-refresh identity through proposal, materialization, and intent", () =>
   Effect.gen(function* () {
     const proposal = proposalFor(refreshTransition)
+    if (proposal === undefined)
+      return yield* Effect.die("expected a delivery proposal for RefreshCurrentGraphAfterClaim")
     expect(proposal).toMatchObject({
       actionIdentity: {
         _tag: "FreshOperationIdRequired",
@@ -182,6 +189,10 @@ effectIt.effect("carries a fresh planned graph-refresh identity through proposal
       Effect.provideService(
         OperationIdAllocator,
         OperationIdAllocator.of({ allocate: () => Effect.succeed(allocatorId) })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused attempt planner") })
       )
     )
     expect(materializedOperationId(action)).toBe(refreshOperationId)
@@ -199,7 +210,19 @@ effectIt.effect("carries a fresh planned graph-refresh identity through proposal
       runId
     ).pipe(
       Effect.provideService(WorkflowInterpreter, observationInterpreter(observed)),
-      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({ append: () => Effect.die("unused journal append"), read: () => Effect.succeed([]) })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused attempt planner") })
+      ),
+      Effect.provideService(
+        TaskClaimAcquisitionPlanner,
+        TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unused claim planner") })
+      )
     )
     expect(intents).toEqual([refreshOperationId])
     expect(observed).toHaveLength(1)
@@ -213,10 +236,15 @@ effectIt.effect("keeps ordinary recovered observations allocator-backed", () =>
     const allocatorId = OperationId.make("delivery-materialization-ordinary-allocator")
     for (const transition of observationTransitions) {
       const proposal = proposalFor(transition)
+      if (proposal === undefined) return yield* Effect.die(`expected a delivery proposal for ${transition._tag}`)
       const action = yield* materializeDeliveryAction(proposal).pipe(
         Effect.provideService(
           OperationIdAllocator,
           OperationIdAllocator.of({ allocate: () => Effect.succeed(allocatorId) })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused attempt planner") })
         )
       )
       expect(materializedOperationId(action), transition._tag).toBe(allocatorId)
@@ -227,6 +255,8 @@ effectIt.effect("keeps ordinary recovered observations allocator-backed", () =>
 effectIt.effect("routes an accepted graph refresh as the same AcceptedOperationAction", () =>
   Effect.gen(function* () {
     const proposal = proposalFor(refreshTransition, new Set([refreshOperationId]))
+    if (proposal === undefined)
+      return yield* Effect.die("expected a delivery proposal for RefreshCurrentGraphAfterClaim")
     expect(proposal.actionIdentity).toEqual({ _tag: "ExistingOperationId" })
     if (proposal.route._tag !== "AcceptedWorkflowRoute") {
       return yield* Effect.die("expected the accepted refresh to retain its accepted route")
@@ -236,6 +266,10 @@ effectIt.effect("routes an accepted graph refresh as the same AcceptedOperationA
       Effect.provideService(
         OperationIdAllocator,
         OperationIdAllocator.of({ allocate: () => Effect.die("accepted refresh must not allocate") })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused attempt planner") })
       )
     )
     expect(action._tag).toBe("AcceptedOperationAction")
@@ -249,7 +283,15 @@ effectIt.effect("routes an accepted graph refresh as the same AcceptedOperationA
       inertLease((operationId) => Effect.sync(() => intents.push(operationId)))
     ).pipe(
       Effect.provideService(WorkflowInterpreter, observationInterpreter(observed)),
-      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({ append: () => Effect.die("unused journal append"), read: () => Effect.succeed([]) })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused attempt planner") })
+      )
     )
     expect(intents).toEqual([refreshOperationId])
     expect(observed[0]?.operationId).toBe(refreshOperationId)

@@ -637,17 +637,12 @@ const appendCoverageRecord = (
   }
 }
 
-const heldIntegrationResponsibilityFor = (state: ReconstructedRunState): StartedIntegrationResponsibility => {
-  const responsibility = deriveIntegrationAdmission(state.workflowHistory.records).responsibilities.find(
+const heldIntegrationResponsibilityFor = (state: ReconstructedRunState): StartedIntegrationResponsibility | undefined =>
+  deriveIntegrationAdmission(state.workflowHistory.records).responsibilities.find(
     (candidate): candidate is StartedIntegrationResponsibility =>
       candidate._tag === "StartedIntegrationResponsibility" &&
       candidate.plannedAttempt.attemptId === coverageAttempt.attemptId
   )
-  if (responsibility === undefined) {
-    throw new Error("expected the coverage fixture to retain its integration responsibility")
-  }
-  return responsibility
-}
 
 const restartCoverageProjectionJournal = (state: ReconstructedRunState) => {
   const began = makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy)
@@ -677,6 +672,8 @@ const readHeldCoverageProjection = (
   Effect.gen(function* () {
     const resources = yield* makeIntegrationTargetResourceController()
     const responsibility = heldIntegrationResponsibilityFor(state)
+    if (responsibility === undefined)
+      return yield* Effect.die("expected the coverage fixture to retain its integration responsibility")
     yield* resources.acquire(responsibility)
     yield* resources.publishAcceptedOwnership(responsibility)
     const recovery = yield* makeRunRecoveryProjection(
@@ -700,9 +697,7 @@ const postSuccessorLineageFixture = () => {
     ({ event }) => event._tag === "IntegratorSessionFixed"
   )
   const directionRecord = fixture.directionRecord
-  if (sessionRecord?.event._tag !== "IntegratorSessionFixed") {
-    throw new Error("expected the FullRerun fixture to retain its predecessor session")
-  }
+  if (sessionRecord?.event._tag !== "IntegratorSessionFixed") return undefined
   const successorHead = GitCommitSha.make("d".repeat(40))
   const directionLineageOperation = makeTargetLineageObservationOperation({
     integrationTarget: fixture.integrationTarget,
@@ -1350,6 +1345,8 @@ effectIt.effect("fails closed for malformed and duplicate post-claim graph refre
 effectIt.effect("requires one exact post-successor current-head lineage witness before target promotion", () =>
   Effect.gen(function* () {
     const valid = postSuccessorLineageFixture()
+    if (valid === undefined)
+      return yield* Effect.die("expected the FullRerun fixture to retain its predecessor session")
     const projection = yield* readHeldCoverageProjection(
       valid.state,
       valid.fixture.integrationTarget,

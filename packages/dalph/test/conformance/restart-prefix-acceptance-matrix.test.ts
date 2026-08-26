@@ -1912,7 +1912,8 @@ const intentOnlyGraphRefreshPrefix = (
   operation: RefreshCurrentGraphOperation
 ): RecoveryPrefix<RestartPrefixCutLabel> => {
   const first = prefix.records[0]
-  const last = prefix.records.at(-1)
+  const last = prefix.records[prefix.records.length - 1]
+  if (last === undefined) return expect.fail("restart-prefix fixture has no records")
   const intent: JournalRecord = {
     event: taskTrackerReadIntent(operation),
     key: intentRecordKey(operation.operationId),
@@ -1927,15 +1928,17 @@ const runningExecutorAfter = (
   plannedAttempt: StartedIntegrationResponsibility["plannedAttempt"]
 ): RecoveryPrefix<RestartPrefixCutLabel> => {
   const first = prefix.records[0]
-  const last = prefix.records.at(-1)
+  const last = prefix.records[prefix.records.length - 1]
+  if (last === undefined) return expect.fail("restart-prefix fixture has no records")
   const isOpenResponsibility = (record: JournalRecord): boolean => {
     if (record.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return false
+    const responsibilityAttemptId = record.event.plannedAttempt.attemptId
     return !prefix.records.some(
       (candidate) =>
         candidate.position > record.position &&
         candidate.event._tag === "PlannedAttemptExecutorWorkReported" &&
         candidate.event.report._tag === "Terminal" &&
-        candidate.event.report.correlation.attemptId === record.event.plannedAttempt.attemptId
+        candidate.event.report.correlation.attemptId === responsibilityAttemptId
     )
   }
   const requestedResponsibility = prefix.records.find(
