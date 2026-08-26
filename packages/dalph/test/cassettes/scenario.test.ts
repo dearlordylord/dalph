@@ -2325,10 +2325,21 @@ it.effect(
 
 it.effect("keeps an unfinished Integrator session dormant when a blocker appears after process loss", () =>
   Effect.gen(function* () {
-    const [prepared, blocked] = yield* Effect.all([
-      runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess),
-      runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.prePromotionBlocker)
-    ])
+    const [prepared, blocked] = yield* Effect.all(
+      [
+        runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess),
+        runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.prePromotionBlocker)
+      ],
+      { concurrency: "unbounded" }
+    )
+    for (const run of [prepared, blocked]) {
+      expect(
+        run.records.every(
+          ({ event }) =>
+            event._tag !== "TaskTrackerReadIntentRecorded" || event.operation.operationId.includes(run.runId)
+        )
+      ).toBe(true)
+    }
     const runStartedAt = prepared.records.findIndex(({ event }) => event._tag === "IntegratorRunStarted")
     if (runStartedAt < 0) return yield* Effect.die("missing unfinished Integrator run start")
     const blockerOutcome = blocked.records.find(
@@ -4059,6 +4070,9 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
           report: { _tag: "Running", attemptId: "attempt:A:0" },
           request: "StartOrContinue"
         },
+        ...read(membershipChangedGraph),
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+        { _tag: "TaskWorkSpecificationReadReturned", body: "Complete A.", taskId: "A", title: "Complete A" },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
           report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
@@ -4077,6 +4091,9 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
           report: { _tag: "Running", attemptId: "attempt:D:1" },
           request: "StartOrContinue"
         },
+        ...read(changedGraph),
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
+        { _tag: "TaskWorkSpecificationReadReturned", body: "Complete D.", taskId: "D", title: "Complete D" },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
           report: { _tag: "Terminal", attemptId: "attempt:D:1", result: { _tag: "Completed" } },
@@ -5050,8 +5067,10 @@ it.effect("reports mismatches through the surface that owns the current story it
 
     const wrongExecutorItem = {
       ...singleton,
-      story: singleton.story.map((item, index) =>
-        index === 13 ? { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } } : item
+      story: singleton.story.map((item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported"
+          ? { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "A" } }
+          : item
       )
     }
     expect((yield* runAuthoredScenarioCassette(wrongExecutorItem).pipe(Effect.flip))._tag).toBe(
