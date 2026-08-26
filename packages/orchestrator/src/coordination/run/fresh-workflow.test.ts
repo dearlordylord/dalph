@@ -37,6 +37,7 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { latestRunningExecutorReportRecordFor, responsibilityStillOwnsTask } from "./fresh-workflow.js"
+import { specificationReadRequiredAfterProgressGraph } from "./fresh-workflow-progress.js"
 
 const runId = RunId.make("fresh-workflow-no-successor-run")
 const taskId = TaskId.make("fresh-workflow-no-successor-task")
@@ -84,7 +85,12 @@ it("keeps a Running responsibility in the current-facts chain after a progress g
     version: workflowJournalEventVersion
   })
   const target = FixtureTarget.make("fresh-workflow-progress-target")
-  const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("fresh-workflow-progress-graph"), target)
+  const graphOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("fresh-workflow-progress-graph"),
+    target,
+    [],
+    [taskId]
+  )
   const graph = projectTrackerSnapshot({ revision: "fresh-workflow-progress-revision", tasks: [] })
   expect(graph._tag).toBe("Valid")
   if (graph._tag === "Invalid") return
@@ -139,7 +145,9 @@ it("requires a focused specification intent after the progress graph and its exa
   const target = FixtureTarget.make("fresh-workflow-causal-order-target")
   const graphOperation = makeTrackerGraphObservationOperation(
     OperationId.make("fresh-workflow-causal-order-graph"),
-    target
+    target,
+    [],
+    [taskId]
   )
   const graph = projectTrackerSnapshot({ revision: "fresh-workflow-causal-order-revision", tasks: [] })
   expect(graph._tag).toBe("Valid")
@@ -219,6 +227,52 @@ it("requires a focused specification intent after the progress graph and its exa
   ]
 
   expect(responsibilityStillOwnsTask(responsibility, freshRecords, new Set())).toBe(false)
+})
+
+it("does not use an unrelated later B-only graph read as A's focused-specification predecessor", () => {
+  const report = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+    report: PlannedAttemptExecutorReport.cases.Running.make({
+      correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+    }),
+    version: workflowJournalEventVersion
+  })
+  const target = FixtureTarget.make("fresh-workflow-unrelated-graph-target")
+  const taskB = TaskId.make("fresh-workflow-unrelated-task-B")
+  const graphOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("fresh-workflow-unrelated-graph"),
+    target,
+    [],
+    [taskB]
+  )
+  const graph = projectTrackerSnapshot({ revision: "fresh-workflow-unrelated-graph-revision", tasks: [] })
+  expect(graph._tag).toBe("Valid")
+  if (graph._tag === "Invalid") return
+  const records = [
+    {
+      event: report,
+      key: JournalRecordKey.make("fresh-workflow-unrelated-report-A"),
+      position: JournalPosition.make(3),
+      runId
+    },
+    {
+      event: taskTrackerReadIntent(graphOperation),
+      key: JournalRecordKey.make("fresh-workflow-unrelated-graph-intent-B"),
+      position: JournalPosition.make(4),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        graphOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(graphOperation, graph.snapshot)
+      ),
+      key: JournalRecordKey.make("fresh-workflow-unrelated-graph-observation-B"),
+      position: JournalPosition.make(5),
+      runId
+    }
+  ]
+
+  expect(specificationReadRequiredAfterProgressGraph(records, plannedAttempt, JournalPosition.make(3))).toBeUndefined()
 })
 
 it.each([

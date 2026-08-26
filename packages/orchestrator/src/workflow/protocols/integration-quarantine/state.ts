@@ -46,6 +46,9 @@ export type IntegrationQuarantineState = typeof IntegrationQuarantineState.Type
 
 type QuarantineRecord = JournalRecord & { readonly event: IntegrationQuarantinedEvent }
 type DirectionRecord = JournalRecord & { readonly event: IntegrationQuarantineDirectionAppliedEvent }
+type PromotionStaleRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TargetPromotionStale" }>
+}
 
 const isQuarantineRecord = (record: JournalRecord): record is QuarantineRecord =>
   record.event._tag === "IntegrationQuarantined"
@@ -329,6 +332,16 @@ function retryTargetHeadEvidenceMatchesRecords(
   )
 }
 
+const promotionStaleRecordMatchesEnvelope = (
+  stale: JournalRecord | undefined,
+  quarantine: QuarantineRecord
+): stale is PromotionStaleRecord =>
+  stale !== undefined &&
+  stale.event._tag === "TargetPromotionStale" &&
+  stale.position < quarantine.position &&
+  stale.runId === quarantine.runId &&
+  stale.key === targetPromotionStaleRecordKey(stale.event.correlation.requestId)
+
 const promotionStaleEvidenceMatchesRecords = (
   records: ReadonlyArray<JournalRecord>,
   quarantine: QuarantineRecord
@@ -336,15 +349,7 @@ const promotionStaleEvidenceMatchesRecords = (
   if (quarantine.event.basis._tag !== "PromotionStale") return false
   const { basis, correlation } = quarantine.event
   const stale = recordAt(records, basis.targetPromotionStaleAt)
-  if (
-    stale === undefined ||
-    stale.event._tag !== "TargetPromotionStale" ||
-    stale.position >= quarantine.position ||
-    stale.runId !== quarantine.runId ||
-    stale.key !== targetPromotionStaleRecordKey(stale.event.correlation.requestId)
-  ) {
-    return false
-  }
+  if (!promotionStaleRecordMatchesEnvelope(stale, quarantine)) return false
   return (
     integratorCorrelationsEqual(stale.event.correlation.qualifiedCandidate.run.session, correlation) &&
     stale.event.correlation.qualifiedCandidate.candidateCommit === basis.candidateCommit &&

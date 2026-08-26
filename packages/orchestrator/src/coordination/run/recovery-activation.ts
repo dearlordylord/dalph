@@ -3232,6 +3232,86 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     }
     return { graphObservation, claimObservation }
   }
+  type GraphRefreshIntentResolution =
+    | { readonly _tag: "Absent" }
+    | { readonly _tag: "Invalid" }
+    | {
+        readonly _tag: "Found"
+        readonly record: JournalRecord & {
+          readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>
+        }
+      }
+  const exactGraphRefreshIntentFor = (
+    expectedOperationId: OperationId,
+    after: JournalPosition
+  ): GraphRefreshIntentResolution => {
+    const candidates = runState.workflowHistory.records.filter(
+      (
+        record
+      ): record is JournalRecord & {
+        readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>
+      } =>
+        record.event._tag === "TaskTrackerReadIntentRecorded" &&
+        record.event.operation.operationId === expectedOperationId &&
+        record.position > after
+    )
+    if (candidates.length === 0) return { _tag: "Absent" }
+    const record = candidates[0]
+    return candidates.length === 1 && record !== undefined ? { _tag: "Found", record } : { _tag: "Invalid" }
+  }
+  const graphRefreshOperationFrom = (
+    resolution: Extract<GraphRefreshIntentResolution, { readonly _tag: "Found" }>,
+    latestClaim: TrackerFactsRecord
+  ): TrackerGraphRefreshOperation | undefined => {
+    const { operation } = resolution.record.event
+    return operation._tag === "ReadTrackerGraph" &&
+      isTrackerGraphRefreshOperation(operation) &&
+      operation.predecessorOperationIds[0] === latestClaim.event.operationId
+      ? operation
+      : undefined
+  }
+  const graphRefreshOutcomeIsCompatible = (
+    outcome: TrackerFactsRecord,
+    operation: TrackerGraphRefreshOperation,
+    taskId: TaskId
+  ): boolean => {
+    const { observation } = outcome.event
+    if (observation._tag === "TaskTrackerFactsReadFailed") {
+      return taskTrackerTargetKey(observation.target) === taskTrackerTargetKey(operation.target)
+    }
+    if (
+      observation._tag !== "CompleteTaskTrackerFacts" &&
+      observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
+    ) {
+      return false
+    }
+    return (
+      observation.factFamilies.some(({ coverage }) => coverage.explicitlyCoveredTaskIds.includes(taskId)) &&
+      taskTrackerTargetKey(observation.target) === taskTrackerTargetKey(operation.target) &&
+      observation.factFamilies.every(
+        ({ coverage }) =>
+          taskTrackerTargetKey(coverage.target) === taskTrackerTargetKey(operation.target) &&
+          coverage.explicitlyCoveredTaskIds.length === 1 &&
+          coverage.explicitlyCoveredTaskIds[0] === taskId
+      )
+    )
+  }
+  const graphRefreshOutcomeResolutionFor = (
+    operation: TrackerGraphRefreshOperation,
+    facts: GraphRefreshFacts,
+    taskId: TaskId
+  ): Extract<GraphRefreshResolution, { readonly _tag: "Invalid" | "Pending" | "Settled" }> => {
+    const outcomes = runState.workflowHistory.records.filter(
+      (record): record is TrackerFactsRecord =>
+        record.event._tag === "TaskTrackerFactsObserved" && record.event.operationId === operation.operationId
+    )
+    if (outcomes.length > 1) return { _tag: "Invalid" }
+    const outcome = outcomes[0]
+    if (outcome === undefined) return { _tag: "Pending", facts, operation }
+    return graphRefreshOutcomeIsCompatible(outcome, operation, taskId)
+      ? { _tag: "Settled", facts, operation }
+      : { _tag: "Invalid" }
+  }
   const graphRefreshResolutionFor = (responsibility: StartedIntegrationResponsibility): GraphRefreshResolution => {
     const taskId = responsibility.plannedAttempt.taskId
     const latestClaim = runState.workflowHistory.records.findLast(
@@ -3242,56 +3322,15 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     )
     if (latestClaim === undefined) return { _tag: "Absent" }
     const expectedOperationId = OperationId.make(`responsibility:${taskId}:after:${latestClaim.position}:graph`)
-    const candidates = runState.workflowHistory.records.filter(
-      (record) =>
-        record.event._tag === "TaskTrackerReadIntentRecorded" &&
-        record.event.operation.operationId === expectedOperationId &&
-        record.position > latestClaim.position
-    )
-    if (candidates.length === 0) return { _tag: "Absent" }
-    if (candidates.length !== 1) return { _tag: "Invalid" }
-    const candidate = candidates[0]
-    if (candidate === undefined || candidate.event._tag !== "TaskTrackerReadIntentRecorded") {
-      return { _tag: "Invalid" }
-    }
-    const operation = candidate.event.operation
-    if (operation._tag !== "ReadTrackerGraph" || !isTrackerGraphRefreshOperation(operation)) {
-      return { _tag: "Invalid" }
-    }
-    if (
-      operation.predecessorOperationIds[0] !== latestClaim.event.operationId ||
-      operation.predecessorOperationIds.length !== 1
-    ) {
-      return { _tag: "Invalid" }
-    }
+    const intent = exactGraphRefreshIntentFor(expectedOperationId, latestClaim.position)
+    if (intent._tag !== "Found") return intent
+    const operation = graphRefreshOperationFrom(intent, latestClaim)
+    if (operation === undefined) return { _tag: "Invalid" }
     const facts = graphRefreshFactsForRecordedOperation(operation, responsibility)
     if (facts === undefined || facts.claimObservation.position !== latestClaim.position) {
       return { _tag: "Invalid" }
     }
-    const outcomes = runState.workflowHistory.records.filter(
-      (record) => record.event._tag === "TaskTrackerFactsObserved" && record.event.operationId === operation.operationId
-    )
-    if (outcomes.length > 1) return { _tag: "Invalid" }
-    const outcome = outcomes[0]
-    if (outcome !== undefined && outcome.event._tag === "TaskTrackerFactsObserved") {
-      const compatible =
-        outcome.event.observation._tag === "TaskTrackerFactsReadFailed"
-          ? taskTrackerTargetKey(outcome.event.observation.target) === taskTrackerTargetKey(operation.target)
-          : (outcome.event.observation._tag === "CompleteTaskTrackerFacts" ||
-              outcome.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
-            outcome.event.observation.factFamilies.some(({ coverage }) =>
-              coverage.explicitlyCoveredTaskIds.includes(taskId)
-            ) &&
-            taskTrackerTargetKey(outcome.event.observation.target) === taskTrackerTargetKey(operation.target) &&
-            outcome.event.observation.factFamilies.every(
-              ({ coverage }) =>
-                taskTrackerTargetKey(coverage.target) === taskTrackerTargetKey(operation.target) &&
-                coverage.explicitlyCoveredTaskIds.length === 1 &&
-                coverage.explicitlyCoveredTaskIds[0] === taskId
-            )
-      if (!compatible) return { _tag: "Invalid" }
-    }
-    return outcomes.length === 0 ? { _tag: "Pending", facts, operation } : { _tag: "Settled", facts, operation }
+    return graphRefreshOutcomeResolutionFor(operation, facts, taskId)
   }
   const graphRefreshFactsFor = (responsibility: StartedIntegrationResponsibility): GraphRefreshFacts | undefined => {
     if (successorAlreadyStartedFor(responsibility)) return undefined
@@ -3305,30 +3344,23 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     if (targetLineageIsCurrentFor(responsibility)) return undefined
     return { graphObservation, claimObservation }
   }
-  /**
-   * A claim reread can make a previously observed graph too old for an
-   * integration decision. Re-read the exact target closure through the normal
-   * tracker action, causally after that claim, before deriving fresh lineage.
-   */
-  const graphRefreshTransitions = integrationResponsibilities.flatMap<RunnableFrontierTransition>((responsibility) => {
-    if (responsibility._tag !== "StartedIntegrationResponsibility") return []
-    if (graphRefreshDirectionFor(responsibility) === undefined) return []
-    const recordedResolution = graphRefreshResolutionFor(responsibility)
-    if (recordedResolution._tag === "Invalid" || recordedResolution._tag === "Settled") return []
-    if (recordedResolution._tag === "Pending") {
-      return integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt) &&
-        !successorAlreadyStartedFor(responsibility) &&
-        taskLifecycleIsOpenFor(responsibility)
-        ? [
-            RunnableFrontierTransition.RefreshCurrentGraphAfterClaim({
-              operation: recordedResolution.operation,
-              plannedAttempt: responsibility.plannedAttempt
-            })
-          ]
-        : []
-    }
+  const pendingGraphRefreshTransitionFor = (
+    responsibility: StartedIntegrationResponsibility,
+    resolution: Extract<GraphRefreshResolution, { readonly _tag: "Pending" }>
+  ): RunnableFrontierTransition | undefined =>
+    integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt) &&
+    !successorAlreadyStartedFor(responsibility) &&
+    taskLifecycleIsOpenFor(responsibility)
+      ? RunnableFrontierTransition.RefreshCurrentGraphAfterClaim({
+          operation: resolution.operation,
+          plannedAttempt: responsibility.plannedAttempt
+        })
+      : undefined
+  const freshGraphRefreshTransitionFor = (
+    responsibility: StartedIntegrationResponsibility
+  ): RunnableFrontierTransition | undefined => {
     const facts = graphRefreshFactsFor(responsibility)
-    if (facts === undefined) return []
+    if (facts === undefined) return undefined
     const graphReadOperation = claimCausalGraphRefreshOperationFor(
       OperationId.make(
         `responsibility:${responsibility.plannedAttempt.taskId}:after:${facts.claimObservation.position}:graph`
@@ -3338,13 +3370,32 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       responsibility.plannedAttempt.taskId
     )
     return graphReadOperation === undefined
-      ? []
-      : [
-          RunnableFrontierTransition.RefreshCurrentGraphAfterClaim({
-            operation: graphReadOperation,
-            plannedAttempt: responsibility.plannedAttempt
-          })
-        ]
+      ? undefined
+      : RunnableFrontierTransition.RefreshCurrentGraphAfterClaim({
+          operation: graphReadOperation,
+          plannedAttempt: responsibility.plannedAttempt
+        })
+  }
+  /**
+   * A claim reread can make a previously observed graph too old for an
+   * integration decision. Re-read the exact target closure through the normal
+   * tracker action, causally after that claim, before deriving fresh lineage.
+   */
+  const graphRefreshTransitionFor = (
+    responsibility: (typeof integrationResponsibilities)[number]
+  ): RunnableFrontierTransition | undefined => {
+    if (responsibility._tag !== "StartedIntegrationResponsibility") return undefined
+    if (graphRefreshDirectionFor(responsibility) === undefined) return undefined
+    const recordedResolution = graphRefreshResolutionFor(responsibility)
+    if (recordedResolution._tag === "Invalid" || recordedResolution._tag === "Settled") return undefined
+    if (recordedResolution._tag === "Pending") {
+      return pendingGraphRefreshTransitionFor(responsibility, recordedResolution)
+    }
+    return freshGraphRefreshTransitionFor(responsibility)
+  }
+  const graphRefreshTransitions = integrationResponsibilities.flatMap<RunnableFrontierTransition>((responsibility) => {
+    const transition = graphRefreshTransitionFor(responsibility)
+    return transition === undefined ? [] : [transition]
   })
   const successorFixTaskIds = new Set(
     integration.transitions.flatMap((transition) =>

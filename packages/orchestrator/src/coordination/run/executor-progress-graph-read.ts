@@ -125,18 +125,23 @@ const correlationKeyOf = (correlation: PlannedAttemptExecutorCorrelation): strin
 const sameTarget = (left: TrackerTarget, right: TrackerTarget): boolean =>
   taskTrackerTargetKey(left) === taskTrackerTargetKey(right)
 
-const readCoversReport = (
+/** True only when one accepted complete read explicitly covers this exact report subject. */
+export const executorProgressGraphReadCoversReport = (
   report: ExecutorProgressReport,
-  read: ExecutorProgressGraphRead,
-  target: TrackerTarget
+  read: ExecutorProgressGraphRead
 ): boolean =>
   read.runId === report.correlation.runId &&
-  sameTarget(read.target, target) &&
   read.explicitlyCoveredTaskIds.includes(report.taskId) &&
   read.intentAt > report.acceptedAt &&
   read.observation._tag === "Observed" &&
   read.observation.observedAt > read.intentAt &&
   (read.observation.outcome === "Complete" || read.observation.outcome === "Unchanged")
+
+const readCoversReportAtTarget = (
+  report: ExecutorProgressReport,
+  read: ExecutorProgressGraphRead,
+  target: TrackerTarget
+): boolean => sameTarget(read.target, target) && executorProgressGraphReadCoversReport(report, read)
 
 const unresolvedReadAfter = (
   report: ExecutorProgressReport,
@@ -151,7 +156,7 @@ const unresolvedReadAfter = (
         read.explicitlyCoveredTaskIds.includes(report.taskId) &&
         read.intentAt > report.acceptedAt &&
         read.observation._tag === "Unresolved" &&
-        !readCoversReport(report, read, target)
+        !readCoversReportAtTarget(report, read, target)
     )
     .toSorted((left, right) => positionOf(right.intentAt) - positionOf(left.intentAt))[0]
 
@@ -203,7 +208,7 @@ const pendingReportsForCorrelation = (
     return reportsSinceSafe.slice(latestNonRunningIndex + 1).flatMap(({ acceptedAt, report, taskId }) => {
       if (report._tag !== "Running") return []
       const pending = { acceptedAt, correlation, taskId }
-      return reads.some((read) => readCoversReport(pending, read, target)) ? [] : [pending]
+      return reads.some((read) => readCoversReportAtTarget(pending, read, target)) ? [] : [pending]
     })
   })
 }
