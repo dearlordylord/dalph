@@ -36,6 +36,7 @@ const taskId = TaskId.make("owner-task")
 const proposal = {
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(1),
+    establishment: { _tag: "InitialGraphEstablishment" },
     purpose: "EstablishCurrentGraph",
     runId,
     target: FixtureTarget.make("owner-target")

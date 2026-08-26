@@ -49,7 +49,11 @@ export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFre
   const causalGraphReadShape = (() => {
     switch (route.purpose) {
       case "EstablishCurrentGraph":
-        return { explicitlyCoveredTaskIds: [], predecessorOperationIds: route.predecessorOperationIds ?? [] }
+        return {
+          explicitlyCoveredTaskIds: [],
+          predecessorOperationIds:
+            route.establishment._tag === "InitialGraphEstablishment" ? [] : route.establishment.predecessorOperationIds
+        }
       case "RefreshCurrentGraph":
         return {
           explicitlyCoveredTaskIds: route.explicitlyCoveredTaskIds,

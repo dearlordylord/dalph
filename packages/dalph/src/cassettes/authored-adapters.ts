@@ -298,7 +298,12 @@ export const controlledExecutorLayer = (
   ) => Effect.Effect<void>,
   survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
   unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>,
-  prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed
+  prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed,
+  beforeReportReturn: (
+    plannedAttempt: PlannedTaskAttempt,
+    request: "StartOrContinue" | "Suspend",
+    report: PlannedAttemptExecutorReport
+  ) => Effect.Effect<void> = () => Effect.void
 ) => {
   const reports = survivingReports
   const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
@@ -336,6 +341,7 @@ export const controlledExecutorLayer = (
         })
       }
       const report = yield* prepareReport(executorReport(item, runId))
+      yield* beforeReportReturn(plannedAttempt, request, report)
       yield* Ref.update(
         reports,
         (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])

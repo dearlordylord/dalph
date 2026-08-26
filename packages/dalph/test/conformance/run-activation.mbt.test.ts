@@ -746,6 +746,7 @@ const makeRunActivationDriverImplementation = () => {
 
   const proposalForC = trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(1),
+    establishment: { _tag: "InitialGraphEstablishment" },
     purpose: "EstablishCurrentGraph",
     runId,
     target

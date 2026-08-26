@@ -27,7 +27,13 @@ const policy = RunControlPolicy.make({
 })
 const runId = RunId.make("coherent-runtime-evaluation")
 const target = FixtureTarget.make("coherent-runtime-evaluation-target")
-const proposal = trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
+const proposal = trackerGraphReadProposalOf({
+  acceptedAt: null,
+  establishment: { _tag: "InitialGraphEstablishment" },
+  purpose: "EstablishCurrentGraph",
+  runId,
+  target
+})
 
 const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): DeliveryRelationInputBundle => ({
   actionInputs: {

@@ -217,9 +217,10 @@ const trackerGraphProposalsWithoutRefresh = (
     return [
       trackerGraphReadProposalOf({
         acceptedAt: journal.position,
-        ...(latestAcceptedGraphReadOperationId === undefined
-          ? {}
-          : { predecessorOperationIds: [latestAcceptedGraphReadOperationId] }),
+        establishment:
+          latestAcceptedGraphReadOperationId === undefined
+            ? { _tag: "InitialGraphEstablishment" }
+            : { _tag: "RestartGraphReestablishment", predecessorOperationIds: [latestAcceptedGraphReadOperationId] },
         purpose: "EstablishCurrentGraph",
         runId,
         target,
