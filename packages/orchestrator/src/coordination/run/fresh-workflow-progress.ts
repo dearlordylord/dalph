@@ -1,29 +1,60 @@
-import type { PlannedTaskAttempt, TaskId } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, type PlannedTaskAttempt, type TaskId } from "@dalph/contracts"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
-import { executorProgressContinuationAvailableFor } from "../executor-progress-graph-read.js"
+import {
+  executorProgressContinuationAvailableFor,
+  executorProgressGraphReadCoversReport,
+  executorProgressGraphReadInputOf,
+  type ExecutorProgressGraphRead,
+  type ExecutorProgressReport
+} from "../executor-progress-graph-read.js"
 
-/** The latest accepted complete graph observation whose intent follows an executor report. */
-const latestCompleteGraphObservationAfter = (
+const observedAtOf = (read: ExecutorProgressGraphRead): JournalPosition | undefined =>
+  read.observation._tag === "Observed" ? read.observation.observedAt : undefined
+
+/**
+ * A graph read recorded before progress-batch metadata was persisted has no
+ * report list. Its validated task-closure still identifies the report subject;
+ * once a batch is present, coverage always uses the exact report identity.
+ */
+const focusedSpecificationGraphReadCoversReport = (
+  report: ExecutorProgressReport,
+  read: ExecutorProgressGraphRead
+): boolean =>
+  executorProgressGraphReadCoversReport(report, read) ||
+  (read.pendingReports.length === 0 &&
+    read.runId === report.correlation.runId &&
+    read.explicitlyCoveredTaskIds.includes(report.taskId) &&
+    read.intentAt > report.acceptedAt &&
+    read.observation._tag === "Observed" &&
+    read.observation.observedAt > read.intentAt &&
+    (read.observation.outcome === "Complete" || read.observation.outcome === "Unchanged"))
+
+/** The latest accepted complete graph observation that explicitly covers the executor report's exact task. */
+const latestCompleteGraphReadCovering = (
   records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
   reportPosition: JournalPosition
-): JournalRecord | undefined =>
-  records.findLast(
-    ({ event, position }) =>
-      position > reportPosition &&
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "CompleteTaskTrackerFacts" ||
-        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
-      records.some(
-        ({ event: candidate, position: intentPosition }) =>
-          intentPosition > reportPosition &&
-          candidate._tag === "TaskTrackerReadIntentRecorded" &&
-          candidate.operation._tag === "ReadTrackerGraph" &&
-          candidate.operation.operationId === event.operationId &&
-          intentPosition < position
-      )
-  )
+): ExecutorProgressGraphRead | undefined => {
+  const report: ExecutorProgressReport = {
+    acceptedAt: reportPosition,
+    correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+    taskId: plannedAttempt.taskId
+  }
+  return records
+    .flatMap(({ event, runId }) =>
+      runId === plannedAttempt.runId &&
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTrackerGraph"
+        ? executorProgressGraphReadInputOf(records, plannedAttempt.runId, event.operation.target).graphReads.filter(
+            ({ operationId }) => operationId === event.operation.operationId
+          )
+        : []
+    )
+    .filter((read) => focusedSpecificationGraphReadCoversReport(report, read))
+    .toSorted((left, right) => Number(observedAtOf(right)) - Number(observedAtOf(left)))[0]
+}
 
 /**
  * A focused specification is fresh only when its own read intent started
@@ -70,22 +101,18 @@ export const specificationReadRequiredAfterProgressGraph = (
   plannedAttempt: PlannedTaskAttempt,
   reportPosition: JournalPosition
 ): OperationId | undefined => {
-  const graphObservation = latestCompleteGraphObservationAfter(records, reportPosition)
-  if (graphObservation === undefined || !executorProgressContinuationAvailableFor(records, plannedAttempt))
-    return undefined
-  if (graphObservation.event._tag !== "TaskTrackerFactsObserved") return undefined
+  const graphRead = latestCompleteGraphReadCovering(records, plannedAttempt, reportPosition)
+  if (graphRead === undefined || !executorProgressContinuationAvailableFor(records, plannedAttempt)) return undefined
+  const graphObservationPosition = observedAtOf(graphRead)
+  /* v8 ignore next -- a covering graph read is necessarily observed. */
+  if (graphObservationPosition === undefined) return undefined
   const latestSpecification = latestFocusedSpecificationObservationAfter(
     records,
     plannedAttempt.taskId,
-    graphObservation.position
+    graphObservationPosition
   )
   return latestSpecification !== undefined &&
-    specificationObservationIsFresh(
-      records,
-      latestSpecification,
-      graphObservation.position,
-      graphObservation.event.operationId
-    )
+    specificationObservationIsFresh(records, latestSpecification, graphObservationPosition, graphRead.operationId)
     ? undefined
-    : graphObservation.event.operationId
+    : graphRead.operationId
 }
