@@ -37,9 +37,8 @@ const readAt = (
   intentAt: number,
   observedAt: number | null,
   observation: ExecutorProgressGraphReadOutcome | null = "Complete",
-  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [TaskId.make("A"), TaskId.make("B"), TaskId.make("C")],
-  pendingReports: ReadonlyArray<ReturnType<typeof reportAt>> = []
-) => ({
+  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]
+): ExecutorProgressGraphRead => ({
   explicitlyCoveredTaskIds,
   intentAt: JournalPosition.make(intentAt),
   observation:
@@ -47,7 +46,9 @@ const readAt = (
       ? { _tag: "Unresolved" }
       : { _tag: "Observed", outcome: observation ?? "Failed", observedAt: JournalPosition.make(observedAt) },
   operationId: OperationId.make(operationId),
-  pendingReports,
+  // Journal reconstruction obtains coverage from the operation's task set;
+  // accepted-report correlations stay in the process-local requirement.
+  pendingReports: [],
   runId,
   target
 })
@@ -73,6 +74,7 @@ describe("executor progress graph-read requirement", () => {
     )
 
     expect(requirement?.pendingReports).toHaveLength(3)
+    expect(requirement?.explicitlyCoveredTaskIds).toEqual([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")])
     expect(requirement?.unresolvedReadOperationId).toBeNull()
   })
 
@@ -81,36 +83,39 @@ describe("executor progress graph-read requirement", () => {
     const requirement = executorProgressGraphReadRequirementOf(
       inputOf(
         reports,
-        [readAt("progress-read", 4, 5, "Complete", [TaskId.make("A"), TaskId.make("B"), TaskId.make("C")], reports)]
+        [readAt("progress-read", 4, 5, "Complete", [TaskId.make("A"), TaskId.make("B"), TaskId.make("C")])]
       )
     )
 
     expect(requirement).toBeUndefined()
   })
 
-  it("requires exact pending report correlations and accepted positions before covering a progress read", () => {
+  it("keeps A pending when a later complete graph read explicitly covers only B", () => {
     const first = reportAt("A", 1, "Running")
     const second = reportAt("B", 2, "Running")
-    const read = readAt("partial-progress-read", 3, 4, "Complete", [TaskId.make("A"), TaskId.make("B")], [first])
+    const read = readAt("B-only-progress-read", 3, 4, "Complete", [TaskId.make("B")])
 
     const requirement = executorProgressGraphReadRequirementOf(inputOf([first, second], [read]))
 
-    expect(requirement?.pendingReports.map(({ acceptedAt }) => acceptedAt)).toEqual([JournalPosition.make(2)])
+    expect(requirement?.pendingReports).toEqual([
+      { acceptedAt: first.acceptedAt, correlation: first.correlation, taskId: first.taskId }
+    ])
+    expect(requirement?.explicitlyCoveredTaskIds).toEqual([TaskId.make("A")])
   })
 
   it("does not let an older progress batch cover a later same-task report", () => {
     const first = reportAt("A", 1, "Running")
-    const later = reportAt("A", 2, "Running")
-    const read = readAt("older-progress-batch", 3, 4, "Complete", [TaskId.make("A")], [first])
+    const later = reportAt("A", 4, "Running")
+    const read = readAt("older-progress-batch", 3, 5, "Complete", [TaskId.make("A")])
 
     const requirement = executorProgressGraphReadRequirementOf(inputOf([first, later], [read]))
 
-    expect(requirement?.pendingReports.map(({ acceptedAt }) => acceptedAt)).toEqual([JournalPosition.make(2)])
+    expect(requirement?.pendingReports.map(({ acceptedAt }) => acceptedAt)).toEqual([JournalPosition.make(4)])
   })
 
   it("does not reread unchanged facts until another Running report is accepted", () => {
     const reports: ReadonlyArray<ReturnType<typeof reportAt>> = [reportAt("A", 1, "Running")]
-    const read = readAt("unchanged-read", 2, 3, "Unchanged", [TaskId.make("A")], reports)
+    const read = readAt("unchanged-read", 2, 3, "Unchanged", [TaskId.make("A")])
 
     expect(executorProgressGraphReadRequirementOf(inputOf(reports, [read]))).toBeUndefined()
     expect(
@@ -137,7 +142,7 @@ describe("executor progress graph-read requirement", () => {
   it("retains an unresolved read for restart reconciliation without treating it as coverage", () => {
     const report = reportAt("A", 1, "Running")
     const requirement = executorProgressGraphReadRequirementOf(
-      inputOf([report], [readAt("unresolved-read", 2, null, null, [TaskId.make("A")], [report])])
+      inputOf([report], [readAt("unresolved-read", 2, null, null, [TaskId.make("A")])])
     )
 
     expect(requirement?.pendingReports).toHaveLength(1)
@@ -151,8 +156,8 @@ describe("executor progress graph-read requirement", () => {
       inputOf(
         [first, second],
         [
-          readAt("older-read", 2, null, null, [TaskId.make("A")], [first]),
-          readAt("latest-read", 4, null, null, [TaskId.make("A")], [first])
+          readAt("older-read", 2, null, null, [TaskId.make("A")]),
+          readAt("latest-read", 4, null, null, [TaskId.make("A")])
         ]
       )
     )
@@ -168,7 +173,8 @@ describe("executor progress graph-read requirement", () => {
     const foreignReport = {
       acceptedAt: JournalPosition.make(1),
       correlation: foreignCorrelation,
-      report: PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation })
+      report: PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation }),
+      taskId: TaskId.make("foreign-task")
     }
     const foreignCommand = {
       command: "StartOrContinue" as const,
@@ -182,15 +188,55 @@ describe("executor progress graph-read requirement", () => {
   it("does not reuse a failed read as the unresolved operation", () => {
     const report = reportAt("A", 1, "Running")
     const requirement = executorProgressGraphReadRequirementOf(
-      inputOf([report], [readAt("failed-read", 2, 3, "Failed", [TaskId.make("A")], [report])])
+      inputOf([report], [readAt("failed-read", 2, 3, "Failed", [TaskId.make("A")])])
     )
 
     expect(requirement?.pendingReports).toHaveLength(1)
     expect(requirement?.unresolvedReadOperationId).toBeNull()
   })
 
+  it("reconstructs report coverage from durable graph-operation task subjects", () => {
+    const operation = makeTrackerGraphObservationOperation(
+      OperationId.make("durable-progress-read"),
+      target,
+      [],
+      [TaskId.make("A")]
+    )
+    const graph = projectTrackerSnapshot({ revision: "durable-progress-graph", tasks: [] })
+    expect(graph._tag).toBe("Valid")
+    if (graph._tag === "Invalid") return
+
+    const derived = executorProgressGraphReadInputOf(
+      [
+        { event: taskTrackerReadIntent(operation), position: JournalPosition.make(2), runId },
+        {
+          event: taskTrackerFactsObservedEvent(
+            operation.operationId,
+            makeCompleteTaskTrackerFactsObserved(operation, graph.snapshot)
+          ),
+          position: JournalPosition.make(3),
+          runId
+        }
+      ],
+      runId,
+      target
+    )
+    const read = derived.graphReads[0]
+
+    expect(read?.explicitlyCoveredTaskIds).toEqual([TaskId.make("A")])
+    expect(read?.pendingReports).toEqual([])
+    expect(
+      executorProgressGraphReadRequirementOf({ ...derived, reports: [reportAt("A", 1, "Running")] })
+    ).toBeUndefined()
+  })
+
   it("keeps a foreign-run observation with the same operation ID unresolved", () => {
-    const operation = makeTrackerGraphObservationOperation(OperationId.make("shared-progress-read"), target)
+    const operation = makeTrackerGraphObservationOperation(
+      OperationId.make("shared-progress-read"),
+      target,
+      [],
+      [TaskId.make("A")]
+    )
     const graph = projectTrackerSnapshot({ revision: "foreign-progress-graph", tasks: [] })
     expect(graph._tag).toBe("Valid")
     if (graph._tag === "Invalid") return
