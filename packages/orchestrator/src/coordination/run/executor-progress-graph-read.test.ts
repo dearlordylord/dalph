@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { AttemptId, PlannedAttemptExecutorCorrelation, PlannedAttemptExecutorReport, RunId } from "@dalph/contracts"
+import { AttemptId, PlannedAttemptExecutorCorrelation, PlannedAttemptExecutorReport, RunId, TaskId } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -28,21 +28,26 @@ const reportAt = (attemptId: string, acceptedAt: number, report: "Running" | "Sa
   report:
     report === "Running"
       ? PlannedAttemptExecutorReport.cases.Running.make({ correlation: correlationFor(attemptId) })
-      : PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: correlationFor(attemptId) })
+      : PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: correlationFor(attemptId) }),
+  taskId: TaskId.make(attemptId)
 })
 
 const readAt = (
   operationId: string,
   intentAt: number,
   observedAt: number | null,
-  observation: ExecutorProgressGraphReadOutcome | null = "Complete"
-): ExecutorProgressGraphRead => ({
+  observation: ExecutorProgressGraphReadOutcome | null = "Complete",
+  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [TaskId.make("A"), TaskId.make("B"), TaskId.make("C")],
+  pendingReports: ReadonlyArray<ReturnType<typeof reportAt>> = []
+) => ({
+  explicitlyCoveredTaskIds,
   intentAt: JournalPosition.make(intentAt),
   observation:
     observedAt === null
       ? { _tag: "Unresolved" }
       : { _tag: "Observed", outcome: observation ?? "Failed", observedAt: JournalPosition.make(observedAt) },
   operationId: OperationId.make(operationId),
+  pendingReports,
   runId,
   target
 })
@@ -72,24 +77,45 @@ describe("executor progress graph-read requirement", () => {
   })
 
   it("covers all pending reports with one later complete graph read", () => {
+    const reports = [reportAt("A", 1, "Running"), reportAt("B", 2, "Running"), reportAt("C", 3, "Running")]
     const requirement = executorProgressGraphReadRequirementOf(
       inputOf(
-        [reportAt("A", 1, "Running"), reportAt("B", 2, "Running"), reportAt("C", 3, "Running")],
-        [readAt("progress-read", 4, 5)]
+        reports,
+        [readAt("progress-read", 4, 5, "Complete", [TaskId.make("A"), TaskId.make("B"), TaskId.make("C")], reports)]
       )
     )
 
     expect(requirement).toBeUndefined()
   })
 
+  it("requires exact pending report correlations and accepted positions before covering a progress read", () => {
+    const first = reportAt("A", 1, "Running")
+    const second = reportAt("B", 2, "Running")
+    const read = readAt("partial-progress-read", 3, 4, "Complete", [TaskId.make("A"), TaskId.make("B")], [first])
+
+    const requirement = executorProgressGraphReadRequirementOf(inputOf([first, second], [read]))
+
+    expect(requirement?.pendingReports.map(({ acceptedAt }) => acceptedAt)).toEqual([JournalPosition.make(2)])
+  })
+
+  it("does not let an older progress batch cover a later same-task report", () => {
+    const first = reportAt("A", 1, "Running")
+    const later = reportAt("A", 2, "Running")
+    const read = readAt("older-progress-batch", 3, 4, "Complete", [TaskId.make("A")], [first])
+
+    const requirement = executorProgressGraphReadRequirementOf(inputOf([first, later], [read]))
+
+    expect(requirement?.pendingReports.map(({ acceptedAt }) => acceptedAt)).toEqual([JournalPosition.make(2)])
+  })
+
   it("does not reread unchanged facts until another Running report is accepted", () => {
     const reports: ReadonlyArray<ReturnType<typeof reportAt>> = [reportAt("A", 1, "Running")]
-    const read = readAt("unchanged-read", 2, 3, "Unchanged")
+    const read = readAt("unchanged-read", 2, 3, "Unchanged", [TaskId.make("A")], reports)
 
     expect(executorProgressGraphReadRequirementOf(inputOf(reports, [read]))).toBeUndefined()
     expect(
       executorProgressGraphReadRequirementOf(inputOf([...reports, reportAt("A", 4, "Running")], [read]))?.pendingReports
-    ).toEqual([{ acceptedAt: JournalPosition.make(4), correlation: correlationFor("A") }])
+    ).toEqual([{ acceptedAt: JournalPosition.make(4), correlation: correlationFor("A"), taskId: TaskId.make("A") }])
   })
 
   it("preserves the durable continuation limit and does not require a graph read after exhaustion", () => {
@@ -109,8 +135,9 @@ describe("executor progress graph-read requirement", () => {
   })
 
   it("retains an unresolved read for restart reconciliation without treating it as coverage", () => {
+    const report = reportAt("A", 1, "Running")
     const requirement = executorProgressGraphReadRequirementOf(
-      inputOf([reportAt("A", 1, "Running")], [readAt("unresolved-read", 2, null, null)])
+      inputOf([report], [readAt("unresolved-read", 2, null, null, [TaskId.make("A")], [report])])
     )
 
     expect(requirement?.pendingReports).toHaveLength(1)
@@ -118,10 +145,15 @@ describe("executor progress graph-read requirement", () => {
   })
 
   it("selects the latest unresolved operation by journal position across pending reports", () => {
+    const first = reportAt("A", 1, "Running")
+    const second = reportAt("B", 5, "Running")
     const requirement = executorProgressGraphReadRequirementOf(
       inputOf(
-        [reportAt("A", 1, "Running"), reportAt("B", 5, "Running")],
-        [readAt("older-read", 2, null, null), readAt("latest-read", 4, null, null)]
+        [first, second],
+        [
+          readAt("older-read", 2, null, null, [TaskId.make("A")], [first]),
+          readAt("latest-read", 4, null, null, [TaskId.make("A")], [first])
+        ]
       )
     )
 
@@ -148,8 +180,9 @@ describe("executor progress graph-read requirement", () => {
   })
 
   it("does not reuse a failed read as the unresolved operation", () => {
+    const report = reportAt("A", 1, "Running")
     const requirement = executorProgressGraphReadRequirementOf(
-      inputOf([reportAt("A", 1, "Running")], [readAt("failed-read", 2, 3, "Failed")])
+      inputOf([report], [readAt("failed-read", 2, 3, "Failed", [TaskId.make("A")], [report])])
     )
 
     expect(requirement?.pendingReports).toHaveLength(1)

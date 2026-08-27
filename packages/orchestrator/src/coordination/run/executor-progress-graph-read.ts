@@ -5,9 +5,10 @@ import {
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport,
   type PlannedTaskAttempt,
-  type RunId
+  type RunId,
+  type TaskId
 } from "@dalph/contracts"
-import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { exactTaskIdSetKey, taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { plannedAttemptExecutorContinuationDisposition } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
   defaultPlannedAttemptExecutorContinuationLimit,
@@ -21,6 +22,7 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 export interface ExecutorProgressReport {
   readonly acceptedAt: JournalPosition
   readonly correlation: PlannedAttemptExecutorCorrelation
+  readonly taskId: TaskId
 }
 
 /** The only tracker outcomes that can be attached to a complete graph-read observation. */
@@ -38,9 +40,12 @@ export type ExecutorProgressGraphReadObservation =
 
 /** One complete-graph read intent and its run-scoped observation envelope. */
 export interface ExecutorProgressGraphRead {
+  readonly explicitlyCoveredTaskIds: ReadonlyArray<TaskId>
   readonly intentAt: JournalPosition
   readonly observation: ExecutorProgressGraphReadObservation
   readonly operationId: OperationId
+  /** Exact accepted reports named by the graph operation. */
+  readonly pendingReports: ReadonlyArray<ExecutorProgressReport>
   readonly runId: RunId
   readonly target: TrackerTarget
 }
@@ -57,6 +62,7 @@ export interface ExecutorProgressAcceptedReport {
   readonly acceptedAt: JournalPosition
   readonly correlation: PlannedAttemptExecutorCorrelation
   readonly report: PlannedAttemptExecutorReport
+  readonly taskId: TaskId
 }
 
 /** Durable inputs from which the process-local progress-read requirement is rebuilt. */
@@ -76,6 +82,8 @@ export interface ExecutorProgressGraphReadDerivationInput {
  */
 export interface ExecutorProgressGraphReadRequirement {
   readonly _tag: "ExecutorProgressGraphReadRequirement"
+  /** Exact task subjects the one complete read must explicitly cover. */
+  readonly explicitlyCoveredTaskIds: readonly [TaskId, ...ReadonlyArray<TaskId>]
   readonly pendingReports: readonly [ExecutorProgressReport, ...ReadonlyArray<ExecutorProgressReport>]
   readonly runId: RunId
   readonly target: TrackerTarget
@@ -123,17 +131,29 @@ const correlationKeyOf = (correlation: PlannedAttemptExecutorCorrelation): strin
 const sameTarget = (left: TrackerTarget, right: TrackerTarget): boolean =>
   taskTrackerTargetKey(left) === taskTrackerTargetKey(right)
 
-const readCoversReport = (
+const sameAcceptedReport = (left: ExecutorProgressReport, right: ExecutorProgressReport): boolean =>
+  left.acceptedAt === right.acceptedAt &&
+  left.taskId === right.taskId &&
+  samePlannedAttemptExecutorCorrelation(left.correlation, right.correlation)
+
+/** True only when one accepted complete read explicitly covers this exact report subject. */
+export const executorProgressGraphReadCoversReport = (
   report: ExecutorProgressReport,
-  read: ExecutorProgressGraphRead,
-  target: TrackerTarget
+  read: ExecutorProgressGraphRead
 ): boolean =>
   read.runId === report.correlation.runId &&
-  sameTarget(read.target, target) &&
+  read.pendingReports.some((coveredReport) => sameAcceptedReport(coveredReport, report)) &&
+  read.explicitlyCoveredTaskIds.includes(report.taskId) &&
   read.intentAt > report.acceptedAt &&
   read.observation._tag === "Observed" &&
   read.observation.observedAt > read.intentAt &&
   (read.observation.outcome === "Complete" || read.observation.outcome === "Unchanged")
+
+const readCoversReportAtTarget = (
+  report: ExecutorProgressReport,
+  read: ExecutorProgressGraphRead,
+  target: TrackerTarget
+): boolean => sameTarget(read.target, target) && executorProgressGraphReadCoversReport(report, read)
 
 const unresolvedReadAfter = (
   report: ExecutorProgressReport,
@@ -147,7 +167,7 @@ const unresolvedReadAfter = (
         sameTarget(read.target, target) &&
         read.intentAt > report.acceptedAt &&
         read.observation._tag === "Unresolved" &&
-        !readCoversReport(report, read, target)
+        !readCoversReportAtTarget(report, read, target)
     )
     .toSorted((left, right) => positionOf(right.intentAt) - positionOf(left.intentAt))[0]
 
@@ -196,10 +216,10 @@ const pendingReportsForCorrelation = (
     if (disposition._tag === "ExecutorContinuationLimitReached") return []
 
     const latestNonRunningIndex = reportsSinceSafe.findLastIndex(({ report }) => report._tag !== "Running")
-    return reportsSinceSafe.slice(latestNonRunningIndex + 1).flatMap(({ acceptedAt, report }) => {
+    return reportsSinceSafe.slice(latestNonRunningIndex + 1).flatMap(({ acceptedAt, report, taskId }) => {
       if (report._tag !== "Running") return []
-      const pending = { acceptedAt, correlation }
-      return reads.some((read) => readCoversReport(pending, read, target)) ? [] : [pending]
+      const pending = { acceptedAt, correlation, taskId }
+      return reads.some((read) => readCoversReportAtTarget(pending, read, target)) ? [] : [pending]
     })
   })
 }
@@ -220,11 +240,17 @@ export const executorProgressGraphReadRequirementOf = (
   const [firstPendingReport, ...remainingPendingReports] = pendingReports
   /* v8 ignore next -- the length guard above guarantees one pending report. */
   if (firstPendingReport === undefined) return undefined
+  const [firstTaskId, ...remainingTaskIds] = [...new Set(pendingReports.map(({ taskId }) => taskId))].toSorted(
+    (left, right) => left.localeCompare(right)
+  )
+  /* v8 ignore next -- every pending report retains one exact task identity. */
+  if (firstTaskId === undefined) return undefined
   const unresolvedReadOperationId = pendingReports
     .flatMap((report) => unresolvedReadAfter(report, input.graphReads, input.target) ?? [])
     .toSorted((left, right) => positionOf(right.intentAt) - positionOf(left.intentAt))[0]?.operationId
   return {
     _tag: "ExecutorProgressGraphReadRequirement",
+    explicitlyCoveredTaskIds: [firstTaskId, ...remainingTaskIds],
     pendingReports: [firstPendingReport, ...remainingPendingReports],
     runId: input.runId,
     target: input.target,
@@ -240,7 +266,7 @@ export const executorProgressRequirementCovers = (
   requirement.pendingReports.some((report) => samePlannedAttemptExecutorCorrelation(report.correlation, correlation))
 
 /** Converts accepted report and command records into the normalized derivation input. */
-type ExecutorProgressInputRecord = Pick<JournalRecord, "event" | "position"> & Partial<Pick<JournalRecord, "runId">>
+type ExecutorProgressInputRecord = Pick<JournalRecord, "event" | "position" | "runId">
 
 export const executorProgressGraphReadInputOf = (
   records: ReadonlyArray<ExecutorProgressInputRecord>,
@@ -249,15 +275,17 @@ export const executorProgressGraphReadInputOf = (
 ): ExecutorProgressGraphReadDerivationInput => {
   const intents: ReadonlyArray<ExecutorProgressGraphRead> = records.flatMap(
     ({ event, position, runId: recordRunId }) =>
-      (recordRunId === undefined || recordRunId === runId) &&
+      recordRunId === runId &&
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
       sameTarget(event.operation.target, target)
         ? [
             {
+              explicitlyCoveredTaskIds: event.operation.readShape.explicitlyCoveredTaskIds,
               intentAt: position,
               observation: { _tag: "Unresolved" },
               operationId: event.operation.operationId,
+              pendingReports: [],
               runId,
               target: event.operation.target
             }
@@ -267,7 +295,7 @@ export const executorProgressGraphReadInputOf = (
   const graphReads = intents.map((intent) => {
     const observation = records.find(
       ({ event, position, runId: observationRunId }) =>
-        (observationRunId === undefined || observationRunId === runId) &&
+        observationRunId === runId &&
         position > intent.intentAt &&
         event._tag === "TaskTrackerFactsObserved" &&
         event.operationId === intent.operationId &&
@@ -278,17 +306,23 @@ export const executorProgressGraphReadInputOf = (
     if (observation === undefined || observation.event._tag !== "TaskTrackerFactsObserved") {
       return { ...intent, observation: { _tag: "Unresolved" } as const }
     }
+    const observedFacts = observation.event.observation
     const outcome: ExecutorProgressGraphReadOutcome =
-      observation.event.observation._tag === "CompleteTaskTrackerFacts"
-        ? "Complete"
-        : observation.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
-          ? "Unchanged"
+      observedFacts._tag === "CompleteTaskTrackerFacts" || observedFacts._tag === "UnchangedTaskTrackerFactsReconfirmed"
+        ? exactTaskIdSetKey(observedFacts.factFamilies[0].coverage.explicitlyCoveredTaskIds) ===
+          exactTaskIdSetKey(intent.explicitlyCoveredTaskIds)
+          ? observedFacts._tag === "CompleteTaskTrackerFacts"
+            ? "Complete"
+            : "Unchanged"
           : "Failed"
+        : "Failed"
     return { ...intent, observation: { _tag: "Observed", outcome, observedAt: observation.position } as const }
   })
   return {
-    commands: records.flatMap(({ event, position }) =>
-      event._tag === "PlannedAttemptExecutorCommandIntended" && event.plannedAttempt.runId === runId
+    commands: records.flatMap(({ event, position, runId: recordRunId }) =>
+      recordRunId === runId &&
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.runId === runId
         ? [
             {
               command: event.command,
@@ -302,11 +336,34 @@ export const executorProgressGraphReadInputOf = (
         : []
     ),
     graphReads,
-    reports: records.flatMap(({ event, position }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.runId === runId
-        ? [{ acceptedAt: position, correlation: event.report.correlation, report: event.report }]
+    reports: records.flatMap(({ event, position, runId: recordRunId }) => {
+      if (
+        recordRunId !== runId ||
+        event._tag !== "PlannedAttemptExecutorWorkReported" ||
+        event.report.correlation.runId !== runId
+      )
+        return []
+      const plannedAttempt = records.findLast(
+        ({ event: candidate, position: candidatePosition, runId: candidateRunId }) =>
+          candidateRunId === runId &&
+          candidatePosition < position &&
+          candidate._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          samePlannedAttemptExecutorCorrelation(
+            event.report.correlation,
+            plannedAttemptExecutorCorrelation(candidate.plannedAttempt)
+          )
+      )?.event
+      return plannedAttempt?._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+        ? [
+            {
+              acceptedAt: position,
+              correlation: event.report.correlation,
+              report: event.report,
+              taskId: plannedAttempt.plannedAttempt.taskId
+            }
+          ]
         : []
-    ),
+    }),
     runId,
     target
   }
