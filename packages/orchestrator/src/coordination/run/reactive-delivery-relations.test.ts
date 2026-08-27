@@ -5,13 +5,14 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   GitRepositoryLocator,
+  PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
+  makeTaskWorkSpecification,
   WorktreeLocator,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
@@ -24,11 +25,13 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import {
   makeTaskAttemptPlanOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import { taskTrackerReadIntent, TaskAttemptPlannedEvent } from "../../workflow/registry/event.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   TaskTrackerFactsReadFailed,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
@@ -53,6 +56,7 @@ import {
 import { JournalStore, InRunJournal } from "../../workflow-journal/store.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { makeRunRecoveryProjection } from "./recovery-activation.js"
 import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
@@ -70,6 +74,9 @@ import {
   deterministicPlannedTaskAttemptLayer
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { PlannedAttemptExecutorContinuationLimitReached } from "../../workflow/protocols/planned-attempt-executor-work/errors.js"
+import { continuePlannedAttemptExecutorWork } from "../../workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
+import { executePlannedAttemptTransition } from "../delivery/planned-attempt-delivery-action-adapter.js"
 
 const runId = RunId.make("reactive-progress-runtime-acceptance")
 const target = FixtureTarget.make("reactive-progress-runtime-acceptance-target")
@@ -79,6 +86,8 @@ const integrationTarget = IntegrationTarget.make({
 })
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(3) })
 const taskIds = [TaskId.make("A"), TaskId.make("B"), TaskId.make("C")] as const
+const specificationFor = (taskId: TaskId) =>
+  makeTaskWorkSpecification({ body: `Reactive progress ${taskId}`, taskId, title: `Reactive progress ${taskId}` })
 
 const attempts = new Map(
   taskIds.map((taskId) => [
@@ -90,7 +99,7 @@ const attempts = new Map(
       executor: TaskExecutorLocator.make(`executor:reactive-progress-${taskId}`),
       runId,
       taskId,
-      taskRevision: TaskRevision.make(`reactive-progress-${taskId}-revision`),
+      taskRevision: specificationFor(taskId).fingerprint,
       worktree: WorktreeLocator.make(`/worktrees/reactive-progress-${taskId}`)
     })
   ])
@@ -132,20 +141,6 @@ const appendGraph = Effect.fn("ReactiveProgressAcceptance.appendGraph")(function
     runId,
     outcomeRecordKey(operation.operationId),
     taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
-  )
-})
-
-const appendProgressRead = Effect.fn("ReactiveProgressAcceptance.appendProgressRead")(function* (
-  journal: Effect.Success<typeof makeJournalService>,
-  operationId: OperationId,
-  revision: string
-) {
-  const operation = makeTrackerGraphObservationOperation(operationId, target, [], [...taskIds])
-  yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-  yield* journal.append(
-    runId,
-    outcomeRecordKey(operation.operationId),
-    makeTaskTrackerFactsObservedFromRead(yield* journal.read(runId), operation, yield* graphSnapshotFor(revision))
   )
 })
 
@@ -494,35 +489,243 @@ it.effect("preserves executor continuation ordinals and the durable limit across
   Effect.scoped(
     Effect.gen(function* () {
       const journal = yield* makeJournalService
-      yield* appendGraph(journal, OperationId.make("reactive-progress-limit-G0"), "reactive-progress-limit-G0")
-      yield* appendResponsibility(journal, taskIds[0])
-      const resources = yield* makeIntegrationTargetResourceController()
-      const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget, resources).pipe(
-        Effect.provideService(InRunJournal, journal)
+      const plannedAttempt = Option.getOrThrow(Option.fromUndefinedOr(attempts.get(taskIds[0])))
+      const graphOperationId = OperationId.make("reactive-progress-limit-G0")
+      yield* appendGraph(journal, graphOperationId, "reactive-progress-limit-G0")
+      const plan = makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("reactive-progress-limit-plan-A"),
+        plannedAttempt,
+        predecessorOperationIds: []
+      })
+      yield* journal.append(
+        runId,
+        attemptPlanRecordKey(plannedAttempt.attemptId),
+        TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
       )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const specification = specificationFor(taskIds[0])
+      const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("reactive-progress-limit-specification"),
+        target,
+        taskIds[0],
+        [graphOperationId, plan.operationId]
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(specificationOperation.operationId),
+        taskTrackerReadIntent(specificationOperation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(specificationOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          specificationOperation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+        )
+      )
+      const resources = yield* makeIntegrationTargetResourceController()
+      const recovery = {
+        readDeliveryProjection: Effect.gen(function* () {
+          const journalState = yield* journal.state.get
+          const records = yield* journal.read(runId)
+          const acceptedReport = records.findLast(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report.correlation.attemptId === plannedAttempt.attemptId &&
+              event.report.correlation.runId === plannedAttempt.runId
+          )?.event
+          const commandCount = records.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" &&
+              event.command === "StartOrContinue" &&
+              event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
+              event.plannedAttempt.runId === plannedAttempt.runId
+          ).length
+          const transitions =
+            acceptedReport?._tag === "PlannedAttemptExecutorWorkReported" &&
+            acceptedReport.report._tag === "Running" &&
+            commandCount < 3
+              ? [
+                  RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+                    acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: acceptedReport.ordinal },
+                    plannedAttempt
+                  })
+                ]
+              : []
+          return {
+            evidence: {
+              _tag: "AvailableDeliveryProjectionEvidence" as const,
+              acceptedAt: journalState.position,
+              facts: [],
+              integrationWaits: []
+            },
+            frontier: { explanations: [], transitions }
+          }
+        }),
+        reconstructedPlannedAttemptPositions: []
+      }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources)
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-
-      for (const ordinal of [1, 2]) {
-        yield* appendRunning(journal, taskIds[0], ordinal, ordinal)
-        yield* publication.awaitCurrent
-        const beforeRead = yield* relation.get
-        const proposal = Option.getOrThrow(Option.fromUndefinedOr(progressProposal(beforeRead)))
-        if (proposal.route._tag !== "TrackerGraphReadRoute") return yield* Effect.die("expected a progress graph route")
-        expect(proposal.route.pendingReports.map(({ taskId }) => taskId)).toEqual([taskIds[0]])
-
-        yield* appendProgressRead(
-          journal,
-          OperationId.make(`reactive-progress-limit-check-${ordinal}`),
-          "reactive-progress-limit-G0"
-        )
-        yield* publication.awaitCurrent
-        expect(progressProposal(yield* relation.get)).toBeUndefined()
-      }
-
-      yield* appendRunning(journal, taskIds[0], 3, 3)
+      yield* appendRunning(journal, taskIds[0], 1, 1)
       yield* publication.awaitCurrent
+      const initial = yield* relation.get
+      const initialProposal = Option.getOrThrow(Option.fromUndefinedOr(progressProposal(initial)))
+      if (initialProposal.route._tag !== "TrackerGraphReadRoute") {
+        return yield* Effect.die("expected a progress graph route")
+      }
+      expect(initialProposal.route.pendingReports.map(({ taskId }) => taskId)).toEqual([taskIds[0]])
+
+      const providerCalls = yield* Ref.make<ReadonlyArray<OperationId>>([])
+      const providerCoverage = yield* Ref.make<ReadonlyArray<ReadonlyArray<TaskId>>>([])
+      const executorCalls = yield* Ref.make<ReadonlyArray<number>>([])
+      const continuationAcceptedOrdinals = yield* Ref.make<ReadonlyArray<number>>([])
+      const forbiddenExecutorActions = yield* Ref.make<ReadonlyArray<string>>([])
+      const limitReached = yield* Deferred.make<void>()
+      const plannedExecutor = PlannedAttemptExecutor.of({
+        project: () => Effect.die("ordinal acceptance must not project executor state"),
+        requestSuspension: () => Effect.die("ordinal acceptance must not suspend executor work"),
+        startOrContinue: (request) =>
+          Effect.gen(function* () {
+            const callNumber = yield* Ref.updateAndGet(executorCalls, (calls) => [...calls, calls.length + 1])
+            if (callNumber > 2) return yield* Effect.die("ordinal acceptance attempted a fourth executor call")
+            return PlannedAttemptExecutorReport.cases.Running.make({
+              correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt)
+            })
+          })
+      })
+      const actionExecutor = DeliveryActionExecutor.of({
+        execute: (action, lease) => {
+          const route = action.proposal.route
+          if (route._tag === "TrackerGraphReadRoute") {
+            if (action._tag !== "FreshOperationAction") {
+              return Effect.die("ordinal acceptance expected a fresh graph read")
+            }
+            if (route.purpose !== "CheckExecutorProgress") {
+              return Effect.die("ordinal acceptance expected an executor-progress graph read")
+            }
+            const explicitlyCoveredTaskIds = route.pendingReports.map(({ taskId }) => taskId)
+            const operation = makeTrackerGraphObservationOperation(
+              action.operationId,
+              target,
+              [],
+              explicitlyCoveredTaskIds
+            )
+            return Effect.gen(function* () {
+              const calls = yield* Ref.updateAndGet(providerCalls, (current) => [...current, action.operationId])
+              if (calls.length > 2) return yield* Effect.die("ordinal acceptance attempted a third graph read")
+              yield* Ref.update(providerCoverage, (coverage) => [...coverage, explicitlyCoveredTaskIds])
+              yield* lease.recordIntent(action.operationId)
+              yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+              yield* journal.append(
+                runId,
+                outcomeRecordKey(operation.operationId),
+                makeTaskTrackerFactsObservedFromRead(
+                  yield* journal.read(runId),
+                  operation,
+                  yield* graphSnapshotFor("reactive-progress-limit-G0")
+                )
+              )
+              yield* publication.awaitCurrent
+              return {
+                _tag: "TrackerGraphObservationPublished" as const,
+                operationId: action.operationId,
+                proposalId: action.proposal.id,
+                snapshot: yield* graphSnapshotFor("reactive-progress-limit-G0")
+              } satisfies DeliveryActionResult
+            })
+          }
+          if (
+            action._tag === "IdentityFreeAction" &&
+            route._tag === "IdentityFreeWorkflowRoute" &&
+            (route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+              route.transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts")
+          ) {
+            const transition = route.transition
+            if (transition.acceptedProgress._tag !== "ExecutorReportAccepted") {
+              return Effect.die("ordinal acceptance expected each continuation to name its accepted report")
+            }
+            const acceptedOrdinal = Number(transition.acceptedProgress.ordinal)
+            return Effect.gen(function* () {
+              const calls = yield* Ref.get(executorCalls)
+              if (acceptedOrdinal !== calls.length + 1) {
+                return yield* Effect.die(
+                  `ordinal acceptance expected report ${calls.length + 1}, got ${acceptedOrdinal}`
+                )
+              }
+              yield* Ref.update(continuationAcceptedOrdinals, (ordinals) => [...ordinals, acceptedOrdinal])
+              const result = yield* executePlannedAttemptTransition(action, transition, lease).pipe(
+                Effect.provideService(InRunJournal, journal),
+                Effect.provideService(PlannedAttemptExecutor, plannedExecutor)
+              )
+              if (result._tag === "ExecutorReportPublished") {
+                const executorCallCount = yield* Ref.get(executorCalls)
+                if (executorCallCount.length === 2) {
+                  yield* publication.awaitCurrent
+                  yield* Deferred.succeed(limitReached, undefined)
+                }
+              }
+              return result
+            })
+          }
+          const isExecutorAction =
+            route._tag === "FreshExecutorWorkflowRoute" ||
+            (route._tag === "IdentityFreeWorkflowRoute" &&
+              (route.transition._tag === "StartPlannedAttemptExecutorWork" ||
+                route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+                route.transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"))
+          return (
+            isExecutorAction ? Ref.update(forbiddenExecutorActions, (actions) => [...actions, route._tag]) : Effect.void
+          ).pipe(
+            Effect.as({
+              _tag: "ActionDeferred" as const,
+              proposalId: action.proposal.id,
+              reason: "TrackerGraphReadUnavailable" as const
+            })
+          )
+        }
+      })
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(resources, lifecycle.admission)
+      const runtime = yield* runDeliveryRuntime(relation).pipe(
+        Effect.provide(deterministicOperationIdAllocatorLayer("reactive-progress-limit-read")),
+        Effect.provide(
+          deterministicPlannedTaskAttemptLayer({
+            baseSha: GitCommitSha.make("1".repeat(40)),
+            executor: TaskExecutorLocator.make("executor:reactive-progress-limit"),
+            runId,
+            worktreeRoot: WorktreeLocator.make("/worktrees/reactive-progress-limit")
+          })
+        ),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, actionExecutor),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(limitReached)
+      yield* Fiber.interrupt(runtime)
+
+      const limitFailure = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(PlannedAttemptExecutor, plannedExecutor),
+        Effect.flip
+      )
+      expect(limitFailure).toBeInstanceOf(PlannedAttemptExecutorContinuationLimitReached)
+      expect(limitFailure).toMatchObject({ _tag: "PlannedAttemptExecutorContinuationLimitReached", limit: 3 })
+      expect(yield* Ref.get(providerCalls)).toHaveLength(2)
+      expect(yield* Ref.get(providerCoverage)).toEqual([[taskIds[0]], [taskIds[0]]])
+      expect(yield* Ref.get(executorCalls)).toEqual([1, 2])
+      expect(yield* Ref.get(continuationAcceptedOrdinals)).toEqual([1, 2])
+      expect(yield* Ref.get(forbiddenExecutorActions)).toEqual([])
       expect(progressProposal(yield* relation.get)).toBeUndefined()
 
       const records = yield* journal.read(runId)
