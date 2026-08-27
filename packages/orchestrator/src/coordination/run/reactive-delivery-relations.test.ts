@@ -16,7 +16,7 @@ import {
   WorktreeLocator,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Deferred, Effect, Exit, Fiber, Option, Ref, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Scope } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -63,6 +63,7 @@ import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { makeJournal } from "../delivery/journal.js"
 import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
 import { DeliveryActionExecutor, type DeliveryActionResult } from "../delivery/delivery-action-executor.js"
+import { executeFreshTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { runDeliveryRuntime } from "../delivery/run-delivery-runtime.js"
 import {
   deliveryRuntimeResourceCapabilitiesLayer,
@@ -77,6 +78,8 @@ import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/
 import { PlannedAttemptExecutorContinuationLimitReached } from "../../workflow/protocols/planned-attempt-executor-work/errors.js"
 import { continuePlannedAttemptExecutorWork } from "../../workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { executePlannedAttemptTransition } from "../delivery/planned-attempt-delivery-action-adapter.js"
+import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
+import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 
 const runId = RunId.make("reactive-progress-runtime-acceptance")
 const target = FixtureTarget.make("reactive-progress-runtime-acceptance-target")
@@ -200,6 +203,60 @@ const appendRunning = Effect.fn("ReactiveProgressAcceptance.appendRunning")(func
   )
 })
 
+/**
+ * The acceptance runtime owns admission and scheduling, while this helper
+ * keeps tracker authority controlled at the provider edge. The journaled
+ * interpreter is production code: it records the read intent before this
+ * provider is called and records the accepted observation afterward.
+ */
+const makeTrackerGraphActionExecutor = Effect.fn("ReactiveProgressAcceptance.makeTrackerGraphActionExecutor")(
+  function* (
+    journal: Effect.Success<typeof makeJournalService>,
+    publication: DeliveryAcceptedFactPublication["Service"],
+    readTrackerGraph: WorkflowInterpreter["Service"]["readTrackerGraph"]
+  ) {
+    const interpreter = yield* WorkflowInterpreter.pipe(
+      Effect.provide(
+        journaledWorkflowInterpreterLayer(
+          runId,
+          Layer.succeed(
+            WorkflowInterpreter,
+            WorkflowInterpreter.of({
+              acquireTaskClaim: () => Effect.die("reactive progress acceptance does not read claims"),
+              readTaskClaim: () => Effect.die("reactive progress acceptance does not read claims"),
+              readTaskWorktree: () => Effect.die("reactive progress acceptance does not read worktrees"),
+              readTargetLineage: () => Effect.die("reactive progress acceptance does not read target lineage"),
+              readTrackerGraph,
+              readTaskWorkSpecification: () => Effect.die("reactive progress acceptance does not read specifications"),
+              reconcileTaskWorktree: () => Effect.die("reactive progress acceptance does not reconcile worktrees"),
+              recordTaskAttemptPlan: () => Effect.die("reactive progress acceptance does not record plans"),
+              releaseTaskClaim: () => Effect.die("reactive progress acceptance does not release claims")
+            })
+          )
+        ).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+      )
+    )
+    const trace = WorkflowTrace.of({ emit: () => Effect.void })
+    return DeliveryActionExecutor.of({
+      execute: (action, lease) => {
+        const route = action.proposal.route
+        if (action._tag === "FreshOperationAction" && route._tag === "TrackerGraphReadRoute") {
+          return executeFreshTrackerGraphRead(action, route, lease).pipe(
+            Effect.provideService(WorkflowInterpreter, interpreter),
+            Effect.provideService(WorkflowTrace, trace),
+            Effect.provideService(DeliveryAcceptedFactPublication, publication)
+          )
+        }
+        return Effect.succeed({
+          _tag: "ActionDeferred" as const,
+          proposalId: action.proposal.id,
+          reason: "TrackerGraphReadUnavailable" as const
+        })
+      }
+    })
+  }
+)
+
 const progressProposal = (value: Effect.Success<typeof deliveryRuntime>) => {
   if (value.proposedActions._tag !== "DeliveryProposalsAvailable") return undefined
   return value.proposedActions.proposals.find(
@@ -222,6 +279,7 @@ it.effect("coalesces three pending executor-progress requirements into one compl
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
       const providerCalls = yield* Ref.make<ReadonlyArray<OperationId>>([])
       const providerCoverage = yield* Ref.make<ReadonlyArray<TaskId>>([])
+      const providerSawJournalIntent = yield* Ref.make<ReadonlyArray<OperationId>>([])
       const executorWorkCalls = yield* Ref.make<ReadonlyArray<string>>([])
       const readAccepted = yield* Deferred.make<void>()
 
@@ -240,69 +298,39 @@ it.effect("coalesces three pending executor-progress requirements into one compl
         _tag: "DeliveryProposalsAvailable",
         proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "CheckExecutorProgress" } }]
       })
-      const lifecycle = yield* makeApplicationExitLifecycle()
-      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(resources, lifecycle.admission)
+      const provider = (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+        Effect.gen(function* () {
+          const records = yield* journal.read(runId)
+          if (
+            records.some(
+              ({ event }) =>
+                event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === operation.operationId
+            )
+          ) {
+            yield* Ref.update(providerSawJournalIntent, (calls) => [...calls, operation.operationId])
+          }
+          yield* Ref.update(providerCalls, (calls) => [...calls, operation.operationId])
+          yield* Ref.set(providerCoverage, [...operation.readShape.explicitlyCoveredTaskIds])
+          return yield* graphSnapshotFor("reactive-progress-coalesced-G1")
+        })
+      const productionExecutor = yield* makeTrackerGraphActionExecutor(journal, publication, provider)
       const executor = DeliveryActionExecutor.of({
         execute: (action, lease) => {
-          if (action.proposal.route._tag !== "TrackerGraphReadRoute") {
-            const route = action.proposal.route
-            const isExecutorWork =
-              route._tag === "FreshExecutorWorkflowRoute" ||
-              (route._tag === "IdentityFreeWorkflowRoute" &&
-                (route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-                  route.transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
-                  route.transition._tag === "StartPlannedAttemptExecutorWork"))
-            return (
-              isExecutorWork ? Ref.update(executorWorkCalls, (calls) => [...calls, route._tag]) : Effect.void
-            ).pipe(
-              Effect.as({
-                _tag: "ActionDeferred" as const,
-                proposalId: action.proposal.id,
-                reason: "TrackerGraphReadUnavailable" as const
-              })
-            )
-          }
-          if (action._tag !== "FreshOperationAction") {
-            return Effect.die("coalescing acceptance expected a fresh graph read")
-          }
           const route = action.proposal.route
-          if (route.purpose !== "CheckExecutorProgress") {
-            return Effect.die("coalescing acceptance expected an executor-progress graph read")
-          }
-          const explicitlyCoveredTaskIds = route.pendingReports.map(({ taskId }) => taskId)
-          const operation = makeTrackerGraphObservationOperation(
-            action.operationId,
-            target,
-            [],
-            explicitlyCoveredTaskIds
+          const isExecutorWork =
+            route._tag === "FreshExecutorWorkflowRoute" ||
+            (route._tag === "IdentityFreeWorkflowRoute" &&
+              (route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+                route.transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+                route.transition._tag === "StartPlannedAttemptExecutorWork"))
+          return (isExecutorWork ? Ref.update(executorWorkCalls, (calls) => [...calls, route._tag]) : Effect.void).pipe(
+            Effect.andThen(productionExecutor.execute(action, lease)),
+            Effect.tap(() => Deferred.succeed(readAccepted, undefined))
           )
-          return Effect.gen(function* () {
-            yield* lease.recordIntent(action.operationId)
-            yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-            yield* Ref.update(providerCalls, (calls) => [...calls, action.operationId])
-            yield* Ref.set(providerCoverage, explicitlyCoveredTaskIds)
-            yield* journal.append(
-              runId,
-              outcomeRecordKey(operation.operationId),
-              taskTrackerFactsObservedEvent(
-                operation.operationId,
-                makeCompleteTaskTrackerFactsObserved(
-                  operation,
-                  yield* graphSnapshotFor("reactive-progress-coalesced-G1")
-                )
-              )
-            )
-            yield* publication.awaitCurrent
-            yield* Deferred.succeed(readAccepted, undefined)
-            return {
-              _tag: "TrackerGraphObservationPublished" as const,
-              operationId: action.operationId,
-              proposalId: action.proposal.id,
-              snapshot: yield* graphSnapshotFor("reactive-progress-coalesced-G1")
-            } satisfies DeliveryActionResult
-          })
         }
       })
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(resources, lifecycle.admission)
       const runtime = yield* runDeliveryRuntime(relation).pipe(
         Effect.provide(deterministicOperationIdAllocatorLayer("reactive-progress-coalesced-read")),
         Effect.provide(
@@ -324,6 +352,7 @@ it.effect("coalesces three pending executor-progress requirements into one compl
       expect(yield* Ref.get(providerCoverage)).toEqual(
         [...taskIds].toSorted((left, right) => left.localeCompare(right))
       )
+      expect(yield* Ref.get(providerSawJournalIntent)).toEqual(yield* Ref.get(providerCalls))
       expect(yield* Ref.get(executorWorkCalls)).toEqual([])
       const records = yield* journal.read(runId)
       const operationId = Option.getOrThrow(Option.fromUndefinedOr((yield* Ref.get(providerCalls))[0]))
