@@ -566,11 +566,13 @@ const claimLabelNameFor = Effect.fn("GithubQualification.claimLabelNameFor")(fun
 const qualificationGate = Effect.runSync(Semaphore.make(1))
 const serializedQualification = <A, E, R>(effect: Effect.Effect<A, E, R>) => qualificationGate.withPermit(effect)
 
+type GithubGraphqlRequestTag = GithubGraphqlRequest["_tag"]
+
 const responseLossGithubGraphqlClient = (
   underlying: GithubGraphqlClient["Service"],
   createRequestCount: Ref.Ref<number>,
   lost: Ref.Ref<boolean>,
-  requestLog: Ref.Ref<ReadonlyArray<string>>
+  requestLog: Ref.Ref<ReadonlyArray<GithubGraphqlRequestTag>>
 ): GithubGraphqlClient["Service"] =>
   GithubGraphqlClient.of({
     execute: Effect.fn("GithubQualification.ResponseLoss.execute")(function* (request: GithubGraphqlRequest) {
@@ -646,7 +648,7 @@ it.effect("loses exactly the first native claim-create response after GitHub app
   Effect.gen(function* () {
     const createRequestCount = yield* Ref.make(0)
     const lost = yield* Ref.make(false)
-    const requestLog = yield* Ref.make<ReadonlyArray<string>>([])
+    const requestLog = yield* Ref.make<ReadonlyArray<GithubGraphqlRequestTag>>([])
     const underlying = GithubGraphqlClient.of({
       execute: () => Effect.succeed(GithubGraphqlResponse.make({ body: {} }))
     })
@@ -841,7 +843,7 @@ it.effect.skipIf(!qualificationEnabled)(
               })
               const createRequestCount = yield* Ref.make(0)
               const lost = yield* Ref.make(false)
-              const requestLog = yield* Ref.make<ReadonlyArray<string>>([])
+              const requestLog = yield* Ref.make<ReadonlyArray<GithubGraphqlRequestTag>>([])
               const underlyingClient = Context.get(
                 yield* Layer.build(githubGraphqlClientNodeLayer),
                 GithubGraphqlClient
