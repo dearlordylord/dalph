@@ -131,18 +131,12 @@ const correlationKeyOf = (correlation: PlannedAttemptExecutorCorrelation): strin
 const sameTarget = (left: TrackerTarget, right: TrackerTarget): boolean =>
   taskTrackerTargetKey(left) === taskTrackerTargetKey(right)
 
-const sameAcceptedReport = (left: ExecutorProgressReport, right: ExecutorProgressReport): boolean =>
-  left.acceptedAt === right.acceptedAt &&
-  left.taskId === right.taskId &&
-  samePlannedAttemptExecutorCorrelation(left.correlation, right.correlation)
-
 /** True only when one accepted complete read explicitly covers this exact report subject. */
 export const executorProgressGraphReadCoversReport = (
   report: ExecutorProgressReport,
   read: ExecutorProgressGraphRead
 ): boolean =>
   read.runId === report.correlation.runId &&
-  read.pendingReports.some((coveredReport) => sameAcceptedReport(coveredReport, report)) &&
   read.explicitlyCoveredTaskIds.includes(report.taskId) &&
   read.intentAt > report.acceptedAt &&
   read.observation._tag === "Observed" &&
@@ -165,6 +159,7 @@ const unresolvedReadAfter = (
       (read) =>
         read.runId === report.correlation.runId &&
         sameTarget(read.target, target) &&
+        read.explicitlyCoveredTaskIds.includes(report.taskId) &&
         read.intentAt > report.acceptedAt &&
         read.observation._tag === "Unresolved" &&
         !readCoversReportAtTarget(report, read, target)

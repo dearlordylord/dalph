@@ -46,7 +46,21 @@ export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFre
   route: Extract<FreshOperationOnlyRoute, { readonly _tag: "TrackerGraphReadRoute" }>,
   lease: DeliveryActionExecutionLease
 ) {
-  const operation = makeTrackerGraphObservationOperation(action.operationId, route.target)
+  // The report correlations and accepted positions remain process-local route
+  // evidence (and proposal identity). The durable graph operation records only
+  // the exact task subjects whose current tracker facts it must cover.
+  const explicitlyCoveredTaskIds =
+    route.purpose === "CheckExecutorProgress"
+      ? [...new Set(route.pendingReports.map(({ taskId }) => taskId))].toSorted((left, right) =>
+          left.localeCompare(right)
+        )
+      : []
+  const operation = makeTrackerGraphObservationOperation(
+    action.operationId,
+    route.target,
+    [],
+    explicitlyCoveredTaskIds
+  )
   return yield* executeTrackerGraphRead(operation, lease).pipe(
     Effect.map((snapshot) => ({
       _tag: "TrackerGraphObservationPublished" as const,
