@@ -64,7 +64,7 @@ const staleRecordMatches = (
  * Git may report the changed head directly or through the mandatory read after
  * a lost response; a stale read before any request authorizes no quarantine.
  */
-export const promotionStaleQuarantineEvidenceIssue = (
+const promotionStaleQuarantineEvidenceIssue = (
   records: ReadonlyArray<JournalRecord>,
   stale: JournalRecord
 ): string | undefined => {
