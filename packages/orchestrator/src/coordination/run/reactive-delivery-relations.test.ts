@@ -379,6 +379,8 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
       const storage = yield* JournalStore
       yield* storage.beginRun(runId, target, policy)
       const providerCalls = yield* Ref.make<ReadonlyArray<OperationId>>([])
+      const firstReadPurposes = yield* Ref.make<ReadonlyArray<string>>([])
+      const secondReadPurposes = yield* Ref.make<ReadonlyArray<string>>([])
       const firstReadIntent = yield* Deferred.make<void>()
       const firstProcessHold = yield* Deferred.make<void>()
       const firstScope = yield* Scope.make()
@@ -397,19 +399,29 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
         const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(resources, lifecycle.admission)
         const executor = DeliveryActionExecutor.of({
           execute: (action, lease) => {
-            if (action._tag !== "FreshOperationAction" || action.proposal.route._tag !== "TrackerGraphReadRoute") {
-              return Effect.die("restart acceptance process 1 expected a graph read")
+            if (action.proposal.route._tag !== "TrackerGraphReadRoute") {
+              return Effect.succeed({
+                _tag: "ActionDeferred" as const,
+                proposalId: action.proposal.id,
+                reason: "TrackerGraphReadUnavailable" as const
+              })
+            }
+            if (action._tag !== "FreshOperationAction") {
+              return Effect.die("restart acceptance process 1 expected a fresh graph read")
             }
             const route = action.proposal.route
-            const explicitlyCoveredTaskIds =
-              route.purpose === "CheckExecutorProgress" ? route.pendingReports.map(({ taskId }) => taskId) : []
-            const operation = makeTrackerGraphObservationOperation(
-              action.operationId,
-              target,
-              [],
-              explicitlyCoveredTaskIds
-            )
+            if (route.purpose !== "CheckExecutorProgress") {
+              return Effect.die("restart acceptance process 1 expected executor-progress graph read")
+            }
+            const explicitlyCoveredTaskIds = route.pendingReports.map(({ taskId }) => taskId)
             return Effect.gen(function* () {
+              yield* Ref.update(firstReadPurposes, (purposes) => [...purposes, route.purpose])
+              const operation = makeTrackerGraphObservationOperation(
+                action.operationId,
+                target,
+                [],
+                explicitlyCoveredTaskIds
+              )
               yield* lease.recordIntent(action.operationId)
               yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
               yield* Ref.update(providerCalls, (calls) => [...calls, action.operationId])
@@ -440,6 +452,7 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
       yield* Deferred.await(firstReadIntent)
       const firstCalls = yield* Ref.get(providerCalls)
       expect(firstCalls).toHaveLength(1)
+      expect(yield* Ref.get(firstReadPurposes)).toEqual(["CheckExecutorProgress"])
       yield* Fiber.interrupt(firstProcess.runtime)
       yield* Scope.close(firstScope, Exit.void)
 
@@ -465,12 +478,21 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
                 reason: "TrackerGraphReadUnavailable" as const
               })
             }
+            const route = action.proposal.route
             return Effect.gen(function* () {
+              yield* Ref.update(secondReadPurposes, (purposes) => [...purposes, route.purpose])
+              const explicitlyCoveredTaskIds =
+                route.purpose === "CheckExecutorProgress" ? route.pendingReports.map(({ taskId }) => taskId) : []
               const callCount = yield* Ref.updateAndGet(providerCalls, (calls) => [...calls, action.operationId])
-              if (callCount.length > 2) {
-                return yield* Effect.never
+              if (callCount.length > 3) {
+                return yield* Effect.die("restart acceptance made a fourth tracker provider call")
               }
-              const operation = makeTrackerGraphObservationOperation(action.operationId, target, [], [taskIds[0]])
+              const operation = makeTrackerGraphObservationOperation(
+                action.operationId,
+                target,
+                [],
+                explicitlyCoveredTaskIds
+              )
               yield* lease.recordIntent(action.operationId)
               yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
               yield* journal.append(
@@ -479,16 +501,26 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
                 makeTaskTrackerFactsObservedFromRead(
                   yield* journal.read(runId),
                   operation,
-                  yield* graphSnapshotFor("reactive-progress-restart-G1")
+                  yield* graphSnapshotFor(
+                    route.purpose === "EstablishCurrentGraph"
+                      ? "reactive-progress-restart-G1"
+                      : "reactive-progress-restart-G2"
+                  )
                 )
               )
               yield* publication.awaitCurrent
-              yield* Deferred.succeed(secondReadAccepted, undefined)
+              if (route.purpose === "CheckExecutorProgress") {
+                yield* Deferred.succeed(secondReadAccepted, undefined)
+              }
               return {
                 _tag: "TrackerGraphObservationPublished" as const,
                 operationId: action.operationId,
                 proposalId: action.proposal.id,
-                snapshot: yield* graphSnapshotFor("reactive-progress-restart-G1")
+                snapshot: yield* graphSnapshotFor(
+                  route.purpose === "EstablishCurrentGraph"
+                    ? "reactive-progress-restart-G1"
+                    : "reactive-progress-restart-G2"
+                )
               } satisfies DeliveryActionResult
             })
           }
@@ -515,8 +547,9 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
       yield* Fiber.interrupt(secondProcess.runtime)
       yield* Scope.close(secondScope, Exit.void)
       const calls = yield* Ref.get(providerCalls)
-      expect(calls).toHaveLength(2)
-      expect(calls[0]).not.toBe(calls[1])
+      expect(calls).toHaveLength(3)
+      expect(new Set(calls)).toHaveLength(3)
+      expect(yield* Ref.get(secondReadPurposes)).toEqual(["EstablishCurrentGraph", "CheckExecutorProgress"])
 
       const thirdScope = yield* Scope.make()
       const thirdProcess = yield* Effect.gen(function* () {
@@ -530,7 +563,7 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
         return yield* relation.get
       }).pipe(Scope.provide(thirdScope))
       expect(progressProposal(thirdProcess)).toBeUndefined()
-      expect(yield* Ref.get(providerCalls)).toHaveLength(2)
+      expect(yield* Ref.get(providerCalls)).toHaveLength(3)
       yield* Scope.close(thirdScope, Exit.void)
     })
   ).pipe(Effect.provide(memoryJournalStoreLayer))
