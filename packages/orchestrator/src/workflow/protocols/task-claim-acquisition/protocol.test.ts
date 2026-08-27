@@ -19,6 +19,13 @@ import {
   UnclaimedTask
 } from "../../../index.js"
 
+type TaskClaimBoundaryCall = "read" | "acquire"
+
+const recordTaskClaimBoundaryCall = (
+  calls: Ref.Ref<ReadonlyArray<TaskClaimBoundaryCall>>,
+  call: TaskClaimBoundaryCall
+) => Ref.update(calls, (current) => [...current, call])
+
 const acquisition = TaskClaimAcquisition.make({
   operationId: OperationId.make("ambiguous-acquisition"),
   owner: ClaimOwner.make("claim-owner"),
@@ -29,11 +36,11 @@ const acquisition = TaskClaimAcquisition.make({
 it.effect("rereads tracker authority after an ambiguously applied acquisition", () =>
   Effect.gen(function* () {
     const controlled = yield* TrackerMutation
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const calls = yield* Ref.make<ReadonlyArray<TaskClaimBoundaryCall>>([])
     const requests = yield* Ref.make(0)
     const ambiguous = TrackerMutation.of({
       acquireTaskClaim: (request) =>
-        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+        recordTaskClaimBoundaryCall(calls, "acquire").pipe(
           Effect.andThen(controlled.acquireTaskClaim(request)),
           Effect.andThen(Ref.update(requests, (count) => count + 1)),
           Effect.andThen(
@@ -47,7 +54,7 @@ it.effect("rereads tracker authority after an ambiguously applied acquisition", 
           )
         ),
       readTaskClaim: (taskId): Effect.Effect<TaskClaimObservation, TaskClaimReadFailure> =>
-        Ref.update(calls, (current) => [...current, "read"]).pipe(Effect.andThen(controlled.readTaskClaim(taskId))),
+        recordTaskClaimBoundaryCall(calls, "read").pipe(Effect.andThen(controlled.readTaskClaim(taskId))),
       releaseTaskClaim: controlled.releaseTaskClaim
     })
 
@@ -66,14 +73,12 @@ it.effect("rereads tracker authority after an ambiguously applied acquisition", 
 it.effect("observes an uncertain prior request before repeating it", () =>
   Effect.gen(function* () {
     const controlled = yield* TrackerMutation
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const calls = yield* Ref.make<ReadonlyArray<TaskClaimBoundaryCall>>([])
     const observed = TrackerMutation.of({
       acquireTaskClaim: (request) =>
-        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
-          Effect.andThen(controlled.acquireTaskClaim(request))
-        ),
+        recordTaskClaimBoundaryCall(calls, "acquire").pipe(Effect.andThen(controlled.acquireTaskClaim(request))),
       readTaskClaim: (taskId) =>
-        Ref.update(calls, (current) => [...current, "read"]).pipe(Effect.andThen(controlled.readTaskClaim(taskId))),
+        recordTaskClaimBoundaryCall(calls, "read").pipe(Effect.andThen(controlled.readTaskClaim(taskId))),
       releaseTaskClaim: controlled.releaseTaskClaim
     })
 
@@ -106,12 +111,12 @@ it.effect("stops when atomic acquisition reports a competing claim", () =>
 it.effect("returns typed non-convergence after bounded unknown outcomes", () =>
   Effect.gen(function* () {
     const controlled = yield* TrackerMutation
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const calls = yield* Ref.make<ReadonlyArray<TaskClaimBoundaryCall>>([])
     const requests = yield* Ref.make(0)
     const unavailable = TrackerMutation.of({
       ...controlled,
       acquireTaskClaim: (request) =>
-        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+        recordTaskClaimBoundaryCall(calls, "acquire").pipe(
           Effect.andThen(Ref.update(requests, (count) => count + 1)),
           Effect.andThen(
             Effect.fail(
@@ -120,7 +125,7 @@ it.effect("returns typed non-convergence after bounded unknown outcomes", () =>
           )
         ),
       readTaskClaim: (taskId) =>
-        Ref.update(calls, (current) => [...current, "read"]).pipe(Effect.andThen(controlled.readTaskClaim(taskId)))
+        recordTaskClaimBoundaryCall(calls, "read").pipe(Effect.andThen(controlled.readTaskClaim(taskId)))
     })
 
     const failure = yield* runTaskClaimAcquisitionProtocol(unavailable, acquisition).pipe(Effect.flip)
@@ -133,11 +138,11 @@ it.effect("returns typed non-convergence after bounded unknown outcomes", () =>
 
 it.effect("reads tracker after the third and final ambiguous acquisition request", () =>
   Effect.gen(function* () {
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const calls = yield* Ref.make<ReadonlyArray<TaskClaimBoundaryCall>>([])
     const reads = yield* Ref.make(0)
     const tracker = TrackerMutation.of({
       acquireTaskClaim: (request) =>
-        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+        recordTaskClaimBoundaryCall(calls, "acquire").pipe(
           Effect.andThen(
             Effect.fail(
               new TaskClaimRequestFailure({
@@ -154,7 +159,7 @@ it.effect("reads tracker after the third and final ambiguous acquisition request
             (readNumber): TaskClaimObservation =>
               readNumber === 4 ? ActiveTaskClaim.make(acquisition) : UnclaimedTask.make({ taskId })
           ),
-          Effect.tap(() => Ref.update(calls, (current) => [...current, "read"]))
+          Effect.tap(() => recordTaskClaimBoundaryCall(calls, "read"))
         ),
       releaseTaskClaim: () => Effect.void
     })
@@ -172,7 +177,7 @@ it.effect("reads tracker after the third and final ambiguous acquisition request
 
 it.effect("returns a conflict when the final reconciliation observes a foreign claim", () =>
   Effect.gen(function* () {
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const calls = yield* Ref.make<ReadonlyArray<TaskClaimBoundaryCall>>([])
     const reads = yield* Ref.make(0)
     const foreign = ActiveTaskClaim.make({
       ...acquisition,
@@ -182,7 +187,7 @@ it.effect("returns a conflict when the final reconciliation observes a foreign c
     })
     const tracker = TrackerMutation.of({
       acquireTaskClaim: (request) =>
-        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+        recordTaskClaimBoundaryCall(calls, "acquire").pipe(
           Effect.andThen(
             Effect.fail(
               new TaskClaimRequestFailure({
@@ -196,7 +201,7 @@ it.effect("returns a conflict when the final reconciliation observes a foreign c
       readTaskClaim: (taskId) =>
         Effect.gen(function* () {
           const readNumber = yield* Ref.updateAndGet(reads, (count) => count + 1)
-          yield* Ref.update(calls, (current) => [...current, "read"])
+          yield* recordTaskClaimBoundaryCall(calls, "read")
           return readNumber === 4 ? foreign : UnclaimedTask.make({ taskId })
         }),
       releaseTaskClaim: () => Effect.void
@@ -213,11 +218,11 @@ it.effect("returns a conflict when the final reconciliation observes a foreign c
 
 it.effect("returns a read failure when the final reconciliation is unreadable", () =>
   Effect.gen(function* () {
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const calls = yield* Ref.make<ReadonlyArray<TaskClaimBoundaryCall>>([])
     const reads = yield* Ref.make(0)
     const tracker = TrackerMutation.of({
       acquireTaskClaim: (request) =>
-        Ref.update(calls, (current) => [...current, "acquire"]).pipe(
+        recordTaskClaimBoundaryCall(calls, "acquire").pipe(
           Effect.andThen(
             Effect.fail(
               new TaskClaimRequestFailure({
@@ -231,7 +236,7 @@ it.effect("returns a read failure when the final reconciliation is unreadable", 
       readTaskClaim: (taskId) =>
         Effect.gen(function* () {
           const readNumber = yield* Ref.updateAndGet(reads, (count) => count + 1)
-          yield* Ref.update(calls, (current) => [...current, "read"])
+          yield* recordTaskClaimBoundaryCall(calls, "read")
           if (readNumber === 4) {
             return yield* new TaskClaimReadFailure({ detail: "GitHub response was malformed", taskId })
           }
