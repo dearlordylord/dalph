@@ -3,6 +3,7 @@ import {
   CompletionClaimBoundary,
   CompletionClaimDeletionFailure,
   CompletionClaimFingerprint,
+  completionClaimReadRequestFor,
   CompletionClaimReadFailure,
   type CompletionClaimReadRequest,
   type CompletionClaimDeletionRequest,
@@ -82,11 +83,6 @@ const completionClaimLabelNameFor = Effect.fn("GithubCompletionClaim.labelNameFo
     Effect.mapError((cause) => new CompletionClaimReadFailure({ detail: String(cause), taskId: request.taskId }))
   )
   return GithubLabelName.make(`dalph-completion-${digest}`)
-})
-
-const replacementReadRequest = (claim: CompletionTaskClaim): CompletionClaimReadRequest => ({
-  expectedClaim: claim,
-  taskId: claim.plannedAttempt.taskId
 })
 
 /** GitHub boundary that creates one completion record beside the still-present active record. */
@@ -170,7 +166,7 @@ const githubCompletionClaimBoundaryWithTrackerLayer = Layer.effect(
     const replaceTaskClaim = Effect.fn("GithubCompletionClaim.replaceTaskClaim")(function* (
       request: CompletionClaimReplacementRequest
     ) {
-      const readRequest = replacementReadRequest(request.claim)
+      const readRequest = completionClaimReadRequestFor(request.claim)
       const [repositoryNodeId] = yield* githubTaskCoordinatesFor(readRequest.taskId).pipe(
         Effect.mapError(
           (cause) =>
