@@ -13,24 +13,6 @@ import {
 const observedAtOf = (read: ExecutorProgressGraphRead): JournalPosition | undefined =>
   read.observation._tag === "Observed" ? read.observation.observedAt : undefined
 
-/**
- * A graph read recorded before progress-batch metadata was persisted has no
- * report list. Its validated task-closure still identifies the report subject;
- * once a batch is present, coverage always uses the exact report identity.
- */
-const focusedSpecificationGraphReadCoversReport = (
-  report: ExecutorProgressReport,
-  read: ExecutorProgressGraphRead
-): boolean =>
-  executorProgressGraphReadCoversReport(report, read) ||
-  (read.pendingReports.length === 0 &&
-    read.runId === report.correlation.runId &&
-    read.explicitlyCoveredTaskIds.includes(report.taskId) &&
-    read.intentAt > report.acceptedAt &&
-    read.observation._tag === "Observed" &&
-    read.observation.observedAt > read.intentAt &&
-    (read.observation.outcome === "Complete" || read.observation.outcome === "Unchanged"))
-
 /** The latest accepted complete graph observation that explicitly covers the executor report's exact task. */
 const latestCompleteGraphReadCovering = (
   records: ReadonlyArray<JournalRecord>,
@@ -52,7 +34,7 @@ const latestCompleteGraphReadCovering = (
           )
         : []
     )
-    .filter((read) => focusedSpecificationGraphReadCoversReport(report, read))
+    .filter((read) => executorProgressGraphReadCoversReport(report, read))
     .toSorted((left, right) => Number(observedAtOf(right)) - Number(observedAtOf(left)))[0]
 }
 
