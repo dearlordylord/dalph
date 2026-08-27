@@ -768,6 +768,7 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
       const providerSawJournalIntent = yield* Ref.make<ReadonlyArray<OperationId>>([])
       const firstReadPurposes = yield* Ref.make<ReadonlyArray<string>>([])
       const secondReadPurposes = yield* Ref.make<ReadonlyArray<string>>([])
+      const executorWorkRoutes = yield* Ref.make<ReadonlyArray<string>>([])
       const firstReadIntent = yield* Deferred.make<void>()
       const firstProcessHold = yield* Deferred.make<void>()
       const firstScope = yield* Scope.make()
@@ -818,11 +819,21 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
                 Effect.andThen(productionExecutor.execute(action, lease))
               )
             }
-            return Effect.succeed({
-              _tag: "ActionDeferred" as const,
-              proposalId: action.proposal.id,
-              reason: "TrackerGraphReadUnavailable" as const
-            })
+            const isExecutorWork =
+              route._tag === "FreshExecutorWorkflowRoute" ||
+              (route._tag === "IdentityFreeWorkflowRoute" &&
+                (route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+                  route.transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+                  route.transition._tag === "StartPlannedAttemptExecutorWork"))
+            return (
+              isExecutorWork ? Ref.update(executorWorkRoutes, (routes) => [...routes, route._tag]) : Effect.void
+            ).pipe(
+              Effect.as({
+                _tag: "ActionDeferred" as const,
+                proposalId: action.proposal.id,
+                reason: "TrackerGraphReadUnavailable" as const
+              })
+            )
           }
         })
         const runtime = yield* runDeliveryRuntime(relation).pipe(
@@ -849,6 +860,7 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
       expect(yield* Ref.get(firstReadPurposes)).toEqual(["CheckExecutorProgress"])
       expect(yield* Ref.get(providerCoverage)).toEqual([[taskIds[0]]])
       expect(yield* Ref.get(providerSawJournalIntent)).toEqual(firstCalls)
+      expect(yield* Ref.get(executorWorkRoutes)).toEqual([])
       yield* Fiber.interrupt(firstProcess.runtime)
       yield* Scope.close(firstScope, Exit.void)
 
@@ -903,11 +915,21 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
                 )
               )
             }
-            return Effect.succeed({
-              _tag: "ActionDeferred" as const,
-              proposalId: action.proposal.id,
-              reason: "TrackerGraphReadUnavailable" as const
-            })
+            const isExecutorWork =
+              route._tag === "FreshExecutorWorkflowRoute" ||
+              (route._tag === "IdentityFreeWorkflowRoute" &&
+                (route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+                  route.transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+                  route.transition._tag === "StartPlannedAttemptExecutorWork"))
+            return (
+              isExecutorWork ? Ref.update(executorWorkRoutes, (routes) => [...routes, route._tag]) : Effect.void
+            ).pipe(
+              Effect.as({
+                _tag: "ActionDeferred" as const,
+                proposalId: action.proposal.id,
+                reason: "TrackerGraphReadUnavailable" as const
+              })
+            )
           }
         })
         const runtime = yield* runDeliveryRuntime(relation).pipe(
@@ -937,6 +959,7 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
       expect(yield* Ref.get(secondReadPurposes)).toEqual(["EstablishCurrentGraph", "CheckExecutorProgress"])
       expect(yield* Ref.get(providerCoverage)).toEqual([[taskIds[0]], [], [taskIds[0]]])
       expect(yield* Ref.get(providerSawJournalIntent)).toEqual(calls)
+      expect(yield* Ref.get(executorWorkRoutes)).toEqual([])
 
       const thirdScope = yield* Scope.make()
       const thirdProcess = yield* Effect.gen(function* () {
@@ -951,6 +974,7 @@ it.effect("repeats an unresolved executor-progress graph read and reuses an acce
       }).pipe(Scope.provide(thirdScope))
       expect(progressProposal(thirdProcess)).toBeUndefined()
       expect(yield* Ref.get(providerCalls)).toHaveLength(3)
+      expect(yield* Ref.get(executorWorkRoutes)).toEqual([])
       yield* Scope.close(thirdScope, Exit.void)
     })
   ).pipe(Effect.provide(memoryJournalStoreLayer))
