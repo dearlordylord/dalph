@@ -37,7 +37,6 @@ import {
   type IntegrationQuarantineState
 } from "../../workflow/protocols/integration-quarantine/state.js"
 import { IntegrationQuarantineBasis } from "../../workflow/protocols/integration-quarantine/events.js"
-import { targetPromotionCorrelationEquals } from "../../workflow/protocols/target-promotion/events.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { integrationQuarantinedRecordKey } from "../../workflow-journal/record-key.js"
@@ -45,7 +44,10 @@ import {
   validateProviderRunActivityAbsent,
   type ProviderRunFailureQuarantineInput
 } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
-import type { PromotionStaleIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
+import {
+  pendingPromotionStaleIntegrationQuarantineFor,
+  type PromotionStaleIntegrationQuarantineInput
+} from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 
 type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; readonly taskId: TaskId } }
 type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
@@ -168,14 +170,7 @@ const promotionStaleQuarantineFor = (
     runBoundState.run.session.sessionId
   )
   if (quarantine._tag !== "NoQuarantine") return undefined
-  const stale = runState.workflowHistory.records.findLast(
-    (record) =>
-      record.event._tag === "TargetPromotionStale" &&
-      targetPromotionCorrelationEquals(record.event.correlation, promotion.correlation)
-  )
-  return stale === undefined
-    ? undefined
-    : { correlation: promotion.correlation, targetPromotionStaleAt: stale.position }
+  return pendingPromotionStaleIntegrationQuarantineFor(runState.workflowHistory.records, promotion.correlation)
 }
 
 /** Finds exact provider-absence evidence whose dependent initial Q append was interrupted. */

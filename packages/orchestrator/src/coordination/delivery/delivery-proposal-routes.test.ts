@@ -44,6 +44,7 @@ import {
 import { TaskLifecycle, type Task, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
@@ -132,6 +133,7 @@ import { executeIntegrationAction } from "./integration-delivery-action-adapter.
 import {
   Integrator,
   IntegratorCallFailure,
+  IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
   IntegratorGit,
   IntegratorGitReadFailure,
@@ -140,6 +142,7 @@ import {
   IntegratorRunProtocolResult,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
   IntegratorResult
 } from "../../workflow/protocols/integrator/protocol.js"
 import {
@@ -187,8 +190,12 @@ import {
   TaskTrackerFactsObservedEvent,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
-import { TargetPromotionGitReadObservation } from "../../workflow/protocols/target-promotion/events.js"
+import {
+  TargetPromotionCompareAndSetResult,
+  TargetPromotionGitReadObservation
+} from "../../workflow/protocols/target-promotion/events.js"
 import { TargetPromotionRuntime } from "../../workflow/protocols/target-promotion/runtime.js"
+import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import {
   EvidenceStore,
   EvidenceStoreFailure,
@@ -2139,6 +2146,158 @@ describe("delivery proposal route matrix", () => {
           Effect.flip
         )
       ).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
+    })
+  )
+
+  effectIt.effect("records the stale result and one quarantine before releasing the integration target", () =>
+    Effect.gen(function* () {
+      const changedHead = GitCommitSha.make("4".repeat(40))
+      const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+        candidateCommit: integrationFinalityFixture.qualifiedCandidate.candidateCommit,
+        candidateText: IntegratorCandidateText.make("refs/heads/route-matrix-stale-candidate"),
+        directParents: [plannedAttempt.baseSha, acceptedResult.commit],
+        qualifiedAt: JournalPosition.make(22),
+        run: {
+          ordinal: IntegratorRunOrdinal.make(1),
+          session: {
+            acceptedResult,
+            candidateResource: IntegratorCandidateResourceLocator.make("/candidate/route-matrix-stale"),
+            expectedTargetHead: plannedAttempt.baseSha,
+            integrationTarget,
+            plannedAttempt,
+            queuedAt: started.queuedAt,
+            sessionId: integrationFinalityFixture.qualifiedCandidate.run.session.sessionId,
+            startedAt: started.startedAt,
+            targetLineageObservedAt: JournalPosition.make(19)
+          }
+        }
+      })
+      const promotion = RunnableFrontierTransition.RunTargetPromotion({
+        candidate: qualifiedCandidate,
+        responsibility: started
+      })
+      const promotionProposal = proposalsFor(promotion).proposals[0]
+      if (promotionProposal === undefined || !isIdentityFreeProposal(promotionProposal)) {
+        return yield* Effect.die("missing stale target-promotion proposal")
+      }
+
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const journal = appendableJournalFor(records)
+      const underlyingTargets = yield* makeIntegrationTargetResourceController()
+      yield* underlyingTargets.acquire(started)
+      yield* underlyingTargets.publishAcceptedOwnership(started)
+      const quarantineObservedAtRelease = yield* Ref.make<ReadonlyArray<boolean>>([])
+      const integrationTargets = {
+        ...underlyingTargets,
+        release: (responsibility: Parameters<typeof underlyingTargets.release>[0]) =>
+          Ref.get(records).pipe(
+            Effect.tap((current) =>
+              Ref.update(quarantineObservedAtRelease, (observations) => [
+                ...observations,
+                current.some(({ event }) => event._tag === "IntegrationQuarantined")
+              ])
+            ),
+            Effect.andThen(underlyingTargets.release(responsibility))
+          )
+      }
+      const lease = { ...inertLease, integrationTargets }
+      const runtime = TargetPromotionRuntime.of({
+        git: {
+          compareAndSet: () =>
+            Effect.succeed(
+              TargetPromotionCompareAndSetResult.cases.RejectedExpectedHead.make({ observedHeadSha: changedHead })
+            ),
+          read: () =>
+            Effect.succeed(
+              TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+                currentHeadSha: plannedAttempt.baseSha
+              })
+            )
+        }
+      })
+      const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: promotionProposal },
+          promotion,
+          lease,
+          target
+        ).pipe(
+          Effect.provideService(CoordinatorOwnership, ownership),
+          Effect.provideService(TargetPromotionRuntime, runtime),
+          Effect.provideService(InRunJournal, journal)
+        )
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: promotionProposal.id })
+      expect(yield* Ref.get(quarantineObservedAtRelease)).toEqual([])
+      expect((yield* underlyingTargets.snapshot).heldResponsibilityPositions).toEqual(new Set([started.queuedAt]))
+
+      const stale = (yield* Ref.get(records)).find(({ event }) => event._tag === "TargetPromotionStale")
+      if (stale?.event._tag !== "TargetPromotionStale") {
+        return yield* Effect.die("rejected compare-and-set did not record the exact stale result")
+      }
+      const quarantine = RunnableFrontierTransition.RecordPromotionStaleIntegrationQuarantine({
+        input: { correlation: stale.event.correlation, targetPromotionStaleAt: stale.position },
+        responsibility: started
+      })
+      const quarantineProposal = proposalsFor(quarantine).proposals[0]
+      if (quarantineProposal === undefined || !isIdentityFreeProposal(quarantineProposal)) {
+        return yield* Effect.die("missing promotion-stale quarantine proposal")
+      }
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: quarantineProposal },
+          quarantine,
+          lease,
+          target
+        ).pipe(Effect.provideService(InRunJournal, journal))
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: quarantineProposal.id })
+
+      const quarantines = (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegrationQuarantined")
+      expect(quarantines).toHaveLength(1)
+      expect(stale.position).toBeLessThan(quarantines[0]?.position ?? stale.position)
+      expect(yield* Ref.get(quarantineObservedAtRelease)).toEqual([true])
+      expect((yield* underlyingTargets.snapshot).heldResponsibilityPositions).toEqual(new Set())
+
+      yield* Ref.set(records, [])
+      yield* Ref.set(quarantineObservedAtRelease, [])
+      yield* underlyingTargets.acquire(started)
+      yield* underlyingTargets.publishAcceptedOwnership(started)
+      const preRequestCompareAndSetCalls = yield* Ref.make(0)
+      const preRequestRuntime = TargetPromotionRuntime.of({
+        git: {
+          compareAndSet: () =>
+            Ref.update(preRequestCompareAndSetCalls, (count) => count + 1).pipe(
+              Effect.andThen(
+                Effect.succeed(
+                  TargetPromotionCompareAndSetResult.cases.RejectedExpectedHead.make({ observedHeadSha: changedHead })
+                )
+              )
+            ),
+          read: () =>
+            Effect.succeed(
+              TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: changedHead })
+            )
+        }
+      })
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: promotionProposal },
+          promotion,
+          lease,
+          target
+        ).pipe(
+          Effect.provideService(CoordinatorOwnership, ownership),
+          Effect.provideService(TargetPromotionRuntime, preRequestRuntime),
+          Effect.provideService(InRunJournal, journal)
+        )
+      ).toMatchObject({ _tag: "ActionCompleted", proposalId: promotionProposal.id })
+      const preRequestRecords = yield* Ref.get(records)
+      expect(yield* Ref.get(preRequestCompareAndSetCalls)).toBe(0)
+      expect(preRequestRecords.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")).toHaveLength(0)
+      expect(preRequestRecords.filter(({ event }) => event._tag === "IntegrationQuarantined")).toHaveLength(0)
+      expect(yield* Ref.get(quarantineObservedAtRelease)).toEqual([false])
+      expect((yield* underlyingTargets.snapshot).heldResponsibilityPositions).toEqual(new Set())
     })
   )
 

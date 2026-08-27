@@ -7,7 +7,7 @@ import {
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
 import { EvidenceStore } from "../../workflow/protocols/evidence-store.js"
-import { TargetPromotionGit } from "../../workflow/protocols/target-promotion/events.js"
+import { targetPromotionCorrelationFor, TargetPromotionGit } from "../../workflow/protocols/target-promotion/events.js"
 import { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
 import {
   coordinatorOwnedTargetPromotionGit,
@@ -53,6 +53,7 @@ import {
 } from "./integrator-delivery-action.js"
 import { recordChangedHeadRetryQuarantine } from "./integration-quarantine-disposition-action.js"
 import { readPostPromotionBlockerCandidateAncestry } from "../../workflow/protocols/integration-finality/post-promotion-blocker-ancestry.js"
+import { pendingPromotionStaleIntegrationQuarantineFor } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -324,6 +325,8 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   if (Option.isNone(runtime)) return yield* new TargetPromotionRuntimeUnavailable()
   const ownership = Context.getOption(context, CoordinatorOwnership)
   if (Option.isNone(ownership)) return yield* new TargetPromotionRuntimeUnavailable()
+  const journal = yield* InRunJournal
+  const correlation = targetPromotionCorrelationFor(transition.candidate)
   yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
@@ -334,7 +337,20 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
         )
       )
     )
-    .pipe(Effect.ensuring(lease.integrationTargets.release(transition.responsibility)))
+    .pipe(
+      Effect.ensuring(
+        journal.read(transition.responsibility.plannedAttempt.runId).pipe(
+          Effect.flatMap((records) =>
+            pendingPromotionStaleIntegrationQuarantineFor(records, correlation) === undefined
+              ? lease.integrationTargets.release(transition.responsibility)
+              : Effect.void
+          ),
+          // If durable state cannot be classified, releasing could cross the
+          // stale-result-before-quarantine boundary. Retain fail-closed.
+          Effect.ignore
+        )
+      )
+    )
   return deliveryActionCompleted(action.proposal.id)
 })
 
