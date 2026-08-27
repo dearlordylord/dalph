@@ -89,6 +89,7 @@ const githubClaimFixtureLayer = Layer.effectContext(
               return { body: { data: { deleteLabel: { clientMutationId: null } } } }
             }),
           ReadIssueDetails: () => Effect.die("unexpected ReadIssueDetails request"),
+          ReadTaskWorkSpecification: () => Effect.die("unexpected ReadTaskWorkSpecification request"),
           ReopenIssue: () => Effect.die("unexpected ReopenIssue request"),
           ResolveRepository: () => Effect.die("unexpected ResolveRepository request"),
           ResolveIssue: () => Effect.die("unexpected ResolveIssue request"),

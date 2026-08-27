@@ -1,5 +1,6 @@
 // @effect-diagnostics multipleEffectProvide:off
-import { Effect, Layer, Option, Ref, Result, Schema } from "effect"
+import { Cause, Effect, Layer, Option, Ref, Result, Schema } from "effect"
+import { it as effectIt } from "@effect/vitest"
 import { expect, it } from "vitest"
 import { RunId, TaskId, TaskRevision, makeTaskWorkSpecification, TaskWorkSpecification } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -34,6 +35,8 @@ import {
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import {
   TestTrackerGraphReader,
+  TrackerAdapterReadContext,
+  TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerReadError,
   TrackerGraphReader,
@@ -1077,6 +1080,69 @@ it("replays a focused read from its canonical journal observation without callin
   expect(result.replayed).toEqual(specification)
   expect(result.events.map(({ _tag }) => _tag)).toEqual(["TaskTrackerReadIntentRecorded", "TaskTrackerFactsObserved"])
 })
+
+effectIt.effect("reuses one acknowledged focused-read intent after a lost provider response", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("journaled-focused-read-lost-response")
+    const target = FixtureTarget.make("target")
+    const taskId = TaskId.make("A")
+    const operation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("journaled-focused-lost-response"),
+      target,
+      taskId
+    )
+    const specification = makeTaskWorkSpecification({ body: "Recovered body", taskId, title: "Recovered title" })
+    const providerReads = yield* Ref.make(0)
+    const provider = Layer.succeed(
+      WorkflowInterpreter,
+      WorkflowInterpreter.of({
+        acquireTaskClaim: () => Effect.die("unused"),
+        readTaskClaim: () => Effect.die("unused"),
+        readTaskWorktree: () => Effect.die("unused"),
+        readTargetLineage: () => Effect.die("unused"),
+        readTrackerGraph: () => Effect.die("unused"),
+        readTaskWorkSpecification: () =>
+          Ref.getAndUpdate(providerReads, (current) => current + 1).pipe(
+            Effect.flatMap((ordinal) =>
+              ordinal === 0
+                ? Effect.fail(
+                    new TrackerAdapterReadError({
+                      context: TrackerAdapterReadContext.cases.Github.make({
+                        operation: "GithubTrackerGraphReader.readTaskWorkSpecification"
+                      }),
+                      detail: "the focused read response was lost",
+                      reason: TrackerAdapterReadFailureReason.cases.Transport.make({})
+                    })
+                  )
+                : Effect.succeed(specification)
+            )
+          ),
+        reconcileTaskWorktree: () => Effect.die("unused"),
+        recordTaskAttemptPlan: () => Effect.die("unused"),
+        releaseTaskClaim: () => Effect.die("unused")
+      })
+    )
+    const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(memoryJournalTestLayer))
+    const result = yield* Effect.gen(function* () {
+      const interpreter = yield* WorkflowInterpreter
+      const journal = yield* JournalStore
+      const first = yield* Effect.exit(interpreter.readTaskWorkSpecification(operation))
+      const recovered = yield* interpreter.readTaskWorkSpecification(operation)
+      return { events: (yield* journal.read(runId)).map(({ event }) => event), first, recovered }
+    }).pipe(Effect.provide(Layer.merge(journaled, memoryJournalTestLayer)))
+
+    expect(result.first._tag).toBe("Failure")
+    if (result.first._tag === "Failure") {
+      expect(Cause.findErrorOption(result.first.cause)).toMatchObject({
+        _tag: "Some",
+        value: { reason: { _tag: "Transport" } }
+      })
+    }
+    expect(result.recovered).toEqual(specification)
+    expect(yield* Ref.get(providerReads)).toBe(2)
+    expect(result.events.map(({ _tag }) => _tag)).toEqual(["TaskTrackerReadIntentRecorded", "TaskTrackerFactsObserved"])
+  })
+)
 
 it("the controlled reader exposes focused specification updates and typed absence", async () => {
   const target = FixtureTarget.make("controlled-target")

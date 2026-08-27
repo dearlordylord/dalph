@@ -1,8 +1,9 @@
 import { Option } from "effect"
-import { type TaskId } from "@dalph/contracts"
+import { type TaskId, type TaskWorkSpecification } from "@dalph/contracts"
 import { TaskLifecycle, type TrackerRevision } from "../src/authorities/task-tracker/task.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent,
   type TaskTrackerFactsObservedEvent
 } from "../src/workflow/task-tracker-facts/observation.js"
@@ -26,3 +27,13 @@ export const taskTrackerGraphFactsObserved = (
   const snapshot = Option.getOrThrow(projection._tag === "Valid" ? Option.some(projection.snapshot) : Option.none())
   return taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
 }
+
+/** Builds exact focused title/body facts for cross-package production fixtures. */
+export const taskTrackerWorkSpecificationFactsObserved = (
+  operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type,
+  specification: TaskWorkSpecification
+): TaskTrackerFactsObservedEvent =>
+  taskTrackerFactsObservedEvent(
+    operation.operationId,
+    makeFocusedTaskWorkSpecificationFactsObserved(operation, specification)
+  )

@@ -7,7 +7,7 @@ import type { Redacted } from "effect"
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
-import type { TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification, type TaskId } from "@dalph/contracts"
 import { makeTrackerGraphObservationOperation } from "../../../workflow/registry/operation.js"
 import { OperationId } from "../../../workflow/identity.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../../../workflow/protocols/task-tracker-read/protocol.js"
@@ -410,7 +410,9 @@ const makeFixture = Effect.fn("GithubQualification.makeFixture")(function* (
 ): Effect.fn.Return<
   GithubFixtureResources & {
     readonly child: GithubFixtureIssueLocator
+    readonly rootBody: string
     readonly root: GithubFixtureIssueLocator
+    readonly rootTitle: string
     readonly taskId: TaskId
     readonly prerequisiteOnlyChild: GithubFixtureIssueLocator
   },
@@ -437,12 +439,9 @@ const makeFixture = Effect.fn("GithubQualification.makeFixture")(function* (
     })
   })
   yield* Ref.set(resourcesRef, empty)
-  const rootIssue = yield* api.createIssue(
-    repositoryNodeId,
-    fixturePrefix(`${suffix}-root`),
-    "Disposable root issue for Dalph #71 qualification.",
-    `issue-71-create-root-${suffix}`
-  )
+  const rootTitle = fixturePrefix(`${suffix}-root`)
+  const rootBody = "Disposable root issue for Dalph #71 qualification."
+  const rootIssue = yield* api.createIssue(repositoryNodeId, rootTitle, rootBody, `issue-71-create-root-${suffix}`)
   let resources = appendIssue(empty, repository, rootIssue)
   yield* Ref.set(resourcesRef, resources)
   const childIssue = yield* api.createIssue(
@@ -510,6 +509,8 @@ const makeFixture = Effect.fn("GithubQualification.makeFixture")(function* (
     child,
     prerequisiteOnlyChild: resources.issues[resources.issues.length - 1] ?? child,
     root,
+    rootBody,
+    rootTitle,
     taskId: githubTaskIdFor(repositoryNodeId, root.nodeId)
   }
 })
@@ -698,7 +699,7 @@ it.effect("retains exact GitHub fixture locators when cleanup cannot finish", ()
 )
 
 it.effect.skipIf(!qualificationEnabled)(
-  "qualifies a complete native GitHub closure, reconfirms unchanged and changed facts, and reconciles competing claims",
+  "qualifies exact GitHub instructions, a complete native closure, changed facts, and competing claims",
   () =>
     serializedQualification(
       Effect.scoped(
@@ -727,6 +728,17 @@ it.effect.skipIf(!qualificationEnabled)(
             return yield* Effect.failCause(fixtureResult.cause)
           }
           const fixture = fixtureResult.value
+          const observedRequests = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest["_tag"]>>([])
+          const underlyingClient = Context.get(yield* Layer.build(githubGraphqlClientNodeLayer), GithubGraphqlClient)
+          const observedClientLayer = Layer.succeed(
+            GithubGraphqlClient,
+            GithubGraphqlClient.of({
+              execute: (request) =>
+                Ref.update(observedRequests, (requests) => [...requests, request._tag]).pipe(
+                  Effect.andThen(underlyingClient.execute(request))
+                )
+            })
+          )
 
           const qualificationResult = yield* Effect.exit(
             Effect.gen(function* () {
@@ -742,6 +754,15 @@ it.effect.skipIf(!qualificationEnabled)(
               expect(first.snapshot.prerequisitesOf(childTaskId)).toHaveLength(configuration.blockerTotal)
               expect(first.snapshot.taskIds()).toHaveLength(configuration.blockerTotal + 2)
               expect(first.snapshot.taskIds()).not.toContain(prerequisiteOnlyChildTaskId)
+              const beforeFocusedRead = (yield* Ref.get(observedRequests)).length
+              const focused = yield* reader.readTaskWorkSpecification(fixture.root.target, rootTaskId)
+              expect(focused).toEqual(
+                makeTaskWorkSpecification({ body: fixture.rootBody, taskId: rootTaskId, title: fixture.rootTitle })
+              )
+              expect((yield* Ref.get(observedRequests)).slice(beforeFocusedRead)).toEqual([
+                "ResolveIssue",
+                "ReadTaskWorkSpecification"
+              ])
               expect(first.event.observation._tag).toBe("CompleteTaskTrackerFacts")
               if (first.event.observation._tag === "CompleteTaskTrackerFacts") {
                 expect(first.event.observation.factFamilies.map(({ completeness }) => completeness)).toEqual([
@@ -838,10 +859,6 @@ it.effect.skipIf(!qualificationEnabled)(
               })
               const createRequestCount = yield* Ref.make(0)
               const lost = yield* Ref.make(false)
-              const underlyingClient = Context.get(
-                yield* Layer.build(githubGraphqlClientNodeLayer),
-                GithubGraphqlClient
-              )
               const ambiguousMutation = Layer.fresh(githubTrackerMutationLayer).pipe(
                 Layer.provide(
                   Layer.succeed(
@@ -881,12 +898,9 @@ it.effect.skipIf(!qualificationEnabled)(
               expect(changed.snapshot.taskIds()).not.toContain(childTaskId)
               expect(changed.snapshot.revision).not.toBe(first.snapshot.revision)
             }).pipe(
-              Effect.provide(githubTrackerGraphReaderLayer.pipe(Layer.provide(githubGraphqlClientNodeLayer))),
+              Effect.provide(githubTrackerGraphReaderLayer.pipe(Layer.provide(observedClientLayer))),
               Effect.provide(
-                githubTrackerMutationLayer.pipe(
-                  Layer.provide(githubGraphqlClientNodeLayer),
-                  Layer.provide(NodeCrypto.layer)
-                )
+                githubTrackerMutationLayer.pipe(Layer.provide(observedClientLayer), Layer.provide(NodeCrypto.layer))
               )
             )
           )

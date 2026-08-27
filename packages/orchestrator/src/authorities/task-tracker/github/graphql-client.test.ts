@@ -17,6 +17,7 @@ import {
   GithubLabelNodeId,
   GithubRepositoryNodeId
 } from "./graphql-client.js"
+import { GithubGraphqlReadThrottled } from "./graphql-read-throttle.js"
 
 const EncodedRequestBody = Schema.Struct({ body: Schema.String })
 const ResolveRequestBody = Schema.Struct({
@@ -78,6 +79,7 @@ it.effect("executes authenticated GitHub GraphQL requests", () =>
           }),
           GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId: GithubIssueNodeId.make("issue") }),
           GithubGraphqlRequest.cases.ReadIssueDetails.make({ issueNodeId: GithubIssueNodeId.make("issue") }),
+          GithubGraphqlRequest.cases.ReadTaskWorkSpecification.make({ issueNodeId: GithubIssueNodeId.make("issue") }),
           GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor: null, issueNodeId: GithubIssueNodeId.make("issue") }),
           GithubGraphqlRequest.cases.ReadBlockedBy.make({
             cursor: GithubCursor.make("cursor"),
@@ -136,7 +138,7 @@ it.effect("executes authenticated GitHub GraphQL requests", () =>
     }).pipe(Effect.provide(clientLayer))
 
     const requests = yield* Ref.get(observed)
-    expect(requests).toHaveLength(16)
+    expect(requests).toHaveLength(17)
     const request = requests[0]
     expect(request).toBeDefined()
     if (request === undefined) return
@@ -153,6 +155,7 @@ it.effect("executes authenticated GitHub GraphQL requests", () =>
         expect.stringContaining("query ResolveRepository"),
         expect.stringContaining("query ReadIssue"),
         expect.stringContaining("query ReadIssueDetails"),
+        expect.stringContaining("query ReadTaskWorkSpecification"),
         expect.stringContaining("query ReadSubIssues"),
         expect.stringContaining("query ReadBlockedBy"),
         expect.stringContaining("mutation CreateIssue"),
@@ -168,6 +171,19 @@ it.effect("executes authenticated GitHub GraphQL requests", () =>
         expect.stringContaining("mutation DeleteClaimLabel")
       ])
     )
+    const focusedRequest = requests.find(({ body }) => body.includes("query ReadTaskWorkSpecification"))
+    expect(focusedRequest?.body).toContain("repository { id }")
+    for (const forbiddenField of [
+      "updatedAt",
+      "comments",
+      "state",
+      "stateReason",
+      "labels",
+      "subIssues",
+      "blockedBy"
+    ]) {
+      expect(focusedRequest?.body).not.toContain(forbiddenField)
+    }
     const connectionRequests = requests.filter(
       ({ body }) => body.includes("query ReadSubIssues") || body.includes("query ReadBlockedBy")
     )
@@ -181,7 +197,8 @@ it.effect("executes authenticated GitHub GraphQL requests", () =>
   })
 )
 
-const executeResolve = (
+const executeRequest = (
+  request: GithubGraphqlRequest,
   response: Response,
   layerFactory: typeof githubGraphqlClientLayer = githubGraphqlClientLayer
 ) => {
@@ -191,21 +208,90 @@ const executeResolve = (
   )
   return Effect.gen(function* () {
     const client = yield* GithubGraphqlClient
-    return yield* client.execute(GithubGraphqlRequest.cases.ResolveIssue.make({ target }))
+    return yield* client.execute(request)
   }).pipe(Effect.provide(layer))
 }
+
+const executeResolve = (response: Response, layerFactory: typeof githubGraphqlClientLayer = githubGraphqlClientLayer) =>
+  executeRequest(GithubGraphqlRequest.cases.ResolveIssue.make({ target }), response, layerFactory)
 
 it.effect("classifies HTTP and JSON failures", () =>
   Effect.gen(function* () {
     const failures = yield* Effect.forEach(
-      [new Response("server error", { status: 500 }), new Response("not-json", { status: 200 })],
+      [
+        new Response("server error", { status: 500 }),
+        new Response("not-json", { status: 200 }),
+        new Response("not-json", { status: 403 }),
+        new Response(JSON.stringify({ message: "Forbidden" }), { status: 403 })
+      ],
       (response) => executeResolve(response).pipe(Effect.flip, Effect.orDie)
     )
 
-    expect(failures).toHaveLength(2)
+    expect(failures).toHaveLength(4)
     for (const failure of failures) {
       expect(failure._tag).toBe("GithubGraphqlClient.RequestError")
       expect(failure.operation).toBe("ResolveIssue")
+    }
+  })
+)
+
+it.effect("classifies primary and secondary GitHub read throttling before generic HTTP failures", () =>
+  Effect.gen(function* () {
+    const failures = yield* Effect.forEach(
+      [
+        new Response("", { headers: { "retry-after": "7" }, status: 429 }),
+        new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), { status: 403 }),
+        new Response("", { headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1900000000" }, status: 403 }),
+        new Response(JSON.stringify({ message: "API rate limit exceeded" }), { status: 403 })
+      ],
+      (response) => executeResolve(response).pipe(Effect.flip, Effect.orDie)
+    )
+
+    expect(failures[0]).toBeInstanceOf(GithubGraphqlReadThrottled)
+    expect(failures[0]).toMatchObject({
+      detail: "GitHub request throttled",
+      operation: "ResolveIssue",
+      retry: { _tag: "RetryAfterSeconds", seconds: 7 }
+    })
+    expect(failures[1]).toBeInstanceOf(GithubGraphqlReadThrottled)
+    expect(failures[1]).toMatchObject({
+      detail: "GitHub request throttled",
+      operation: "ResolveIssue",
+      retry: { _tag: "Unavailable" }
+    })
+    expect(failures[2]).toMatchObject({
+      detail: "GitHub request throttled",
+      operation: "ResolveIssue",
+      retry: { _tag: "RateLimitResetEpochSeconds", epochSeconds: 1_900_000_000 }
+    })
+    expect(failures[3]).toMatchObject({
+      detail: "GitHub request throttled",
+      operation: "ResolveIssue",
+      retry: { _tag: "Unavailable" }
+    })
+    expect(JSON.stringify(failures)).not.toContain("secondary rate limit")
+  })
+)
+
+it.effect("leaves throttled mutation responses outside the read-only classifier", () =>
+  Effect.gen(function* () {
+    const request = GithubGraphqlRequest.cases.CreateIssue.make({
+      body: "body",
+      operationId: OperationId.make("throttled-mutation"),
+      repositoryNodeId: GithubRepositoryNodeId.make("repository-node"),
+      title: "title"
+    })
+    const failures = yield* Effect.forEach(
+      [
+        new Response("", { headers: { "retry-after": "7" }, status: 429 }),
+        new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), { status: 403 })
+      ],
+      (response) => executeRequest(request, response).pipe(Effect.flip, Effect.orDie)
+    )
+
+    for (const failure of failures) {
+      expect(failure).not.toBeInstanceOf(GithubGraphqlReadThrottled)
+      expect(failure).toMatchObject({ _tag: "GithubGraphqlClient.RequestError", operation: "CreateIssue" })
     }
   })
 )
