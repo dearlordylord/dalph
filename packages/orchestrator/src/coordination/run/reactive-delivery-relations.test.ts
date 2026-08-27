@@ -612,6 +612,7 @@ it.effect("preserves executor continuation ordinals and the durable limit across
 
       const providerCalls = yield* Ref.make<ReadonlyArray<OperationId>>([])
       const providerCoverage = yield* Ref.make<ReadonlyArray<ReadonlyArray<TaskId>>>([])
+      const providerSawJournalIntent = yield* Ref.make<ReadonlyArray<OperationId>>([])
       const executorCalls = yield* Ref.make<ReadonlyArray<number>>([])
       const continuationAcceptedOrdinals = yield* Ref.make<ReadonlyArray<number>>([])
       const forbiddenExecutorActions = yield* Ref.make<ReadonlyArray<string>>([])
@@ -628,46 +629,31 @@ it.effect("preserves executor continuation ordinals and the durable limit across
             })
           })
       })
+      const provider = (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+        Effect.gen(function* () {
+          const records = yield* journal.read(runId)
+          if (
+            records.some(
+              ({ event }) =>
+                event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === operation.operationId
+            )
+          ) {
+            yield* Ref.update(providerSawJournalIntent, (calls) => [...calls, operation.operationId])
+          }
+          const calls = yield* Ref.updateAndGet(providerCalls, (current) => [...current, operation.operationId])
+          if (calls.length > 2) return yield* Effect.die("ordinal acceptance attempted a third graph read")
+          yield* Ref.update(providerCoverage, (coverage) => [
+            ...coverage,
+            [...operation.readShape.explicitlyCoveredTaskIds]
+          ])
+          return yield* graphSnapshotFor("reactive-progress-limit-G0")
+        })
+      const productionExecutor = yield* makeTrackerGraphActionExecutor(journal, publication, provider)
       const actionExecutor = DeliveryActionExecutor.of({
         execute: (action, lease) => {
           const route = action.proposal.route
-          if (route._tag === "TrackerGraphReadRoute") {
-            if (action._tag !== "FreshOperationAction") {
-              return Effect.die("ordinal acceptance expected a fresh graph read")
-            }
-            if (route.purpose !== "CheckExecutorProgress") {
-              return Effect.die("ordinal acceptance expected an executor-progress graph read")
-            }
-            const explicitlyCoveredTaskIds = route.pendingReports.map(({ taskId }) => taskId)
-            const operation = makeTrackerGraphObservationOperation(
-              action.operationId,
-              target,
-              [],
-              explicitlyCoveredTaskIds
-            )
-            return Effect.gen(function* () {
-              const calls = yield* Ref.updateAndGet(providerCalls, (current) => [...current, action.operationId])
-              if (calls.length > 2) return yield* Effect.die("ordinal acceptance attempted a third graph read")
-              yield* Ref.update(providerCoverage, (coverage) => [...coverage, explicitlyCoveredTaskIds])
-              yield* lease.recordIntent(action.operationId)
-              yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-              yield* journal.append(
-                runId,
-                outcomeRecordKey(operation.operationId),
-                makeTaskTrackerFactsObservedFromRead(
-                  yield* journal.read(runId),
-                  operation,
-                  yield* graphSnapshotFor("reactive-progress-limit-G0")
-                )
-              )
-              yield* publication.awaitCurrent
-              return {
-                _tag: "TrackerGraphObservationPublished" as const,
-                operationId: action.operationId,
-                proposalId: action.proposal.id,
-                snapshot: yield* graphSnapshotFor("reactive-progress-limit-G0")
-              } satisfies DeliveryActionResult
-            })
+          if (action._tag === "FreshOperationAction" && route._tag === "TrackerGraphReadRoute") {
+            return productionExecutor.execute(action, lease)
           }
           if (
             action._tag === "IdentityFreeAction" &&
@@ -750,6 +736,7 @@ it.effect("preserves executor continuation ordinals and the durable limit across
       expect(limitFailure).toMatchObject({ _tag: "PlannedAttemptExecutorContinuationLimitReached", limit: 3 })
       expect(yield* Ref.get(providerCalls)).toHaveLength(2)
       expect(yield* Ref.get(providerCoverage)).toEqual([[taskIds[0]], [taskIds[0]]])
+      expect(yield* Ref.get(providerSawJournalIntent)).toEqual(yield* Ref.get(providerCalls))
       expect(yield* Ref.get(executorCalls)).toEqual([1, 2])
       expect(yield* Ref.get(continuationAcceptedOrdinals)).toEqual([1, 2])
       expect(yield* Ref.get(forbiddenExecutorActions)).toEqual([])
