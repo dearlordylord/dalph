@@ -566,13 +566,17 @@ const claimLabelNameFor = Effect.fn("GithubQualification.claimLabelNameFor")(fun
 const qualificationGate = Effect.runSync(Semaphore.make(1))
 const serializedQualification = <A, E, R>(effect: Effect.Effect<A, E, R>) => qualificationGate.withPermit(effect)
 
+type GithubGraphqlRequestTag = GithubGraphqlRequest["_tag"]
+
 const responseLossGithubGraphqlClient = (
   underlying: GithubGraphqlClient["Service"],
   createRequestCount: Ref.Ref<number>,
-  lost: Ref.Ref<boolean>
+  lost: Ref.Ref<boolean>,
+  requestLog: Ref.Ref<ReadonlyArray<GithubGraphqlRequestTag>>
 ): GithubGraphqlClient["Service"] =>
   GithubGraphqlClient.of({
     execute: Effect.fn("GithubQualification.ResponseLoss.execute")(function* (request: GithubGraphqlRequest) {
+      yield* Ref.update(requestLog, (requests) => [...requests, request._tag])
       const response = yield* underlying.execute(request)
       if (request._tag !== "CreateClaimLabel") return response
       yield* Ref.update(createRequestCount, (count) => count + 1)
@@ -644,10 +648,11 @@ it.effect("loses exactly the first native claim-create response after GitHub app
   Effect.gen(function* () {
     const createRequestCount = yield* Ref.make(0)
     const lost = yield* Ref.make(false)
+    const requestLog = yield* Ref.make<ReadonlyArray<GithubGraphqlRequestTag>>([])
     const underlying = GithubGraphqlClient.of({
       execute: () => Effect.succeed(GithubGraphqlResponse.make({ body: {} }))
     })
-    const client = responseLossGithubGraphqlClient(underlying, createRequestCount, lost)
+    const client = responseLossGithubGraphqlClient(underlying, createRequestCount, lost, requestLog)
     const request = GithubGraphqlRequest.cases.CreateClaimLabel.make({
       description: "fixture-description",
       labelName: GithubLabelName.make("fixture-label"),
@@ -838,6 +843,7 @@ it.effect.skipIf(!qualificationEnabled)(
               })
               const createRequestCount = yield* Ref.make(0)
               const lost = yield* Ref.make(false)
+              const requestLog = yield* Ref.make<ReadonlyArray<GithubGraphqlRequestTag>>([])
               const underlyingClient = Context.get(
                 yield* Layer.build(githubGraphqlClientNodeLayer),
                 GithubGraphqlClient
@@ -846,13 +852,14 @@ it.effect.skipIf(!qualificationEnabled)(
                 Layer.provide(
                   Layer.succeed(
                     GithubGraphqlClient,
-                    responseLossGithubGraphqlClient(underlyingClient, createRequestCount, lost)
+                    responseLossGithubGraphqlClient(underlyingClient, createRequestCount, lost, requestLog)
                   )
                 ),
                 Layer.provide(NodeCrypto.layer)
               )
               const ambiguousTracker = Context.get(yield* Layer.build(ambiguousMutation), TrackerMutation)
               const ambiguous = yield* runTaskClaimAcquisitionProtocol(ambiguousTracker, ambiguousAcquisition)
+              expect(yield* Ref.get(requestLog)).toEqual(["FindClaimLabel", "CreateClaimLabel", "FindClaimLabel"])
               expect(yield* ambiguousTracker.readTaskClaim(childTaskId)).toEqual(ambiguous)
               yield* ambiguousTracker.releaseTaskClaim({
                 claim: ambiguous,
