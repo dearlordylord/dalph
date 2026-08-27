@@ -1,9 +1,16 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
 import { Deferred, Effect, Option, Ref, Schema, Stream, SubscriptionRef } from "effect"
 import type { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
-import { IntegratorSessionCorrelation, type IntegratorCandidateText } from "@dalph/orchestrator"
+import {
+  IntegratorSessionCorrelation,
+  taskTrackerTargetKey,
+  type IntegratorCandidateText,
+  type TrackerTarget
+} from "@dalph/orchestrator"
 import {
   type AuthoredCassetteDecision as CassetteDecision,
+  type AuthoredConcurrentReadBatchMember,
+  type AuthoredConcurrentReadBatchResult,
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
   AuthoredTrackerGraphReadResult
@@ -48,7 +55,13 @@ export class AuthoredCoordinatorProcessDies extends Schema.TaggedError<AuthoredC
   { storyPosition: Schema.Int }
 ) {}
 
-type CursorFailure = AuthoredCassetteInteractionMismatch
+/** A typed cassette failure for a malformed or incompletely drained concurrent read phase. */
+export class AuthoredConcurrentReadBatchFailure extends Schema.TaggedError<AuthoredConcurrentReadBatchFailure>()(
+  "AuthoredConcurrentReadBatchFailure",
+  { detail: Schema.String, storyPosition: Schema.Int }
+) {}
+
+type CursorFailure = AuthoredCassetteInteractionMismatch | AuthoredConcurrentReadBatchFailure
 type OuterIntegratorGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationFailed.Type
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type
@@ -415,12 +428,27 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type,
     CursorFailure
   >
+  /** The exact task identity closes a specification result staged by a read batch. */
+  readonly consumeTaskWorkSpecificationFor: (
+    taskId: TaskId
+  ) => Effect.Effect<typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type, CursorFailure>
   readonly consumeTaskClaimRead: Effect.Effect<
     Option.Option<
       | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.Type
       | typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type
       | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
     >
+  >
+  /** The exact task identity closes a claim result staged by a read batch. */
+  readonly consumeTaskClaimReadFor: (
+    taskId: TaskId
+  ) => Effect.Effect<
+    Option.Option<
+      | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.Type
+      | typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type
+      | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
+    >,
+    CursorFailure
   >
   readonly consumeTaskClaimAcquisitionConflictReturned: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type>
@@ -437,6 +465,10 @@ export interface StoryCursor {
     CursorFailure
   >
   readonly consumeTrackerGraph: Effect.Effect<AuthoredTrackerGraphReadResult, CursorFailure>
+  /** The exact tracker target closes an ordinary graph result staged by a read batch. */
+  readonly consumeTrackerGraphFor: (
+    target: TrackerTarget
+  ) => Effect.Effect<AuthoredTrackerGraphReadResult, CursorFailure>
   readonly pauseAtCoordinatorProcessDeath: Effect.Effect<void>
   /** Test-driver view of the next authored boundary; observing it never advances the story. */
   readonly storyItems: Stream.Stream<StoryItem | undefined>
@@ -457,6 +489,17 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   options: StoryCursorOptions = {}
 ): Effect.fn.Return<StoryCursor> {
   const position = yield* SubscriptionRef.make(0)
+  const occurrencePosition = yield* Ref.make(0)
+  type ConcurrentReadBatchMemberState = {
+    readonly member: AuthoredConcurrentReadBatchMember
+    readonly selectionConsumed: boolean
+    readonly resultConsumed: boolean
+  }
+  type ConcurrentReadBatchState = {
+    readonly index: number
+    readonly members: ReadonlyArray<ConcurrentReadBatchMemberState>
+  }
+  const concurrentReadBatchState = yield* Ref.make<ConcurrentReadBatchState | undefined>(undefined)
   const controlDirectionBeforeAdmission = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
     Option.none()
   )
@@ -516,6 +559,157 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   )
 
+  const concurrentReadBatchFailure = (detail: string, storyIndex: number) =>
+    new AuthoredConcurrentReadBatchFailure({ detail, storyPosition: storyIndex })
+
+  const concurrentReadOperationKey = (operation: CassetteDecision): string => JSON.stringify(operation)
+
+  const currentConcurrentReadBatch = Effect.fn("AuthoredCassette.currentConcurrentReadBatch")(function* () {
+    const index = yield* SubscriptionRef.get(position)
+    const item = story[index]
+    if (item?._tag !== "ConcurrentReadBatch") return undefined
+    const current = yield* Ref.get(concurrentReadBatchState)
+    if (current?.index === index) return current
+    const operationKeys = item.members.map(({ operation }) => concurrentReadOperationKey(operation))
+    if (new Set(operationKeys).size !== operationKeys.length) {
+      return yield* concurrentReadBatchFailure(
+        "a concurrent read batch cannot request one exact operation more than once",
+        index
+      )
+    }
+    const next: ConcurrentReadBatchState = {
+      index,
+      members: item.members.map((member) => ({
+        member,
+        resultConsumed: member.result._tag === "NoProviderResult",
+        selectionConsumed: false
+      }))
+    }
+    yield* Ref.set(concurrentReadBatchState, next)
+    return next
+  })
+
+  const reportOccurrence = (item: StoryItem) =>
+    Effect.gen(function* () {
+      const storyPosition = yield* Ref.modify(occurrencePosition, (current) => [current + 1, current + 1] as const)
+      yield* options.onOccurrence?.({ item, storyPosition }) ?? Effect.void
+    })
+
+  const advanceDrainedConcurrentReadBatch = (state: ConcurrentReadBatchState) =>
+    Effect.gen(function* () {
+      if (state.members.some(({ resultConsumed, selectionConsumed }) => !selectionConsumed || !resultConsumed)) return
+      yield* Ref.set(concurrentReadBatchState, undefined)
+      yield* SubscriptionRef.set(position, state.index + 1)
+      yield* announceTerminalAssertions
+    })
+
+  const storyItemFromConcurrentReadBatchResult = (
+    result: Exclude<AuthoredConcurrentReadBatchResult, { readonly _tag: "NoProviderResult" }>
+  ): StoryItem => {
+    switch (result._tag) {
+      case "TaskClaimReadFailed":
+        return AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.make({ reason: result.reason, taskId: result.taskId })
+      case "TaskClaimCurrentReadReturned":
+        return AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.make({ taskId: result.taskId })
+      case "TaskClaimReadReturned":
+        return AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.make({ observation: result.observation })
+      case "TaskWorkSpecificationReadReturned":
+        return AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.make({
+          body: result.body,
+          taskId: result.taskId,
+          title: result.title
+        })
+      case "TrackerGraphReadFailed":
+        return AuthoredCassetteStoryItem.cases.TrackerGraphReadFailed.make({ reason: result.reason })
+      case "TrackerGraphReadReturned":
+        return AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned.make({ graph: result.graph })
+    }
+  }
+
+  const consumeConcurrentReadSelection = Effect.fn("AuthoredCassette.consumeConcurrentReadSelection")(function* (
+    operation: CassetteDecision
+  ) {
+    const state = yield* currentConcurrentReadBatch()
+    /* v8 ignore next -- @preserve The caller only enters this helper while the current item is a concurrent read batch. */
+    if (state === undefined) {
+      return yield* concurrentReadBatchFailure(
+        `cannot select ${concurrentReadOperationKey(operation)} outside a current concurrent read batch`,
+        yield* SubscriptionRef.get(position)
+      )
+    }
+    const memberIndex = state.members.findIndex(
+      ({ member }) => concurrentReadOperationKey(member.operation) === concurrentReadOperationKey(operation)
+    )
+    if (memberIndex < 0) {
+      return yield* concurrentReadBatchFailure(
+        `unlisted concurrent read operation ${concurrentReadOperationKey(operation)}`,
+        state.index
+      )
+    }
+    const memberState = state.members[memberIndex]
+    /* v8 ignore next -- @preserve The index came from the same non-empty member list. */
+    if (memberState === undefined) {
+      return yield* concurrentReadBatchFailure("concurrent read batch member disappeared", state.index)
+    }
+    if (memberState.selectionConsumed) {
+      return yield* concurrentReadBatchFailure(
+        `duplicate concurrent read operation ${concurrentReadOperationKey(operation)}`,
+        state.index
+      )
+    }
+    const selection = AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: memberState.member.operation })
+    const nextState: ConcurrentReadBatchState = {
+      ...state,
+      members: state.members.map((candidate, index) =>
+        index === memberIndex ? { ...candidate, selectionConsumed: true } : candidate
+      )
+    }
+    yield* Ref.set(concurrentReadBatchState, nextState)
+    yield* reportOccurrence(selection)
+    yield* advanceDrainedConcurrentReadBatch(nextState)
+    return selection
+  })
+
+  const consumeConcurrentReadResult = Effect.fn("AuthoredCassette.consumeConcurrentReadResult")(function* (
+    description: string,
+    matches: (member: AuthoredConcurrentReadBatchMember) => boolean
+  ) {
+    const state = yield* currentConcurrentReadBatch()
+    if (state === undefined) return Option.none<StoryItem>()
+    const memberIndex = state.members.findIndex(
+      ({ member, resultConsumed, selectionConsumed }) =>
+        selectionConsumed && !resultConsumed && matches(member)
+    )
+    if (memberIndex < 0) {
+      return yield* concurrentReadBatchFailure(
+        `missing or duplicate ${description} result in concurrent read batch`,
+        state.index
+      )
+    }
+    const memberState = state.members[memberIndex]
+    /* v8 ignore next -- @preserve The index came from the same non-empty member list. */
+    if (memberState === undefined) {
+      return yield* concurrentReadBatchFailure("concurrent read batch member disappeared", state.index)
+    }
+    if (memberState.member.result._tag === "NoProviderResult") {
+      return yield* concurrentReadBatchFailure(
+        `${description} unexpectedly has no provider result in concurrent read batch`,
+        state.index
+      )
+    }
+    const result = storyItemFromConcurrentReadBatchResult(memberState.member.result)
+    const nextState: ConcurrentReadBatchState = {
+      ...state,
+      members: state.members.map((candidate, index) =>
+        index === memberIndex ? { ...candidate, resultConsumed: true } : candidate
+      )
+    }
+    yield* Ref.set(concurrentReadBatchState, nextState)
+    yield* reportOccurrence(result)
+    yield* advanceDrainedConcurrentReadBatch(nextState)
+    return Option.some(result)
+  })
+
   const awaitBarrierAdvance = <A extends StoryItem>(claimed: ClaimedStoryItem<A>): Effect.Effect<boolean> => {
     if (claimed._tag === "Claimed" || claimed.item === undefined || !cursorDriverBarrierTags.has(claimed.item._tag)) {
       return Effect.succeed(false)
@@ -545,7 +739,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           : [{ _tag: "Mismatch" as const, index, item }, index]
       })
       if (claimed._tag === "Claimed") {
-        yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
+        yield* reportOccurrence(claimed.item)
       }
       yield* announceTerminalAssertions
       const advanced = bypassControlBoundary ? false : yield* awaitBarrierAdvance(claimed)
@@ -556,6 +750,12 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     Effect.gen(function* () {
       const claimed = yield* claimNext((item): item is StoryItem => item?._tag === tag)
       if (claimed._tag === "Mismatch") {
+        if (claimed.item?._tag === "ConcurrentReadBatch") {
+          return yield* concurrentReadBatchFailure(
+            `ordered ${tag} interaction crossed an incompletely drained concurrent read batch`,
+            claimed.index
+          )
+        }
         return yield* new AuthoredCassetteInteractionMismatch({
           actual: tag,
           /* v8 ignore next -- The terminal assertion item keeps a decoded story non-empty until execution ends. */
@@ -671,6 +871,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeDalphSelectionForLoop: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
     "AuthoredCassette.consumeDalphSelectionForLoop"
   )(function* (operation) {
+    if ((yield* currentConcurrentReadBatch()) !== undefined) {
+      return yield* consumeConcurrentReadSelection(operation)
+    }
     const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation))
     if (claimed._tag === "Claimed") return claimed.item
     if (yield* awaitSelectionRecovery(claimed, operation)) return yield* consumeDalphSelectionForLoop(operation)
@@ -1476,6 +1679,28 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       )
     )
   )
+  const consumeTaskWorkSpecificationFor: StoryCursor["consumeTaskWorkSpecificationFor"] = Effect.fn(
+    "AuthoredCassette.consumeTaskWorkSpecificationFor"
+  )(function* (taskId) {
+    const batched = yield* consumeConcurrentReadResult(
+      `task-work specification ${taskId}`,
+      (member) => member.operation._tag === "ReadTaskWorkSpecification" && member.operation.taskId === taskId
+    )
+    if (Option.isSome(batched)) {
+      const decoded = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned)(
+        batched.value
+      ).pipe(Effect.orDie)
+      if (decoded.taskId !== taskId) {
+        return yield* new AuthoredCassetteInteractionMismatch({
+          actual: taskId,
+          expected: decoded.taskId,
+          storyPosition: (yield* SubscriptionRef.get(position)) - 1
+        })
+      }
+      return decoded
+    }
+    return yield* consumeTaskWorkSpecification
+  })
   const awaitOwnedSelectionBeforeTaskClaimRead = Effect.fn("AuthoredCassette.awaitOwnedSelectionBeforeTaskClaimRead")(
     function* (item: StoryItem | undefined, index: number) {
       if (item?._tag !== "DalphSelects" || item.operation._tag !== "ReadTaskClaim") return false
@@ -1505,6 +1730,26 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
   })
   const consumeTaskClaimRead = consumeTaskClaimReadLoop()
+  const consumeTaskClaimReadFor: StoryCursor["consumeTaskClaimReadFor"] = Effect.fn(
+    "AuthoredCassette.consumeTaskClaimReadFor"
+  )(function* (taskId) {
+    const batched = yield* consumeConcurrentReadResult(
+      `task claim ${taskId}`,
+      (member) => member.operation._tag === "ReadTaskClaim" && member.operation.taskId === taskId
+    )
+    if (Option.isSome(batched)) {
+      return Option.some(
+        yield* Schema.decodeUnknownEffect(
+          Schema.Union([
+            AuthoredCassetteStoryItem.cases.TaskClaimReadFailed,
+            AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned,
+            AuthoredCassetteStoryItem.cases.TaskClaimReadReturned
+          ])
+        )(batched.value).pipe(Effect.orDie)
+      )
+    }
+    return yield* consumeTaskClaimReadLoop()
+  })
   const consumeTaskClaimAcquisitionConflictReturned = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type =>
@@ -1622,6 +1867,20 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(claimed.item).pipe(Effect.orDie)
   })
   const consumeTrackerGraph = consumeTrackerGraphLoop()
+  const consumeTrackerGraphFor: StoryCursor["consumeTrackerGraphFor"] = Effect.fn(
+    "AuthoredCassette.consumeTrackerGraphFor"
+  )(function* (target) {
+    const batched = yield* consumeConcurrentReadResult(
+      `tracker graph ${taskTrackerTargetKey(target)}`,
+      (member) =>
+        member.operation._tag === "ReadTrackerGraph" &&
+        taskTrackerTargetKey(member.operation.target) === taskTrackerTargetKey(target)
+    )
+    if (Option.isSome(batched)) {
+      return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(batched.value).pipe(Effect.orDie)
+    }
+    return yield* consumeTrackerGraphLoop()
+  })
   return {
     completeControlDirectionBeforeDeliveryActionAdmission: Effect.gen(function* () {
       const gate = yield* SubscriptionRef.get(controlDirectionBeforeAdmission)
@@ -1702,8 +1961,11 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeTaskClaimAcquisitionRejected,
     consumeTaskClaimReleaseResponseLost,
     consumeTaskWorkSpecification,
+    consumeTaskWorkSpecificationFor,
+    consumeTaskClaimReadFor,
     consumeTerminalAssertions,
     consumeTrackerGraph,
+    consumeTrackerGraphFor,
     pauseAtCoordinatorProcessDeath,
     storyItems: SubscriptionRef.changes(position).pipe(Stream.map((index) => story[index]))
   }

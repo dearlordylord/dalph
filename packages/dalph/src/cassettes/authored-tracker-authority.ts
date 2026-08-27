@@ -127,7 +127,17 @@ export const controlledTrackerAuthorityLayer = (
           )
         )
       const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId) =>
-        cursor.consumeTaskClaimRead.pipe(
+        cursor.consumeTaskClaimReadFor(taskId).pipe(
+          Effect.mapError(
+            (failure) =>
+              new TaskClaimReadFailure({
+                detail:
+                  failure._tag === "AuthoredConcurrentReadBatchFailure"
+                    ? failure.detail
+                    : `${failure._tag} at authored story position ${failure.storyPosition}`,
+                taskId
+              })
+          ),
           Effect.flatMap(
             Option.match({
               onNone: () => currentObservation(taskId),

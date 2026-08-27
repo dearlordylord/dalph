@@ -50,8 +50,8 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
   Layer.succeed(
     TrackerGraphReader,
     TrackerGraphReader.of({
-      read: Effect.fn("AuthoredCassette.TrackerGraphReader.read")(function* () {
-        const item = yield* cursor.consumeTrackerGraph.pipe(
+      read: Effect.fn("AuthoredCassette.TrackerGraphReader.read")(function* (target) {
+        const item = yield* cursor.consumeTrackerGraphFor(target).pipe(
           Effect.mapError((failure) =>
             trackerReadFailure(
               `${failure._tag} at story position ${failure.storyPosition}`,
@@ -72,7 +72,7 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
       }),
       readTaskWorkSpecification: Effect.fn("AuthoredCassette.TrackerGraphReader.readTaskWorkSpecification")(
         function* (_target, taskId) {
-          const item = yield* cursor.consumeTaskWorkSpecification.pipe(
+          const item = yield* cursor.consumeTaskWorkSpecificationFor(taskId).pipe(
             Effect.mapError((failure) =>
               trackerReadFailure(
                 `${failure._tag} at story position ${failure.storyPosition}`,
@@ -237,7 +237,9 @@ export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOpt
               new TraceOutputError({
                 detail:
                   `${failure._tag} at story position ${failure.storyPosition}: ` +
-                  `expected ${failure.expected}, received ${failure.actual} while emitting ${encodedDecision(actual)}`
+                  (failure._tag === "AuthoredConcurrentReadBatchFailure"
+                    ? failure.detail
+                    : `expected ${failure.expected}, received ${failure.actual} while emitting ${encodedDecision(actual)}`)
               })
           )
         )
@@ -313,16 +315,18 @@ export const controlledExecutorLayer = (
       const item = yield* cursor
         .consumeExecutorReportFor(request, plannedAttempt.attemptId)
         .pipe(
-          Effect.mapError(
-            (failure) =>
-              new PlannedAttemptExecutorCommandFailure({
+            Effect.mapError(
+              (failure) =>
+                new PlannedAttemptExecutorCommandFailure({
                 command: request,
                 correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
-                detail:
-                  `${failure._tag} at story position ${failure.storyPosition}: ` +
-                  `expected ${failure.expected}, received ${failure.actual} while handling ${request} for ` +
-                  `${plannedAttempt.taskId}/${plannedAttempt.attemptId}`
-              })
+                  detail:
+                    `${failure._tag} at story position ${failure.storyPosition}: ` +
+                    (failure._tag === "AuthoredConcurrentReadBatchFailure"
+                      ? failure.detail
+                      : `expected ${failure.expected}, received ${failure.actual} while handling ${request} for ` +
+                        `${plannedAttempt.taskId}/${plannedAttempt.attemptId}`)
+                })
           )
         )
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)

@@ -3,6 +3,13 @@ export {
   authoredCassetteStoryItemOwners,
   AuthoredCassetteDecision,
   AuthoredCassetteStoryItem,
+  AuthoredConcurrentReadBatch,
+  AuthoredConcurrentReadBatchResult,
+  type AuthoredConcurrentReadBatchMember,
+  AuthoredDeliveryStoryBeat,
+  AuthoredDeliveryStoryAttempt,
+  AuthoredDeliveryStoryCheckpoint,
+  AuthoredStoryPosition,
   AuthoredCassetteStoryItemOwnerContradiction,
   AuthoredExpectedBehavior,
   AuthoredObservedBehavior,
@@ -16,7 +23,11 @@ export {
   AuthoredTaskWorkSpecification,
   AuthoredTrackerGraph
 } from "./authored-domain.js"
-export { AuthoredCassetteInteractionMismatch, AuthoredIntegratorGitObservationFailure } from "./authored-cursor.js"
+export {
+  AuthoredCassetteInteractionMismatch,
+  AuthoredConcurrentReadBatchFailure,
+  AuthoredIntegratorGitObservationFailure
+} from "./authored-cursor.js"
 export { AuthoredCassetteBehaviorMismatch } from "./authored-outcomes.js"
 export { renderAuthoredCassetteLyrics } from "./authored-presentation.js"
 export {

@@ -5,6 +5,7 @@ import {
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
+  RunId,
   TaskExecutorLocator,
   TaskId,
   makeTaskWorkSpecification,
@@ -67,6 +68,40 @@ export const AuthoredRunActivationOrdinal = Schema.Int.check(Schema.isGreaterTha
 )
 export type AuthoredRunActivationOrdinal = typeof AuthoredRunActivationOrdinal.Type
 
+/** Exact maintained delivery-story beat number; no checkpoint may be implicit or duplicated. */
+export const AuthoredDeliveryStoryBeat = Schema.Literals(
+  // The delivery contract intentionally enumerates every maintained checkpoint.
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] // eslint-disable-line no-magic-numbers
+)
+export type AuthoredDeliveryStoryBeat = typeof AuthoredDeliveryStoryBeat.Type
+
+/** Zero-based authored story position retained on every public capstone checkpoint. */
+export const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+  Schema.brand("AuthoredStoryPosition")
+)
+export type AuthoredStoryPosition = typeof AuthoredStoryPosition.Type
+
+/** One exact planned attempt correlation projected into the delivery-story state table. */
+export const AuthoredDeliveryStoryAttempt = Schema.Struct({
+  attemptId: AttemptId,
+  runId: RunId,
+  taskId: TaskId
+})
+export type AuthoredDeliveryStoryAttempt = typeof AuthoredDeliveryStoryAttempt.Type
+
+/** One chronological DS01–DS13 delivery state row from typed runtime obligations. */
+export const AuthoredDeliveryStoryCheckpoint = Schema.Struct({
+  activationOrdinal: AuthoredRunActivationOrdinal,
+  awaitingAlice: Schema.Array(AuthoredDeliveryStoryAttempt),
+  beat: AuthoredDeliveryStoryBeat,
+  capacity: TaskWorkCapacity,
+  graphRevision: TrackerRevision,
+  held: Schema.Array(AuthoredDeliveryStoryAttempt),
+  retained: Schema.Array(AuthoredDeliveryStoryAttempt),
+  storyPosition: AuthoredStoryPosition
+})
+export type AuthoredDeliveryStoryCheckpoint = typeof AuthoredDeliveryStoryCheckpoint.Type
+
 export const AuthoredTaskWorkSpecification = Schema.Struct({
   body: Schema.String,
   taskId: TaskId,
@@ -86,6 +121,80 @@ export const AuthoredCassetteDecision = Schema.TaggedUnion({
   RecordTaskAttemptPlan: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
+
+/**
+ * A cassette-only concurrent read phase. These reads are independent provider
+ * observations that may arrive in either order, while the surrounding story
+ * remains chronological. Each member owns its exact selection and, where the
+ * provider returns an authored fact, its exact correlated result.
+ */
+export const AuthoredConcurrentReadBatchResult = Schema.TaggedUnion({
+  NoProviderResult: {},
+  TaskClaimReadFailed: { reason: Schema.Literal("Unreadable"), taskId: TaskId },
+  TaskClaimCurrentReadReturned: { taskId: TaskId },
+  TaskClaimReadReturned: { observation: TaskClaimObservation },
+  TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
+  TrackerGraphReadFailed: { reason: Schema.Literal("IncompleteSnapshot") },
+  TrackerGraphReadReturned: { graph: AuthoredTrackerGraph }
+})
+export type AuthoredConcurrentReadBatchResult = typeof AuthoredConcurrentReadBatchResult.Type
+
+const AuthoredConcurrentReadBatchMember = Schema.Union([
+  Schema.Struct({
+    operation: AuthoredCassetteDecision.cases.ReadTaskClaim,
+    result: Schema.Union([
+      AuthoredConcurrentReadBatchResult.cases.TaskClaimReadFailed,
+      AuthoredConcurrentReadBatchResult.cases.TaskClaimCurrentReadReturned,
+      AuthoredConcurrentReadBatchResult.cases.TaskClaimReadReturned
+    ])
+  }),
+  Schema.Struct({
+    operation: AuthoredCassetteDecision.cases.ReadTaskWorkSpecification,
+    result: AuthoredConcurrentReadBatchResult.cases.TaskWorkSpecificationReadReturned
+  }),
+  Schema.Struct({
+    operation: AuthoredCassetteDecision.cases.ReadTrackerGraph,
+    result: Schema.Union([
+      AuthoredConcurrentReadBatchResult.cases.TrackerGraphReadFailed,
+      AuthoredConcurrentReadBatchResult.cases.TrackerGraphReadReturned
+    ])
+  }),
+  Schema.Struct({
+    operation: AuthoredCassetteDecision.cases.ReadTaskWorktree,
+    result: AuthoredConcurrentReadBatchResult.cases.NoProviderResult
+  }),
+  Schema.Struct({
+    operation: AuthoredCassetteDecision.cases.ReadTargetLineage,
+    result: AuthoredConcurrentReadBatchResult.cases.NoProviderResult
+  })
+]).check(
+  Schema.makeFilter((member) => {
+    if (member.operation._tag === "ReadTaskClaim") {
+      const resultTaskId =
+        "observation" in member.result
+          ? member.result.observation.taskId
+          : "taskId" in member.result
+            ? member.result.taskId
+            : undefined
+      return resultTaskId === member.operation.taskId
+        ? undefined
+        : "a task-claim observation result must name the selected task"
+    }
+    if (member.operation._tag === "ReadTaskWorkSpecification") {
+      return "taskId" in member.result && member.result.taskId === member.operation.taskId
+        ? undefined
+        : "a task-work specification result must name the selected task"
+    }
+    return undefined
+  })
+)
+export type AuthoredConcurrentReadBatchMember = typeof AuthoredConcurrentReadBatchMember.Type
+
+/** A bounded unordered read phase; it is never a global relaxation of story ordering. */
+export const AuthoredConcurrentReadBatch = Schema.TaggedStruct("ConcurrentReadBatch", {
+  members: Schema.NonEmptyArray(AuthoredConcurrentReadBatchMember)
+})
+export type AuthoredConcurrentReadBatch = typeof AuthoredConcurrentReadBatch.Type
 
 /**
  * Executor reports in authored input name the attempt but never a RunId.
@@ -710,6 +819,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
     request: Schema.Literals(["StartOrContinue", "Suspend"]),
     taskId: TaskId
   },
+  /** Cassette-only batch of independent current-fact reads; later ordered items wait until it drains. */
+  ConcurrentReadBatch: { members: Schema.NonEmptyArray(AuthoredConcurrentReadBatchMember) },
   DalphSelects: { operation: AuthoredCassetteDecision },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
@@ -919,7 +1030,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteKillsCoordinatorWithTargetLineageReadHeld",
     "CassetteReleasesHeldTargetLineageRead"
   ],
-  DalphOperationTrace: ["DalphSelects"],
+  DalphOperationTrace: ["DalphSelects", "ConcurrentReadBatch"],
   Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
   OuterIntegrator: [
     "IntegratorRequestReceived",

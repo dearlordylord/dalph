@@ -50,6 +50,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteKillsCoordinatorWithTargetLineageReadHeld: () =>
         "The coordinator dies while an exact target-lineage read remains held before Git",
       CassetteReleasesHeldTargetLineageRead: noLandmark,
+      ConcurrentReadBatch: noLandmark,
       DalphSelects: noLandmark,
       ExpectedBehavior: noLandmark,
       GitWorktreeObservationChanged: noLandmark,
@@ -469,6 +470,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `The cassette kills the coordinator while task ${item.taskId} attempt ${item.attemptId}'s target-lineage read is held.`,
       CassetteReleasesHeldTargetLineageRead: (item) =>
         `The cassette releases task ${item.taskId} attempt ${item.attemptId}'s held target-lineage read.`,
+      ConcurrentReadBatch: (item) =>
+        `The cassette permits ${item.members.length} independent current-fact reads to arrive in any order before the next ordered story item.`,
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,
