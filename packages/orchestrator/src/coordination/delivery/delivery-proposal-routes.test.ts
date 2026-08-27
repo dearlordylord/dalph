@@ -241,17 +241,17 @@ it("routes cancellation claim release through settlement as a new operation acti
 it("distinguishes every semantic progress batch while retaining establishment coalescing", () => {
   const pendingReport = (acceptedAt: number, attemptId: string) => ({
     acceptedAt: JournalPosition.make(acceptedAt),
-    correlation: plannedAttemptExecutorCorrelation({
-      ...plannedAttempt,
-      attemptId: AttemptId.make(attemptId)
-    })
+    correlation: plannedAttemptExecutorCorrelation({ ...plannedAttempt, attemptId: AttemptId.make(attemptId) }),
+    taskId
   })
-  const progressBatch = (reports: ReadonlyArray<ReturnType<typeof pendingReport>>) =>
+  type PendingReport = ReturnType<typeof pendingReport>
+  const progressBatch = (reports: readonly [PendingReport, ...ReadonlyArray<PendingReport>]) =>
     trackerGraphReadProposalOf({
       acceptedAt: JournalPosition.make(100),
       purpose: "CheckExecutorProgress",
       requirement: {
         _tag: "ExecutorProgressGraphReadRequirement",
+        explicitlyCoveredTaskIds: [taskId],
         pendingReports: reports,
         runId,
         target,
