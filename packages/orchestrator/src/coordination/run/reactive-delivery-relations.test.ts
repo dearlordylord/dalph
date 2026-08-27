@@ -115,6 +115,20 @@ const appendGraph = Effect.fn("ReactiveProgressAcceptance.appendGraph")(function
   )
 })
 
+const appendProgressRead = Effect.fn("ReactiveProgressAcceptance.appendProgressRead")(function* (
+  journal: Effect.Success<typeof makeJournalService>,
+  operationId: OperationId,
+  revision: string
+) {
+  const operation = makeTrackerGraphObservationOperation(operationId, target, [], [...taskIds])
+  yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(operation.operationId),
+    makeTaskTrackerFactsObservedFromRead(yield* journal.read(runId), operation, yield* graphSnapshotFor(revision))
+  )
+})
+
 const appendResponsibility = Effect.fn("ReactiveProgressAcceptance.appendResponsibility")(function* (
   journal: Effect.Success<typeof makeJournalService>,
   taskId: TaskId
@@ -285,4 +299,56 @@ it.effect(
         yield* Fiber.interrupt(observer)
       })
     ).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("preserves executor continuation ordinals and the durable limit across tracker graph reads", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      yield* appendGraph(journal, OperationId.make("reactive-progress-limit-G0"), "reactive-progress-limit-G0")
+      yield* appendResponsibility(journal, taskIds[0])
+      const resources = yield* makeIntegrationTargetResourceController()
+      const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget, resources).pipe(
+        Effect.provideService(InRunJournal, journal)
+      )
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+
+      for (const ordinal of [1, 2]) {
+        yield* appendRunning(journal, taskIds[0], ordinal, ordinal)
+        yield* publication.awaitCurrent
+        const beforeRead = yield* relation.get
+        const proposal = Option.getOrThrow(Option.fromUndefinedOr(progressProposal(beforeRead)))
+        if (proposal.route._tag !== "TrackerGraphReadRoute") return yield* Effect.die("expected a progress graph route")
+        expect(proposal.route.pendingReports.map(({ taskId }) => taskId)).toEqual([taskIds[0]])
+
+        yield* appendProgressRead(
+          journal,
+          OperationId.make(`reactive-progress-limit-check-${ordinal}`),
+          "reactive-progress-limit-G0"
+        )
+        yield* publication.awaitCurrent
+        expect(progressProposal(yield* relation.get)).toBeUndefined()
+      }
+
+      yield* appendRunning(journal, taskIds[0], 3, 3)
+      yield* publication.awaitCurrent
+      expect(progressProposal(yield* relation.get)).toBeUndefined()
+
+      const records = yield* journal.read(runId)
+      expect(
+        records.flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "StartOrContinue"
+            ? [Number(event.ordinal)]
+            : []
+        )
+      ).toEqual([1, 2, 3])
+      expect(
+        records.flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" ? [Number(event.ordinal)] : []
+        )
+      ).toEqual([1, 2, 3])
+    })
+  ).pipe(Effect.provide(memoryJournalStoreLayer))
 )
