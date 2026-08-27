@@ -15,7 +15,7 @@ import {
   WorktreeLocator,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Deferred, Effect, Fiber, Option, Ref, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Ref, Scope, Stream } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -57,6 +57,18 @@ import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-deliver
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { makeJournal } from "../delivery/journal.js"
 import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
+import { DeliveryActionExecutor, type DeliveryActionResult } from "../delivery/delivery-action-executor.js"
+import { runDeliveryRuntime } from "../delivery/run-delivery-runtime.js"
+import {
+  deliveryRuntimeResourceCapabilitiesLayer,
+  deliveryRuntimeResourceCapabilitiesOf
+} from "../delivery/delivery-runtime-resources.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+import {
+  deterministicOperationIdAllocatorLayer,
+  deterministicPlannedTaskAttemptLayer
+} from "../../workflow/protocols/task-attempt-planning/plan.js"
+import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 
 const runId = RunId.make("reactive-progress-runtime-acceptance")
 const target = FixtureTarget.make("reactive-progress-runtime-acceptance-target")
@@ -95,6 +107,13 @@ const graphSnapshotFor = Effect.fn("ReactiveProgressAcceptance.graphSnapshotFor"
 const makeJournalService = Effect.gen(function* () {
   const storage = yield* JournalStore
   yield* storage.beginRun(runId, target, policy)
+  const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+  if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+  return yield* makeJournal(runId, target, initial, storage)
+})
+
+const makeRestartJournalService = Effect.gen(function* () {
+  const storage = yield* JournalStore
   const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
   return yield* makeJournal(runId, target, initial, storage)
@@ -349,6 +368,169 @@ it.effect("preserves executor continuation ordinals and the durable limit across
           event._tag === "PlannedAttemptExecutorWorkReported" ? [Number(event.ordinal)] : []
         )
       ).toEqual([1, 2, 3])
+    })
+  ).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("repeats an unresolved executor-progress graph read and reuses an accepted observation after restart", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const storage = yield* JournalStore
+      yield* storage.beginRun(runId, target, policy)
+      const providerCalls = yield* Ref.make<ReadonlyArray<OperationId>>([])
+      const firstReadIntent = yield* Deferred.make<void>()
+      const firstProcessHold = yield* Deferred.make<void>()
+      const firstScope = yield* Scope.make()
+      const firstProcess = yield* Effect.gen(function* () {
+        const journal = yield* makeRestartJournalService
+        yield* appendGraph(journal, OperationId.make("reactive-progress-restart-G0"), "reactive-progress-restart-G0")
+        yield* appendResponsibility(journal, taskIds[0])
+        yield* appendRunning(journal, taskIds[0], 1, 1)
+        const resources = yield* makeIntegrationTargetResourceController()
+        const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget, resources).pipe(
+          Effect.provideService(InRunJournal, journal)
+        )
+        const relations = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources)
+        const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+        const lifecycle = yield* makeApplicationExitLifecycle()
+        const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(resources, lifecycle.admission)
+        const executor = DeliveryActionExecutor.of({
+          execute: (action, lease) => {
+            if (action._tag !== "FreshOperationAction" || action.proposal.route._tag !== "TrackerGraphReadRoute") {
+              return Effect.die("restart acceptance process 1 expected a graph read")
+            }
+            const route = action.proposal.route
+            const explicitlyCoveredTaskIds =
+              route.purpose === "CheckExecutorProgress" ? route.pendingReports.map(({ taskId }) => taskId) : []
+            const operation = makeTrackerGraphObservationOperation(
+              action.operationId,
+              target,
+              [],
+              explicitlyCoveredTaskIds
+            )
+            return Effect.gen(function* () {
+              yield* lease.recordIntent(action.operationId)
+              yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+              yield* Ref.update(providerCalls, (calls) => [...calls, action.operationId])
+              yield* Deferred.succeed(firstReadIntent, undefined)
+              yield* Deferred.await(firstProcessHold)
+              return yield* Effect.never
+            })
+          }
+        })
+        const runtime = yield* runDeliveryRuntime(relation).pipe(
+          Effect.provide(deterministicOperationIdAllocatorLayer("reactive-progress-restart-read")),
+          Effect.provide(
+            deterministicPlannedTaskAttemptLayer({
+              baseSha: GitCommitSha.make("1".repeat(40)),
+              executor: TaskExecutorLocator.make("executor:reactive-progress-restart"),
+              runId,
+              worktreeRoot: WorktreeLocator.make("/worktrees/reactive-progress-restart")
+            })
+          ),
+          Effect.provide(plannedAttemptProtocolControllerLayer),
+          Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+          Effect.provideService(DeliveryActionExecutor, executor),
+          Effect.forkChild
+        )
+        return { journal, runtime }
+      }).pipe(Scope.provide(firstScope))
+
+      yield* Deferred.await(firstReadIntent)
+      const firstCalls = yield* Ref.get(providerCalls)
+      expect(firstCalls).toHaveLength(1)
+      yield* Fiber.interrupt(firstProcess.runtime)
+      yield* Scope.close(firstScope, Exit.void)
+
+      const secondReadAccepted = yield* Deferred.make<void>()
+      const secondScope = yield* Scope.make()
+      const secondProcess = yield* Effect.gen(function* () {
+        const journal = yield* makeRestartJournalService
+        const resources = yield* makeIntegrationTargetResourceController()
+        const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget, resources).pipe(
+          Effect.provideService(InRunJournal, journal)
+        )
+        const relations = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources)
+        const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+        const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
+        const lifecycle = yield* makeApplicationExitLifecycle()
+        const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(resources, lifecycle.admission)
+        const executor = DeliveryActionExecutor.of({
+          execute: (action, lease) => {
+            if (action._tag !== "FreshOperationAction" || action.proposal.route._tag !== "TrackerGraphReadRoute") {
+              return Effect.succeed({
+                _tag: "ActionDeferred" as const,
+                proposalId: action.proposal.id,
+                reason: "TrackerGraphReadUnavailable" as const
+              })
+            }
+            return Effect.gen(function* () {
+              const callCount = yield* Ref.updateAndGet(providerCalls, (calls) => [...calls, action.operationId])
+              if (callCount.length > 2) {
+                return yield* Effect.never
+              }
+              const operation = makeTrackerGraphObservationOperation(action.operationId, target, [], [taskIds[0]])
+              yield* lease.recordIntent(action.operationId)
+              yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+              yield* journal.append(
+                runId,
+                outcomeRecordKey(operation.operationId),
+                makeTaskTrackerFactsObservedFromRead(
+                  yield* journal.read(runId),
+                  operation,
+                  yield* graphSnapshotFor("reactive-progress-restart-G1")
+                )
+              )
+              yield* publication.awaitCurrent
+              yield* Deferred.succeed(secondReadAccepted, undefined)
+              return {
+                _tag: "TrackerGraphObservationPublished" as const,
+                operationId: action.operationId,
+                proposalId: action.proposal.id,
+                snapshot: yield* graphSnapshotFor("reactive-progress-restart-G1")
+              } satisfies DeliveryActionResult
+            })
+          }
+        })
+        const runtime = yield* runDeliveryRuntime(relation).pipe(
+          Effect.provide(deterministicOperationIdAllocatorLayer("reactive-progress-restart-read")),
+          Effect.provide(
+            deterministicPlannedTaskAttemptLayer({
+              baseSha: GitCommitSha.make("1".repeat(40)),
+              executor: TaskExecutorLocator.make("executor:reactive-progress-restart"),
+              runId,
+              worktreeRoot: WorktreeLocator.make("/worktrees/reactive-progress-restart")
+            })
+          ),
+          Effect.provide(plannedAttemptProtocolControllerLayer),
+          Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+          Effect.provideService(DeliveryActionExecutor, executor),
+          Effect.forkChild
+        )
+        return { journal, runtime }
+      }).pipe(Scope.provide(secondScope))
+
+      yield* Deferred.await(secondReadAccepted)
+      yield* Fiber.interrupt(secondProcess.runtime)
+      yield* Scope.close(secondScope, Exit.void)
+      const calls = yield* Ref.get(providerCalls)
+      expect(calls).toHaveLength(2)
+      expect(calls[0]).not.toBe(calls[1])
+
+      const thirdScope = yield* Scope.make()
+      const thirdProcess = yield* Effect.gen(function* () {
+        const journal = yield* makeRestartJournalService
+        const resources = yield* makeIntegrationTargetResourceController()
+        const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget, resources).pipe(
+          Effect.provideService(InRunJournal, journal)
+        )
+        const relations = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources)
+        const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+        return yield* relation.get
+      }).pipe(Scope.provide(thirdScope))
+      expect(progressProposal(thirdProcess)).toBeUndefined()
+      expect(yield* Ref.get(providerCalls)).toHaveLength(2)
+      yield* Scope.close(thirdScope, Exit.void)
     })
   ).pipe(Effect.provide(memoryJournalStoreLayer))
 )
