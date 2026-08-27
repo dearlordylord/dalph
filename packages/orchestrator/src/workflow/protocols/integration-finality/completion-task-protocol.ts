@@ -596,6 +596,11 @@ export const completionTaskConfirmationDisposition = (
                 detail: "focused completion reconciliation found another current claim",
                 reason: "CompletionClaimForeign" as const
               } as const),
+        ForeignCompletionClaim: () => ({
+          _tag: "Conflict" as const,
+          detail: "focused completion reconciliation found another completion fingerprint",
+          reason: "CompletionClaimForeign" as const
+        }),
         UnclaimedTask: () => ({
           _tag: "Conflict" as const,
           detail: "focused completion reconciliation found no current claim",

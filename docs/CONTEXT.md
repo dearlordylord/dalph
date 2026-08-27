@@ -778,12 +778,18 @@ spelling or an earlier claim token cannot imply it.
 _Avoid_: Operation-ID prefix, stale claim token, automatic reacquisition
 
 **Completion claim**:
-The temporary task-tracker record that replaces one exact active task claim
-immediately before Dalph asks the task tracker to mark the task complete. It
-binds the exact confirmed integration result, current task revision, and any
-supporting artifacts required by the selected resolution protocol. Dalph
-deletes it only after the task tracker confirms completion.
+The temporary task-tracker evidence that takes over workflow authorization
+from one exact active task claim immediately before Dalph asks the task tracker
+to mark the task complete. It binds the exact confirmed integration result,
+current task revision, and supporting resolution evidence; its provider record
+may coexist with the active-claim record until later authorized cleanup.
 _Avoid_: Task claim, task completed successfully, Git branch
+
+**Completion claim fingerprint**:
+The bounded identity derived from one canonical encoding of every field in an
+exact completion claim. It identifies evidence for comparison and cannot by
+itself reconstruct or authorize the claim.
+_Avoid_: Completion claim, claim token, task revision
 
 **Planned task attempt**:
 One immutable Dalph decision to try one exact task revision fingerprint in one

@@ -55,7 +55,7 @@ export const controlledTrackerAuthorityLayer = (
             const observation = observations.get(taskId)
             if (observation === undefined) return tracker.readTaskClaim(taskId)
             /* v8 ignore start -- @preserve Production planning never routes an active-claim read through a task whose completion-finality protocol owns the current claim. */
-            return observation._tag === "CompletionTaskClaim"
+            return observation._tag === "CompletionTaskClaim" || observation._tag === "ForeignCompletionClaim"
               ? Effect.fail(
                   new TaskClaimReadFailure({
                     detail: "the task currently has a promotion-correlated completion claim",
@@ -165,8 +165,8 @@ export const controlledTrackerAuthorityLayer = (
                 return applyAcquisition(acquisition)
               }
               /* v8 ignore start -- @preserve A completion claim retains integration-finality ownership and cannot return to fresh task acquisition. */
-              if (observed._tag === "CompletionTaskClaim") {
-                return Effect.die(`authored tracker cannot acquire ${acquisition.taskId} over a completion claim`)
+              if (observed._tag === "CompletionTaskClaim" || observed._tag === "ForeignCompletionClaim") {
+                return Effect.die(`authored tracker cannot acquire ${acquisition.taskId} over completion evidence`)
               }
               /* v8 ignore stop -- @preserve */
               return isExactTaskClaim(observed, attempted)
@@ -189,9 +189,9 @@ export const controlledTrackerAuthorityLayer = (
                     )
                   )
               }
-              if (observed._tag === "CompletionTaskClaim") {
+              if (observed._tag === "CompletionTaskClaim" || observed._tag === "ForeignCompletionClaim") {
                 return Effect.die(
-                  `authored tracker cannot release active claim ${release.claim.taskId} over a completion claim`
+                  `authored tracker cannot release active claim ${release.claim.taskId} over completion evidence`
                 )
               }
               if (observed._tag === "UnclaimedTask") {
@@ -234,20 +234,29 @@ export const controlledTrackerAuthorityLayer = (
           })
         )
       const completionClaimBoundary = CompletionClaimBoundary.of({
-        readTaskClaim: (taskId) =>
+        readTaskClaim: (request) =>
           Effect.gen(function* () {
             const returned = yield* cursor.consumeCompletionClaimReadReturned.pipe(Effect.orDie)
             /* v8 ignore start -- @preserve The authored finality chronology binds every controlled response to the production-requested task. */
-            if (returned.taskId !== taskId) {
+            if (returned.taskId !== request.taskId) {
               return yield* Effect.die(
-                `authored completion-claim read returned ${returned.taskId} while reading ${taskId}`
+                `authored completion-claim read returned ${returned.taskId} while reading ${request.taskId}`
               )
             }
-            const current = yield* currentCompletionObservation(taskId).pipe(Effect.orDie)
-            const kind = current._tag === "CompletionTaskClaim" ? "Completion" : "Active"
-            if (current._tag === "UnclaimedTask" || kind !== returned.claim) {
+            const current = yield* currentCompletionObservation(request.taskId).pipe(Effect.orDie)
+            if (current._tag === "UnclaimedTask" || current._tag === "ForeignCompletionClaim") {
               return yield* Effect.die(
-                `authored completion-claim read expected ${returned.claim} for ${taskId}, received ${current._tag}`
+                `authored completion-claim read expected ${returned.claim} for ${request.taskId}, received ${current._tag}`
+              )
+            }
+            const kind = current._tag === "CompletionTaskClaim" ? "Completion" : "Active"
+            const exact =
+              current._tag === "CompletionTaskClaim"
+                ? completionTaskClaimEquals(current, request.expectedClaim)
+                : isExactTaskClaim(current, request.expectedClaim.originalClaim)
+            if (kind !== returned.claim || !exact) {
+              return yield* Effect.die(
+                `authored completion-claim read expected exact ${returned.claim} for ${request.taskId}, received ${current._tag}`
               )
             }
             /* v8 ignore stop -- @preserve */

@@ -783,9 +783,11 @@ const makeProductionState = () => {
   })
 
   const boundary = CompletionClaimBoundary.of({
-    readTaskClaim: (taskId) =>
+    readTaskClaim: (request) =>
       Effect.sync(() =>
-        taskId === productionClaimIdentity.plannedAttempt.taskId ? claimObservation : UnclaimedTask.make({ taskId })
+        request.taskId === productionClaimIdentity.plannedAttempt.taskId
+          ? claimObservation
+          : UnclaimedTask.make({ taskId: request.taskId })
       ),
     replaceTaskClaim: (request) =>
       replacementDisposition === "Applied"

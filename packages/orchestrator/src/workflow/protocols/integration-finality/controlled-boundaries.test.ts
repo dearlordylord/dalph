@@ -22,6 +22,7 @@ import {
   FocusedTaskCompletionFacts,
   FocusedTaskCompletionReadFailure,
   completionClaimDeletionRequestFor,
+  completionClaimReadRequestFor,
   completionClaimReplacementRequestFor,
   completionTaskRequestEquals
 } from "./events.js"
@@ -271,7 +272,7 @@ it.effect("fails closed for the remaining explicit unclaimed and mismatched clai
     const unclaimed = UnclaimedTask.make({ taskId: fixture.taskId })
     const explicitlyUnclaimed = yield* Effect.gen(function* () {
       const boundary = yield* CompletionClaimBoundary
-      expect(yield* boundary.readTaskClaim(fixture.taskId)).toEqual(unclaimed)
+      expect(yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))).toEqual(unclaimed)
       const failure = yield* boundary.replaceTaskClaim(replacement).pipe(Effect.flip)
       yield* boundary.deleteTaskClaim(deletion)
       return failure
@@ -280,7 +281,7 @@ it.effect("fails closed for the remaining explicit unclaimed and mismatched clai
 
     const activeDeletion = yield* Effect.gen(function* () {
       const boundary = yield* CompletionClaimBoundary
-      expect(yield* boundary.readTaskClaim(fixture.taskId)).toEqual(fixture.activeClaim)
+      expect(yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))).toEqual(fixture.activeClaim)
       return yield* boundary.deleteTaskClaim(deletion).pipe(Effect.flip)
     }).pipe(Effect.provide(controlledCompletionClaimBoundaryLayerFrom([fixture.activeClaim])))
     expect(activeDeletion).toBeInstanceOf(CompletionClaimDeletionFailure)

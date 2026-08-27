@@ -2251,8 +2251,10 @@ describe("delivery proposal route matrix", () => {
 
       const unreadableBoundary = CompletionClaimBoundary.of({
         deleteTaskClaim: () => Effect.die("unreadable claim must not be deleted"),
-        readTaskClaim: (taskId) =>
-          Effect.fail(new CompletionClaimReadFailure({ detail: "tracker claim is unreadable", taskId })),
+        readTaskClaim: (request) =>
+          Effect.fail(
+            new CompletionClaimReadFailure({ detail: "tracker claim is unreadable", taskId: request.taskId })
+          ),
         replaceTaskClaim: () => Effect.die("unreadable claim must not be replaced")
       })
       expect(

@@ -32,6 +32,7 @@ import {
   CompletionClaimRequestLimit,
   CompletionClaimRequestOrdinal,
   completionClaimRequestLimit,
+  completionClaimReadRequestFor,
   CompletionTaskClaim,
   completionTaskClaimEquals,
   CompletionSuccessObservation,
@@ -341,7 +342,7 @@ const runReplacementAttempt = Effect.fn("IntegrationFinality.runReplacementAttem
   const priorOutcome = yield* existingReplacementOutcome(request, records)
   /* v8 ignore next -- @preserve The serialized action owner cannot publish an outcome concurrently with its own attempt; restart returns before entering this helper. */
   if (priorOutcome !== undefined) return priorOutcome
-  const observed = yield* tracker.readTaskClaim(request.claim.plannedAttempt.taskId)
+  const observed = yield* tracker.readTaskClaim(completionClaimReadRequestFor(request.claim))
   if (observed._tag === "CompletionTaskClaim") {
     if (!completionTaskClaimEquals(observed, request.claim)) {
       return yield* new CompletionClaimOwnershipConflict({ attempted: request.claim, observed })
@@ -383,7 +384,7 @@ const reconcileExhaustedReplacement = Effect.fn("IntegrationFinality.reconcileEx
   tracker: CompletionClaimBoundaryService,
   request: CompletionClaimReplacementRequest
 ) {
-  const observed = yield* tracker.readTaskClaim(request.claim.plannedAttempt.taskId)
+  const observed = yield* tracker.readTaskClaim(completionClaimReadRequestFor(request.claim))
   if (observed._tag === "CompletionTaskClaim") {
     if (!completionTaskClaimEquals(observed, request.claim)) {
       return yield* new CompletionClaimOwnershipConflict({ attempted: request.claim, observed })
@@ -638,7 +639,7 @@ const runDeletionAttempt = Effect.fn("IntegrationFinality.runDeletionAttempt")(f
       replacementOperationId,
       CompletionClaimCleanupBoundaryCall.ReadBeforeDeletionAttempt({ attemptOrdinal, readOrdinal })
     ),
-    tracker.readTaskClaim(request.claim.plannedAttempt.taskId),
+    tracker.readTaskClaim(completionClaimReadRequestFor(request.claim)),
     (observed) =>
       Effect.gen(function* () {
         yield* appendDeletionReadObservation(request, replacementOperationId, readPurpose, observed)
@@ -720,7 +721,7 @@ const reconcileExhaustedDeletion = Effect.fn("IntegrationFinality.reconcileExhau
       replacementOperationId,
       CompletionClaimCleanupBoundaryCall.ReadAfterDeletionAttemptsExhausted({ attemptOrdinal, readOrdinal })
     ),
-    tracker.readTaskClaim(request.claim.plannedAttempt.taskId),
+    tracker.readTaskClaim(completionClaimReadRequestFor(request.claim)),
     (observed) =>
       Effect.gen(function* () {
         yield* appendDeletionReadObservation(request, replacementOperationId, purpose, observed)
