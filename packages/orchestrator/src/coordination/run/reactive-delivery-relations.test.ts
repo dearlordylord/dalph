@@ -244,7 +244,8 @@ const makeTrackerGraphActionExecutor = Effect.fn("ReactiveProgressAcceptance.mak
           return executeFreshTrackerGraphRead(action, route, lease).pipe(
             Effect.provideService(WorkflowInterpreter, interpreter),
             Effect.provideService(WorkflowTrace, trace),
-            Effect.provideService(DeliveryAcceptedFactPublication, publication)
+            Effect.provideService(DeliveryAcceptedFactPublication, publication),
+            Effect.tap(() => publication.awaitCurrent)
           )
         }
         return Effect.succeed({
@@ -391,78 +392,74 @@ it.effect(
         const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
         const providerCalls = yield* Ref.make<ReadonlyArray<OperationId>>([])
         const providerCoverage = yield* Ref.make<ReadonlyArray<ReadonlyArray<TaskId>>>([])
+        const providerSawJournalIntent = yield* Ref.make<ReadonlyArray<OperationId>>([])
         const executorWorkCalls = yield* Ref.make<ReadonlyArray<string>>([])
         const firstReadAccepted = yield* Deferred.make<void>()
         const releaseFirstRead = yield* Deferred.make<void>()
         const secondReadAccepted = yield* Deferred.make<void>()
         const lifecycle = yield* makeApplicationExitLifecycle()
         const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(resources, lifecycle.admission)
+        const provider = (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+          Effect.gen(function* () {
+            const records = yield* journal.read(runId)
+            if (
+              records.some(
+                ({ event }) =>
+                  event._tag === "TaskTrackerReadIntentRecorded" &&
+                  event.operation.operationId === operation.operationId
+              )
+            ) {
+              yield* Ref.update(providerSawJournalIntent, (calls) => [...calls, operation.operationId])
+            }
+            const callCount = yield* Ref.updateAndGet(providerCalls, (calls) => [...calls, operation.operationId])
+            yield* Ref.update(providerCoverage, (coverage) => [
+              ...coverage,
+              [...operation.readShape.explicitlyCoveredTaskIds]
+            ])
+            if (callCount.length > 2) {
+              return yield* Effect.die("unchanged acceptance made an unexpected third provider call")
+            }
+            const revision =
+              callCount.length === 1 ? "reactive-progress-unchanged-G0" : "reactive-progress-unchanged-G1"
+            return yield* graphSnapshotFor(revision)
+          })
+        const productionExecutor = yield* makeTrackerGraphActionExecutor(journal, publication, provider)
         const executor = DeliveryActionExecutor.of({
           execute: (action, lease) => {
-            if (action.proposal.route._tag !== "TrackerGraphReadRoute") {
-              const route = action.proposal.route
-              const isExecutorWork =
-                route._tag === "FreshExecutorWorkflowRoute" ||
-                (route._tag === "IdentityFreeWorkflowRoute" &&
-                  (route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-                    route.transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
-                    route.transition._tag === "StartPlannedAttemptExecutorWork"))
-              return (
-                isExecutorWork ? Ref.update(executorWorkCalls, (calls) => [...calls, route._tag]) : Effect.void
-              ).pipe(
-                Effect.as({
-                  _tag: "ActionDeferred" as const,
-                  proposalId: action.proposal.id,
-                  reason: "TrackerGraphReadUnavailable" as const
-                })
-              )
-            }
-            if (action._tag !== "FreshOperationAction") {
-              return Effect.die("unchanged acceptance expected a fresh graph read")
-            }
             const route = action.proposal.route
-            if (route.purpose !== "CheckExecutorProgress") {
-              return Effect.die("unchanged acceptance expected an executor-progress graph read")
-            }
-            const explicitlyCoveredTaskIds = route.pendingReports.map(({ taskId }) => taskId)
-            const operation = makeTrackerGraphObservationOperation(
-              action.operationId,
-              target,
-              [],
-              explicitlyCoveredTaskIds
-            )
-            return Effect.gen(function* () {
-              yield* lease.recordIntent(action.operationId)
-              yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-              const callCount = yield* Ref.updateAndGet(providerCalls, (calls) => [...calls, action.operationId])
-              yield* Ref.update(providerCoverage, (coverage) => [...coverage, explicitlyCoveredTaskIds])
-              const revision =
-                callCount.length === 1 ? "reactive-progress-unchanged-G0" : "reactive-progress-unchanged-G1"
-              yield* journal.append(
-                runId,
-                outcomeRecordKey(operation.operationId),
-                makeTaskTrackerFactsObservedFromRead(
-                  yield* journal.read(runId),
-                  operation,
-                  yield* graphSnapshotFor(revision)
-                )
-              )
-              yield* publication.awaitCurrent
-              if (callCount.length === 1) {
-                yield* Deferred.succeed(firstReadAccepted, undefined)
-                yield* Deferred.await(releaseFirstRead)
-              } else if (callCount.length === 2) {
-                yield* Deferred.succeed(secondReadAccepted, undefined)
-              } else {
-                return yield* Effect.die("unchanged acceptance made an unexpected third provider call")
-              }
-              return {
-                _tag: "TrackerGraphObservationPublished" as const,
-                operationId: action.operationId,
-                proposalId: action.proposal.id,
-                snapshot: yield* graphSnapshotFor(revision)
-              } satisfies DeliveryActionResult
-            })
+            const isExecutorWork =
+              route._tag === "FreshExecutorWorkflowRoute" ||
+              (route._tag === "IdentityFreeWorkflowRoute" &&
+                (route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+                  route.transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+                  route.transition._tag === "StartPlannedAttemptExecutorWork"))
+            const accepted =
+              action._tag === "FreshOperationAction" && route._tag === "TrackerGraphReadRoute"
+                ? productionExecutor
+                    .execute(action, lease)
+                    .pipe(
+                      Effect.tap(() =>
+                        Ref.get(providerCalls).pipe(
+                          Effect.flatMap((calls) =>
+                            calls.length === 1
+                              ? Deferred.succeed(firstReadAccepted, undefined).pipe(
+                                  Effect.andThen(Deferred.await(releaseFirstRead))
+                                )
+                              : calls.length === 2
+                                ? Deferred.succeed(secondReadAccepted, undefined)
+                                : Effect.die("unchanged acceptance made an unexpected third provider call")
+                          )
+                        )
+                      )
+                    )
+                : Effect.succeed({
+                    _tag: "ActionDeferred" as const,
+                    proposalId: action.proposal.id,
+                    reason: "TrackerGraphReadUnavailable" as const
+                  })
+            return (
+              isExecutorWork ? Ref.update(executorWorkCalls, (calls) => [...calls, route._tag]) : Effect.void
+            ).pipe(Effect.andThen(accepted))
           }
         })
         const runtime = yield* runDeliveryRuntime(relation).pipe(
@@ -509,6 +506,7 @@ it.effect(
         yield* Fiber.interrupt(runtime)
         expect(yield* Ref.get(providerCalls)).toHaveLength(2)
         expect(yield* Ref.get(providerCoverage)).toEqual([[taskIds[0]], [taskIds[1]]])
+        expect(yield* Ref.get(providerSawJournalIntent)).toEqual(yield* Ref.get(providerCalls))
         expect(yield* Ref.get(executorWorkCalls)).toEqual([])
       })
     ).pipe(Effect.provide(memoryJournalStoreLayer))
