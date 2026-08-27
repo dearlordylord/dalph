@@ -1,11 +1,11 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { expect, it } from "@effect/vitest"
-import { Effect, Layer, Match } from "effect"
+import { Effect, Layer, Match, Ref } from "effect"
 import { trackerGraphReaderContract } from "../../../../test/contracts/tracker-graph-reader-contract.js"
 import { FixtureTarget } from "../fixture/target.js"
 import { TaskLifecycle } from "../task.js"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
-import { type TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import { type TrackerTarget } from "../target.js"
 import {
   GithubGraphqlClient,
@@ -15,10 +15,11 @@ import {
   GithubIssueNodeId,
   GithubRepositoryNodeId
 } from "./graphql-client.js"
+import { GithubGraphqlReadThrottled, GithubGraphqlThrottleEvidence } from "./graphql-read-throttle.js"
 import { githubTaskIdFor } from "./task-identity.js"
 import { githubTrackerGraphReaderLayer } from "./graph-reader.js"
 import { githubConnectionPageLimit, githubSnapshotTaskLimit } from "./read-limits.js"
-import { TrackerAdapterReadError, TrackerGraphReader } from "../graph-reader.js"
+import { TrackerAdapterReadError, type TrackerAdapterReadFailureReason, TrackerGraphReader } from "../graph-reader.js"
 
 const page = (body: unknown): GithubGraphqlResponse => ({ body })
 
@@ -71,6 +72,18 @@ const responseFor = (request: GithubGraphqlRequest) => {
     DeleteIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
     DeleteClaimLabel: () => page({ errors: [{ message: "unexpected claim request" }] }),
     ReadIssueDetails: () => page({ errors: [{ message: "unexpected detail request" }] }),
+    ReadTaskWorkSpecification: (request) =>
+      page({
+        data: {
+          node: {
+            __typename: "Issue",
+            body: "Exact current body",
+            id: request.issueNodeId,
+            repository: { id: "repository-node" },
+            title: "Exact current title"
+          }
+        }
+      }),
     ReopenIssue: () => page({ errors: [{ message: "unexpected mutation request" }] }),
     ResolveRepository: () => page({ errors: [{ message: "unexpected repository request" }] }),
     ResolveIssue: () => page({ data: { repository: { id: "repository-node", issue: { id: "root-node" } } } }),
@@ -559,10 +572,242 @@ it.effect("rejects a cross-repository native relationship without exposing a gra
   )
 )
 
-it.effect("defers focused GitHub task-work qualification to the provider ticket", () =>
+it.effect("reads exact GitHub title and body for one claimed task", () =>
   Effect.gen(function* () {
     const reader = yield* TrackerGraphReader
-    const error = yield* reader.readTaskWorkSpecification(target, root).pipe(Effect.flip)
-    expect(error).toMatchObject({ _tag: "TrackerGraphReader.AdapterReadError", reason: { _tag: "UnsupportedTarget" } })
+    const specification = yield* reader.readTaskWorkSpecification(target, root)
+    expect(specification).toEqual(
+      makeTaskWorkSpecification({ body: "Exact current body", taskId: root, title: "Exact current title" })
+    )
   }).pipe(Effect.provide(githubTrackerGraphReaderLayer), Effect.provide(clientLayer))
+)
+
+it.effect(
+  "focused GitHub task-work read fails closed on missing cross-repository partial malformed and throttled evidence",
+  () =>
+    Effect.gen(function* () {
+      const foreignTaskId = githubTaskIdFor(
+        GithubRepositoryNodeId.make("foreign-repository"),
+        GithubIssueNodeId.make("root-node")
+      )
+      const cases: ReadonlyArray<{
+        readonly expectedRequests: ReadonlyArray<GithubGraphqlRequest["_tag"]>
+        readonly handler: (request: GithubGraphqlRequest) => GithubGraphqlResponse
+        readonly name: string
+        readonly reason: TrackerAdapterReadFailureReason["_tag"]
+        readonly taskId: TaskId
+      }> = [
+        {
+          expectedRequests: ["ResolveIssue", "ReadTaskWorkSpecification"],
+          handler: (request) =>
+            request._tag === "ReadTaskWorkSpecification" ? page({ data: { node: null } }) : responseFor(request),
+          name: "missing",
+          reason: "IncompleteSnapshot",
+          taskId: root
+        },
+        {
+          expectedRequests: ["ResolveIssue"],
+          handler: responseFor,
+          name: "cross-repository",
+          reason: "IncompleteSnapshot",
+          taskId: foreignTaskId
+        },
+        {
+          expectedRequests: ["ResolveIssue", "ReadTaskWorkSpecification"],
+          handler: (request) =>
+            request._tag === "ReadTaskWorkSpecification"
+              ? page({
+                  data: {
+                    node: {
+                      __typename: "Issue",
+                      body: "must not be published",
+                      id: "root-node",
+                      repository: { id: "repository-node" },
+                      title: "Partial provider title"
+                    }
+                  },
+                  errors: [{ message: "partial provider result" }]
+                })
+              : responseFor(request),
+          name: "partial",
+          reason: "IncompleteSnapshot",
+          taskId: root
+        },
+        {
+          expectedRequests: ["ResolveIssue", "ReadTaskWorkSpecification"],
+          handler: (request) =>
+            request._tag === "ReadTaskWorkSpecification"
+              ? page({ data: { node: { __typename: "Issue", body: "missing title", id: "root-node" } } })
+              : responseFor(request),
+          name: "malformed",
+          reason: "BoundaryDecode",
+          taskId: root
+        },
+        {
+          expectedRequests: ["ResolveIssue", "ReadTaskWorkSpecification"],
+          handler: (request) =>
+            request._tag === "ReadTaskWorkSpecification"
+              ? page({
+                  data: {
+                    node: {
+                      __typename: "Issue",
+                      body: "body",
+                      id: "another-issue",
+                      repository: { id: "repository-node" },
+                      title: "Another issue"
+                    }
+                  }
+                })
+              : responseFor(request),
+          name: "wrong issue node",
+          reason: "IncompleteSnapshot",
+          taskId: root
+        },
+        {
+          expectedRequests: ["ResolveIssue", "ReadTaskWorkSpecification"],
+          handler: (request) =>
+            request._tag === "ReadTaskWorkSpecification"
+              ? page({
+                  data: {
+                    node: {
+                      __typename: "Issue",
+                      body: "body",
+                      id: "root-node",
+                      repository: { id: "repository-node" },
+                      title: ""
+                    }
+                  }
+                })
+              : responseFor(request),
+          name: "empty title",
+          reason: "BoundaryDecode",
+          taskId: root
+        },
+        {
+          expectedRequests: ["ResolveIssue", "ReadTaskWorkSpecification"],
+          handler: (request) =>
+            request._tag === "ReadTaskWorkSpecification"
+              ? page({ errors: [{ message: "API rate limit exceeded", type: "RATE_LIMITED" }] })
+              : responseFor(request),
+          name: "throttled",
+          reason: "Throttled",
+          taskId: root
+        },
+        {
+          expectedRequests: ["ResolveIssue", "ReadTaskWorkSpecification"],
+          handler: (request) =>
+            request._tag === "ReadTaskWorkSpecification"
+              ? page({ errors: [{ message: "secondary rate limit" }] })
+              : responseFor(request),
+          name: "secondary throttling",
+          reason: "Throttled",
+          taskId: root
+        },
+        {
+          expectedRequests: ["ResolveIssue", "ReadTaskWorkSpecification"],
+          handler: (request) =>
+            request._tag === "ReadTaskWorkSpecification"
+              ? page({ errors: [{ message: "API rate limit exceeded" }] })
+              : responseFor(request),
+          name: "primary throttling",
+          reason: "Throttled",
+          taskId: root
+        },
+        {
+          expectedRequests: [],
+          handler: responseFor,
+          name: "malformed task identity",
+          reason: "BoundaryDecode",
+          taskId: TaskId.make("not-a-github-task")
+        }
+      ]
+
+      for (const scenario of cases) {
+        const requests = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest["_tag"]>>([])
+        const layer = Layer.succeed(
+          GithubGraphqlClient,
+          GithubGraphqlClient.of({
+            execute: (request) =>
+              Ref.update(requests, (current) => [...current, request._tag]).pipe(Effect.as(scenario.handler(request)))
+          })
+        )
+        const error = yield* Effect.gen(function* () {
+          const reader = yield* TrackerGraphReader
+          return yield* reader.readTaskWorkSpecification(target, scenario.taskId)
+        }).pipe(Effect.provide(githubTrackerGraphReaderLayer), Effect.provide(layer), Effect.flip, Effect.orDie)
+        expect(error, scenario.name).toMatchObject({
+          _tag: "TrackerGraphReader.AdapterReadError",
+          reason: { _tag: scenario.reason }
+        })
+        expect(yield* Ref.get(requests), scenario.name).toEqual(scenario.expectedRequests)
+      }
+    })
+)
+
+it.effect("maps a transport-classified GitHub throttle to the focused typed read failure", () =>
+  Effect.gen(function* () {
+    const reader = yield* TrackerGraphReader
+    const error = yield* reader.readTaskWorkSpecification(target, root).pipe(Effect.flip, Effect.orDie)
+    expect(error).toMatchObject({ _tag: "TrackerGraphReader.AdapterReadError", reason: { _tag: "Throttled" } })
+  }).pipe(
+    Effect.provide(githubTrackerGraphReaderLayer),
+    Effect.provide(
+      Layer.succeed(
+        GithubGraphqlClient,
+        GithubGraphqlClient.of({
+          execute: (request) =>
+            request._tag === "ReadTaskWorkSpecification"
+              ? new GithubGraphqlReadThrottled({
+                  detail: "GitHub request throttled",
+                  operation: request._tag,
+                  retry: GithubGraphqlThrottleEvidence.cases.Unavailable.make({})
+                })
+              : Effect.succeed(responseFor(request))
+        })
+      )
+    )
+  )
+)
+
+it.effect("repeats only the read-only GitHub instruction protocol after a lost response", () =>
+  Effect.gen(function* () {
+    const attempts = yield* Ref.make(0)
+    const requests = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest["_tag"]>>([])
+    const layer = Layer.succeed(
+      GithubGraphqlClient,
+      GithubGraphqlClient.of({
+        execute: (request) =>
+          Ref.update(requests, (current) => [...current, request._tag]).pipe(
+            Effect.andThen(
+              request._tag === "ReadTaskWorkSpecification"
+                ? Ref.getAndUpdate(attempts, (value) => value + 1).pipe(
+                    Effect.flatMap((attempt) =>
+                      attempt === 0
+                        ? Effect.fail(
+                            new GithubGraphqlRequestError({ detail: "response lost", operation: request._tag })
+                          )
+                        : Effect.succeed(responseFor(request))
+                    )
+                  )
+                : Effect.succeed(responseFor(request))
+            )
+          )
+      })
+    )
+    const read = Effect.gen(function* () {
+      const reader = yield* TrackerGraphReader
+      return yield* reader.readTaskWorkSpecification(target, root)
+    }).pipe(Effect.provide(githubTrackerGraphReaderLayer), Effect.provide(layer))
+
+    const lost = yield* read.pipe(Effect.flip, Effect.orDie)
+    const recovered = yield* read
+    expect(lost).toMatchObject({ _tag: "TrackerGraphReader.AdapterReadError", reason: { _tag: "Transport" } })
+    expect(recovered.title).toBe("Exact current title")
+    expect(yield* Ref.get(requests)).toEqual([
+      "ResolveIssue",
+      "ReadTaskWorkSpecification",
+      "ResolveIssue",
+      "ReadTaskWorkSpecification"
+    ])
+  })
 )

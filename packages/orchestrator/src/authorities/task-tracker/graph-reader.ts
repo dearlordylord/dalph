@@ -23,6 +23,8 @@ export const TrackerAdapterReadFailureReason = Schema.TaggedUnion({
   BoundaryDecode: {},
   IncompleteSnapshot: {},
   ResourceLimitExceeded: {},
+  /** The provider proved a request limit, so Dalph must not infer missing tracker facts. */
+  Throttled: {},
   Transport: {},
   UnsupportedTarget: {}
 })
@@ -31,6 +33,7 @@ export type TrackerAdapterReadFailureReason = typeof TrackerAdapterReadFailureRe
 export const GithubTrackerReadOperation = Schema.Literals([
   "GithubTrackerGraphReader.readBlockedBy",
   "GithubTrackerGraphReader.readIssue",
+  "GithubTrackerGraphReader.readTaskWorkSpecification",
   "GithubTrackerGraphReader.readSubIssues",
   "GithubTrackerGraphReader.resolveIssue",
   "GithubTrackerGraphReader.project",

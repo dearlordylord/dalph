@@ -1,14 +1,12 @@
 /* eslint-disable functional/immutable-data -- Request accumulation is private adapter scratch and never becomes authority. */
-import { Effect, Layer, Match, Option, Schema } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { TaskLifecycle } from "../task.js"
-import { type GithubIssueTarget } from "./target.js"
 import { type TrackerTask } from "../task.js"
 import { type TrackerTarget } from "../target.js"
 import { GithubGraphqlClient, githubGraphqlClientNodeLayer, GithubGraphqlRequest } from "./graphql-client.js"
 import type { GithubCursor, GithubGraphqlResponse, GithubIssueNodeId } from "./graphql-client.js"
 import {
   BlockedByResponse,
-  GraphqlErrorsEnvelope,
   type IssueConnection,
   ReadIssueResponse,
   ResolveIssueResponse,
@@ -19,11 +17,20 @@ import { githubConnectionPageLimit, githubSnapshotTaskLimit } from "./read-limit
 import { GraphProjectionError, projectTrackerSnapshot } from "../graph.js"
 import {
   type GithubTrackerReadOperation,
-  TrackerAdapterReadContext,
-  TrackerAdapterReadError,
+  type TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerGraphReader
 } from "../graph-reader.js"
+import {
+  adapterError,
+  decodeResponse,
+  githubTarget,
+  incomplete,
+  operationForRequest,
+  resourceLimitExceeded,
+  type GithubTrackerGraphReadRequest
+} from "./read-boundary.js"
+import { makeReadTaskWorkSpecification } from "./task-work-specification-reader.js"
 
 interface IssueProjection {
   readonly issueNodeId: GithubIssueNodeId
@@ -31,45 +38,6 @@ interface IssueProjection {
   readonly observedParentNodeId: GithubIssueNodeId | null
   readonly prerequisiteNodeIds: ReadonlyArray<GithubIssueNodeId>
 }
-
-type GithubTrackerGraphReadRequest = Extract<
-  GithubGraphqlRequest,
-  { readonly _tag: "ReadBlockedBy" | "ReadIssue" | "ReadSubIssues" | "ResolveIssue" }
->
-
-const adapterError = (operation: GithubTrackerReadOperation, reason: TrackerAdapterReadFailureReason, detail: string) =>
-  new TrackerAdapterReadError({ context: TrackerAdapterReadContext.cases.Github.make({ operation }), detail, reason })
-
-const decodeResponse = <S extends Schema.Constraint>(
-  schema: S,
-  operation: GithubTrackerReadOperation,
-  response: GithubGraphqlResponse
-) =>
-  Effect.gen(function* () {
-    const header = yield* Schema.decodeUnknownEffect(GraphqlErrorsEnvelope)(response.body).pipe(
-      Effect.mapError((cause) =>
-        adapterError(operation, TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({}), String(cause))
-      )
-    )
-    if (header.errors !== undefined && header.errors.length > 0) {
-      return yield* adapterError(
-        operation,
-        TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({}),
-        header.errors.map(({ message }) => message).join("; ")
-      )
-    }
-    return yield* Schema.decodeUnknownEffect(schema)(response.body).pipe(
-      Effect.mapError((cause) =>
-        adapterError(operation, TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({}), String(cause))
-      )
-    )
-  })
-
-const incomplete = (operation: GithubTrackerReadOperation, detail: string) =>
-  adapterError(operation, TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({}), detail)
-
-const resourceLimitExceeded = (operation: GithubTrackerReadOperation, detail: string) =>
-  adapterError(operation, TrackerAdapterReadFailureReason.cases.ResourceLimitExceeded.make({}), detail)
 
 const isOpenLifecycle = (
   state: "CLOSED" | "OPEN",
@@ -107,64 +75,47 @@ const lifecycleFrom = (
   )
 }
 
-const githubTarget = (target: TrackerTarget): Effect.Effect<GithubIssueTarget, TrackerAdapterReadError> =>
-  typeof target === "string"
-    ? Effect.fail(
-        adapterError(
-          "GithubTrackerGraphReader.selectAdapter",
-          TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({}),
-          "GitHub reader cannot read a fixture target"
-        )
-      )
-    : Effect.succeed(target)
-
-const operationForRequest = (request: GithubTrackerGraphReadRequest): GithubTrackerReadOperation => {
-  return Match.valueTags(request, {
-    ResolveIssue: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.resolveIssue",
-    ReadIssue: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readIssue",
-    ReadSubIssues: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readSubIssues",
-    ReadBlockedBy: (): GithubTrackerReadOperation => "GithubTrackerGraphReader.readBlockedBy"
-  })
-}
-
 export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, never, GithubGraphqlClient> = Layer.effect(
   TrackerGraphReader,
   Effect.gen(function* () {
     const client = yield* GithubGraphqlClient
-
-    /**
-     * Produces an all-or-nothing bounded observation, not a GitHub
-     * point-in-time transaction. See docs/ARCHITECTURE.md.
-     */
-    const read = Effect.fn("GithubTrackerGraphReader.read")(function* (target: TrackerTarget) {
-      const selectedTarget = yield* githubTarget(target)
-      const execute = Effect.fn("GithubTrackerGraphReader.execute")(function* (request: GithubTrackerGraphReadRequest) {
-        const operation = operationForRequest(request)
-        const response = yield* client
-          .execute(request)
-          .pipe(
-            Effect.mapError((error) =>
-              adapterError(operation, TrackerAdapterReadFailureReason.cases.Transport.make({}), error.detail)
+    const execute = Effect.fn("GithubTrackerGraphReader.execute")(function* (request: GithubTrackerGraphReadRequest) {
+      const operation = operationForRequest(request)
+      const response = yield* client
+        .execute(request)
+        .pipe(
+          Effect.mapError((error) =>
+            adapterError(
+              operation,
+              error._tag === "GithubGraphqlClient.ReadThrottled"
+                ? TrackerAdapterReadFailureReason.cases.Throttled.make({})
+                : TrackerAdapterReadFailureReason.cases.Transport.make({}),
+              error.detail
             )
           )
-        return response
-      })
+        )
+      return response
+    })
 
-      const resolvedResponse = yield* execute(GithubGraphqlRequest.cases.ResolveIssue.make({ target: selectedTarget }))
-      const resolved = yield* decodeResponse(
-        ResolveIssueResponse,
-        "GithubTrackerGraphReader.resolveIssue",
-        resolvedResponse
-      )
+    const resolveTarget = Effect.fn("GithubTrackerGraphReader.resolveTarget")(function* (target: TrackerTarget) {
+      const selectedTarget = yield* githubTarget(target)
+      const response = yield* execute(GithubGraphqlRequest.cases.ResolveIssue.make({ target: selectedTarget }))
+      const resolved = yield* decodeResponse(ResolveIssueResponse, "GithubTrackerGraphReader.resolveIssue", response)
       if (resolved.data.repository === null || resolved.data.repository.issue === null) {
         return yield* incomplete(
           "GithubTrackerGraphReader.resolveIssue",
           "GitHub repository or root issue is inaccessible"
         )
       }
+      return { repositoryNodeId: resolved.data.repository.id, rootIssueNodeId: resolved.data.repository.issue.id }
+    })
 
-      const rootNodeId = resolved.data.repository.issue.id
-      const rootRepositoryNodeId = resolved.data.repository.id
+    /**
+     * Produces an all-or-nothing bounded observation, not a GitHub
+     * point-in-time transaction. See docs/ARCHITECTURE.md.
+     */
+    const read = Effect.fn("GithubTrackerGraphReader.read")(function* (target: TrackerTarget) {
+      const { repositoryNodeId: rootRepositoryNodeId, rootIssueNodeId: rootNodeId } = yield* resolveTarget(target)
       const pending: Array<{ readonly expandChildren: boolean; readonly issueNodeId: GithubIssueNodeId }> = [
         { expandChildren: true, issueNodeId: rootNodeId }
       ]
@@ -440,13 +391,7 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
       return graph.snapshot
     })
 
-    const readTaskWorkSpecification = Effect.fn("GithubTrackerGraphReader.readTaskWorkSpecification")(function* () {
-      return yield* adapterError(
-        "GithubTrackerGraphReader.selectAdapter",
-        TrackerAdapterReadFailureReason.cases.UnsupportedTarget.make({}),
-        "focused GitHub task-work specification qualification is owned outside the provider-neutral milestone"
-      )
-    })
+    const readTaskWorkSpecification = makeReadTaskWorkSpecification(execute, resolveTarget)
 
     return TrackerGraphReader.of({ read, readTaskWorkSpecification })
   })

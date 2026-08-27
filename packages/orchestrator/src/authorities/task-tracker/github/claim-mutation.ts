@@ -5,11 +5,11 @@ import {
   GithubGraphqlClient,
   githubGraphqlClientNodeLayer,
   GithubGraphqlRequest,
-  GithubIssueNodeId,
   GithubLabelName,
   GithubLabelNodeId,
   GithubRepositoryNodeId
 } from "./graphql-client.js"
+import { decodeGithubTaskId } from "./task-identity.js"
 import {
   ActiveTaskClaim,
   isExactTaskClaim,
@@ -22,9 +22,6 @@ import {
   UnclaimedTask
 } from "../claim-mutation.js"
 import type { TaskClaimAcquisition, TaskClaimRelease } from "../claim-mutation.js"
-
-const githubTaskIdEncodingVersion = "t1."
-const GithubTaskCoordinates = Schema.Tuple([GithubRepositoryNodeId, GithubIssueNodeId])
 
 const GithubClaimDescriptionFields = Schema.Struct({
   operationId: ActiveTaskClaim.fields.operationId,
@@ -68,18 +65,8 @@ type GithubClaimRecord =
   | { readonly _tag: "Active"; readonly labelId: GithubLabelNodeId; readonly observation: ActiveTaskClaim }
 
 const decodeCoordinates = (taskId: TaskId) => {
-  if (!taskId.startsWith(githubTaskIdEncodingVersion)) {
-    return Effect.fail(new TaskClaimReadFailure({ detail: "task identity is not owned by the GitHub adapter", taskId }))
-  }
-  return Effect.try({
-    try: (): unknown =>
-      JSON.parse(Buffer.from(taskId.slice(githubTaskIdEncodingVersion.length), "base64url").toString("utf8")),
-    catch: (cause) => new TaskClaimReadFailure({ detail: String(cause), taskId })
-  }).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(GithubTaskCoordinates)),
-    Effect.mapError((cause) =>
-      cause instanceof TaskClaimReadFailure ? cause : new TaskClaimReadFailure({ detail: String(cause), taskId })
-    )
+  return decodeGithubTaskId(taskId).pipe(
+    Effect.mapError((cause) => new TaskClaimReadFailure({ detail: cause.detail, taskId }))
   )
 }
 
@@ -135,7 +122,7 @@ export const githubTrackerMutationLayer = Layer.effect(
     const crypto = yield* Crypto.Crypto
 
     const readGithubClaim = Effect.fn("GithubTrackerMutation.readGithubClaim")(function* (taskId: TaskId) {
-      const [repositoryNodeId] = yield* decodeCoordinates(taskId)
+      const { repositoryNodeId } = yield* decodeCoordinates(taskId)
       const labelName = yield* githubClaimLabelNameFor(crypto, taskId)
       const response = yield* client
         .execute(GithubGraphqlRequest.cases.FindClaimLabel.make({ labelName, repositoryNodeId }))
@@ -190,7 +177,7 @@ export const githubTrackerMutationLayer = Layer.effect(
     const acquireTaskClaim = Effect.fn("GithubTrackerMutation.acquireTaskClaim")(function* (
       acquisition: TaskClaimAcquisition
     ) {
-      const [repositoryNodeId] = yield* decodeCoordinates(acquisition.taskId)
+      const { repositoryNodeId } = yield* decodeCoordinates(acquisition.taskId)
       const labelName = yield* githubClaimLabelNameFor(crypto, acquisition.taskId)
       const description = yield* descriptionFor(acquisition)
       const response = yield* client

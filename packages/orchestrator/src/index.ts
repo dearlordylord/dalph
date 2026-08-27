@@ -213,7 +213,11 @@ export {
   GithubLabelNodeId,
   GithubRepositoryNodeId
 } from "./authorities/task-tracker/github/graphql-client.js"
-export { githubTrackerGraphReaderNodeLayer } from "./authorities/task-tracker/github/graph-reader.js"
+export {
+  githubTrackerGraphReaderLayer,
+  githubTrackerGraphReaderNodeLayer
+} from "./authorities/task-tracker/github/graph-reader.js"
+export { githubTaskIdFor } from "./authorities/task-tracker/github/task-identity.js"
 export {
   githubTrackerMutationLayer,
   githubTrackerMutationNodeLayer
