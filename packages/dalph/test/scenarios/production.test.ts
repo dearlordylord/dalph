@@ -1142,14 +1142,15 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
 
       const current = projectTrackerSnapshot({ revision: "production-lost-claim-current", tasks: [] })
       if (current._tag === "Invalid") return yield* Effect.die("current graph must be valid")
-      const acquireCalls = yield* Ref.make(0)
-      const claimReads = yield* Ref.make(0)
+      type ClaimBoundaryCall = "acquire" | "read"
+      const claimCalls = yield* Ref.make<ReadonlyArray<ClaimBoundaryCall>>([])
+      const recordClaimCall = (call: ClaimBoundaryCall) => Ref.update(claimCalls, (calls) => [...calls, call])
       const nextOperation = yield* Ref.make(0)
       const trackerLayer = Layer.succeed(
         TrackerMutation,
         TrackerMutation.of({
-          acquireTaskClaim: () => Ref.update(acquireCalls, (count) => count + 1).pipe(Effect.as(claim)),
-          readTaskClaim: () => Ref.update(claimReads, (count) => count + 1).pipe(Effect.as(claim)),
+          acquireTaskClaim: () => recordClaimCall("acquire").pipe(Effect.as(claim)),
+          readTaskClaim: () => recordClaimCall("read").pipe(Effect.as(claim)),
           releaseTaskClaim: () => Effect.void
         })
       )
@@ -1201,8 +1202,7 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
       )
 
-      expect(yield* Ref.get(acquireCalls)).toBe(0)
-      expect(yield* Ref.get(claimReads)).toBeGreaterThan(0)
+      expect(yield* Ref.get(claimCalls)).toEqual(["read"])
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
