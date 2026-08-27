@@ -381,10 +381,27 @@ const canonical = (value: unknown): unknown => {
 }
 
 export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal["route"]): DeliveryProposalId => {
-  // Establishment and progress-check reads are the same one-at-a-time graph
-  // boundary.  Keep their process-local identity coalesced while preserving
-  // the purpose on the executable route for diagnostics and policy.
-  const identityRoute = route._tag === "TrackerGraphReadRoute" ? { _tag: route._tag, target: route.target } : route
+  // Establishment reads retain one process-local identity. Each progress-read
+  // batch retains its own accepted-report identity so a settled owner for an
+  // earlier batch cannot hide a later report behind the same proposal ID.
+  const identityRoute =
+    route._tag === "TrackerGraphReadRoute"
+      ? route.purpose === "EstablishCurrentGraph"
+        ? { _tag: route._tag, purpose: route.purpose, target: route.target }
+        : {
+            _tag: route._tag,
+            pendingReports: route.pendingReports
+              .map(({ acceptedAt, correlation }) => ({ acceptedAt, correlation }))
+              .toSorted(
+                (left, right) =>
+                  Number(left.acceptedAt) - Number(right.acceptedAt) ||
+                  left.correlation.runId.localeCompare(right.correlation.runId) ||
+                  left.correlation.attemptId.localeCompare(right.correlation.attemptId)
+              ),
+            purpose: route.purpose,
+            target: route.target
+          }
+      : route
   return DeliveryProposalId.make(`delivery:${JSON.stringify(canonical({ route: identityRoute, runId }))}`)
 }
 

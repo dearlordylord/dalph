@@ -237,6 +237,51 @@ it("routes cancellation claim release through settlement as a new operation acti
   type CancelledRelease = Extract<Transition, { readonly _tag: "ReleaseCancelledAttemptClaim" }>["operation"]
   expectTypeOf<CancelledRelease["authority"]["_tag"]>().toEqualTypeOf<"CancelledAttemptClaimReleaseAuthority">()
 })
+
+it("distinguishes every semantic progress batch while retaining establishment coalescing", () => {
+  const pendingReport = (acceptedAt: number, attemptId: string) => ({
+    acceptedAt: JournalPosition.make(acceptedAt),
+    correlation: plannedAttemptExecutorCorrelation({
+      ...plannedAttempt,
+      attemptId: AttemptId.make(attemptId)
+    })
+  })
+  const progressBatch = (reports: ReadonlyArray<ReturnType<typeof pendingReport>>) =>
+    trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(100),
+      purpose: "CheckExecutorProgress",
+      requirement: {
+        _tag: "ExecutorProgressGraphReadRequirement",
+        pendingReports: reports,
+        runId,
+        target,
+        unresolvedReadOperationId: null
+      },
+      runId,
+      target
+    })
+
+  const firstBatch = progressBatch([pendingReport(20, "attempt-A"), pendingReport(21, "attempt-C")])
+  const sameBatchPermutation = progressBatch([pendingReport(21, "attempt-C"), pendingReport(20, "attempt-A")])
+  const laterBatch = progressBatch([pendingReport(20, "attempt-A"), pendingReport(22, "attempt-C")])
+  const establishment = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(1),
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target
+  })
+  const repeatedEstablishment = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(99),
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target,
+    waitsForLiveOperationId: OperationId.make("establishment-intent")
+  })
+
+  expect(laterBatch.id).not.toBe(firstBatch.id)
+  expect(sameBatchPermutation.id).toBe(firstBatch.id)
+  expect(repeatedEstablishment.id).toBe(establishment.id)
+})
 const queued = QueuedIntegrationResponsibility.make({
   acceptedResult,
   integrationTarget,
