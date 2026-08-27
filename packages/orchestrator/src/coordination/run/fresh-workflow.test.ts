@@ -59,7 +59,7 @@ const graphReadRecordsFor = (
   outcome: "Complete" | "Failed" = "Complete"
 ) => {
   const graph = projectTrackerSnapshot({ revision: `${operation.operationId}-revision`, tasks: [] })
-  if (graph._tag === "Invalid") throw new Error("the empty tracker graph must be valid")
+  if (graph._tag === "Invalid") expect.fail("the empty tracker graph must be valid")
   const observation =
     outcome === "Complete"
       ? makeCompleteTaskTrackerFactsObserved(operation, graph.snapshot)
