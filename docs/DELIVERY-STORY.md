@@ -105,8 +105,13 @@ reports candidate `M₂`; Dalph asks Git to prove exact ordered parents
 physical integration-target position is released, but promotion does not
 settle A. Dalph replaces A's exact active claim with a promotion-correlated
 completion claim. A later focused tracker read reports A successfully
-completed in `G₃` with that exact completion claim. Dalph deletes only that
-claim, records A's delivery settlement, and removes A's retained
+completed in `G₃` with that exact completion claim. Dalph rereads that exact
+marker, releases the exact original active claim, then rereads the completion
+marker and current active record to prove the release
+still holds. Only then does it ask the tracker to delete the exact completion
+marker. After the tracker reports that marker absent, Dalph rereads the current
+active record once more and sees it still absent. Dalph records the marker
+deleted, records A's delivery settlement, and removes A's retained
 integration-completion responsibility.
 
 **18.** Alice reopens C. `G₄`. Only the lifecycle wait clears; every other fact
@@ -152,7 +157,7 @@ record normal termination.
 | 14 | A queued for integration | G₂ | 2 | B D | A C | — | D10 |
 | 15 | Integrator reports candidate; Dalph proves its parents | G₂ | 2 | B D | A C | — | **D26 D28** |
 | 16 | rejected promotion quarantines exact S; no successor starts | G₂ | 2 | B D | A C | A | **D27 D44** |
-| 17 | Alice authorizes FullRerun; exact S₂ promotes; focused success permits exact claim deletion and A settles | G₃ | 2 | B D | C | — | D24 D27 D28 D33 D44 |
+| 17 | Alice authorizes FullRerun; exact S₂ promotes; focused success leads to exact active-claim release, marker/active rereads, marker deletion last, absence proof, and settlement | G₃ | 2 | B D | C | — | D24 D27 D28 D33 D44 |
 | 18 | C reopened | G₄ | 2 | B D | C | — | D9 D19 |
 | 19 | capacity 2 → 3; C admitted | G₄ | 3 | B C D | — | — | D6 D13 |
 | 20 | F and G added | G₅ | 3 | B C D | — | — | D7 D9 |
@@ -219,7 +224,10 @@ in one maintained chronology` runs the capacity, suspension, retention, restart,
 and admission prefix through `runAuthoredScenarioCassette`; `executes DS-14
 through DS-17 from rejected exact-head offer through Operator-authorized
 successor finality` checks the exact stale-head, FullRerun, successor, and
-finality fields.
+finality fields. For DS-17 it directly checks focused success, the exact
+original active-claim release, the ordered marker and active-record rereads,
+the marker deletion attempt after those rereads, marker absence followed by a
+fresh active-record absence check, and settlement last.
 
 The highest-seam cassette is supplemented by existing protocol and
 conformance evidence for the required forbidden outcomes:

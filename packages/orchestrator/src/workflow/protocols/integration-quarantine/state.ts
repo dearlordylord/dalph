@@ -29,6 +29,7 @@ import {
 import { integratorCorrelationsEqual } from "../integrator/state.js"
 import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-authorization.js"
 import { providerRunStartFor, validateProviderRunActivityAbsent } from "./provider-failure.js"
+import { promotionStaleQuarantineEvidenceIssue } from "./promotion-stale-evidence.js"
 
 /** Reconstructed disposition for one exact Integrator session; no process-local choice cache is retained. */
 export const IntegrationQuarantineState = Schema.TaggedUnion({
@@ -348,7 +349,8 @@ const promotionStaleEvidenceMatchesRecords = (
   return (
     integratorCorrelationsEqual(stale.event.correlation.qualifiedCandidate.run.session, correlation) &&
     stale.event.correlation.qualifiedCandidate.candidateCommit === basis.candidateCommit &&
-    stale.event.observation.observedHeadSha === basis.observedTargetHead
+    stale.event.observation.observedHeadSha === basis.observedTargetHead &&
+    promotionStaleQuarantineEvidenceIssue(records, stale) === undefined
   )
 }
 

@@ -14,7 +14,7 @@ import {
   targetPromotionIntentRecordKey,
   targetPromotionStaleRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import {
@@ -36,6 +36,7 @@ import {
   appendPromotionStaleIntegrationQuarantine,
   IntegrationPromotionStaleQuarantineRejected
 } from "./promotion-stale.js"
+import { deriveIntegrationQuarantineState } from "./state.js"
 
 const candidate = integrationFinalityFixture.qualifiedCandidate
 const correlation = targetPromotionCorrelationFor(candidate)
@@ -113,6 +114,75 @@ it.effect("records one quarantine after Git directly rejects the exact compare-a
     expect(first.event._tag).toBe("IntegrationQuarantined")
     expect(first.event.basis._tag).toBe("PromotionStale")
     expect(second).toEqual(first)
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("reconstructs promotion-stale quarantine only from one exact earlier compare-and-set intent", () =>
+  Effect.gen(function* () {
+    const quarantine = yield* appendQuarantineFor("DirectRejectionAfterAttempt")
+    const journal = yield* JournalStore
+    const records = yield* journal.read(runId)
+    const stale = records.find(({ event }) => event._tag === "TargetPromotionStale")
+    const attempt = records.find(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+    if (stale?.event._tag !== "TargetPromotionStale" || attempt?.event._tag !== "TargetPromotionAttemptIntended") {
+      return yield* Effect.die("promotion-stale reconstruction fixture lacks its exact attempt and stale records")
+    }
+    const staleEvent = stale.event
+    const attemptEvent = attempt.event
+
+    expect(deriveIntegrationQuarantineState(records, quarantine.event.correlation.sessionId)._tag).toBe("Quarantined")
+
+    const beforeFirstAttempt: ReadonlyArray<JournalRecord> = records.map((record) =>
+      record.position === stale.position
+        ? {
+            ...record,
+            event: TargetPromotionStaleEvent.make({
+              ...staleEvent,
+              basis: TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({})
+            })
+          }
+        : record
+    )
+    const withoutAttempt: ReadonlyArray<JournalRecord> = records.filter(
+      (record) => record.position !== attempt.position
+    )
+    const duplicateAttempt: ReadonlyArray<JournalRecord> = [...records, { ...attempt }]
+    const foreignAttempt: ReadonlyArray<JournalRecord> = records.map((record) =>
+      record.position === attempt.position
+        ? {
+            ...record,
+            event: {
+              ...attemptEvent,
+              correlation: {
+                ...attemptEvent.correlation,
+                qualifiedCandidate: {
+                  ...attemptEvent.correlation.qualifiedCandidate,
+                  candidateCommit: GitCommitSha.make("5".repeat(40))
+                }
+              }
+            }
+          }
+        : record
+    )
+    const mismatchedAttempt: ReadonlyArray<JournalRecord> = records.map((record) =>
+      record.position === attempt.position
+        ? { ...record, event: { ...attemptEvent, attemptOrdinal: TargetPromotionAttemptOrdinal.make(2) } }
+        : record
+    )
+
+    for (const [label, invalid] of [
+      ["BeforeFirstAttempt stale evidence", beforeFirstAttempt],
+      ["zero compare-and-set intents", withoutAttempt],
+      ["duplicate compare-and-set intents", duplicateAttempt],
+      ["foreign promotion attempt", foreignAttempt],
+      ["mismatched attempt ordinal", mismatchedAttempt]
+    ] as const) {
+      const state = deriveIntegrationQuarantineState(invalid, quarantine.event.correlation.sessionId)
+      expect(state._tag, label).toBe("Contradiction")
+      if (state._tag === "Contradiction") {
+        expect(state.detail, label).toContain("exact earlier Journal facts")
+      }
+    }
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 

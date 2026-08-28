@@ -4,22 +4,18 @@ import { Effect, Schema } from "effect"
 import {
   targetPromotionCandidateCommitOf,
   targetPromotionCorrelationEquals,
-  targetPromotionExpectedHeadOf,
   targetPromotionRunIdOf,
   TargetPromotionCorrelation
 } from "../target-promotion/events.js"
-import type { TargetPromotionAttemptIntendedEvent, TargetPromotionStaleEvent } from "../target-promotion/events.js"
+import type { TargetPromotionStaleEvent } from "../target-promotion/events.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
-import {
-  integrationQuarantinedRecordKey,
-  targetPromotionAttemptIntentRecordKey,
-  targetPromotionStaleRecordKey
-} from "../../../workflow-journal/record-key.js"
+import { integrationQuarantinedRecordKey, targetPromotionStaleRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationQuarantineBasis, IntegrationQuarantinedEvent } from "./events.js"
 import { integratorCorrelationsEqual } from "../integrator/state.js"
+import { promotionStaleQuarantineEvidenceIssue } from "./promotion-stale-evidence.js"
 
 /** The exact promotion correlation and durable stale event needed to stop the old integration session. */
 export const PromotionStaleIntegrationQuarantineInput = Schema.Struct({
@@ -35,7 +31,6 @@ export class IntegrationPromotionStaleQuarantineRejected extends Schema.TaggedEr
 ) {}
 
 type PromotionStaleRecord = JournalRecord & { readonly event: TargetPromotionStaleEvent }
-type PromotionAttemptRecord = JournalRecord & { readonly event: TargetPromotionAttemptIntendedEvent }
 type QuarantineRecord = JournalRecord & { readonly event: IntegrationQuarantinedEvent }
 
 const runIdFor = targetPromotionRunIdOf
@@ -58,38 +53,6 @@ const staleRecordMatches = (
   record.key === targetPromotionStaleRecordKey(input.correlation.requestId) &&
   record.event._tag === "TargetPromotionStale" &&
   targetPromotionCorrelationEquals(record.event.correlation, input.correlation)
-
-/**
- * A promotion-stale quarantine requires one exact compare-and-set attempt.
- * Git may report the changed head directly or through the mandatory read after
- * a lost response; a stale read before any request authorizes no quarantine.
- */
-const promotionStaleQuarantineEvidenceIssue = (
-  records: ReadonlyArray<JournalRecord>,
-  stale: JournalRecord
-): string | undefined => {
-  if (stale.event._tag !== "TargetPromotionStale") return "evidence is not a target-promotion stale event"
-  if (stale.event.basis._tag !== "AfterAttempt") {
-    return "promotion-stale quarantine requires a stale result after a numbered compare-and-set attempt"
-  }
-  if (stale.event.observation.observedHeadSha === targetPromotionExpectedHeadOf(stale.event.correlation)) {
-    return "promotion-stale quarantine cannot follow an unchanged expected head"
-  }
-  const { attemptOrdinal } = stale.event.basis
-  const staleCorrelation = stale.event.correlation
-  const attempts = records.filter(
-    (record): record is PromotionAttemptRecord =>
-      record.position < stale.position &&
-      record.runId === stale.runId &&
-      record.key === targetPromotionAttemptIntentRecordKey(staleCorrelation.requestId, attemptOrdinal) &&
-      record.event._tag === "TargetPromotionAttemptIntended" &&
-      record.event.attemptOrdinal === attemptOrdinal &&
-      targetPromotionCorrelationEquals(record.event.correlation, staleCorrelation)
-  )
-  return attempts.length === 1
-    ? undefined
-    : "promotion-stale quarantine requires one exact earlier correlated compare-and-set attempt intent"
-}
 
 const basisFor = (
   input: PromotionStaleIntegrationQuarantineInput,

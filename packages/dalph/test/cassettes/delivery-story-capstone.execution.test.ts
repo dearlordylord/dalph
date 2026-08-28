@@ -676,7 +676,9 @@ it.effect(
       })
       expect(appliedCompareAndSet.captureOrder).toBeGreaterThan(successorCandidateCapture.captureOrder)
 
-      // Completion finality remains bound to A's original active claim and the focused success read.
+      // DS17 completion finality: focused success releases the exact original
+      // active record, rereads marker and active-record authority, deletes the
+      // completion marker last, proves both records absent, then settles.
       const originalClaim = exactlyOne(
         recordsFor(records, "TaskClaimAcquired").filter(({ event }) => event.claim.taskId === "A"),
         "A original active claim"
@@ -755,6 +757,36 @@ it.effect(
         ),
         "A completion-claim deletion intent"
       )
+      const cleanupReads = recordsFor(records, "CompletionClaimDeletionReadObserved").filter(
+        ({ event }) => event.request.operationId === deletionIntent.event.operationId
+      )
+      const markerBeforeRelease = exactlyOne(
+        cleanupReads.filter(({ event }) => event.purpose._tag === "BeforeOriginalClaimRelease"),
+        "A completion marker read before original-claim release"
+      )
+      const originalReleaseIntent = exactlyOne(
+        recordsFor(records, "TaskClaimReleaseIntended").filter(
+          ({ event }) => event.operation.release.claim.taskId === "A"
+        ),
+        "A original active-claim release intent"
+      )
+      const originalReleased = exactlyOne(
+        recordsFor(records, "TaskClaimReleased").filter(({ event }) => event.release.claim.taskId === "A"),
+        "A original active-claim release result"
+      )
+      const markerBeforeDeletion = exactlyOne(
+        cleanupReads.filter(
+          ({ event }) =>
+            event.purpose._tag === "BeforeDeletionAttempt" &&
+            event.purpose.attemptOrdinal === 1 &&
+            event.observation._tag === "CompletionTaskClaim"
+        ),
+        "A completion marker reread before deletion"
+      )
+      const originalReleaseConfirmed = exactlyOne(
+        cleanupReads.filter(({ event }) => event.purpose._tag === "ConfirmOriginalClaimReleased"),
+        "A original active-claim absence confirmation"
+      )
       const deletionAttempt = exactlyOne(
         recordsFor(records, "CompletionClaimDeletionAttemptIntended").filter(
           ({ event }) => event.operationId === deletionIntent.event.operationId
@@ -766,6 +798,14 @@ it.effect(
           ({ event }) => event.operationId === deletionIntent.event.operationId
         ),
         "A exact completion-claim deletion"
+      )
+      const markerAbsent = exactlyOne(
+        cleanupReads.filter(({ event }) => event.observation._tag === "CompletionClaimMarkerAbsent"),
+        "A completion marker absence read"
+      )
+      const noActiveClaimAfterMarkerAbsent = exactlyOne(
+        cleanupReads.filter(({ event }) => event.purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent"),
+        "A active-record absence read after marker absence"
       )
       const settled = exactlyOne(
         recordsFor(records, "IntegrationFinalitySettled").filter(
@@ -783,8 +823,21 @@ it.effect(
       expect(deletionIntent.event.successObservation.target).toEqual(focusedObservation.facts.target)
       expect(deletionIntent.event.claim).toEqual(replacementIntent.event.claim)
       expect(deletionIntent.event.successObservation.observedAt).toBe(focusedCompleted.position)
+      expect(markerBeforeRelease.event.observation).toEqual(replacementIntent.event.claim)
+      expect(markerBeforeRelease.event.request).toEqual({
+        claim: deletionIntent.event.claim,
+        operationId: deletionIntent.event.operationId,
+        successObservation: deletionIntent.event.successObservation
+      })
+      expect(originalReleaseIntent.event.operation.release.claim).toEqual(originalClaim)
+      expect(originalReleaseIntent.event.operation.authority).toEqual({ _tag: "WorkflowClaimReleaseAuthority" })
+      expect(originalReleased.event.release).toEqual(originalReleaseIntent.event.operation.release)
+      expect(markerBeforeDeletion.event.observation).toEqual(replacementIntent.event.claim)
+      expect(originalReleaseConfirmed.event.observation).toEqual({ _tag: "UnclaimedTask", taskId: "A" })
       expect(deletionAttempt.event.claim).toEqual(deletionIntent.event.claim)
       expect(deletionAttempt.event.successObservation).toEqual(deletionIntent.event.successObservation)
+      expect(markerAbsent.event.observation).toEqual({ _tag: "CompletionClaimMarkerAbsent", taskId: "A" })
+      expect(noActiveClaimAfterMarkerAbsent.event.observation).toEqual({ _tag: "UnclaimedTask", taskId: "A" })
       expect(deletion.event.claim).toEqual(deletionIntent.event.claim)
       expect(deletion.event.successObservation).toEqual(deletionIntent.event.successObservation)
       expect(settled.event.claim).toEqual(deletion.event.claim)
@@ -822,7 +875,14 @@ it.effect(
         completionAcknowledged.position,
         focusedCompleted.position,
         deletionIntent.position,
+        markerBeforeRelease.position,
+        originalReleaseIntent.position,
+        originalReleased.position,
+        markerBeforeDeletion.position,
+        originalReleaseConfirmed.position,
         deletionAttempt.position,
+        markerAbsent.position,
+        noActiveClaimAfterMarkerAbsent.position,
         deletion.position,
         settled.position
       ]
@@ -836,7 +896,14 @@ it.effect(
       expect(completionIntent.position).toBeLessThan(completionAttempt.position)
       expect(completionAttempt.position).toBeLessThan(completionAcknowledged.position)
       expect(replacement.position).toBeLessThan(focusedCompleted.position)
-      expect(focusedCompleted.position).toBeLessThan(deletion.position)
+      expect(focusedCompleted.position).toBeLessThan(originalReleaseIntent.position)
+      expect(originalReleaseIntent.position).toBeLessThan(originalReleased.position)
+      expect(originalReleased.position).toBeLessThan(markerBeforeDeletion.position)
+      expect(markerBeforeDeletion.position).toBeLessThan(originalReleaseConfirmed.position)
+      expect(originalReleaseConfirmed.position).toBeLessThan(deletionAttempt.position)
+      expect(deletionAttempt.position).toBeLessThan(markerAbsent.position)
+      expect(markerAbsent.position).toBeLessThan(noActiveClaimAfterMarkerAbsent.position)
+      expect(noActiveClaimAfterMarkerAbsent.position).toBeLessThan(deletion.position)
       expect(deletion.position).toBeLessThan(settled.position)
     }),
   capstoneTimeout

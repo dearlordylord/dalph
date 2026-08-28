@@ -5,24 +5,49 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import {
   InRunJournal,
+  IntegrationQuarantineBasis,
+  IntegrationQuarantinedEvent,
+  IntegratorRunQualifiedCandidate,
+  type IntegratorSessionId,
+  JournalPosition,
+  JournalRecordKey,
+  JournalStore,
   CoordinatorOwnership,
   OperationId,
   TaskTrackerReadIntentRecordedEvent,
   acquireStartedIntegrationTarget,
   deriveIntegrationAdmission,
+  deriveIntegrationQuarantineState,
   projectWorkflowOccurrences,
   reduceWorkflowJournalHistory,
+  TargetPromotionStaleEvent,
+  TargetPromotionTerminalBasis,
+  TargetPromotionAttemptIntendedEvent,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionAttemptReason,
+  TargetPromotionIntendedEvent,
   TargetPromotionGitReadObservation,
   TargetPromotionGitReadFailure,
   TargetPromotionRuntime,
   intentRecordKey,
+  integrationQuarantinedRecordKey,
   makeTrackerGraphObservationOperation,
+  memoryJournalStoreLayer,
+  appendPromotionStaleIntegrationQuarantine,
+  targetPromotionAttemptIntentRecordKey,
   targetPromotionCorrelationEquals,
+  targetPromotionCorrelationFor,
+  targetPromotionIntentRecordKey,
+  targetPromotionStaleRecordKey,
   type IntegrationTargetResourceController,
   type JournalRecord,
   makeIntegrationTargetResourceController,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
+import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
+import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
+import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
+import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
 import {
   expectedRecoveryPrefix,
   prefixThrough,
@@ -359,6 +384,142 @@ const assertNoSuccessorTransition = (snapshot: RunRecoveryProjectionSnapshot): v
   expect(snapshot.frontier.transitions.filter(({ _tag }) => successorTransitionTags.has(_tag))).toEqual([])
 }
 
+type StoredPromotionStalePrefixKind =
+  | "Exact"
+  | "BeforeFirstAttempt"
+  | "ZeroAttempt"
+  | "DuplicateAttempt"
+  | "ForeignAttempt"
+
+interface StoredPromotionStalePrefix {
+  readonly prefix: RecoveryPrefix<StoredPromotionStalePrefixKind>
+  readonly sessionId: IntegratorSessionId
+}
+
+const storedPromotionStalePrefix = Effect.fn("RestartPrefixAcceptanceMatrix.storedPromotionStalePrefix")(function* (
+  kind: StoredPromotionStalePrefixKind
+): Effect.fn.Return<StoredPromotionStalePrefix, unknown> {
+  const candidate = integrationFinalityFixture.qualifiedCandidate
+  const correlation = targetPromotionCorrelationFor(candidate)
+  const runId = candidate.run.session.plannedAttempt.runId
+  const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+  const changedHead = GitCommitSha.make("4".repeat(40))
+  const exact = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const storage = yield* JournalStore
+      yield* storage.beginRun(
+        runId,
+        FixtureTarget.make("promotion-stale-storage-prefix"),
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      )
+      yield* storage.append(
+        runId,
+        targetPromotionIntentRecordKey(correlation.requestId),
+        TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+      )
+      yield* storage.append(
+        runId,
+        targetPromotionAttemptIntentRecordKey(correlation.requestId, attemptOrdinal),
+        TargetPromotionAttemptIntendedEvent.make({
+          attemptOrdinal,
+          correlation,
+          reason: TargetPromotionAttemptReason.cases.Initial.make({
+            observedHeadSha: candidate.run.session.expectedTargetHead
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const stale = yield* storage.append(
+        runId,
+        targetPromotionStaleRecordKey(correlation.requestId),
+        TargetPromotionStaleEvent.make({
+          basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
+          correlation,
+          observation: { _tag: "CompareAndSetRejected", observedHeadSha: changedHead },
+          version: workflowJournalEventVersion
+        })
+      )
+      const journal = InRunJournal.of({ append: storage.append, read: storage.read })
+      yield* appendPromotionStaleIntegrationQuarantine({ correlation, targetPromotionStaleAt: stale.position }).pipe(
+        Effect.provideService(InRunJournal, journal)
+      )
+      return yield* storage.read(runId)
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+  const began = exactlyOne(
+    exact.filter(({ event }) => event._tag === "WorkflowRunBegan"),
+    "minimal stored-prefix WorkflowRunBegan"
+  )
+  const intent = exactlyOne(
+    exact.filter(({ event }) => event._tag === "TargetPromotionIntended"),
+    "minimal stored-prefix promotion intent"
+  )
+  const attempt = exactlyOne(
+    exact.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended"),
+    "minimal stored-prefix promotion attempt"
+  )
+  const stale = exactlyOne(
+    exact.filter(({ event }) => event._tag === "TargetPromotionStale"),
+    "minimal stored-prefix stale result"
+  )
+  const quarantine = exactlyOne(
+    exact.filter(({ event }) => event._tag === "IntegrationQuarantined"),
+    "minimal stored-prefix quarantine"
+  )
+  if (
+    attempt.event._tag !== "TargetPromotionAttemptIntended" ||
+    stale.event._tag !== "TargetPromotionStale" ||
+    quarantine.event._tag !== "IntegrationQuarantined"
+  ) {
+    return yield* Effect.die("minimal stored-prefix records did not narrow")
+  }
+
+  const foreignCandidate = IntegratorRunQualifiedCandidate.make({
+    ...candidate,
+    candidateCommit: GitCommitSha.make("6".repeat(40))
+  })
+  const foreignAttempt = {
+    ...attempt,
+    event: TargetPromotionAttemptIntendedEvent.make({
+      ...attempt.event,
+      correlation: targetPromotionCorrelationFor(foreignCandidate)
+    })
+  }
+  const attemptedRecords =
+    kind === "ZeroAttempt"
+      ? []
+      : kind === "ForeignAttempt"
+        ? [foreignAttempt]
+        : kind === "DuplicateAttempt"
+          ? [attempt, { ...attempt, key: JournalRecordKey.make("invalid:duplicate-target-promotion-attempt") }]
+          : [attempt]
+  const stalePosition = JournalPosition.make(3 + attemptedRecords.length)
+  const staleEvent = TargetPromotionStaleEvent.make({
+    ...stale.event,
+    basis:
+      kind === "BeforeFirstAttempt"
+        ? TargetPromotionTerminalBasis.cases.BeforeFirstAttempt.make({})
+        : TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal })
+  })
+  const storedStale = { ...stale, event: staleEvent, position: stalePosition }
+  const quarantineBasis = IntegrationQuarantineBasis.cases.PromotionStale.make({
+    candidateCommit: candidate.candidateCommit,
+    observedTargetHead: changedHead,
+    targetPromotionStaleAt: stalePosition
+  })
+  const storedQuarantine = {
+    ...quarantine,
+    event: IntegrationQuarantinedEvent.make({ ...quarantine.event, basis: quarantineBasis }),
+    key: integrationQuarantinedRecordKey(candidate.run.session.sessionId, quarantineBasis),
+    position: JournalPosition.make(Number(stalePosition) + 1)
+  }
+  const records = [began, intent, ...attemptedRecords, storedStale, storedQuarantine] as const
+  return {
+    prefix: { cut: kind, endpoint: kind + " promotion-stale quarantine", records },
+    sessionId: candidate.run.session.sessionId
+  }
+})
+
 it.effect(
   "preserves #270 promotion intent, stale evidence, and durable quarantine through both restart stores",
   () =>
@@ -527,5 +688,34 @@ it.effect(
   // outcomes through memory and SQLite. The final body measured 9.63s isolated
   // and 24.14s in the affected aggregate; 120s doubles the observed 60.112s
   // shared-runner contention ceiling for this one store-heavy test.
+  120_000
+)
+
+it.effect(
+  "reconstructs only an exact attempt-backed promotion-stale quarantine through both restart stores",
+  () =>
+    Effect.gen(function* () {
+      yield* Effect.forEach(
+        ["Exact", "BeforeFirstAttempt", "ZeroAttempt", "DuplicateAttempt", "ForeignAttempt"] as const,
+        (kind) =>
+          Effect.gen(function* () {
+            const stored = yield* storedPromotionStalePrefix(kind)
+            yield* Effect.forEach(
+              lanes,
+              (lane) =>
+                withRecoveryPrefixStore(stored.prefix, lane, (storage) =>
+                  Effect.gen(function* () {
+                    const began = stored.prefix.records[0]
+                    const decoded = yield* storage.read(began.runId)
+                    const state = deriveIntegrationQuarantineState(decoded, stored.sessionId)
+                    expect(state._tag, kind + " / " + lane).toBe(kind === "Exact" ? "Quarantined" : "Contradiction")
+                  })
+                ),
+              { concurrency: 1 }
+            )
+          }),
+        { concurrency: 1 }
+      )
+    }),
   120_000
 )
