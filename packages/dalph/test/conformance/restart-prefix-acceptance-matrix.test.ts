@@ -1,11 +1,17 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
+import { GitCommitSha } from "@dalph/contracts"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import {
   InRunJournal,
+  CoordinatorOwnership,
   acquireStartedIntegrationTarget,
+  deriveIntegrationAdmission,
+  TargetPromotionGitReadObservation,
+  TargetPromotionRuntime,
   targetPromotionCorrelationEquals,
+  type IntegrationTargetResourceController,
   type JournalRecord,
   makeIntegrationTargetResourceController
 } from "@dalph/orchestrator"
@@ -23,6 +29,14 @@ import {
   makeRunRecoveryProjection,
   type RunRecoveryProjectionSnapshot
 } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import { deliveryProposalsOf } from "../../../orchestrator/src/coordination/delivery/delivery-proposal-derivation.js"
+import { executeIntegrationAction } from "../../../orchestrator/src/coordination/delivery/integration-delivery-action-adapter.js"
+import type { DeliveryActionExecutionLease } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
+import type {
+  DeliveryActionProposal,
+  IdentityFreeDeliveryProposal
+} from "../../../orchestrator/src/coordination/delivery/delivery-action-proposal.js"
+import type { RunnableFrontierTransition } from "../../../orchestrator/src/coordination/frontier/frontier.js"
 import type { TargetPromotionRuntimeInput } from "../../../orchestrator/src/workflow/protocols/target-promotion/runtime.js"
 
 const lanes: ReadonlyArray<RecoveryStoreLane> = ["memory", "sqlite"]
@@ -112,9 +126,53 @@ const disabledTargetPromotionRuntime: TargetPromotionRuntimeInput = {
 
 interface ProductionRestartProjection {
   readonly afterAcquire: RunRecoveryProjectionSnapshot
+  readonly afterRecovery: RunRecoveryProjectionSnapshot | undefined
   readonly beforeAcquire: RunRecoveryProjectionSnapshot
+  readonly boundaryCalls: ReadonlyArray<string>
   readonly records: ReadonlyArray<JournalRecord>
 }
+
+const isIdentityFreeProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>
+  proposal.actionIdentity._tag === "NoWorkflowOperationIdentity"
+
+const identityFreeActionFor = (
+  runId: JournalRecord["runId"],
+  records: ReadonlyArray<JournalRecord>,
+  transition: RunnableFrontierTransition
+): { readonly _tag: "IdentityFreeAction"; readonly proposal: IdentityFreeDeliveryProposal } => {
+  const acceptedAt = records.at(-1)?.position
+  if (acceptedAt === undefined) return expect.fail(transition._tag + " has no accepted journal position")
+  const proposals = deliveryProposalsOf({
+    acceptedAt,
+    acceptedOperationIds: new Set(),
+    fresh: [],
+    integrationResponsibilities: deriveIntegrationAdmission(records).responsibilities,
+    responsibilities: [],
+    runId,
+    transitions: [transition]
+  })
+  expect(proposals.issues).toEqual([])
+  const proposal = exactlyOne(
+    [...proposals.ticketDelivery, ...proposals.deliverySettlement],
+    transition._tag + " production proposal"
+  )
+  if (!isIdentityFreeProposal(proposal)) {
+    return expect.fail(transition._tag + " did not derive its identity-free production proposal")
+  }
+  return { _tag: "IdentityFreeAction", proposal }
+}
+
+const executionLeaseFor = (integrationTargets: IntegrationTargetResourceController): DeliveryActionExecutionLease => ({
+  acceptIntegrationTargetOwnership: Effect.void,
+  bindPreStartTaskWorkPosition: () => Effect.void,
+  bindPreStartPlannedAttemptPosition: () => Effect.void,
+  bindPlannedAttemptPosition: () => Effect.void,
+  forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
+  integrationTargets,
+  recordIntent: () => Effect.void,
+  releasePlannedAttemptPosition: () => Effect.void,
+  withPlannedAttemptProtocol: () => Effect.die("restart-prefix promotion never enters attempt execution")
+})
 
 const productionRestartProjection = (
   prefix: RecoveryPrefix<RestartPrefixCutLabel>,
@@ -142,11 +200,64 @@ const productionRestartProjection = (
       if (acquire?._tag === "AcquireStartedIntegrationTarget") {
         yield* acquireStartedIntegrationTarget(resources, acquire)
       }
-      return {
-        afterAcquire: yield* recovery.readDeliveryProjection,
-        beforeAcquire,
-        records: yield* storage.read(began.runId)
+      const afterAcquire = yield* recovery.readDeliveryProjection
+      const boundaryCalls: Array<string> = []
+      let afterRecovery: RunRecoveryProjectionSnapshot | undefined
+      if (prefix.cut === "AttemptIntended") {
+        const promotion = exactlyOne(
+          afterAcquire.frontier.transitions.filter(({ _tag }) => _tag === "RunTargetPromotion"),
+          "recovered RunTargetPromotion"
+        )
+        if (promotion._tag !== "RunTargetPromotion") {
+          return yield* Effect.die("recovered promotion transition narrowing failed")
+        }
+        // This is a current Git boundary fact, not a record copied from the
+        // later authored run: the target moved to this controlled test head.
+        const reconciledTargetHead = GitCommitSha.make("2".repeat(40))
+        const runtime = TargetPromotionRuntime.of({
+          git: {
+            compareAndSet: () =>
+              Effect.sync(() => boundaryCalls.push("compareAndSet")).pipe(
+                Effect.andThen(Effect.die("restart must reconcile before any compare-and-set retry"))
+              ),
+            read: () =>
+              Effect.sync(() => {
+                boundaryCalls.push("read")
+                return TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+                  currentHeadSha: reconciledTargetHead
+                })
+              })
+          }
+        })
+        const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+        const lease = executionLeaseFor(resources)
+        yield* executeIntegrationAction(
+          identityFreeActionFor(began.runId, yield* storage.read(began.runId), promotion),
+          promotion,
+          lease,
+          began.event.target
+        ).pipe(
+          Effect.provideService(CoordinatorOwnership, ownership),
+          Effect.provideService(TargetPromotionRuntime, runtime),
+          Effect.provideService(InRunJournal, journal)
+        )
+        const afterStale = yield* recovery.readDeliveryProjection
+        const quarantine = exactlyOne(
+          afterStale.frontier.transitions.filter(({ _tag }) => _tag === "RecordPromotionStaleIntegrationQuarantine"),
+          "recovered promotion-stale quarantine"
+        )
+        if (quarantine._tag !== "RecordPromotionStaleIntegrationQuarantine") {
+          return yield* Effect.die("recovered quarantine transition narrowing failed")
+        }
+        yield* executeIntegrationAction(
+          identityFreeActionFor(began.runId, yield* storage.read(began.runId), quarantine),
+          quarantine,
+          lease,
+          began.event.target
+        ).pipe(Effect.provideService(InRunJournal, journal))
+        afterRecovery = yield* recovery.readDeliveryProjection
       }
+      return { afterAcquire, afterRecovery, beforeAcquire, boundaryCalls, records: yield* storage.read(began.runId) }
     })
   )
 
@@ -213,21 +324,53 @@ it.effect(
           const replayed = yield* replayRecoveryPrefix(prefix, lane)
           expect(recoveryPrefixMismatch(prefix.cut, lane, expected, replayed)).toBeUndefined()
           const production = yield* productionRestartProjection(prefix, lane)
-          expect(production.records, prefix.cut + " / " + lane + " projection must be read-only").toEqual(
-            prefix.records
-          )
           const before = exactAttemptTransitions(production.beforeAcquire, plannedAttempt.attemptId)
           const after = exactAttemptTransitions(production.afterAcquire, plannedAttempt.attemptId)
           assertNoSuccessorTransition(production.beforeAcquire)
           assertNoSuccessorTransition(production.afterAcquire)
+          if (production.afterRecovery !== undefined) assertNoSuccessorTransition(production.afterRecovery)
 
           if (prefix.cut === "AttemptIntended") {
             expect(prefix.records.at(-1)).toEqual(matrix.attempt)
-            // The compare-and-set response was lost. The retained intent is
-            // exact, but unrelated earlier continuation work prevents retry.
-            expect(before).toEqual([])
-            expect(after).toEqual([])
+            expect(before.map(({ _tag }) => _tag)).toEqual(["AcquireStartedIntegrationTarget"])
+            const promotions = after.filter(({ _tag }) => _tag === "RunTargetPromotion")
+            expect(promotions).toHaveLength(1)
+            if (promotions[0]?._tag === "RunTargetPromotion") {
+              expect(promotions[0].candidate).toEqual(matrix.attempt.event.correlation.qualifiedCandidate)
+              expect(promotions[0].responsibility.plannedAttempt).toEqual(plannedAttempt)
+            }
+            expect(production.boundaryCalls).toEqual(["read"])
+            expect(production.records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")).toEqual(
+              prefix.records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+            )
+            const recoveredStale = exactlyOne(
+              production.records.filter(({ event }) => event._tag === "TargetPromotionStale"),
+              prefix.cut + " / " + lane + " recovered TargetPromotionStale"
+            )
+            const recoveredQuarantine = exactlyOne(
+              production.records.filter(
+                ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "PromotionStale"
+              ),
+              prefix.cut + " / " + lane + " recovered promotion-stale quarantine"
+            )
+            expect(recoveredStale.event).toEqual({
+              ...matrix.stale.event,
+              observation: {
+                _tag: "ReconciledCandidateNotInAncestry",
+                observedHeadSha: matrix.stale.event.observation.observedHeadSha
+              }
+            })
+            expect(recoveredQuarantine.event).toEqual(matrix.quarantine.event)
+            expect(
+              exactAttemptTransitions(
+                production.afterRecovery ?? expect.fail("lost-response recovery did not reach durable quarantine"),
+                plannedAttempt.attemptId
+              )
+            ).toEqual([])
           } else if (prefix.cut === "Stale") {
+            expect(production.records, prefix.cut + " / " + lane + " projection must be read-only").toEqual(
+              prefix.records
+            )
             expect(prefix.records.at(-1)).toEqual(matrix.stale)
             expect(before.filter(({ _tag }) => _tag === "AcquireStartedIntegrationTarget")).toEqual([])
             const quarantines = after.filter(({ _tag }) => _tag === "RecordPromotionStaleIntegrationQuarantine")
@@ -240,6 +383,9 @@ it.effect(
               expect(quarantines[0].responsibility.plannedAttempt).toEqual(plannedAttempt)
             }
           } else {
+            expect(production.records, prefix.cut + " / " + lane + " projection must be read-only").toEqual(
+              prefix.records
+            )
             // #271 owns recovery after an Operator direction. A process restart
             // has no retained semaphore lease to release at this durable-Q cut.
             expect(prefix.records.at(-1)).toEqual(matrix.quarantine)

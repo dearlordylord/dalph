@@ -752,13 +752,13 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
       runState,
       {
         activeResponsibilityPositions: new Set(),
-        currentTrackerTaskIds: new Set([taskId]),
+        currentTrackerTaskIds: new Set(),
         heldResponsibilityPositions: new Set([responsibility.queuedAt]),
         integrationTarget: Option.some(target),
         targetLineageByAttemptId: new Map([[attemptId, lineage(preparedCandidateCommit)]]),
         targetLineageRefreshRequiredAttemptIds: new Set([attemptId]),
         targetPromotionConfigured: true,
-        taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+        taskClaimAuthorityByAttemptId: new Map()
       },
       [responsibility]
     ).transitions()

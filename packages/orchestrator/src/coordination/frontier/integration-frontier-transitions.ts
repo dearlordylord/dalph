@@ -501,6 +501,23 @@ const transitionsBeforeStartedIntegrationAdmission = (
       RunnableFrontierTransition.RecordPromotionStaleIntegrationQuarantine({ input: promotionStale, responsibility })
     ]
   }
+  // A lost compare-and-set response crosses the Git ambiguity boundary before
+  // tracker freshness can change admission. Reacquire the exact target and
+  // reconcile that retained attempt before consulting newer graph or claim facts.
+  if (
+    runtimeFacts.targetPromotionConfigured === true &&
+    promotionAttemptNeedsReconciliationRead(promotion) &&
+    integratorState._tag === "GitQualifiedPrepared"
+  ) {
+    return held
+      ? [
+          RunnableFrontierTransition.RunTargetPromotion({
+            candidate: integratorRunQualifiedCandidateFromState(integratorState),
+            responsibility
+          })
+        ]
+      : [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+  }
   if (!trackerFactsAreCurrentFor(responsibility)) return releaseStartedIntegrationTargetFor(responsibility, held)
   if (!claimIsExactFor(responsibility)) return []
   if (waiting) return releaseStartedIntegrationTargetFor(responsibility, held)
