@@ -28,6 +28,7 @@ import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-j
 import {
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
+  integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
@@ -1174,6 +1175,36 @@ const acceptedResultIntegrationDriver = defineDriver(
       })
     }
 
+    const preparationForRun = (id: bigint, run: IntegratorRunCorrelation): IntegratorPreparationInput => {
+      if (run.ordinal === IntegratorRunOrdinal.make(1)) {
+        return makeInput(id, modelResults, runtime.readRecords())
+      }
+      const direction = directionRecordFor(id, "Retry")
+      const started = runtime.readRecords().find((record) => record.key === integratorRunStartedRecordKey(run))
+      if (started === undefined) {
+        return rejectImpossibleTransition("Retry candidate qualification lacks its exact run start")
+      }
+      const lineage = runtime
+        .readRecords()
+        .filter(
+          (record) =>
+            record.event._tag === "TargetLineageObserved" &&
+            record.event.plannedAttempt.attemptId === attemptFor(id).attemptId &&
+            record.position > direction.position &&
+            record.position < started.position
+        )
+        .toSorted((left, right) => left.position - right.position)
+        .at(-1)
+      if (lineage === undefined || lineage.event._tag !== "TargetLineageObserved") {
+        return rejectImpossibleTransition("Retry candidate qualification lacks its fresh target-lineage observation")
+      }
+      return IntegratorPreparationInput.make({
+        responsibility: responsibilityFor(id),
+        targetLineage: lineage.event.observation,
+        targetLineageObservedAt: lineage.position
+      })
+    }
+
     const assertLostRun = (run: IntegratorRunCorrelation, outcome: { readonly _tag: string }): void => {
       if (outcome._tag !== "Failure") {
         return rejectImpossibleTransition(
@@ -1240,7 +1271,8 @@ const acceptedResultIntegrationDriver = defineDriver(
         observedSecondParent: secondParent,
         candidateQualificationProven: exact,
         promotionAuthorized: exact,
-        candidateGitResponseAmbiguous: false
+        candidateGitResponseAmbiguous: false,
+        quarantineRecorded: exact ? current.quarantineRecorded : false
       }))
     }
 
@@ -1351,8 +1383,19 @@ const acceptedResultIntegrationDriver = defineDriver(
         integratorOutcome: "NotPrepared",
         integratorRunResultRecorded: true,
         candidateReported: false,
+        integratorResponseAmbiguous: false,
+        submittedCandidate: 0n,
+        candidateJournalPosition: 0n,
+        candidateGitReadIntentRecorded: false,
+        candidateGitReadCount: 0n,
+        candidateGitResponseAmbiguous: false,
+        candidateGitObservation: "NoCandidateGitObservation",
+        candidateQualificationProven: false,
+        observedFirstParent: 0n,
+        observedSecondParent: 0n,
+        resourceHeadCandidate: 0n,
         promotionAuthorized: false,
-        integratorResponseAmbiguous: false
+        quarantineRecorded: result.phase === "RetryInFlight" ? false : result.quarantineRecorded
       }))
 
     const modelChooseDirection = (id: bigint, direction: QuarantineDirection): void =>
@@ -1377,7 +1420,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     const modelRejectConflictingDirection = (id: bigint): void =>
       updateModelResult(id, (result) => ({ ...result, quarantineConflictCount: result.quarantineConflictCount + 1n }))
 
-    const modelStartRetry = (id: bigint): void =>
+    const modelStartRetry = (id: bigint): void => {
       updateModelResult(id, (result) => ({
         ...result,
         phase: "RetryInFlight",
@@ -1391,6 +1434,8 @@ const acceptedResultIntegrationDriver = defineDriver(
         lastRecoveryRunSession: result.retryRunCount === 0n ? 0n : result.lastRecoveryRunSession,
         lastRecoveryRunOrdinal: result.retryRunCount === 0n ? 0n : result.lastRecoveryRunOrdinal
       }))
+      targetReacquisitionRequired = false
+    }
 
     const modelRetryNotApplicable = (id: bigint): void => {
       const quarantinePosition = modelNextJournalPosition
@@ -1468,6 +1513,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         quarantineDirection: "NoQuarantineDirection",
         quarantineDirectionSession: 0n,
         quarantineDirectionPosition: 0n,
+        quarantineConflictCount: 0n,
         quarantineRedeliveryCount: 0n,
         retryNotApplicableCount: 0n,
         retryFreshQuarantineCount: 0n
@@ -1729,7 +1775,16 @@ const acceptedResultIntegrationDriver = defineDriver(
     }
 
     const modelReacquire = (id: bigint): void => {
-      updateModelResult(id, (result) => ({ ...result, targetHeld: true }))
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase:
+          result.phase === "CandidateGitReadPending" && result.candidateGitResponseAmbiguous
+            ? "CandidateGitReadIntent"
+            : result.phase,
+        targetHeld: true,
+        candidateGitResponseAmbiguous:
+          result.phase === "CandidateGitReadPending" ? false : result.candidateGitResponseAmbiguous
+      }))
       targetReacquisitionRequired = [...modelResults].some(
         ([other, result]) => other !== id && !result.targetHeld && targetReacquisitionPhase(result.phase)
       )
@@ -1927,8 +1982,17 @@ const acceptedResultIntegrationDriver = defineDriver(
 
     const observeCandidate = (id: bigint, mode: GitMode, observation: CandidateGitObservation) =>
       Effect.gen(function* () {
+        const run = currentRunFor(id)
+        const candidateText = candidateTextOf(modelResultFor(id).submittedCandidate)
         runtime.setGitMode(mode)
-        yield* runtime.runProtocol(id)
+        yield* runtime.runProtocolFor(preparationForRun(id, run), run)
+        if (
+          !runtime
+            .readRecords()
+            .some((record) => record.key === integratorRunCandidateGitObservedRecordKey(run, candidateText))
+        ) {
+          return rejectImpossibleTransition(`candidate Git observation was not recorded for exact run ${run.ordinal}`)
+        }
         modelObserveCandidate(id, observation)
       })
 
@@ -2008,8 +2072,9 @@ const acceptedResultIntegrationDriver = defineDriver(
         }),
       loseCandidateGitResponseOne: () =>
         Effect.gen(function* () {
+          const run = currentRunFor(1n)
           runtime.failNextGitRead()
-          yield* Effect.exit(runtime.runProtocol(1n))
+          yield* Effect.exit(runtime.runProtocolFor(preparationForRun(1n, run), run))
           modelLoseGit(1n)
         }),
       loseCandidateGitResponseTwo: () => Effect.void,
@@ -2081,10 +2146,10 @@ const acceptedResultIntegrationDriver = defineDriver(
         }),
       reportIntegratorNotPreparedOne: () =>
         Effect.gen(function* () {
-          const correlation = runFor(1n)
-          const result = IntegratorResult.cases.NotPrepared.make({ correlation, detail: notPreparedDetail })
+          const run = runFor(1n)
+          const result = IntegratorResult.cases.NotPrepared.make({ correlation: run, detail: notPreparedDetail })
           yield* appendIntegratorResult(1n, result)
-          yield* Effect.exit(runtime.runProtocol(1n))
+          yield* Effect.exit(runtime.runProtocolFor(preparationForRun(1n, run), run))
           modelNotPrepared(1n)
         }),
       recordQuarantineOne: () =>
@@ -2220,6 +2285,8 @@ quintIt(
     driverFactory: acceptedResultIntegrationDriver,
     maxSteps: 35,
     nTraces: 100,
+    // Trace 79, step 23 reaches reacquisition after an ambiguous candidate-Git
+    // response and proves the adapter rewinds to the same recorded read intent.
     seed: "57",
     spec: "specs/acceptedResultIntegration.qnt",
     stateCheck: stateCheck(

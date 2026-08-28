@@ -881,7 +881,7 @@ it.effect(
         { concurrency: 1 }
       )
     }),
-  // One cached source run feeds three retained cuts plus two fail-closed
+  // One direct source fixture feeds three retained cuts plus two fail-closed
   // outcomes through memory and SQLite. The final body measured 9.63s isolated
   // and 24.14s in the affected aggregate; 120s doubles the observed 60.112s
   // shared-runner contention ceiling for this one store-heavy test.
