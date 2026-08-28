@@ -476,7 +476,7 @@ export const authorizeCompletionTaskAttempt = Effect.fn("IntegrationFinality.aut
         )
       )
     )
-    const alreadyCompleted = focusedCompletionObservationFor(request, focused.facts, focused.observedAt, target)
+    const alreadyCompleted = yield* authorizeCurrentFocusedCompletion(request, focused, target)
     if (alreadyCompleted !== undefined) {
       return CompletionTaskAttemptAuthorization.cases.CompletionAlreadyObserved.make({ observation: alreadyCompleted })
     }
@@ -520,28 +520,87 @@ const focusedCompletionObservationFor = (
   facts: FocusedTaskCompletionFacts,
   observedAt: JournalRecord["position"],
   target: TrackerTarget
-): FocusedCompletedTaskObservation | undefined =>
-  facts.lifecycle === "CompletedSuccessfully" &&
-  facts.taskId === request.taskId &&
-  facts.taskRevision === request.taskRevision &&
-  taskTrackerTargetKey(facts.target) === taskTrackerTargetKey(target)
-    ? FocusedCompletedTaskObservation.make({
-        claim: request.claim,
-        lifecycle: "CompletedSuccessfully",
-        observedAt,
-        operationId: facts.operationId,
-        taskId: facts.taskId,
-        taskRevision: facts.taskRevision,
-        trackerRevision: facts.trackerRevision,
-        target: facts.target
-      })
-    : undefined
+): FocusedCompletedTaskObservation | undefined => {
+  if (
+    facts.lifecycle !== "CompletedSuccessfully" ||
+    facts.taskId !== request.taskId ||
+    facts.taskRevision !== request.taskRevision ||
+    taskTrackerTargetKey(facts.target) !== taskTrackerTargetKey(target) ||
+    facts.targetMembership !== "Member" ||
+    facts.currentClaim._tag !== "CompletionTaskClaim" ||
+    !completionTaskClaimEquals(facts.currentClaim, request.claim)
+  ) {
+    return undefined
+  }
+  return FocusedCompletedTaskObservation.make({
+    claim: facts.currentClaim,
+    lifecycle: "CompletedSuccessfully",
+    observedAt,
+    operationId: facts.operationId,
+    taskId: facts.taskId,
+    taskRevision: facts.taskRevision,
+    trackerRevision: facts.trackerRevision,
+    target: facts.target
+  })
+}
+
+const authorizeCurrentFocusedCompletion = Effect.fn("IntegrationFinality.authorizeCurrentFocusedCompletion")(function* (
+  request: CompletionTaskRequest,
+  focused: { readonly facts: FocusedTaskCompletionFacts; readonly observedAt: JournalRecord["position"] },
+  target: TrackerTarget
+) {
+  if (focused.facts.lifecycle !== "CompletedSuccessfully") return undefined
+  const observation = focusedCompletionObservationFor(request, focused.facts, focused.observedAt, target)
+  if (observation !== undefined) return observation
+  const issue =
+    focusedTaskAuthorizationIssue(focused.facts, target, request) ??
+    completionClaimAuthorizationIssue(focused.facts, request)
+  return yield* new CompletionTaskAuthorizationConflict({
+    detail: issue?.detail ?? "current completion evidence does not prove the exact requested claim",
+    reason: issue?.reason ?? "CompletionClaimForeign",
+    request
+  })
+})
 
 /** Pure current task-local classification shared by live confirmation and reconstructed diagnostics. */
 export type CompletionTaskConfirmationDisposition =
-  | { readonly _tag: "CompletedSuccessfully" }
+  | { readonly _tag: "CompletedSuccessfully"; readonly claim: CompletionTaskRequest["claim"] }
   | { readonly _tag: "Pending" }
   | { readonly _tag: "Conflict"; readonly detail: string; readonly reason: CompletionTaskConflictReason }
+
+type CurrentCompletionClaimDisposition =
+  | { readonly _tag: "Exact"; readonly claim: CompletionTaskRequest["claim"] }
+  | Extract<CompletionTaskConfirmationDisposition, { readonly _tag: "Conflict" }>
+
+const currentCompletionClaimDisposition = (
+  request: CompletionTaskRequest,
+  facts: FocusedTaskCompletionFacts
+): CurrentCompletionClaimDisposition =>
+  Match.valueTags(facts.currentClaim, {
+    ActiveTaskClaim: () => ({
+      _tag: "Conflict" as const,
+      detail: "focused completion reconciliation found another current claim",
+      reason: "CompletionClaimForeign" as const
+    }),
+    CompletionTaskClaim: (claim) =>
+      completionTaskClaimEquals(claim, request.claim)
+        ? { _tag: "Exact" as const, claim }
+        : {
+            _tag: "Conflict" as const,
+            detail: "focused completion reconciliation found another current claim",
+            reason: "CompletionClaimForeign" as const
+          },
+    ForeignCompletionClaim: () => ({
+      _tag: "Conflict" as const,
+      detail: "focused completion reconciliation found another completion fingerprint",
+      reason: "CompletionClaimForeign" as const
+    }),
+    UnclaimedTask: () => ({
+      _tag: "Conflict" as const,
+      detail: "focused completion reconciliation found no current claim",
+      reason: "CompletionClaimMissing" as const
+    })
+  })
 
 export const completionTaskConfirmationDisposition = (
   request: CompletionTaskRequest,
@@ -578,39 +637,19 @@ export const completionTaskConfirmationDisposition = (
     }
   }
   return Match.value(facts.lifecycle).pipe(
-    Match.when("CompletedSuccessfully", () => ({ _tag: "CompletedSuccessfully" as const })),
+    Match.when("CompletedSuccessfully", () => {
+      const claim = currentCompletionClaimDisposition(request, facts)
+      return claim._tag === "Exact" ? ({ _tag: "CompletedSuccessfully", claim: claim.claim } as const) : claim
+    }),
     Match.when("TerminalWithoutSuccess", () => ({
       _tag: "Conflict" as const,
       detail: "focused completion reconciliation found TerminalWithoutSuccess",
       reason: "TaskLifecycleConflict" as const
     })),
-    Match.when("Open", () =>
-      Match.valueTags(facts.currentClaim, {
-        ActiveTaskClaim: () => ({
-          _tag: "Conflict" as const,
-          detail: "focused completion reconciliation found another current claim",
-          reason: "CompletionClaimForeign" as const
-        }),
-        CompletionTaskClaim: (claim) =>
-          completionTaskClaimEquals(claim, request.claim)
-            ? ({ _tag: "Pending" as const } as const)
-            : ({
-                _tag: "Conflict" as const,
-                detail: "focused completion reconciliation found another current claim",
-                reason: "CompletionClaimForeign" as const
-              } as const),
-        ForeignCompletionClaim: () => ({
-          _tag: "Conflict" as const,
-          detail: "focused completion reconciliation found another completion fingerprint",
-          reason: "CompletionClaimForeign" as const
-        }),
-        UnclaimedTask: () => ({
-          _tag: "Conflict" as const,
-          detail: "focused completion reconciliation found no current claim",
-          reason: "CompletionClaimMissing" as const
-        })
-      })
-    ),
+    Match.when("Open", () => {
+      const claim = currentCompletionClaimDisposition(request, facts)
+      return claim._tag === "Exact" ? ({ _tag: "Pending" } as const) : claim
+    }),
     Match.exhaustive
   )
 }
@@ -664,7 +703,7 @@ const completionConfirmationFromFocusedFacts = Effect.fn("IntegrationFinality.co
       })
     }
     const observation = FocusedCompletedTaskObservation.make({
-      claim: request.claim,
+      claim: disposition.claim,
       lifecycle: "CompletedSuccessfully",
       observedAt,
       operationId,
