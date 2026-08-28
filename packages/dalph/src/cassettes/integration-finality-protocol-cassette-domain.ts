@@ -10,6 +10,7 @@ export const CompletionClaimBoundaryResult = Schema.TaggedUnion({
   DeletionUnknownApplied: {},
   ReadActiveClaim: {},
   ReadCompletionClaim: {},
+  ReadCompletionMarkerAbsent: {},
   ReadFailed: { detail: Schema.String },
   ReadForeignClaim: {},
   ReadUnclaimed: {},
@@ -52,8 +53,8 @@ const IntegrationFinalityProtocolCassetteShape = Schema.Struct({
 const completionClaimMutationLimit = 3
 const directReplacementReadCalls = 1
 const reconciledReplacementReadCalls = 2
-const directDeletionReadCalls = 2
-const reconciledDeletionReadCalls = 3
+const directDeletionReadCalls = 4
+const reconciledDeletionReadCalls = 4
 const pendingDeletionStoryPrefixLength = 3
 const lastStoryItemOffset = 1
 
@@ -116,7 +117,16 @@ export type IntegrationFinalityProtocolCassette = typeof IntegrationFinalityProt
 
 /** Observable production-protocol result returned by one cassette replay. */
 export const IntegrationFinalityProtocolCassetteRun = Schema.Struct({
-  boundaryCalls: Schema.Array(Schema.Literals(["deleteTaskClaim", "readTaskClaim", "replaceTaskClaim"])),
+  boundaryCalls: Schema.Array(
+    Schema.Literals([
+      "deleteTaskClaim",
+      "readCompletionClaimMarker",
+      "readOriginalTaskClaim",
+      "readTaskClaim",
+      "releaseOriginalTaskClaim",
+      "replaceTaskClaim"
+    ])
+  ),
   deletionCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   failureTag: Schema.NullOr(Schema.String),
   journalTags: Schema.Array(Schema.String),
@@ -172,7 +182,13 @@ const successfulSettlementExpectation: CompletionClaimProtocolTerminalExpectatio
     ...focusedSuccessJournalTags,
     "CompletionClaimDeletionIntended",
     "CompletionClaimDeletionReadObserved",
+    "TaskClaimReleaseIntended",
+    "TaskClaimReleased",
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeletionAttemptIntended",
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeleted",
     "IntegrationFinalitySettled"
   ],
@@ -244,7 +260,9 @@ export const deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess = Integra
   boundaryResults: [
     CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
     CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
-    CompletionClaimBoundaryResult.cases.DeletionApplied.make({})
+    CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
+    CompletionClaimBoundaryResult.cases.DeletionApplied.make({}),
+    CompletionClaimBoundaryResult.cases.ReadCompletionMarkerAbsent.make({})
   ],
   initialClaim: "Completion",
   name: "deletes only the exact completion claim after focused task success",
@@ -255,8 +273,9 @@ export const reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess = Int
   boundaryResults: [
     CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
     CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
+    CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
     CompletionClaimBoundaryResult.cases.DeletionUnknownApplied.make({}),
-    CompletionClaimBoundaryResult.cases.ReadUnclaimed.make({})
+    CompletionClaimBoundaryResult.cases.ReadCompletionMarkerAbsent.make({})
   ],
   initialClaim: "Completion",
   name: "reconciles a lost completion-claim deletion without reopening success",
@@ -273,7 +292,12 @@ export const reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess = Int
           ...focusedSuccessJournalTags,
           "CompletionClaimDeletionIntended",
           "CompletionClaimDeletionReadObserved",
+          "TaskClaimReleaseIntended",
+          "TaskClaimReleased",
+          "CompletionClaimDeletionReadObserved",
+          "CompletionClaimDeletionReadObserved",
           "CompletionClaimDeletionAttemptIntended",
+          "CompletionClaimDeletionReadObserved",
           "CompletionClaimDeletionReadObserved",
           "CompletionClaimDeleted",
           "IntegrationFinalitySettled"
@@ -333,20 +357,27 @@ const deletionCannotConvergeExpectation: CompletionClaimProtocolTerminalExpectat
     ...focusedSuccessJournalTags,
     "CompletionClaimDeletionIntended",
     "CompletionClaimDeletionReadObserved",
-    "CompletionClaimDeletionAttemptIntended",
+    "TaskClaimReleaseIntended",
+    "TaskClaimReleased",
+    "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeletionAttemptIntended",
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeletionReadObserved",
+    "CompletionClaimDeletionAttemptIntended",
+    "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeletionReadObserved",
     "CompletionClaimDeletionAttemptIntended",
     "CompletionClaimDeletionReadObserved"
   ],
-  readCalls: 5,
+  readCalls: 6,
   replacementCalls: 0
 }
 
 export const keepsSuccessfulWorkFinalWhenCompletionClaimDeletionCannotConverge =
   IntegrationFinalityProtocolCassette.make({
     boundaryResults: [
+      CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
       CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
       CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
       CompletionClaimBoundaryResult.cases.DeletionUnknown.make({}),
@@ -364,6 +395,7 @@ export const keepsSuccessfulWorkFinalWhenCompletionClaimDeletionCannotConverge =
 export const doesNotTerminateAnEmptyFrontierWhileCompletionSettlementIsPending =
   IntegrationFinalityProtocolCassette.make({
     boundaryResults: [
+      CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
       CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
       CompletionClaimBoundaryResult.cases.ReadCompletionClaim.make({}),
       CompletionClaimBoundaryResult.cases.DeletionUnknown.make({}),

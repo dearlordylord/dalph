@@ -376,10 +376,12 @@ export const completionClaimDeletionAttemptIntentRecordKey = (
 export const completionClaimDeletionReadObservedRecordKey = (
   operationId: OperationId,
   purpose: CompletionClaimDeletionReadPurpose
-): JournalRecordKey =>
-  JournalRecordKey.make(
-    `${completionClaimRecordKeyPrefix(operationId)}:deletion-read:${purpose._tag}:${purpose.attemptOrdinal}:${purpose.readOrdinal}`
+): JournalRecordKey => {
+  const attemptIdentity = purpose._tag === "BeforeOriginalClaimRelease" ? "original" : purpose.attemptOrdinal
+  return JournalRecordKey.make(
+    `${completionClaimRecordKeyPrefix(operationId)}:deletion-read:${purpose._tag}:${attemptIdentity}:${purpose.readOrdinal}`
   )
+}
 
 /** Stable journal key for the one exact completion-claim deletion result. */
 export const completionClaimDeletedRecordKey = (operationId: OperationId): JournalRecordKey =>

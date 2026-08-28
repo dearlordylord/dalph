@@ -22,7 +22,10 @@ import {
   ClaimToken,
   CompletionClaimBoundary,
   type CompletionClaimBoundaryService,
+  type CompletionClaimMarkerObservation,
+  type CompletionClaimObservation,
   CompletionClaimReadFailure,
+  type CompletionClaimReadRequest,
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimDeletionIntendedEvent,
   CompletionClaimDeletionFailure,
@@ -311,6 +314,7 @@ const takeBoundaryResult = Effect.fn("IntegrationFinalityProtocolCassette.takeBo
 const expectedReadTagByResult: ReadonlyMap<CompletionClaimProtocolBoundaryResult["_tag"], string> = new Map([
   ["ReadActiveClaim", "ActiveTaskClaim"],
   ["ReadCompletionClaim", "CompletionTaskClaim"],
+  ["ReadCompletionMarkerAbsent", "CompletionClaimMarkerAbsent"],
   ["ReadForeignClaim", "ActiveTaskClaim"],
   ["ReadUnclaimed", "UnclaimedTask"]
 ])
@@ -318,7 +322,13 @@ const expectedReadTagByResult: ReadonlyMap<CompletionClaimProtocolBoundaryResult
 const expectedReadTag = (result: CompletionClaimProtocolBoundaryResult): string | undefined =>
   expectedReadTagByResult.get(result._tag)
 
-type BoundaryCall = "deleteTaskClaim" | "readTaskClaim" | "replaceTaskClaim"
+type BoundaryCall =
+  | "deleteTaskClaim"
+  | "readCompletionClaimMarker"
+  | "readOriginalTaskClaim"
+  | "readTaskClaim"
+  | "releaseOriginalTaskClaim"
+  | "replaceTaskClaim"
 
 const recordBoundaryCall = (calls: Ref.Ref<ReadonlyArray<BoundaryCall>>, call: BoundaryCall) =>
   Ref.update(calls, (current) => [...current, call])
@@ -334,21 +344,35 @@ const scriptedBoundaryFor = Effect.fn("IntegrationFinalityProtocolCassette.scrip
   const readCalls = yield* Ref.make(0)
   const replacementCalls = yield* Ref.make(0)
   const deletionCalls = yield* Ref.make(0)
-  const readTaskClaim: CompletionClaimBoundaryService["readTaskClaim"] = (taskId) =>
+  const consumeScriptedRead = <A extends CompletionClaimObservation | CompletionClaimMarkerObservation>(
+    call: "readCompletionClaimMarker" | "readTaskClaim",
+    request: CompletionClaimReadRequest,
+    read: Effect.Effect<A, CompletionClaimReadFailure>
+  ) =>
     Effect.gen(function* () {
-      yield* recordBoundaryCall(boundaryCalls, "readTaskClaim")
+      yield* recordBoundaryCall(boundaryCalls, call)
       yield* Ref.update(readCalls, (count) => count + 1)
       const result = yield* takeBoundaryResult(results)
       if (result._tag === "ReadFailed") {
-        return yield* new CompletionClaimReadFailure({ detail: result.detail, taskId })
+        return yield* new CompletionClaimReadFailure({ detail: result.detail, taskId: request.taskId })
       }
       const expected = expectedReadTag(result)
       /* v8 ignore next -- @preserve Story/boundary schemas keep mutation results out of read positions. */
       if (expected === undefined) return yield* Effect.die(`expected a read result, received ${result._tag}`)
-      const observed = yield* controlled.readTaskClaim(taskId)
+      const observed = yield* read
+      const matches =
+        observed._tag === expected || (result._tag === "ReadForeignClaim" && observed._tag === "ForeignCompletionClaim")
       /* v8 ignore next -- @preserve The controlled boundary and declarative initial claim are constructed coherently. */
-      if (observed._tag !== expected)
-        return yield* Effect.die(`read result ${result._tag} contradicted controlled claim state`)
+      if (!matches) return yield* Effect.die(`read result ${result._tag} contradicted controlled claim state`)
+      return { observed, result }
+    })
+  const readTaskClaim: CompletionClaimBoundaryService["readTaskClaim"] = (request) =>
+    Effect.gen(function* () {
+      const { observed, result } = yield* consumeScriptedRead(
+        "readTaskClaim",
+        request,
+        controlled.readTaskClaim(request)
+      )
       const foreignClaimRead = new Set([
         "ReadForeignClaim:Active",
         "ReadForeignClaim:Completion",
@@ -363,6 +387,21 @@ const scriptedBoundaryFor = Effect.fn("IntegrationFinalityProtocolCassette.scrip
       }
       return observed
     })
+
+  const readCompletionClaimMarker: CompletionClaimBoundaryService["readCompletionClaimMarker"] = (request) =>
+    consumeScriptedRead("readCompletionClaimMarker", request, controlled.readCompletionClaimMarker(request)).pipe(
+      Effect.map(({ observed }) => observed)
+    )
+
+  const readOriginalTaskClaim: CompletionClaimBoundaryService["readOriginalTaskClaim"] = (taskId) =>
+    recordBoundaryCall(boundaryCalls, "readOriginalTaskClaim").pipe(
+      Effect.andThen(controlled.readOriginalTaskClaim(taskId))
+    )
+
+  const releaseOriginalTaskClaim: CompletionClaimBoundaryService["releaseOriginalTaskClaim"] = (release) =>
+    recordBoundaryCall(boundaryCalls, "releaseOriginalTaskClaim").pipe(
+      Effect.andThen(controlled.releaseOriginalTaskClaim(release))
+    )
 
   const replaceTaskClaim: CompletionClaimBoundaryService["replaceTaskClaim"] = (request) =>
     Effect.gen(function* () {
@@ -428,7 +467,14 @@ const scriptedBoundaryFor = Effect.fn("IntegrationFinalityProtocolCassette.scrip
     readCalls,
     remainingResults: results,
     replacementCalls,
-    service: CompletionClaimBoundary.of({ deleteTaskClaim, readTaskClaim, replaceTaskClaim })
+    service: CompletionClaimBoundary.of({
+      deleteTaskClaim,
+      readCompletionClaimMarker,
+      readOriginalTaskClaim,
+      readTaskClaim,
+      releaseOriginalTaskClaim,
+      replaceTaskClaim
+    })
   } satisfies ScriptedBoundary
 })
 
@@ -441,14 +487,14 @@ const appendFocusedSuccess = Effect.fn("IntegrationFinalityProtocolCassette.appe
   yield* journal.service.append(prepared.runId, describeJournalEvent(intent).expectedKey, intent)
   const trackerRevision = TrackerRevision.make(`integration-finality-protocol-focused:${request.operationId}`)
   const completionBoundary: CompletionTaskBoundaryService = {
-    readFocusedTaskCompletion: (taskId, target, operationId) =>
+    readFocusedTaskCompletion: (readRequest) =>
       Effect.succeed({
         currentClaim: prepared.claim,
         lifecycle: "CompletedSuccessfully",
-        operationId,
-        target,
+        operationId: readRequest.operationId,
+        target: readRequest.target,
         targetMembership: "Member",
-        taskId,
+        taskId: readRequest.taskId,
         taskRevision: prepared.plannedAttempt.taskRevision,
         trackerRevision,
         unfinishedPrerequisiteTaskIds: []

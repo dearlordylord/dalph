@@ -3,7 +3,7 @@ import type {
   CompletionClaimProtocolStoryItem
 } from "./integration-finality-protocol-cassette-domain.js"
 
-type ClaimState = "Active" | "Completion" | "Foreign" | "Unclaimed"
+type ClaimState = "Active" | "Completion" | "Foreign" | "MarkerAbsent" | "Unclaimed"
 type ProtocolPhase = "Deletion" | "Replacement"
 type ReadDisposition = "Conflict" | "Failure" | "Mutate" | "Success"
 interface BoundaryScriptCursor {
@@ -22,7 +22,7 @@ const readDispositionByPhaseAndState: ReadonlyMap<string, ReadDisposition> = new
   ["Deletion:Foreign:ReadActiveClaim", "Conflict"],
   ["Deletion:Active:ReadActiveClaim", "Conflict"],
   ["Deletion:Completion:ReadCompletionClaim", "Mutate"],
-  ["Deletion:Unclaimed:ReadUnclaimed", "Success"]
+  ["Deletion:MarkerAbsent:ReadCompletionMarkerAbsent", "Success"]
 ])
 
 const readDisposition = (
@@ -45,7 +45,7 @@ const mutationDisposition = (
 }
 
 const stateAfterAppliedMutation = (phase: ProtocolPhase): ClaimState =>
-  phase === "Replacement" ? "Completion" : "Unclaimed"
+  phase === "Replacement" ? "Completion" : "MarkerAbsent"
 
 const consumeMutation = (
   phase: ProtocolPhase,
@@ -63,26 +63,91 @@ const consumeMutation = (
 const readEndsPhase = (disposition: ReadDisposition, attempts: number): boolean =>
   disposition !== "Mutate" || attempts === completionClaimMutationLimit
 
+const consumeDeletionAuthorizationRead = (
+  cursor: BoundaryScriptCursor,
+  results: ReadonlyArray<CompletionClaimBoundaryResult>
+): readonly [BoundaryScriptCursor, boolean] | undefined => {
+  const read = results[cursor.index]
+  if (read === undefined) return undefined
+  const disposition = readDisposition("Deletion", cursor.state, read)
+  if (disposition === undefined) return undefined
+  return [{ ...cursor, index: cursor.index + 1 }, disposition === "Mutate"]
+}
+
+const consumeAppliedDeletionObservation = (
+  cursor: BoundaryScriptCursor,
+  results: ReadonlyArray<CompletionClaimBoundaryResult>
+): BoundaryScriptCursor | undefined => {
+  const read = results[cursor.index]
+  return read !== undefined && readDisposition("Deletion", cursor.state, read) === "Success"
+    ? { ...cursor, index: cursor.index + 1 }
+    : undefined
+}
+
+interface ProtocolPhaseStart {
+  readonly cursor: BoundaryScriptCursor
+  readonly continues: boolean
+}
+
+const beginProtocolPhase = (
+  phase: ProtocolPhase,
+  cursor: BoundaryScriptCursor,
+  results: ReadonlyArray<CompletionClaimBoundaryResult>
+): ProtocolPhaseStart | undefined => {
+  if (phase === "Replacement") return { continues: true, cursor }
+  const authorized = consumeDeletionAuthorizationRead(cursor, results)
+  return authorized === undefined ? undefined : { continues: authorized[1], cursor: authorized[0] }
+}
+
+type ProtocolPhaseStep =
+  | { readonly _tag: "Complete"; readonly cursor: BoundaryScriptCursor }
+  | { readonly _tag: "Continue"; readonly attempts: number; readonly cursor: BoundaryScriptCursor }
+
+const appliedMutationStep = (
+  phase: ProtocolPhase,
+  cursor: BoundaryScriptCursor,
+  results: ReadonlyArray<CompletionClaimBoundaryResult>
+): ProtocolPhaseStep | undefined => {
+  const completed = phase === "Deletion" ? consumeAppliedDeletionObservation(cursor, results) : cursor
+  return completed === undefined ? undefined : { _tag: "Complete", cursor: completed }
+}
+
+const consumeProtocolPhaseStep = (
+  phase: ProtocolPhase,
+  cursor: BoundaryScriptCursor,
+  attempts: number,
+  results: ReadonlyArray<CompletionClaimBoundaryResult>
+): ProtocolPhaseStep | undefined => {
+  const read = results[cursor.index]
+  if (read === undefined) return undefined
+  const disposition = readDisposition(phase, cursor.state, read)
+  if (disposition === undefined) return undefined
+  const afterRead = { ...cursor, index: cursor.index + 1 }
+  if (readEndsPhase(disposition, attempts)) return { _tag: "Complete", cursor: afterRead }
+  const consumed = consumeMutation(phase, afterRead, results)
+  if (consumed === undefined) return undefined
+  const [afterMutation, mutationResult] = consumed
+  if (mutationResult === "Applied") return appliedMutationStep(phase, afterMutation, results)
+  if (mutationResult === "Failed") return { _tag: "Complete", cursor: afterMutation }
+  return { _tag: "Continue", attempts: attempts + 1, cursor: afterMutation }
+}
+
 const consumeProtocolPhase = (
   phase: ProtocolPhase,
   cursor: BoundaryScriptCursor,
   results: ReadonlyArray<CompletionClaimBoundaryResult>
 ): BoundaryScriptCursor | undefined => {
-  let next = cursor
+  const start = beginProtocolPhase(phase, cursor, results)
+  if (start === undefined) return undefined
+  if (!start.continues) return start.cursor
+  let next = start.cursor
   let attempts = 0
   for (let readOrdinal = 0; readOrdinal <= completionClaimMutationLimit; readOrdinal += 1) {
-    const read = results[next.index]
-    if (read === undefined) return undefined
-    const disposition = readDisposition(phase, next.state, read)
-    if (disposition === undefined) return undefined
-    next = { ...next, index: next.index + 1 }
-    if (readEndsPhase(disposition, attempts)) return next
-    const consumed = consumeMutation(phase, next, results)
-    if (consumed === undefined) return undefined
-    attempts += 1
-    const [afterMutation, mutationResult] = consumed
-    next = afterMutation
-    if (mutationResult === "Applied" || mutationResult === "Failed") return next
+    const step = consumeProtocolPhaseStep(phase, next, attempts, results)
+    if (step === undefined) return undefined
+    if (step._tag === "Complete") return step.cursor
+    next = step.cursor
+    attempts = step.attempts
   }
   return undefined
 }

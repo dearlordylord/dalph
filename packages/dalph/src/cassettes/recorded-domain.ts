@@ -67,7 +67,7 @@ import {
   CompletionClaimRequestOrdinal,
   CompletionClaimDeletionReadPurpose,
   CompletionClaimDeletionRequest,
-  CompletionClaimObservation,
+  CompletionClaimCleanupObservation,
   CompletionSuccessObservation,
   CompletionTaskAcknowledgement,
   CompletionTaskRequest,
@@ -448,7 +448,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     successObservation: CompletionSuccessObservation
   },
   CompletionClaimDeletionReadObserved: {
-    observation: CompletionClaimObservation,
+    observation: CompletionClaimCleanupObservation,
     ...nonActionOccurrence,
     purpose: CompletionClaimDeletionReadPurpose,
     replacementOperationId: OperationId,

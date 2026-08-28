@@ -61,6 +61,7 @@ import {
   type CompletionTaskRequest,
   type CompletionTaskRequestLookup,
   type CompletionClaimObservation,
+  type CompletionClaimCleanupObservation,
   type CompletionClaimDeletionRequest,
   type FocusedTaskCompletionFacts,
   type FocusedCompletedTaskObservation,
@@ -281,6 +282,14 @@ const renameCompletionClaimObservation = (
   if (observation._tag === "CompletionTaskClaim") return renameCompletionTaskClaim(observation, maps)
   return observation
 }
+
+const renameCompletionClaimCleanupObservation = (
+  observation: CompletionClaimCleanupObservation,
+  maps: IdentityRenamingMaps
+): CompletionClaimCleanupObservation =>
+  observation._tag === "CompletionClaimMarkerAbsent"
+    ? preserveCassetteValue(observation)
+    : renameCompletionClaimObservation(observation, maps)
 
 const renameFocusedTaskCompletionFacts = (
   facts: FocusedTaskCompletionFacts,
@@ -1638,7 +1647,7 @@ const renameRecordedCassetteEntry = (
       CompletionClaimDeletionReadObserved: (entry) =>
         completeFields<typeof entry>({
           _tag: "CompletionClaimDeletionReadObserved",
-          observation: renameCompletionClaimObservation(entry.observation, maps),
+          observation: renameCompletionClaimCleanupObservation(entry.observation, maps),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           purpose: entry.purpose,
           replacementOperationId: renamed(entry.replacementOperationId, maps.operationIds),

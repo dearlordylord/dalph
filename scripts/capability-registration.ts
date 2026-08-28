@@ -8,6 +8,7 @@ type CapabilityFamily =
   | "journal"
   | "task-tracker-graph-read"
   | "task-tracker-claim"
+  | "task-tracker-completion-claim"
   | "task-tracker-completion"
   | "git-worktree"
   | "git-lineage"
@@ -177,6 +178,7 @@ const requiredCapabilityFamilies = [
   "journal",
   "task-tracker-graph-read",
   "task-tracker-claim",
+  "task-tracker-completion-claim",
   "task-tracker-completion",
   "git-worktree",
   "git-lineage",
@@ -281,7 +283,13 @@ const trackerClaimContract = contract("TrackerMutation", [
     },
     marker: "trackerMutationContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/tracker-mutation-contract.ts"
+    source: "packages/orchestrator/test/contracts/tracker-mutation-contract.ts",
+    implementation: implementationBinding(
+      "githubTrackerMutationLayer",
+      "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.ts",
+      "githubTrackerMutationLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -298,6 +306,54 @@ const completionContract = contract("CompletionBoundary", [
       "controlledCompletionTaskBoundaryLayerFrom",
       "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts",
       "controlledCompletionTaskBoundaryLayerFrom",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
+  },
+  {
+    invocation: {
+      marker: "completionBoundaryContract(",
+      source: "packages/orchestrator/src/authorities/task-tracker/github/completion-task.test.ts"
+    },
+    marker: "completionBoundaryContract",
+    role: "production",
+    source: "packages/orchestrator/test/contracts/completion-boundary-contract.ts",
+    implementation: implementationBinding(
+      "githubCompletionTaskBoundaryLayer",
+      "packages/orchestrator/src/authorities/task-tracker/github/completion-task.ts",
+      "githubCompletionTaskBoundaryLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
+  }
+])
+
+const completionClaimContract = contract("CompletionClaimBoundary", [
+  {
+    invocation: {
+      marker: "completionClaimBoundaryContract(",
+      source: "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
+    },
+    marker: "completionClaimBoundaryContract",
+    role: "controlled",
+    source: "packages/orchestrator/test/contracts/completion-claim-boundary-contract.ts",
+    implementation: implementationBinding(
+      "controlledCompletionClaimBoundaryLayerFrom",
+      "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts",
+      "controlledCompletionClaimBoundaryLayerFrom",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
+  },
+  {
+    invocation: {
+      marker: "completionClaimBoundaryContract(",
+      source: "packages/orchestrator/src/authorities/task-tracker/github/completion-claim.test.ts"
+    },
+    marker: "completionClaimBoundaryContract",
+    role: "production",
+    source: "packages/orchestrator/test/contracts/completion-claim-boundary-contract.ts",
+    implementation: implementationBinding(
+      "githubCompletionClaimBoundaryLayer",
+      "packages/orchestrator/src/authorities/task-tracker/github/completion-claim.ts",
+      "githubCompletionClaimBoundaryLayer",
       { _tag: "ObjectProperty", property: "layer" }
     )
   }
@@ -651,9 +707,37 @@ export const capabilityRegistrationInventory = {
       ),
       contract: trackerClaimContract,
       family: "task-tracker-claim",
-      production: notApplicable(
-        "application-supplied-boundary",
-        "production activation accepts TrackerMutation from its host; the GitHub adapter is qualification-tested but this repository does not assemble it in production"
+      production: implementation(
+        "githubTrackerMutationLayer",
+        "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.ts",
+        "githubTrackerMutationLayer",
+        composed(
+          "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts",
+          "githubTrackerMutationLayer"
+        )
+      )
+    },
+    {
+      boundary: "completion-claim observation, creation, and deletion",
+      controlled: implementation(
+        "controlledCompletionClaimBoundaryLayerFrom",
+        "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts",
+        "controlledCompletionClaimBoundaryLayerFrom",
+        controlledComposition(
+          "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts",
+          "controlledCompletionClaimBoundaryLayerFrom"
+        )
+      ),
+      contract: completionClaimContract,
+      family: "task-tracker-completion-claim",
+      production: implementation(
+        "githubCompletionClaimBoundaryLayer",
+        "packages/orchestrator/src/authorities/task-tracker/github/completion-claim.ts",
+        "githubCompletionClaimBoundaryLayer",
+        composed(
+          "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts",
+          "githubCompletionClaimBoundaryLayer"
+        )
       )
     },
     {
@@ -669,9 +753,14 @@ export const capabilityRegistrationInventory = {
       ),
       contract: completionContract,
       family: "task-tracker-completion",
-      production: notApplicable(
-        "application-supplied-boundary",
-        "production activation accepts completion and focused-observation services from its application host; this repository has no provider adapter to register"
+      production: implementation(
+        "githubCompletionTaskBoundaryLayer",
+        "packages/orchestrator/src/authorities/task-tracker/github/completion-task.ts",
+        "githubCompletionTaskBoundaryLayer",
+        composed(
+          "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts",
+          "githubCompletionTaskBoundaryLayer"
+        )
       )
     },
     {
@@ -907,6 +996,7 @@ export const capabilityRegistrationInventory = {
     }
   ],
   compositionSources: [
+    { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts" },
     { role: "production", source: "packages/dalph/src/application/production.ts" },
     { role: "production", source: "packages/dalph/bin/codex-qualification-host.ts" },
     {
@@ -918,6 +1008,11 @@ export const capabilityRegistrationInventory = {
     { role: "controlled", source: "packages/dalph/src/application/dry-run.ts" }
   ],
   compositionSupportBindings: [
+    support(
+      "githubDeliveryAuthorityLayer",
+      "exact four-capability GitHub tracker assembly over one configured client and Crypto service",
+      "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts"
+    ),
     support(
       "githubTrackerGraphReaderNodeLayer",
       "node GraphQL dependencies around the registered GitHub graph-reader implementation",

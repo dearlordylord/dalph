@@ -11,8 +11,10 @@ import {
   completionTaskClaimEquals,
   completionSuccessObservationEquals,
   completionClaimRequestLimit,
+  completionOriginalTaskClaimReleaseFor,
   type CompletionClaimDeletionRequest,
   type CompletionClaimFinalityJournalEvent,
+  type CompletionClaimRequestOrdinal,
   type CompletionTaskClaim,
   type CompletionSuccessObservation
 } from "./events.js"
@@ -33,9 +35,21 @@ type DeletionAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "Completio
 type DeletionOutcome = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimDeleted" }>
 type Settlement = Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationFinalitySettled" }>
 type DeletionRead = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimDeletionReadObserved" }>
+type ClaimReleaseIntent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimReleaseIntended" }>
 type IntegrationFinalityEvent = CompletionClaimFinalityJournalEvent
+type MarkerReadPurpose = Extract<
+  DeletionRead["purpose"],
+  { readonly _tag: "BeforeOriginalClaimRelease" | "BeforeDeletionAttempt" | "AfterDeletionAttemptsExhausted" }
+>
+type ActiveReadPurpose = Extract<
+  DeletionRead["purpose"],
+  { readonly _tag: "ConfirmOriginalClaimReleased" | "ConfirmNoActiveClaimAfterMarkerAbsent" }
+>
 type ReplacementAttemptRecord = JournalRecord & { readonly event: ReplacementAttempt }
+type DeletionIntentRecord = JournalRecord & { readonly event: DeletionIntent }
 type DeletionAttemptRecord = JournalRecord & { readonly event: DeletionAttempt }
+type MarkerReadRecord = JournalRecord & { readonly event: DeletionRead & { readonly purpose: MarkerReadPurpose } }
+type ActiveReadRecord = JournalRecord & { readonly event: DeletionRead & { readonly purpose: ActiveReadPurpose } }
 
 export interface IntegrationFinalityHistoryIndexes {
   readonly replacementIntents: HashMap.HashMap<OperationId, JournalRecord & { readonly event: ReplacementIntent }>
@@ -272,21 +286,108 @@ const invalidDeletionIntent = (
   }
 }
 
+const isMarkerReadPurpose = (purpose: DeletionRead["purpose"]): purpose is MarkerReadPurpose =>
+  purpose._tag === "BeforeOriginalClaimRelease" ||
+  purpose._tag === "BeforeDeletionAttempt" ||
+  purpose._tag === "AfterDeletionAttemptsExhausted"
+
+const isActiveReadPurpose = (purpose: DeletionRead["purpose"]): purpose is ActiveReadPurpose =>
+  purpose._tag === "ConfirmOriginalClaimReleased" || purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent"
+
+const latestMarkerCleanupRead = (
+  records: ReadonlyArray<JournalRecord>,
+  position: JournalPosition,
+  operationId: OperationId
+): MarkerReadRecord | undefined =>
+  prior(records, position).findLast(
+    (candidate): candidate is MarkerReadRecord =>
+      candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
+      candidate.event.request.operationId === operationId &&
+      isMarkerReadPurpose(candidate.event.purpose)
+  )
+
+const latestActiveCleanupRead = (
+  records: ReadonlyArray<JournalRecord>,
+  position: JournalPosition,
+  operationId: OperationId
+): ActiveReadRecord | undefined =>
+  prior(records, position).findLast(
+    (candidate): candidate is ActiveReadRecord =>
+      candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
+      candidate.event.request.operationId === operationId &&
+      isActiveReadPurpose(candidate.event.purpose)
+  )
+
+const markerReadAuthorizesDeletionAttempt = (markerRead: MarkerReadRecord, event: DeletionAttempt): boolean =>
+  markerRead.event.purpose._tag === "BeforeDeletionAttempt" &&
+  markerRead.event.purpose.attemptOrdinal === event.attemptOrdinal &&
+  markerRead.event.observation._tag === "CompletionTaskClaim" &&
+  completionTaskClaimEquals(markerRead.event.observation, event.claim)
+
+const activeReadAuthorizesDeletionAttempt = (activeRead: ActiveReadRecord, event: DeletionAttempt): boolean =>
+  activeRead.event.purpose._tag === "ConfirmOriginalClaimReleased" &&
+  activeRead.event.purpose.attemptOrdinal === event.attemptOrdinal &&
+  activeRead.event.observation._tag === "UnclaimedTask"
+
+const latestCleanupReadsAuthorizeDeletionAttempt = (
+  originalReleaseRecord: JournalRecord | undefined,
+  markerRead: MarkerReadRecord | undefined,
+  activeRead: ActiveReadRecord | undefined,
+  event: DeletionAttempt
+): boolean => {
+  if (originalReleaseRecord === undefined) return false
+  if (markerRead === undefined) return false
+  if (activeRead === undefined) return false
+  return [
+    markerReadAuthorizesDeletionAttempt(markerRead, event),
+    activeReadAuthorizesDeletionAttempt(activeRead, event),
+    originalReleaseRecord.position < markerRead.position,
+    markerRead.position < activeRead.position
+  ].every(Boolean)
+}
+
+const deletionAttemptMatchesIntent = (
+  intent: DeletionIntentRecord | undefined,
+  event: Pick<DeletionAttempt, "claim" | "successObservation">
+): boolean => {
+  if (intent === undefined) return false
+  return (
+    completionTaskClaimEquals(intent.event.claim, event.claim) &&
+    completionSuccessObservationEquals(intent.event.successObservation, event.successObservation)
+  )
+}
+
 const invalidDeletionAttempt = (
   record: JournalRecord,
+  records: ReadonlyArray<JournalRecord>,
   indexes: IntegrationFinalityHistoryIndexes,
   event: DeletionAttempt
 ): IntegrationFinalityHistoryValidation => {
   const intent = mapGet(indexes.deletionIntents, event.operationId)
   const attempts = mapGet(indexes.deletionAttempts, event.operationId) ?? HashMap.empty<number, DeletionAttemptRecord>()
   const ordinal = Number(event.attemptOrdinal)
+  const originalRelease = completionOriginalTaskClaimReleaseFor(event.claim)
+  const originalReleaseRecord = prior(records, record.position).findLast(
+    ({ event: priorEvent }) =>
+      priorEvent._tag === "TaskClaimReleased" &&
+      priorEvent.release.operationId === originalRelease.operationId &&
+      isExactTaskClaim(priorEvent.release.claim, originalRelease.claim)
+  )
+  const latestMarkerRead = latestMarkerCleanupRead(records, record.position, event.operationId)
+  const latestActiveRead = latestActiveCleanupRead(records, record.position, event.operationId)
+  const originalClaimReleaseConfirmed = latestCleanupReadsAuthorizeDeletionAttempt(
+    originalReleaseRecord,
+    latestMarkerRead,
+    latestActiveRead,
+    event
+  )
   const valid = [
     intent !== undefined,
     completionTaskClaimEquals(event.claim, event.successObservation.claim),
-    intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim),
-    intent !== undefined &&
-      completionSuccessObservationEquals(intent.event.successObservation, event.successObservation),
+    deletionAttemptMatchesIntent(intent, event),
     !HashSet.has(indexes.deletionTerminals, event.operationId),
+    originalClaimReleaseConfirmed,
+    latestMarkerRead,
     ordinal === HashMap.size(attempts) + 1,
     ordinal <= completionClaimRequestLimit,
     !HashMap.has(attempts, ordinal)
@@ -304,6 +405,25 @@ const invalidDeletionAttempt = (
   }
 }
 
+const latestCleanupReadsProveDeletion = (
+  deletionAttempt: JournalRecord | undefined,
+  markerRead: MarkerReadRecord | undefined,
+  activeRead: ActiveReadRecord | undefined
+): boolean => {
+  if (deletionAttempt === undefined) return false
+  if (markerRead === undefined) return false
+  if (activeRead === undefined) return false
+  if (markerRead.event.purpose._tag === "BeforeOriginalClaimRelease") return false
+  if (markerRead.event.observation._tag !== "CompletionClaimMarkerAbsent") return false
+  if (activeRead.event.purpose._tag !== "ConfirmNoActiveClaimAfterMarkerAbsent") return false
+  if (activeRead.event.observation._tag !== "UnclaimedTask") return false
+  return [
+    deletionAttempt.position < markerRead.position,
+    markerRead.position < activeRead.position,
+    activeRead.event.purpose.attemptOrdinal === markerRead.event.purpose.attemptOrdinal
+  ].every(Boolean)
+}
+
 const invalidDeletionOutcome = (
   record: JournalRecord,
   records: ReadonlyArray<JournalRecord>,
@@ -312,13 +432,28 @@ const invalidDeletionOutcome = (
 ): IntegrationFinalityHistoryValidation => {
   const intent = mapGet(indexes.deletionIntents, event.operationId)
   const duplicate = HashSet.has(indexes.deletionTerminals, event.operationId)
-  const valid =
-    !duplicate &&
-    intent !== undefined &&
-    completionTaskClaimEquals(event.claim, event.successObservation.claim) &&
-    completionTaskClaimEquals(intent.event.claim, event.claim) &&
-    completionSuccessObservationEquals(intent.event.successObservation, event.successObservation) &&
+  const originalRelease = completionOriginalTaskClaimReleaseFor(event.claim)
+  const originalClaimReleased = prior(records, record.position).some(
+    ({ event: priorEvent }) =>
+      priorEvent._tag === "TaskClaimReleased" &&
+      priorEvent.release.operationId === originalRelease.operationId &&
+      isExactTaskClaim(priorEvent.release.claim, originalRelease.claim)
+  )
+  const deletionAttempt = prior(records, record.position).findLast(
+    ({ event: priorEvent }) =>
+      priorEvent._tag === "CompletionClaimDeletionAttemptIntended" && priorEvent.operationId === event.operationId
+  )
+  const latestMarkerRead = latestMarkerCleanupRead(records, record.position, event.operationId)
+  const latestActiveRead = latestActiveCleanupRead(records, record.position, event.operationId)
+  const deletionWasObservedAbsent = latestCleanupReadsProveDeletion(deletionAttempt, latestMarkerRead, latestActiveRead)
+  const valid = [
+    !duplicate,
+    originalClaimReleased,
+    deletionWasObservedAbsent,
+    completionTaskClaimEquals(event.claim, event.successObservation.claim),
+    deletionAttemptMatchesIntent(intent, event),
     completeTaskInObservation(records, event.successObservation, record.position)
+  ].every(Boolean)
   return {
     detail: valid
       ? undefined
@@ -389,13 +524,80 @@ const invalidDeletionRead = (
   if (request.claim.plannedAttempt.runId !== runId) {
     return `completion claim cleanup read binds run ${request.claim.plannedAttempt.runId}`
   }
+  if (!deletionReadObservationMatchesPurpose(event)) {
+    return `completion claim cleanup read observation kind contradicts ${event.purpose._tag}`
+  }
   const intent = mapGet(indexes.deletionIntents, request.operationId)?.event
   const priorAttemptIndex = mapGet(indexes.deletionAttempts, request.operationId)
   const priorAttempts = priorAttemptIndex === undefined ? 0 : HashMap.size(priorAttemptIndex)
   const priorReads = countPriorDeletionReads(records, record.position, event)
-  return deletionReadIsValid(intent, indexes, event, priorAttempts, priorReads)
+  return deletionReadIsValid(intent, indexes, event, priorAttempts, priorReads) &&
+    confirmationReadHasReleaseAndMarker(records, record, event)
     ? undefined
     : `completion claim cleanup read ${record.key} lacks its exact deletion intent, replacement, or ordinal`
+}
+
+const deletionReadObservationMatchesPurpose = (event: DeletionRead): boolean => {
+  const readsActiveRecord =
+    event.purpose._tag === "ConfirmOriginalClaimReleased" ||
+    event.purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent"
+  const observedActiveRecord =
+    event.observation._tag === "ActiveTaskClaim" || event.observation._tag === "UnclaimedTask"
+  return readsActiveRecord === observedActiveRecord
+}
+
+const exactMarkerPrecedesOriginalReleaseConfirmation = (
+  candidate: JournalRecord,
+  event: DeletionRead,
+  attemptOrdinal: CompletionClaimRequestOrdinal
+): boolean =>
+  candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
+  candidate.event.request.operationId === event.request.operationId &&
+  candidate.event.purpose._tag === "BeforeDeletionAttempt" &&
+  candidate.event.purpose.attemptOrdinal === attemptOrdinal &&
+  candidate.event.observation._tag === "CompletionTaskClaim" &&
+  completionTaskClaimEquals(candidate.event.observation, event.request.claim)
+
+const markerAbsencePrecedesActiveAbsenceConfirmation = (
+  candidate: JournalRecord,
+  event: DeletionRead,
+  attemptOrdinal: CompletionClaimRequestOrdinal
+): boolean =>
+  candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
+  candidate.event.request.operationId === event.request.operationId &&
+  (candidate.event.purpose._tag === "BeforeDeletionAttempt" ||
+    candidate.event.purpose._tag === "AfterDeletionAttemptsExhausted") &&
+  candidate.event.purpose.attemptOrdinal === attemptOrdinal &&
+  candidate.event.observation._tag === "CompletionClaimMarkerAbsent"
+
+const confirmationReadHasReleaseAndMarker = (
+  records: ReadonlyArray<JournalRecord>,
+  record: JournalRecord,
+  event: DeletionRead
+): boolean => {
+  if (
+    event.purpose._tag !== "ConfirmOriginalClaimReleased" &&
+    event.purpose._tag !== "ConfirmNoActiveClaimAfterMarkerAbsent"
+  ) {
+    return true
+  }
+  const attemptOrdinal = event.purpose.attemptOrdinal
+  const expected = completionOriginalTaskClaimReleaseFor(event.request.claim)
+  const release = prior(records, record.position).findLast(
+    (candidate) =>
+      candidate.event._tag === "TaskClaimReleased" &&
+      candidate.event.release.operationId === expected.operationId &&
+      isExactTaskClaim(candidate.event.release.claim, expected.claim)
+  )
+  const marker =
+    event.purpose._tag === "ConfirmOriginalClaimReleased"
+      ? prior(records, record.position).findLast((candidate) =>
+          exactMarkerPrecedesOriginalReleaseConfirmation(candidate, event, attemptOrdinal)
+        )
+      : prior(records, record.position).findLast((candidate) =>
+          markerAbsencePrecedesActiveAbsenceConfirmation(candidate, event, attemptOrdinal)
+        )
+  return release !== undefined && marker !== undefined && release.position < marker.position
 }
 
 const deletionReadIsValid = (
@@ -427,17 +629,83 @@ const matchesDeletionRead = (candidate: WorkflowJournalEvent, expected: Deletion
   candidate._tag === "CompletionClaimDeletionReadObserved" &&
   candidate.request.operationId === expected.request.operationId &&
   candidate.purpose._tag === expected.purpose._tag &&
-  candidate.purpose.attemptOrdinal === expected.purpose.attemptOrdinal
+  (candidate.purpose._tag === "BeforeOriginalClaimRelease" ||
+    expected.purpose._tag === "BeforeOriginalClaimRelease" ||
+    candidate.purpose.attemptOrdinal === expected.purpose.attemptOrdinal)
 
 const deletionIntentMatches = (intent: DeletionIntent, request: CompletionClaimDeletionRequest): boolean =>
   completionTaskClaimEquals(intent.claim, request.claim) &&
   completionSuccessObservationEquals(intent.successObservation, request.successObservation)
 
+const completionCleanupForReleaseIntent = (
+  records: ReadonlyArray<JournalRecord>,
+  position: JournalPosition,
+  event: ClaimReleaseIntent
+): (JournalRecord & { readonly event: DeletionIntent }) | undefined =>
+  prior(records, position).findLast(
+    (candidate): candidate is JournalRecord & { readonly event: DeletionIntent } =>
+      candidate.event._tag === "CompletionClaimDeletionIntended" &&
+      completionOriginalTaskClaimReleaseFor(candidate.event.claim).operationId === event.operation.release.operationId
+  )
+
+const cleanupReleaseIntentMatches = (
+  event: ClaimReleaseIntent,
+  expectedRelease: ReturnType<typeof completionOriginalTaskClaimReleaseFor>
+): boolean =>
+  event.operation.authority._tag === "WorkflowClaimReleaseAuthority" &&
+  isExactTaskClaim(event.operation.release.claim, expectedRelease.claim) &&
+  event.operation.release.operationId === expectedRelease.operationId
+
+const cleanupReleaseIntentHasPredecessors = (event: ClaimReleaseIntent, cleanup: DeletionIntent): boolean => {
+  const predecessors = new Set(event.operation.predecessorOperationIds)
+  return (
+    predecessors.has(cleanup.claim.originalClaim.operationId) &&
+    predecessors.has(cleanup.successObservation.operationId)
+  )
+}
+
+const originalClaimReleaseMarkerObservation = (
+  records: ReadonlyArray<JournalRecord>,
+  position: JournalPosition,
+  cleanup: JournalRecord & { readonly event: DeletionIntent }
+): DeletionRead["observation"] | undefined =>
+  prior(records, position).findLast(
+    (candidate): candidate is JournalRecord & { readonly event: DeletionRead } =>
+      candidate.position > cleanup.position &&
+      candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
+      candidate.event.request.operationId === cleanup.event.operationId &&
+      candidate.event.purpose._tag === "BeforeOriginalClaimRelease"
+  )?.event.observation
+
+const invalidCompletionCleanupReleaseIntent = (
+  record: JournalRecord,
+  records: ReadonlyArray<JournalRecord>,
+  event: ClaimReleaseIntent
+): string | undefined => {
+  const cleanup = completionCleanupForReleaseIntent(records, record.position, event)
+  if (cleanup === undefined) return undefined
+  const expectedRelease = completionOriginalTaskClaimReleaseFor(cleanup.event.claim)
+  if (!cleanupReleaseIntentMatches(event, expectedRelease)) {
+    return "completion cleanup release intent contradicts its exact original claim"
+  }
+  if (!cleanupReleaseIntentHasPredecessors(event, cleanup.event)) {
+    return "completion cleanup release intent requires its exact claim and focused-success predecessors"
+  }
+  const observation = originalClaimReleaseMarkerObservation(records, record.position, cleanup)
+  return observation?._tag === "CompletionTaskClaim" && completionTaskClaimEquals(observation, cleanup.event.claim)
+    ? undefined
+    : "completion cleanup release intent requires a fresh exact completion-marker observation"
+}
+
 export const deletionReadPurposeMatches = (event: DeletionRead, priorAttempts: number): boolean =>
-  event.purpose._tag === "BeforeDeletionAttempt"
-    ? Number(event.purpose.attemptOrdinal) === priorAttempts + 1
-    : Number(event.purpose.attemptOrdinal) === completionClaimRequestLimit &&
-      priorAttempts === completionClaimRequestLimit
+  event.purpose._tag === "BeforeOriginalClaimRelease"
+    ? true
+    : event.purpose._tag === "BeforeDeletionAttempt" || event.purpose._tag === "ConfirmOriginalClaimReleased"
+      ? Number(event.purpose.attemptOrdinal) === priorAttempts + 1
+      : event.purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent"
+        ? Number(event.purpose.attemptOrdinal) === Math.min(priorAttempts + 1, completionClaimRequestLimit)
+        : Number(event.purpose.attemptOrdinal) === completionClaimRequestLimit &&
+          priorAttempts === completionClaimRequestLimit
 
 const recordCompletionTaskIssue = (
   issue: ReturnType<typeof invalidCompletionTaskHistory>,
@@ -448,6 +716,33 @@ const recordCompletionTaskIssue = (
   if (issue?.kind === "Semantic") recordSemanticIssue(issue.detail)
 }
 
+const invalidReplacementHistory = (
+  record: JournalRecord,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: IntegrationFinalityHistoryIndexes
+): IntegrationFinalityHistoryValidation | undefined => {
+  const event = record.event
+  if (event._tag === "CompletionClaimReplacementIntended")
+    return invalidReplacementIntent(record, records, indexes, event)
+  if (event._tag === "CompletionClaimReplacementAttemptIntended")
+    return invalidReplacementAttempt(record, indexes, event)
+  if (event._tag === "CompletionClaimReplaced") return invalidReplacementOutcome(record, indexes, event)
+  return undefined
+}
+
+const invalidDeletionHistory = (
+  record: JournalRecord,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: IntegrationFinalityHistoryIndexes
+): IntegrationFinalityHistoryValidation | undefined => {
+  const event = record.event
+  if (event._tag === "CompletionClaimDeletionIntended") return invalidDeletionIntent(record, records, indexes, event)
+  if (event._tag === "CompletionClaimDeletionAttemptIntended")
+    return invalidDeletionAttempt(record, records, indexes, event)
+  if (event._tag === "CompletionClaimDeleted") return invalidDeletionOutcome(record, records, indexes, event)
+  return undefined
+}
+
 /** Validates one finality event against exact promotion, claim, and tracker chronology. */
 export const invalidIntegrationFinalityHistory = (
   record: JournalRecord,
@@ -455,14 +750,13 @@ export const invalidIntegrationFinalityHistory = (
   indexes: IntegrationFinalityHistoryIndexes
 ): IntegrationFinalityHistoryValidation => {
   const event = record.event
-  if (event._tag === "CompletionClaimReplacementIntended")
-    return invalidReplacementIntent(record, records, indexes, event)
-  if (event._tag === "CompletionClaimReplacementAttemptIntended")
-    return invalidReplacementAttempt(record, indexes, event)
-  if (event._tag === "CompletionClaimReplaced") return invalidReplacementOutcome(record, indexes, event)
-  if (event._tag === "CompletionClaimDeletionIntended") return invalidDeletionIntent(record, records, indexes, event)
-  if (event._tag === "CompletionClaimDeletionAttemptIntended") return invalidDeletionAttempt(record, indexes, event)
-  if (event._tag === "CompletionClaimDeleted") return invalidDeletionOutcome(record, records, indexes, event)
+  if (event._tag === "TaskClaimReleaseIntended") {
+    return { detail: invalidCompletionCleanupReleaseIntent(record, records, event), indexes }
+  }
+  const replacement = invalidReplacementHistory(record, records, indexes)
+  if (replacement !== undefined) return replacement
+  const deletion = invalidDeletionHistory(record, records, indexes)
+  if (deletion !== undefined) return deletion
   if (event._tag === "IntegrationFinalitySettled") return invalidSettlement(record, records, indexes, event)
   return { detail: undefined, indexes }
 }

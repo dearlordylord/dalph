@@ -1,6 +1,7 @@
 import { Context, Effect, Schema } from "effect"
 import { TaskId } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../authorities/coordinator-ownership/ownership.js"
+import type { TaskTrackerMutationThrottled } from "../../authorities/task-tracker/mutation-throttling.js"
 import type {
   GitWorktreeCreateFailure,
   GitWorktreeObservationError,
@@ -72,6 +73,7 @@ type TaskClaimAcquisitionError =
   | TaskClaimOwnershipConflict
   | TaskClaimReadFailure
   | TaskClaimRequestFailure
+  | TaskTrackerMutationThrottled
 
 /** The generic operation handlers used before complete-attempt executor work. */
 export interface WorkflowInterpreterService {
@@ -121,6 +123,7 @@ export interface WorkflowInterpreterService {
     | TaskClaimReadFailure
     | TaskClaimReleaseDidNotConverge
     | TaskClaimReleaseFailure
+    | TaskTrackerMutationThrottled
   >
   readonly readTaskWorkSpecification: (
     operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type,

@@ -165,6 +165,7 @@ import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-public
 import {
   completionClaimDeletionRequestFor,
   CompletionClaimBoundary,
+  CompletionClaimMarkerAbsent,
   CompletionClaimReadFailure,
   CompletionClaimReplacedEvent,
   completionClaimReplacementOperationIdFor,
@@ -2312,14 +2313,31 @@ describe("delivery proposal route matrix", () => {
         }
       ])
       const journal = appendableJournalFor(records)
-      let currentClaim: typeof integrationFinalityFixture.activeClaim | typeof integrationFinalityFixture.claim =
+      let activeClaim: typeof integrationFinalityFixture.activeClaim | undefined =
         integrationFinalityFixture.activeClaim
+      let completionMarker: typeof integrationFinalityFixture.claim | undefined
       const boundary = CompletionClaimBoundary.of({
-        deleteTaskClaim: () => Effect.void,
-        readTaskClaim: () => Effect.succeed(currentClaim),
+        deleteTaskClaim: () =>
+          Effect.sync(() => {
+            completionMarker = undefined
+          }),
+        readCompletionClaimMarker: () =>
+          Effect.succeed(
+            completionMarker ?? CompletionClaimMarkerAbsent.make({ taskId: integrationFinalityFixture.taskId })
+          ),
+        readOriginalTaskClaim: () =>
+          Effect.succeed(activeClaim ?? UnclaimedTask.make({ taskId: integrationFinalityFixture.taskId })),
+        readTaskClaim: () =>
+          Effect.succeed(
+            completionMarker ?? activeClaim ?? UnclaimedTask.make({ taskId: integrationFinalityFixture.taskId })
+          ),
+        releaseOriginalTaskClaim: () =>
+          Effect.sync(() => {
+            activeClaim = undefined
+          }),
         replaceTaskClaim: (request) =>
           Effect.sync(() => {
-            currentClaim = request.claim
+            completionMarker = request.claim
             return request.claim
           })
       })
@@ -2421,11 +2439,14 @@ describe("delivery proposal route matrix", () => {
       const waitingJournal = appendableJournalFor(waitingRecords)
       const foreignBoundary = CompletionClaimBoundary.of({
         deleteTaskClaim: () => Effect.die("foreign wait must not delete"),
+        readCompletionClaimMarker: () => Effect.die("foreign replacement must not enter cleanup"),
+        readOriginalTaskClaim: () => Effect.die("foreign replacement must not enter cleanup"),
         readTaskClaim: () =>
           Effect.succeed({
             ...integrationFinalityFixture.activeClaim,
             operationId: OperationId.make("foreign-finality-action-claim")
           }),
+        releaseOriginalTaskClaim: () => Effect.die("foreign replacement must not enter cleanup"),
         replaceTaskClaim: () => Effect.die("foreign wait must not replace")
       })
       expect(
@@ -2437,8 +2458,16 @@ describe("delivery proposal route matrix", () => {
 
       const unreadableBoundary = CompletionClaimBoundary.of({
         deleteTaskClaim: () => Effect.die("unreadable claim must not be deleted"),
-        readTaskClaim: (taskId) =>
-          Effect.fail(new CompletionClaimReadFailure({ detail: "tracker claim is unreadable", taskId })),
+        readCompletionClaimMarker: (request) =>
+          Effect.fail(
+            new CompletionClaimReadFailure({ detail: "tracker claim is unreadable", taskId: request.taskId })
+          ),
+        readOriginalTaskClaim: () => Effect.die("unreadable claim must not enter cleanup"),
+        readTaskClaim: (request) =>
+          Effect.fail(
+            new CompletionClaimReadFailure({ detail: "tracker claim is unreadable", taskId: request.taskId })
+          ),
+        releaseOriginalTaskClaim: () => Effect.die("unreadable claim must not enter cleanup"),
         replaceTaskClaim: () => Effect.die("unreadable claim must not be replaced")
       })
       expect(
@@ -2529,7 +2558,7 @@ describe("delivery proposal route matrix", () => {
       const boundary = CompletionTaskBoundary.of({
         completeTask: () => Effect.die("focused observation never sends another completion request"),
         readCompletionRequest: () => Effect.die("focused observation never performs request lookup"),
-        readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+        readFocusedTaskCompletion: ({ operationId }) =>
           Ref.get(lifecycle).pipe(
             Effect.map((currentLifecycle) => ({
               ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
@@ -2724,7 +2753,7 @@ describe("delivery proposal route matrix", () => {
       const waitingBoundary = CompletionTaskBoundary.of({
         completeTask: () => Effect.die("focused confirmation wait must not complete the task"),
         readCompletionRequest: () => Effect.die("focused confirmation wait must not look up the request"),
-        readFocusedTaskCompletion: (taskId) =>
+        readFocusedTaskCompletion: ({ taskId }) =>
           Effect.fail(new FocusedTaskCompletionReadFailure({ detail: "focused facts unavailable", taskId }))
       })
       expect(
@@ -2793,7 +2822,7 @@ describe("delivery proposal route matrix", () => {
       const boundary = CompletionTaskBoundary.of({
         completeTask: () => Effect.die("focused confirmation never completes the task"),
         readCompletionRequest: () => Effect.die("the Applied lookup is already durable"),
-        readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+        readFocusedTaskCompletion: ({ operationId }) =>
           Effect.succeed({
             ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
             currentClaim: integrationFinalityFixture.claim,
@@ -2858,7 +2887,7 @@ describe("delivery proposal route matrix", () => {
             CompletionTaskBoundary.of({
               completeTask: () => Effect.die("authorization conflict must stop before completion"),
               readCompletionRequest: () => Effect.die("authorization conflict must stop before lookup"),
-              readFocusedTaskCompletion: (taskId) =>
+              readFocusedTaskCompletion: ({ taskId }) =>
                 Effect.fail(new FocusedTaskCompletionReadFailure({ detail: "focused facts unavailable", taskId }))
             })
         },
@@ -2872,7 +2901,7 @@ describe("delivery proposal route matrix", () => {
                   new CompletionTaskRequestFailure({ detail: "response lost", outcome: "Unknown", request: received })
                 ),
               readCompletionRequest: () => Effect.die("failed confirmation must stop before lookup"),
-              readFocusedTaskCompletion: (taskId, _target, operationId) => {
+              readFocusedTaskCompletion: ({ operationId, taskId }) => {
                 focusedReadCount += 1
                 return focusedReadCount === 1
                   ? Effect.succeed({
@@ -2899,7 +2928,7 @@ describe("delivery proposal route matrix", () => {
                 Effect.succeed(
                   CompletionTaskRequestLookup.cases.Unreadable.make({ detail: "lookup unavailable", request: received })
                 ),
-              readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+              readFocusedTaskCompletion: ({ operationId }) =>
                 Effect.succeed({
                   ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
                   currentClaim: integrationFinalityFixture.claim,
@@ -2919,7 +2948,7 @@ describe("delivery proposal route matrix", () => {
                 ),
               readCompletionRequest: (received) =>
                 Effect.succeed(CompletionTaskRequestLookup.cases.NotApplied.make({ request: received })),
-              readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+              readFocusedTaskCompletion: ({ operationId }) =>
                 Effect.succeed({
                   ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
                   currentClaim: integrationFinalityFixture.claim,
@@ -2941,7 +2970,7 @@ describe("delivery proposal route matrix", () => {
                   })
                 ),
               readCompletionRequest: () => Effect.die("mismatched acknowledgement must stop before lookup"),
-              readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+              readFocusedTaskCompletion: ({ operationId }) =>
                 Effect.succeed({
                   ...integrationFinalityFixture.focusedSuccessFactsEvent.observation.facts,
                   currentClaim: integrationFinalityFixture.claim,

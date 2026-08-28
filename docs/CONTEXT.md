@@ -780,6 +780,15 @@ token currently own the task. It does not prove that the task remains open or
 inside the Run's current Run task graph.
 _Avoid_: Claim request acknowledged, claimed task eligibility observed
 
+**Task-tracker mutation throttled**:
+The typed boundary failure returned when the task tracker conclusively refuses
+one acknowledged exact claim, completion-claim, completion, or cleanup mutation
+because of provider throttling. It names the logical mutation and its existing
+operation identity, and may retain safe decoded timing evidence for diagnosis;
+it neither authorizes nor schedules another request. A later invocation must
+first read the owning tracker facts under the existing protocol.
+_Avoid_: Ambiguous mutation outcome, retry deadline, provider payload
+
 **Explicit task-claim reacquisition authority**:
 The durable authority linking one replacement task-claim acquisition intent to
 one earlier applied Operator direction for that Run and task. The direction's
@@ -790,12 +799,36 @@ spelling or an earlier claim token cannot imply it.
 _Avoid_: Operation-ID prefix, stale claim token, automatic reacquisition
 
 **Completion claim**:
-The temporary task-tracker record that replaces one exact active task claim
-immediately before Dalph asks the task tracker to mark the task complete. It
-binds the exact confirmed integration result, current task revision, and any
-supporting artifacts required by the selected resolution protocol. Dalph
-deletes it only after the task tracker confirms completion.
+The temporary task-tracker evidence that takes over workflow authorization
+from one exact active task claim immediately before Dalph asks the task tracker
+to mark the task complete. It binds the exact confirmed integration result,
+current task revision, and supporting resolution evidence; its provider record
+may coexist with the active-claim record until later authorized cleanup.
 _Avoid_: Task claim, task completed successfully, Git branch
+
+**Completion claim fingerprint**:
+The bounded identity derived from one canonical encoding of every field in an
+exact completion claim. It identifies evidence for comparison and cannot by
+itself reconstruct or authorize the claim.
+_Avoid_: Completion claim, claim token, task revision
+
+**Completion-claim cleanup disposition**:
+The recoverable, task-local removal of the two tracker records retained after
+fresh focused task success. Dalph first confirms that the exact completion
+claim still witnesses the cleanup, then records generic intent and confirms
+release of the exact original active claim. It deletes the exact completion
+claim only after a new marker read followed by a current active-record read
+that proves the original claim remains absent. Marker absence is not finality:
+after observing it, Dalph reads the current active record again, and only its
+fresh absence permits deletion evidence and settlement. A mutation
+acknowledgement is not an observation: after a lost response or restart, Dalph
+rereads the exact remaining record before deciding whether any request is
+still authorized. A missing original claim is acceptable only while the exact
+completion claim remains; a recreated exact active claim is a premise
+contradiction, while foreign, malformed, stale, or incomplete evidence
+authorizes no deletion.
+_Avoid_: Single-record claim deletion, acknowledged cleanup, reusable cleanup
+approval, foreign-claim repair
 
 **Planned task attempt**:
 One immutable Dalph decision to try one exact task revision fingerprint in one

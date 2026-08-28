@@ -13,6 +13,10 @@ import {
 } from "./capability-registration-gate.js"
 
 const sourceFiles = repositoryCapabilitySourceFiles()
+const githubTrackerMutationContractCall = `trackerMutationContract({
+  ...trackerMutationContractFixture(taskId, "github"),
+  layer: githubTrackerMutationLayer.pipe(Layer.provide(githubClaimFixtureLayer), Layer.provide(NodeCrypto.layer))
+})`
 
 const issuesFor = (inventory: CapabilityRegistrationInventory): ReadonlyArray<string> =>
   runCapabilityRegistrationGate(inventory, sourceFiles)
@@ -27,22 +31,41 @@ describe("capability registration gate", () => {
     expect(issues.some((issue) => issue.includes(`in ${path}:`) && issue.includes("TS1134"))).toBe(true)
   })
 
-  it("runs every registered controlled and production implementation through its named contract family", () => {
-    expect(issuesFor(capabilityRegistrationInventory)).toEqual([])
+  it(
+    "runs every registered controlled and production implementation through its named contract family",
+    { timeout: 30_000 },
+    () => {
+      expect(issuesFor(capabilityRegistrationInventory)).toEqual([])
 
-    for (const capability of capabilityRegistrationInventory.capabilities) {
-      for (const role of ["controlled", "production"] as const) {
-        const implementation = capability[role]
-        if (implementation._tag === "Implementation") {
-          expect(capability.contract.executions).toContainEqual(expect.objectContaining({ role }))
+      for (const capability of capabilityRegistrationInventory.capabilities) {
+        for (const role of ["controlled", "production"] as const) {
+          const implementation = capability[role]
+          if (implementation._tag === "Implementation") {
+            expect(capability.contract.executions).toContainEqual(
+              expect.objectContaining({
+                implementation: expect.objectContaining({
+                  identity: implementation.identity,
+                  marker: implementation.marker,
+                  source: implementation.source
+                }),
+                role
+              })
+            )
+          }
         }
       }
     }
-  })
+  )
 
-  it("records typed N/A evidence instead of fabricating repository providers", () => {
+  it("registers the four real tracker authorities and keeps unrelated unavailable providers typed N/A", () => {
+    const graph = capabilityRegistrationInventory.capabilities.find(
+      ({ family }) => family === "task-tracker-graph-read"
+    )
     const completion = capabilityRegistrationInventory.capabilities.find(
       ({ family }) => family === "task-tracker-completion"
+    )
+    const completionClaim = capabilityRegistrationInventory.capabilities.find(
+      ({ family }) => family === "task-tracker-completion-claim"
     )
     const claim = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "task-tracker-claim")
     const integrator = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "outer-integrator")
@@ -50,12 +73,20 @@ describe("capability registration gate", () => {
       ({ family }) => family === "git-target-promotion"
     )
 
-    expect(completion?.production).toEqual(
-      expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
-    )
-    expect(claim?.production).toEqual(
-      expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
-    )
+    expect([
+      graph?.production._tag,
+      claim?.production._tag,
+      completionClaim?.production._tag,
+      completion?.production._tag
+    ]).toEqual(["Implementation", "Implementation", "Implementation", "Implementation"])
+    expect(
+      capabilityRegistrationInventory.requiredFamilies.filter((family) => family.startsWith("task-tracker-"))
+    ).toEqual([
+      "task-tracker-graph-read",
+      "task-tracker-claim",
+      "task-tracker-completion-claim",
+      "task-tracker-completion"
+    ])
     expect(integrator?.production).toEqual(
       expect.objectContaining({ _tag: "NotApplicable", reason: "no-repository-provider" })
     )
@@ -252,6 +283,110 @@ describe("capability registration gate", () => {
     )
   })
 
+  it.each([
+    ["task-tracker-claim", "production", "githubTrackerMutationLayer"],
+    ["task-tracker-completion-claim", "controlled", "controlledCompletionClaimBoundaryLayerFrom"],
+    ["task-tracker-completion-claim", "production", "githubCompletionClaimBoundaryLayer"],
+    ["task-tracker-completion", "production", "githubCompletionTaskBoundaryLayer"]
+  ] as const)("rejects a missing implementation binding for %s %s", (family, role, identity) => {
+    const missingBinding = {
+      ...capabilityRegistrationInventory,
+      capabilities: capabilityRegistrationInventory.capabilities.map((capability) =>
+        capability.family !== family
+          ? capability
+          : {
+              ...capability,
+              contract: {
+                ...capability.contract,
+                executions: capability.contract.executions.map((execution) => {
+                  if (execution.role !== role) return execution
+                  const { implementation: _implementation, ...executionWithoutImplementation } = execution
+                  return executionWithoutImplementation
+                })
+              }
+            }
+      )
+    }
+
+    expect(issuesFor(missingBinding)).toContain(
+      `${family} ${role} contract implementation binding is missing: ${identity}`
+    )
+  })
+
+  it("rejects alternate, empty, and stale implementation proof on all four newly bound tracker edges", () => {
+    const productionClaimEmpty = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "layer: githubTrackerMutationLayer.pipe(Layer.provide(githubClaimFixtureLayer), Layer.provide(NodeCrypto.layer))",
+              "layer: Layer.empty"
+            )
+          }
+        : file
+    )
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, productionClaimEmpty)).toContain(
+      "task-tracker-claim production contract implementation binding is stale: githubTrackerMutationLayer"
+    )
+
+    const controlledCompletionClaimAlternate = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "layer: controlledCompletionClaimBoundaryLayerFrom([fixture.activeClaim]),",
+              "layer: controlledCompletionTaskBoundaryLayerFrom([openFacts]),"
+            )
+          }
+        : file
+    )
+    expect(
+      runCapabilityRegistrationGate(capabilityRegistrationInventory, controlledCompletionClaimAlternate)
+    ).toContain(
+      "task-tracker-completion-claim controlled contract implementation binding is stale: controlledCompletionClaimBoundaryLayerFrom"
+    )
+
+    const productionCompletionClaimEmpty = sourceFiles.map((file) =>
+      file.path === "packages/orchestrator/src/authorities/task-tracker/github/completion-claim.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "  layer: Layer.unwrap(\n    makeHarness().pipe(\n      Effect.provide(NodeCrypto.layer),\n      Effect.map(({ layer }) => layer)\n    )\n  ),",
+              "  layer: Layer.empty,"
+            )
+          }
+        : file
+    )
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, productionCompletionClaimEmpty)).toContain(
+      "task-tracker-completion-claim production contract implementation binding is stale: githubCompletionClaimBoundaryLayer"
+    )
+
+    const staleProductionCompletionIdentity = {
+      ...capabilityRegistrationInventory,
+      capabilities: capabilityRegistrationInventory.capabilities.map((capability) =>
+        capability.family !== "task-tracker-completion"
+          ? capability
+          : {
+              ...capability,
+              contract: {
+                ...capability.contract,
+                executions: capability.contract.executions.map((execution) =>
+                  execution.role !== "production" || execution.implementation === undefined
+                    ? execution
+                    : {
+                        ...execution,
+                        implementation: { ...execution.implementation, identity: "staleCompletionTaskLayer" }
+                      }
+                )
+              }
+            }
+      )
+    }
+    expect(issuesFor(staleProductionCompletionIdentity)).toContain(
+      "task-tracker-completion production contract implementation binding is stale: staleCompletionTaskLayer"
+    )
+  })
+
   it("rejects a Codex executor contract that substitutes a different Layer", () => {
     const substituted = sourceFiles.map((file) =>
       file.path === "packages/dalph/src/application/codex-planned-attempt-executor.test.ts"
@@ -369,7 +504,7 @@ describe("capability registration gate", () => {
         return {
           ...file,
           source: file.source.replace(
-            'trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })',
+            githubTrackerMutationContractCall,
             'const contractResidue = "trackerMutationContract("\nconst regexResidue = /trackerMutationContract\\(/'
           )
         }
@@ -496,8 +631,8 @@ describe("capability registration gate", () => {
         ? {
             ...file,
             source: file.source.replace(
-              'trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })\n',
-              '{\n  const { trackerMutationContract } = { trackerMutationContract: () => undefined }\n  trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })\n}\n'
+              `${githubTrackerMutationContractCall}\n`,
+              `{\n  const { trackerMutationContract } = { trackerMutationContract: () => undefined }\n  ${githubTrackerMutationContractCall}\n}\n`
             )
           }
         : file

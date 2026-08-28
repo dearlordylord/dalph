@@ -9,6 +9,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   makeTaskWorkSpecification,
+  type TaskWorkSpecification,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
@@ -25,6 +26,7 @@ import {
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
+  type GithubGraphqlRequest,
   ActiveTaskClaim,
   AllocatedWorkflowRunId,
   attemptPlanRecordKey,
@@ -37,6 +39,15 @@ import {
   freshWorkflowRunId,
   GitCommand,
   GitCommonDirectoryTarget,
+  GithubGraphqlClient,
+  GithubIssueNodeId,
+  GithubIssueNumber,
+  GithubIssueTarget,
+  GithubRepositoryName,
+  GithubRepositoryNodeId,
+  GithubRepositoryOwner,
+  githubTaskIdFor,
+  githubTrackerGraphReaderLayer,
   intentRecordKey,
   JournalDatabaseLocator,
   type JournalRecord,
@@ -62,6 +73,7 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
   nodeGitCommandLayer,
   OperationId,
   OperationIdAllocator,
@@ -92,6 +104,9 @@ import {
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TrackerGraphReader,
+  TrackerAdapterReadContext,
+  TrackerAdapterReadError,
+  TrackerAdapterReadFailureReason,
   TrackerMutation,
   TrackerRevision,
   WorkflowRunAlreadyTerminated,
@@ -99,9 +114,12 @@ import {
   WorkflowTrace,
   unavailableIntegratorCandidateProviderAuthority
 } from "@dalph/orchestrator"
-import { Cause, ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Option, Ref } from "effect"
+import { Cause, ConfigProvider, Deferred, Effect, Fiber, FileSystem, Layer, Match, Option, Ref } from "effect"
 import { expect } from "vitest"
-import { taskTrackerGraphFactsObserved } from "../../../orchestrator/test/task-tracker-facts.js"
+import {
+  taskTrackerGraphFactsObserved,
+  taskTrackerWorkSpecificationFactsObserved
+} from "../../../orchestrator/test/task-tracker-facts.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 
@@ -109,6 +127,211 @@ const productionIntegrationTarget = (repository: string): IntegrationTarget =>
   IntegrationTarget.make({
     repository: GitRepositoryLocator.make(repository),
     ref: IntegrationTargetRef.make("refs/heads/master")
+  })
+
+const githubInstructionTarget = GithubIssueTarget.make({
+  issueNumber: GithubIssueNumber.make(281),
+  owner: GithubRepositoryOwner.make("dearlordylord"),
+  repository: GithubRepositoryName.make("dalph")
+})
+const githubInstructionRepositoryNodeId = GithubRepositoryNodeId.make("github-instruction-repository")
+const githubInstructionIssueNodeId = GithubIssueNodeId.make("github-instruction-issue")
+const githubInstructionTaskId = githubTaskIdFor(githubInstructionRepositoryNodeId, githubInstructionIssueNodeId)
+const githubInstructionFailureMatrixTimeoutMilliseconds = 30_000
+const githubInstructionSpecification = makeTaskWorkSpecification({
+  body: "Exact current body from GitHub.",
+  taskId: githubInstructionTaskId,
+  title: "Exact current title from GitHub"
+})
+const unexpectedGithubInstructionResponse = {
+  body: { errors: [{ message: "unexpected non-instruction GitHub request" }] }
+}
+
+/** The complete executor boundary vocabulary observed by the GitHub-instruction production vertical. */
+type ObservedPlannedAttemptExecutorCall = "project" | "requestSuspension" | "startOrContinue"
+
+const appendObservedExecutorCall =
+  (call: ObservedPlannedAttemptExecutorCall) =>
+  (calls: ReadonlyArray<ObservedPlannedAttemptExecutorCall>): ReadonlyArray<ObservedPlannedAttemptExecutorCall> => [
+    ...calls,
+    call
+  ]
+
+const githubInstructionResponse = (request: GithubGraphqlRequest, focusedBody: unknown) =>
+  Match.valueTags(request, {
+    AddBlockedBy: () => unexpectedGithubInstructionResponse,
+    AddIssueComment: () => unexpectedGithubInstructionResponse,
+    AddSubIssue: () => unexpectedGithubInstructionResponse,
+    CloseIssue: () => unexpectedGithubInstructionResponse,
+    CreateClaimLabel: () => unexpectedGithubInstructionResponse,
+    CreateIssue: () => unexpectedGithubInstructionResponse,
+    DeleteClaimLabel: () => unexpectedGithubInstructionResponse,
+    DeleteIssue: () => unexpectedGithubInstructionResponse,
+    FindClaimLabel: () => unexpectedGithubInstructionResponse,
+    ReadBlockedBy: () => ({
+      body: {
+        data: {
+          node: {
+            __typename: "Issue",
+            blockedBy: { nodes: [], pageInfo: { endCursor: null, hasNextPage: false } },
+            id: githubInstructionIssueNodeId
+          }
+        }
+      }
+    }),
+    ReadIssue: () => ({
+      body: {
+        data: {
+          node: {
+            __typename: "Issue",
+            id: githubInstructionIssueNodeId,
+            parent: null,
+            repository: { id: githubInstructionRepositoryNodeId },
+            state: "OPEN",
+            stateReason: null
+          }
+        }
+      }
+    }),
+    ReadIssueDetails: () => unexpectedGithubInstructionResponse,
+    ReadSubIssues: () => ({
+      body: {
+        data: {
+          node: {
+            __typename: "Issue",
+            id: githubInstructionIssueNodeId,
+            subIssues: { nodes: [], pageInfo: { endCursor: null, hasNextPage: false } }
+          }
+        }
+      }
+    }),
+    ReadTaskWorkSpecification: () => ({ body: focusedBody }),
+    ReopenIssue: () => unexpectedGithubInstructionResponse,
+    ResolveIssue: () => ({
+      body: {
+        data: { repository: { id: githubInstructionRepositoryNodeId, issue: { id: githubInstructionIssueNodeId } } }
+      }
+    }),
+    ResolveRepository: () => unexpectedGithubInstructionResponse
+  })
+
+const runFreshGithubInstructionVertical = (scenario: string, focusedBody: unknown) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: `dalph-github-instructions-${scenario}-` })
+    const git = yield* GitCommand
+    yield* git.runInWorktree(directory, ["init"])
+    yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+    yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+    yield* fileSystem.writeFileString(`${directory}/README.md`, "GitHub instruction vertical\n")
+    yield* git.runInWorktree(directory, ["add", "README.md"])
+    yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
+    yield* git.runInWorktree(directory, ["branch", "-M", "master"])
+    const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
+    const runId = yield* freshWorkflowRunId(githubInstructionTarget)
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make(`github-instructions-${scenario}`),
+      baseSha,
+      branch: TaskBranchRef.make(`refs/heads/dalph/github-instructions-${scenario}`),
+      executor: TaskExecutorLocator.make("executor:github-instruction-vertical"),
+      runId,
+      taskId: githubInstructionTaskId,
+      taskRevision: githubInstructionSpecification.fingerprint,
+      worktree: WorktreeLocator.make(`${directory}/worktree`)
+    })
+    const githubCalls = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest["_tag"]>>([])
+    const executorCalls = yield* Ref.make<ReadonlyArray<ObservedPlannedAttemptExecutorCall>>([])
+    const executorRequests = yield* Ref.make<ReadonlyArray<PlannedAttemptExecutorRequest>>([])
+    const githubClientLayer = Layer.succeed(
+      GithubGraphqlClient,
+      GithubGraphqlClient.of({
+        execute: (request) =>
+          Ref.update(githubCalls, (calls) => [...calls, request._tag]).pipe(
+            Effect.as(githubInstructionResponse(request, focusedBody))
+          )
+      })
+    )
+    const executorLayer = Layer.succeed(
+      PlannedAttemptExecutor,
+      PlannedAttemptExecutor.of({
+        project: (correlation) =>
+          Ref.update(executorCalls, appendObservedExecutorCall("project")).pipe(
+            Effect.as(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }))
+          ),
+        requestSuspension: () =>
+          Ref.update(executorCalls, appendObservedExecutorCall("requestSuspension")).pipe(
+            Effect.andThen(Effect.die("fresh instruction read must not suspend executor work"))
+          ),
+        startOrContinue: (request) =>
+          Ref.update(executorCalls, appendObservedExecutorCall("startOrContinue")).pipe(
+            Effect.andThen(Ref.update(executorRequests, (requests) => [...requests, request])),
+            Effect.andThen(
+              new PlannedAttemptExecutorCommandFailure({
+                command: "StartOrContinue",
+                correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt),
+                detail: "stop after observing the exact executor request"
+              })
+            )
+          )
+      })
+    )
+    const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+    const application = productionWorkflowInterpreterLayer(
+      runId,
+      GitCommonDirectoryTarget.make(`${directory}/.git`),
+      productionIntegrationTarget(`${directory}/.git`),
+      controlledTrackerMutationLayer,
+      executorLayer,
+      unavailableIntegratorCandidateProviderAuthority
+    ).pipe(
+      Layer.provide(githubTrackerGraphReaderLayer.pipe(Layer.provide(githubClientLayer))),
+      Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+    )
+    const nextOperation = yield* Ref.make(0)
+    const exit = yield* runWorkflow(
+      githubInstructionTarget,
+      Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })),
+      runId
+    ).pipe(
+      Effect.provideService(
+        OperationIdAllocator,
+        OperationIdAllocator.of({
+          allocate: () =>
+            Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+              Effect.map((value) => OperationId.make(`github-instructions-${scenario}-operation-${value}`))
+            )
+        })
+      ),
+      Effect.provideService(
+        TaskClaimAcquisitionPlanner,
+        TaskClaimAcquisitionPlanner.of({
+          plan: (operationId, taskId) =>
+            Effect.succeed({
+              operationId,
+              owner: ClaimOwner.make("dalph"),
+              taskId,
+              token: ClaimToken.make(`github-instructions-${scenario}-token`)
+            })
+        })
+      ),
+      Effect.provideService(
+        PlannedTaskAttemptPlanner,
+        PlannedTaskAttemptPlanner.of({ plan: () => Effect.succeed(plannedAttempt) })
+      ),
+      Effect.provide(application),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename }))),
+      Effect.exit
+    )
+    const records = yield* Effect.gen(function* () {
+      return yield* (yield* JournalStore).read(runId)
+    }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+    return {
+      executorCalls: yield* Ref.get(executorCalls),
+      executorRequests: yield* Ref.get(executorRequests),
+      exit,
+      githubCalls: yield* Ref.get(githubCalls),
+      records
+    }
   })
 
 type PublicExecutorProjectionPlan = (
@@ -120,6 +343,14 @@ type PublicExecutorProjectionForApplication = (
   correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>
 ) => Effect.Effect<PlannedAttemptExecutorProjection>
 
+interface PublicRunFixtureOptions {
+  readonly acceptedResultEvidenceStore?: EvidenceStoreService
+  readonly integratorCandidateProviderAuthority?: IntegratorCandidateProviderAuthorityService
+  readonly projectionForApplication?: PublicExecutorProjectionForApplication
+  readonly seedExecutorFacts?: boolean
+  readonly taskWorkSpecificationRead?: Effect.Effect<TaskWorkSpecification, TrackerAdapterReadError>
+}
+
 // eslint-disable-next-line functional/no-mixed-types -- Public Run fixture intentionally groups boundary effects and observations for each scenario.
 interface PublicRunFixture {
   readonly activate: () => ReturnType<typeof runWorkflow>
@@ -127,11 +358,42 @@ interface PublicRunFixture {
   readonly commandCalls: Effect.Effect<ReadonlyArray<"StartOrContinue" | "Suspend">>
   readonly applicationBuilds: () => number
   readonly projectionCalls: Effect.Effect<number>
+  readonly specificationReads: Effect.Effect<number>
   readonly readRecords: Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
   readonly journalFilename: JournalDatabaseLocator
   readonly repository: string
   readonly runId: RunId
   readonly target: FixtureTarget
+}
+
+interface StartupValidCandidatePositions {
+  readonly directionAppliedAt: JournalPosition
+  readonly predecessorLineageObservedAt: JournalPosition
+  readonly quarantineAt: JournalPosition
+  readonly queuedAt: JournalPosition
+  readonly startedAt: JournalPosition
+  readonly successorLineageObservedAt: JournalPosition
+}
+
+/**
+ * Derives the shared StartupValid candidate-provenance chronology from the
+ * exact journal record that immediately precedes it.
+ */
+const startupValidCandidatePositionsAfter = (preceding: JournalRecord): StartupValidCandidatePositions => {
+  const queuedAt = JournalPosition.make(Number(preceding.position) + 1)
+  const startedAt = JournalPosition.make(Number(queuedAt) + 1)
+  const predecessorLineageObservedAt = JournalPosition.make(Number(startedAt) + 2)
+  const quarantineAt = JournalPosition.make(Number(predecessorLineageObservedAt) + 4)
+  const directionAppliedAt = JournalPosition.make(Number(quarantineAt) + 1)
+  const successorLineageObservedAt = JournalPosition.make(Number(directionAppliedAt) + 2)
+  return {
+    directionAppliedAt,
+    predecessorLineageObservedAt,
+    quarantineAt,
+    queuedAt,
+    startedAt,
+    successorLineageObservedAt
+  }
 }
 
 /**
@@ -140,14 +402,15 @@ interface PublicRunFixture {
  * The returned `activate` function still crosses the public runWorkflow
  * boundary; only the opaque executor projection sequence is controlled.
  */
-const makePublicRunFixture = (
-  projectionPlan: PublicExecutorProjectionPlan,
-  projectionForApplication?: PublicExecutorProjectionForApplication,
-  integratorCandidateProviderAuthority: IntegratorCandidateProviderAuthorityService = unavailableIntegratorCandidateProviderAuthority,
-  seedExecutorFacts = true,
-  acceptedResultEvidenceStore?: EvidenceStoreService
-) =>
+const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, options: PublicRunFixtureOptions = {}) =>
   Effect.gen(function* () {
+    const {
+      acceptedResultEvidenceStore,
+      integratorCandidateProviderAuthority = unavailableIntegratorCandidateProviderAuthority,
+      projectionForApplication,
+      seedExecutorFacts = true,
+      taskWorkSpecificationRead
+    } = options
     const fileSystem = yield* FileSystem.FileSystem
     const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-executor-projection-" })
     const git = yield* GitCommand
@@ -202,10 +465,16 @@ const makePublicRunFixture = (
       [claimOperation.acquisition.operationId],
       [taskId]
     )
+    const specificationObservation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("production-executor-projection-specification"),
+      target,
+      taskId,
+      [observation.operationId]
+    )
     const plan = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("production-executor-projection-plan"),
       plannedAttempt: attempt,
-      predecessorOperationIds: [observation.operationId]
+      predecessorOperationIds: [specificationObservation.operationId]
     })
     const worktree = makeTaskWorktreeReconciliationOperation({
       operationId: OperationId.make("production-executor-projection-worktree"),
@@ -239,6 +508,16 @@ const makePublicRunFixture = (
           revision: TrackerRevision.make("production-executor-projection-seed"),
           taskIds: [taskId]
         })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(specificationObservation.operationId),
+        taskTrackerReadIntent(specificationObservation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(specificationObservation.operationId),
+        taskTrackerWorkSpecificationFactsObserved(specificationObservation, specification)
       )
       yield* journal.append(
         runId,
@@ -289,6 +568,7 @@ const makePublicRunFixture = (
     const projections = yield* Ref.make(projectionPlan(correlation))
     const commandCallsRef = yield* Ref.make<ReadonlyArray<"StartOrContinue" | "Suspend">>([])
     const projectionCallsRef = yield* Ref.make(0)
+    const specificationReadsRef = yield* Ref.make(0)
     const consumeCommand = (command: "StartOrContinue" | "Suspend", planned: PlannedTaskAttempt) =>
       Effect.gen(function* () {
         yield* Ref.update(commandCallsRef, (calls) => [...calls, command])
@@ -343,7 +623,12 @@ const makePublicRunFixture = (
             TrackerGraphReader,
             TrackerGraphReader.of({
               read: () => Effect.succeed(projected.snapshot),
-              readTaskWorkSpecification: () => Effect.succeed(specification)
+              readTaskWorkSpecification: () =>
+                Ref.update(specificationReadsRef, (count) => count + 1).pipe(
+                  Effect.andThen(
+                    taskWorkSpecificationRead === undefined ? Effect.succeed(specification) : taskWorkSpecificationRead
+                  )
+                )
             })
           )
         ),
@@ -386,6 +671,7 @@ const makePublicRunFixture = (
       applicationBuilds: () => applicationBuilds,
       commandCalls: Ref.get(commandCallsRef),
       projectionCalls: Ref.get(projectionCallsRef),
+      specificationReads: Ref.get(specificationReadsRef),
       readRecords,
       journalFilename: filename,
       repository: directory,
@@ -454,20 +740,34 @@ it.effect("ordinary production Run activation sends FullRerun cleanup through th
             )
           )
       } satisfies IntegratorCandidateProviderAuthorityService
-      const fixture = yield* makePublicRunFixture(
-        () => [],
-        undefined,
-        provider,
-        true,
-        EvidenceStore.of({
+      const fixture = yield* makePublicRunFixture(() => [], {
+        acceptedResultEvidenceStore: EvidenceStore.of({
           put: () => Effect.die("FullRerun cleanup does not write accepted-result evidence"),
           read: () => Effect.die("FullRerun cleanup does not read accepted-result evidence")
-        })
-      )
+        }),
+        integratorCandidateProviderAuthority: provider
+      })
       const acceptedResult = AcceptedResult.make({
         commit: fixture.attempt.baseSha,
         evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("b".repeat(64)) })
       })
+      const terminalReport = yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+        return yield* journal.append(
+          fixture.runId,
+          plannedAttemptExecutorWorkReportedRecordKey(fixture.attempt.attemptId, reportOrdinal),
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: reportOrdinal,
+            report: PlannedAttemptExecutorReport.cases.Terminal.make({
+              correlation: plannedAttemptExecutorCorrelation(fixture.attempt),
+              result: { _tag: "Accepted", acceptedResult }
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename })))
+      const positions = startupValidCandidatePositionsAfter(terminalReport)
       const candidateTarget = productionIntegrationTarget(`${fixture.repository}/.git`)
       const predecessor = IntegratorSessionCorrelation.make({
         acceptedResult,
@@ -475,21 +775,21 @@ it.effect("ordinary production Run activation sends FullRerun cleanup through th
         expectedTargetHead: fixture.attempt.baseSha,
         integrationTarget: candidateTarget,
         plannedAttempt: fixture.attempt,
-        queuedAt: JournalPosition.make(12),
+        queuedAt: positions.queuedAt,
         sessionId: IntegratorSessionId.make("session:ordinary-production-predecessor"),
-        startedAt: JournalPosition.make(13),
-        targetLineageObservedAt: JournalPosition.make(15)
+        startedAt: positions.startedAt,
+        targetLineageObservedAt: positions.predecessorLineageObservedAt
       })
       const successor = integratorSuccessorCorrelationFor({
-        directionAppliedAt: JournalPosition.make(20),
+        directionAppliedAt: positions.directionAppliedAt,
         predecessor,
-        quarantineAt: JournalPosition.make(19),
+        quarantineAt: positions.quarantineAt,
         targetLineage: TargetLineageObservation.make({
           plannedBaseIsAncestorOfTargetHead: true,
           plannedBaseSha: fixture.attempt.baseSha,
           targetHeadSha: fixture.attempt.baseSha
         }),
-        targetLineageObservedAt: JournalPosition.make(22)
+        targetLineageObservedAt: positions.successorLineageObservedAt
       })
       yield* Ref.set(
         active,
@@ -508,23 +808,9 @@ it.effect("ordinary production Run activation sends FullRerun cleanup through th
         ])
       )
 
-      yield* Effect.gen(function* () {
-        const journal = yield* JournalStore
-        const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-        yield* journal.append(
-          fixture.runId,
-          plannedAttemptExecutorWorkReportedRecordKey(fixture.attempt.attemptId, reportOrdinal),
-          PlannedAttemptExecutorWorkReportedEvent.make({
-            ordinal: reportOrdinal,
-            report: PlannedAttemptExecutorReport.cases.Terminal.make({
-              correlation: plannedAttemptExecutorCorrelation(fixture.attempt),
-              result: { _tag: "Accepted", acceptedResult }
-            }),
-            version: workflowJournalEventVersion
-          })
-        )
-        yield* appendCandidateProvenance(predecessor, successor, "ordinary-production-full-rerun", "StartupValid")
-      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename })))
+      yield* appendCandidateProvenance(predecessor, successor, "ordinary-production-full-rerun", "StartupValid").pipe(
+        Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename }))
+      )
 
       const activation = yield* Effect.exit(fixture.activate())
       // Cleanup is the qualified boundary under test. Delivery then reaches
@@ -567,26 +853,15 @@ it.effect("ordinary production Run activation leaves a current quarantine untouc
             Effect.andThen(Effect.die("current quarantine must not remove a provider candidate"))
           )
       }
-      const fixture = yield* makePublicRunFixture(() => [], undefined, provider)
+      const fixture = yield* makePublicRunFixture(() => [], { integratorCandidateProviderAuthority: provider })
       const acceptedResult = AcceptedResult.make({
         commit: fixture.attempt.baseSha,
         evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("b".repeat(64)) })
       })
-      const predecessor = IntegratorSessionCorrelation.make({
-        acceptedResult,
-        candidateResource: IntegratorCandidateResourceLocator.make("candidate:ordinary-production-current-quarantine"),
-        expectedTargetHead: fixture.attempt.baseSha,
-        integrationTarget: productionIntegrationTarget(`${fixture.repository}/.git`),
-        plannedAttempt: fixture.attempt,
-        queuedAt: JournalPosition.make(12),
-        sessionId: IntegratorSessionId.make("session:ordinary-production-current-quarantine"),
-        startedAt: JournalPosition.make(13),
-        targetLineageObservedAt: JournalPosition.make(15)
-      })
-      yield* Effect.gen(function* () {
+      const terminalReport = yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-        yield* journal.append(
+        return yield* journal.append(
           fixture.runId,
           plannedAttemptExecutorWorkReportedRecordKey(fixture.attempt.attemptId, reportOrdinal),
           PlannedAttemptExecutorWorkReportedEvent.make({
@@ -598,8 +873,22 @@ it.effect("ordinary production Run activation leaves a current quarantine untouc
             version: workflowJournalEventVersion
           })
         )
-        yield* appendCurrentQuarantineProvenance(predecessor, "StartupValid")
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename })))
+      const positions = startupValidCandidatePositionsAfter(terminalReport)
+      const predecessor = IntegratorSessionCorrelation.make({
+        acceptedResult,
+        candidateResource: IntegratorCandidateResourceLocator.make("candidate:ordinary-production-current-quarantine"),
+        expectedTargetHead: fixture.attempt.baseSha,
+        integrationTarget: productionIntegrationTarget(`${fixture.repository}/.git`),
+        plannedAttempt: fixture.attempt,
+        queuedAt: positions.queuedAt,
+        sessionId: IntegratorSessionId.make("session:ordinary-production-current-quarantine"),
+        startedAt: positions.startedAt,
+        targetLineageObservedAt: positions.predecessorLineageObservedAt
+      })
+      yield* appendCurrentQuarantineProvenance(predecessor, "StartupValid").pipe(
+        Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename }))
+      )
 
       const activation = yield* Effect.exit(fixture.activate())
       // Cleanup is intentionally a no-op. The current quarantine keeps the
@@ -633,12 +922,7 @@ it.effect("ordinary production Run activation leaves a current quarantine untouc
 it.effect("ordinary production Run activation derives W1 then B1 cleanup and preserves unrelated P2", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const fixture = yield* makePublicRunFixture(
-        () => [],
-        undefined,
-        unavailableIntegratorCandidateProviderAuthority,
-        false
-      )
+      const fixture = yield* makePublicRunFixture(() => [], { seedExecutorFacts: false })
       const fileSystem = yield* FileSystem.FileSystem
       const git = yield* GitCommand
       const p2Worktree = WorktreeLocator.make(`${fixture.repository}/worktree-p2`)
@@ -717,8 +1001,15 @@ it.effect("reconciles an exact projected executor report through ordinary Run en
         }
       })
       expect(yield* fixture.projectionCalls).toBe(1)
+      expect(yield* fixture.specificationReads).toBe(0)
       expect(fixture.applicationBuilds()).toBe(1)
       expect(yield* fixture.commandCalls).toEqual(["StartOrContinue"])
+      expect(
+        records.filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskWorkSpecification"
+        )
+      ).toHaveLength(1)
       expect(
         records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
       ).toHaveLength(1)
@@ -743,6 +1034,22 @@ it.effect("reconciles an exact projected executor report through ordinary Run en
       yield* fixture.activate().pipe(Effect.exit)
       const records = yield* fixture.readRecords
       const projection = records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
+      const focusedIntentAt = records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTaskWorkSpecification" &&
+          event.operation.operationId !== OperationId.make("production-executor-projection-specification")
+      )
+      const focusedObservationAt = records.findIndex(
+        ({ event }, index) =>
+          index > focusedIntentAt &&
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+      )
+      const continuationAt = records.findIndex(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")
+      const continuationCommandAt = records.findIndex(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.ordinal === 2
+      )
       expect(projection?.event).toMatchObject({
         commandOrdinal: 1,
         plannedAttempt: { runId: fixture.runId, attemptId: fixture.attempt.attemptId },
@@ -755,8 +1062,13 @@ it.effect("reconciles an exact projected executor report through ordinary Run en
         }
       })
       expect(yield* fixture.projectionCalls).toBe(1)
+      expect(yield* fixture.specificationReads).toBe(1)
       expect(fixture.applicationBuilds()).toBe(1)
       expect(yield* fixture.commandCalls).toEqual(["StartOrContinue"])
+      expect(focusedIntentAt).toBeGreaterThanOrEqual(0)
+      expect(focusedObservationAt).toBeGreaterThan(focusedIntentAt)
+      expect(continuationAt).toBeGreaterThan(focusedObservationAt)
+      expect(continuationCommandAt).toBeGreaterThan(continuationAt)
       expect(
         records
           .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
@@ -765,6 +1077,112 @@ it.effect("reconciles an exact projected executor report through ordinary Run en
       expect(records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
+)
+
+it.effect(
+  "missing cross-repository partial malformed and throttled instructions make zero safely suspended resume calls",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cases: ReadonlyArray<{ readonly error: TrackerAdapterReadError; readonly name: string }> = [
+          {
+            error: new TrackerAdapterReadError({
+              context: TrackerAdapterReadContext.cases.Github.make({
+                operation: "GithubTrackerGraphReader.readTaskWorkSpecification"
+              }),
+              detail: "the claimed issue is missing",
+              reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+            }),
+            name: "missing"
+          },
+          {
+            error: new TrackerAdapterReadError({
+              context: TrackerAdapterReadContext.cases.Github.make({
+                operation: "GithubTrackerGraphReader.readTaskWorkSpecification"
+              }),
+              detail: "the issue belongs to another repository",
+              reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+            }),
+            name: "cross-repository"
+          },
+          {
+            error: new TrackerAdapterReadError({
+              context: TrackerAdapterReadContext.cases.Github.make({
+                operation: "GithubTrackerGraphReader.readTaskWorkSpecification"
+              }),
+              detail: "the provider returned a partial response",
+              reason: TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
+            }),
+            name: "partial"
+          },
+          {
+            error: new TrackerAdapterReadError({
+              context: TrackerAdapterReadContext.cases.Github.make({
+                operation: "GithubTrackerGraphReader.readTaskWorkSpecification"
+              }),
+              detail: "the provider response is malformed",
+              reason: TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
+            }),
+            name: "malformed"
+          },
+          {
+            error: new TrackerAdapterReadError({
+              context: TrackerAdapterReadContext.cases.Github.make({
+                operation: "GithubTrackerGraphReader.readTaskWorkSpecification"
+              }),
+              detail: "the provider throttled the read",
+              reason: TrackerAdapterReadFailureReason.cases.Throttled.make({})
+            }),
+            name: "throttled"
+          }
+        ]
+
+        for (const scenario of cases) {
+          const fixture = yield* makePublicRunFixture(
+            (correlation) => [
+              PlannedAttemptExecutorProjection.cases.Exact.make({
+                report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+              })
+            ],
+            { taskWorkSpecificationRead: Effect.fail(scenario.error) }
+          )
+          const activation = yield* Effect.exit(fixture.activate())
+          expect(activation._tag, scenario.name).toBe("Failure")
+          const failure =
+            activation._tag === "Failure" ? Option.getOrThrow(Cause.findErrorOption(activation.cause)) : undefined
+          expect(failure, scenario.name).toEqual(scenario.error)
+          expect(yield* fixture.specificationReads, scenario.name).toBe(1)
+          expect(yield* fixture.commandCalls, scenario.name).toEqual([])
+
+          const records = yield* fixture.readRecords
+          expect(
+            records.some(
+              ({ event }) =>
+                event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+                event.observation._tag === "ExactExecutorReport" &&
+                event.observation.report._tag === "SafelySuspended"
+            ),
+            scenario.name
+          ).toBe(true)
+          expect(
+            records.some(
+              ({ event }) =>
+                event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskWorkSpecification"
+            ),
+            scenario.name
+          ).toBe(true)
+          expect(
+            records.some(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized"),
+            scenario.name
+          ).toBe(false)
+          expect(
+            records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"),
+            scenario.name
+          ).toHaveLength(1)
+        }
+      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+    ),
+  { timeout: githubInstructionFailureMatrixTimeoutMilliseconds }
 )
 
 it.effect("reconciles an exact projected executor report through ordinary Run entry (Terminal)", () =>
@@ -961,9 +1379,8 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         const firstProcessResultAvailable = yield* Deferred.make<PlannedAttemptExecutorProjection>()
-        const fixture = yield* makePublicRunFixture(
-          () => [],
-          (applicationOrdinal, correlation) => {
+        const fixture = yield* makePublicRunFixture(() => [], {
+          projectionForApplication: (applicationOrdinal, correlation) => {
             const exact = PlannedAttemptExecutorProjection.cases.Exact.make({
               report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
             })
@@ -971,7 +1388,7 @@ it.effect(
               ? Deferred.succeed(firstProcessResultAvailable, exact).pipe(Effect.andThen(Effect.never))
               : Effect.succeed(exact)
           }
-        )
+        })
         const firstProcess = yield* fixture.activate().pipe(Effect.forkScoped)
         expect(yield* Deferred.await(firstProcessResultAvailable)).toMatchObject({
           _tag: "Exact",
@@ -1013,6 +1430,153 @@ it.effect(
 )
 
 const absentHistoryApplicationScenario = "establishes an absent Run before its first tracker read and activates it once"
+
+it.effect("reads exact GitHub title and body before planning one claimed task", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const result = yield* runFreshGithubInstructionVertical("exact", {
+        data: {
+          node: {
+            __typename: "Issue",
+            body: githubInstructionSpecification.body,
+            id: githubInstructionIssueNodeId,
+            repository: { id: githubInstructionRepositoryNodeId },
+            title: githubInstructionSpecification.title
+          }
+        }
+      })
+      const request = result.executorRequests[0]
+      const focusedAt = result.records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+      )
+      const claimAt = result.records.findIndex(({ event }) => event._tag === "TaskClaimAcquired")
+      const focusedIntentAt = result.records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskWorkSpecification"
+      )
+      const plannedAt = result.records.findIndex(({ event }) => event._tag === "TaskAttemptPlanned")
+      const responsibilityAt = result.records.findIndex(
+        ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+      )
+
+      expect(result.exit._tag).toBe("Failure")
+      expect(result.executorCalls).toEqual(["startOrContinue"])
+      expect(result.executorRequests).toHaveLength(1)
+      expect(request?.specification).toEqual(githubInstructionSpecification)
+      expect(claimAt).toBeGreaterThanOrEqual(0)
+      expect(focusedIntentAt).toBeGreaterThan(claimAt)
+      expect(focusedAt).toBeGreaterThan(focusedIntentAt)
+      expect(plannedAt).toBeGreaterThan(focusedAt)
+      expect(responsibilityAt).toBeGreaterThan(plannedAt)
+      expect(result.githubCalls.filter((tag) => tag === "ReadTaskWorkSpecification")).toEqual([
+        "ReadTaskWorkSpecification"
+      ])
+      expect(
+        result.githubCalls.every((tag) =>
+          ["ReadBlockedBy", "ReadIssue", "ReadSubIssues", "ReadTaskWorkSpecification", "ResolveIssue"].includes(tag)
+        )
+      ).toBe(true)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect(
+  "missing cross-repository partial malformed and throttled GitHub instructions make zero fresh executor calls",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cases: ReadonlyArray<{
+          readonly body: unknown
+          readonly name: string
+          readonly reason: TrackerAdapterReadFailureReason["_tag"]
+        }> = [
+          { body: { data: { node: null } }, name: "missing", reason: "IncompleteSnapshot" },
+          {
+            body: {
+              data: {
+                node: {
+                  __typename: "Issue",
+                  body: "foreign body",
+                  id: githubInstructionIssueNodeId,
+                  repository: { id: "foreign-repository" },
+                  title: "Foreign title"
+                }
+              }
+            },
+            name: "cross-repository",
+            reason: "IncompleteSnapshot"
+          },
+          {
+            body: {
+              data: {
+                node: {
+                  __typename: "Issue",
+                  body: "must not reach the executor",
+                  id: githubInstructionIssueNodeId,
+                  repository: { id: githubInstructionRepositoryNodeId },
+                  title: "Partial title"
+                }
+              },
+              errors: [{ message: "partial instruction response" }]
+            },
+            name: "partial",
+            reason: "IncompleteSnapshot"
+          },
+          {
+            body: {
+              data: {
+                node: {
+                  __typename: "Issue",
+                  body: "missing title",
+                  id: githubInstructionIssueNodeId,
+                  repository: { id: githubInstructionRepositoryNodeId }
+                }
+              }
+            },
+            name: "malformed",
+            reason: "BoundaryDecode"
+          },
+          {
+            body: { errors: [{ message: "API rate limit exceeded", type: "RATE_LIMITED" }] },
+            name: "throttled",
+            reason: "Throttled"
+          }
+        ]
+
+        for (const scenario of cases) {
+          const result = yield* runFreshGithubInstructionVertical(scenario.name, scenario.body)
+          expect(result.exit._tag, scenario.name).toBe("Failure")
+          const failure =
+            result.exit._tag === "Failure" ? Option.getOrThrow(Cause.findErrorOption(result.exit.cause)) : undefined
+          expect(failure, scenario.name).toMatchObject({
+            _tag: "TrackerGraphReader.AdapterReadError",
+            reason: { _tag: scenario.reason }
+          })
+          expect(result.executorCalls, scenario.name).toEqual([])
+          expect(result.executorRequests, scenario.name).toEqual([])
+          const claimAt = result.records.findIndex(({ event }) => event._tag === "TaskClaimAcquired")
+          const focusedIntentAt = result.records.findIndex(
+            ({ event }) =>
+              event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskWorkSpecification"
+          )
+          expect(claimAt, scenario.name).toBeGreaterThanOrEqual(0)
+          expect(focusedIntentAt, scenario.name).toBeGreaterThan(claimAt)
+          expect(
+            result.records.some(({ event }) => event._tag === "TaskAttemptPlanned"),
+            scenario.name
+          ).toBe(false)
+          expect(
+            result.githubCalls.every((tag) =>
+              ["ReadBlockedBy", "ReadIssue", "ReadSubIssues", "ReadTaskWorkSpecification", "ResolveIssue"].includes(tag)
+            ),
+            scenario.name
+          ).toBe(true)
+        }
+      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+    ),
+  { timeout: githubInstructionFailureMatrixTimeoutMilliseconds }
+)
 
 it.effect(absentHistoryApplicationScenario, () =>
   Effect.scoped(
@@ -1171,14 +1735,15 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
 
       const current = projectTrackerSnapshot({ revision: "production-lost-claim-current", tasks: [] })
       if (current._tag === "Invalid") return yield* Effect.die("current graph must be valid")
-      const acquireCalls = yield* Ref.make(0)
-      const claimReads = yield* Ref.make(0)
+      type ClaimBoundaryCall = "acquire" | "read"
+      const claimCalls = yield* Ref.make<ReadonlyArray<ClaimBoundaryCall>>([])
+      const recordClaimCall = (call: ClaimBoundaryCall) => Ref.update(claimCalls, (calls) => [...calls, call])
       const nextOperation = yield* Ref.make(0)
       const trackerLayer = Layer.succeed(
         TrackerMutation,
         TrackerMutation.of({
-          acquireTaskClaim: () => Ref.update(acquireCalls, (count) => count + 1).pipe(Effect.as(claim)),
-          readTaskClaim: () => Ref.update(claimReads, (count) => count + 1).pipe(Effect.as(claim)),
+          acquireTaskClaim: () => recordClaimCall("acquire").pipe(Effect.as(claim)),
+          readTaskClaim: () => recordClaimCall("read").pipe(Effect.as(claim)),
           releaseTaskClaim: () => Effect.void
         })
       )
@@ -1230,8 +1795,7 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
       )
 
-      expect(yield* Ref.get(acquireCalls)).toBe(0)
-      expect(yield* Ref.get(claimReads)).toBeGreaterThan(0)
+      expect(yield* Ref.get(claimCalls)).toEqual(["read"])
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
@@ -1769,10 +2333,16 @@ it.effect("publishes each accepted executor report before continuing and stops a
         [claimOperation.acquisition.operationId],
         [plannedAttempt.taskId]
       )
+      const specificationObservation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("production-specification"),
+        trackerTarget,
+        plannedAttempt.taskId,
+        [observation.operationId]
+      )
       const plan = makeTaskAttemptPlanOperation({
         operationId: OperationId.make("production-plan"),
         plannedAttempt,
-        predecessorOperationIds: [observation.operationId]
+        predecessorOperationIds: [specificationObservation.operationId]
       })
       const worktree = makeTaskWorktreeReconciliationOperation({
         operationId: OperationId.make("production-worktree"),
@@ -1809,6 +2379,16 @@ it.effect("publishes each accepted executor report before continuing and stops a
             revision: TrackerRevision.make("production-observation"),
             taskIds: [plannedAttempt.taskId]
           })
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(specificationObservation.operationId),
+          taskTrackerReadIntent(specificationObservation)
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(specificationObservation.operationId),
+          taskTrackerWorkSpecificationFactsObserved(specificationObservation, currentSpecification)
         )
         yield* journal.append(
           runId,
@@ -1877,6 +2457,7 @@ it.effect("publishes each accepted executor report before continuing and stops a
         ref: IntegrationTargetRef.make("refs/heads/continuation-target")
       })
       const trackerReads = yield* Ref.make(0)
+      const specificationReads = yield* Ref.make(0)
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
@@ -1890,7 +2471,8 @@ it.effect("publishes each accepted executor report before continuing and stops a
             TrackerGraphReader,
             TrackerGraphReader.of({
               read: () => Ref.updateAndGet(trackerReads, (reads) => reads + 1).pipe(Effect.as(currentSnapshot)),
-              readTaskWorkSpecification: () => Effect.succeed(currentSpecification)
+              readTaskWorkSpecification: () =>
+                Ref.updateAndGet(specificationReads, (reads) => reads + 1).pipe(Effect.as(currentSpecification))
             })
           )
         ),
@@ -1924,34 +2506,12 @@ it.effect("publishes each accepted executor report before continuing and stops a
         Effect.provide(application),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
       )
-      const failure = yield* activateExactRun.pipe(Effect.flip)
-      expect(failure._tag).toBe("GitTargetLineageReadFailure")
-      const trackerReadsAfterFailure = yield* Ref.get(trackerReads)
-      expect(trackerReadsAfterFailure).toBeGreaterThan(0)
-      const failedRecords = yield* Effect.gen(function* () {
-        return yield* (yield* JournalStore).read(runId)
-      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
-      const targetReadIntents = failedRecords.filter(
-        ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
-      )
-      expect(targetReadIntents).toHaveLength(1)
-      expect(failedRecords.some(({ event }) => event._tag === "TargetLineageObserved")).toBe(false)
-
-      yield* git.runInWorktree(directory, ["update-ref", continuationTarget.ref, plannedAttempt.baseSha])
-      yield* activateExactRun
-      expect(yield* Ref.get(trackerReads)).toBeGreaterThan(trackerReadsAfterFailure)
+      expect(yield* activateExactRun).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+      expect(yield* Ref.get(trackerReads)).toBe(2)
+      expect(yield* Ref.get(specificationReads)).toBe(0)
       const records = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
-      const originalTargetReadOperationId =
-        targetReadIntents[0]?.event._tag === "GitReadIntentRecorded"
-          ? targetReadIntents[0].event.operation.operationId
-          : undefined
-      expect(
-        records.some(
-          ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === originalTargetReadOperationId
-        )
-      ).toBe(true)
       expect(records.findLast(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")?.event).toMatchObject(
         {
           _tag: "PlannedAttemptExecutorWorkReported",
@@ -1976,6 +2536,18 @@ it.effect("publishes each accepted executor report before continuing and stops a
       expect(terminal).toBeDefined()
       expect(stabilizationRead).toBeDefined()
       expect(terminal?.position).toBeLessThan(stabilizationRead?.position ?? JournalPosition.make(0))
+      const recordsAfterTerminal = records.filter(({ position }) => position > (terminal?.position ?? Infinity))
+      expect(
+        recordsAfterTerminal.flatMap(({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" ? [event.operation._tag] : []
+        )
+      ).toEqual(["ReadTrackerGraph"])
+      expect(
+        recordsAfterTerminal.filter(
+          ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
+        )
+      ).toHaveLength(0)
+      expect(recordsAfterTerminal.filter(({ event }) => event._tag === "TargetLineageObserved")).toHaveLength(0)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )

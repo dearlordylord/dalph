@@ -92,7 +92,6 @@ const sameOwnerReplacementIsForeign = (replacementChange: {
     const releaseCalls = yield* Ref.make(0)
     const failure = yield* runTaskClaimReleaseProtocol(
       {
-        acquireTaskClaim: () => Effect.die("unused"),
         readTaskClaim: () => Effect.succeed(replacement),
         releaseTaskClaim: () => Ref.update(releaseCalls, (count) => count + 1)
       },

@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 import { trackerGraphReaderContract } from "../../../test/contracts/tracker-graph-reader-contract.js"
-import { TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import { FixtureTarget } from "./fixture/target.js"
 import { TaskLifecycle } from "./task.js"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./github/target.js"
@@ -50,6 +50,10 @@ trackerGraphReaderContract({
       target: fixture("missing")
     }
   ],
+  focused: {
+    expected: makeTaskWorkSpecification({ body: "", taskId: TaskId.make("task-only"), title: "task-only" }),
+    taskId: TaskId.make("task-only")
+  },
   name: "fixture tracker reader"
 })
 

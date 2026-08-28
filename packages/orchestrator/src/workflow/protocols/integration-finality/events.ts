@@ -1,6 +1,6 @@
 import { Context, type Effect, Match, Schema } from "effect"
-import { TaskId, TaskRevision } from "@dalph/contracts"
-import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
+import { TaskId } from "@dalph/contracts"
+import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -11,7 +11,7 @@ import {
 import { TargetPromotionGitReadObservation } from "../target-promotion/events.js"
 import {
   CompletionClaimDeletionRequest,
-  CompletionClaimObservation,
+  CompletionClaimCleanupObservation,
   CompletionClaimReplacementRequest,
   CompletionSuccessObservation,
   completionTaskClaimEquals,
@@ -19,50 +19,14 @@ import {
 } from "./completion-claim.js"
 import type { FocusedTaskCompletionFacts } from "./focused-task-completion-facts.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
+import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
+import type { FocusedTaskCompletionReadRequest } from "./focused-task-completion-request.js"
+import { CompletionTaskRequest } from "./completion-task-request.js"
 
 export * from "./completion-claim.js"
+export * from "./completion-task-request.js"
 export * from "./focused-task-completion-facts.js"
-
-/** Stable operation identity for the one task-completion request derived from promotion. */
-export const completionTaskOperationIdFor = (claim: CompletionTaskClaim): OperationId =>
-  OperationId.make(`completion-task:${claim.promotionCorrelation.requestId}`)
-
-/** The immutable completion request Q; retries retain this exact identity. */
-export const CompletionTaskRequest = Schema.Struct({
-  claim: CompletionTaskClaim,
-  operationId: OperationId,
-  taskId: TaskId,
-  taskRevision: TaskRevision
-}).check(
-  Schema.makeFilter((request) => {
-    const exactBinding =
-      request.claim.plannedAttempt.taskId === request.taskId &&
-      request.claim.plannedAttempt.taskRevision === request.taskRevision &&
-      request.operationId === completionTaskOperationIdFor(request.claim)
-    return exactBinding ? undefined : "completion request must bind one exact task, revision, and claim"
-  })
-)
-export type CompletionTaskRequest = typeof CompletionTaskRequest.Type
-
-/** Compares the complete immutable task-completion request Q. */
-export const completionTaskRequestEquals = (left: CompletionTaskRequest, right: CompletionTaskRequest): boolean =>
-  left.operationId === right.operationId &&
-  left.taskId === right.taskId &&
-  left.taskRevision === right.taskRevision &&
-  completionTaskClaimEquals(left.claim, right.claim)
-
-/**
- * Purely derives Q's immutable value from a promoted claim. This value carries
- * no current authority and establishes no workflow occurrence; the completion
- * protocol rereads every premise before it durably establishes Q's intent.
- */
-export const completionTaskRequestFor = (claim: CompletionTaskClaim): CompletionTaskRequest =>
-  CompletionTaskRequest.make({
-    claim,
-    operationId: completionTaskOperationIdFor(claim),
-    taskId: claim.plannedAttempt.taskId,
-    taskRevision: claim.plannedAttempt.taskRevision
-  })
+export * from "./focused-task-completion-request.js"
 
 /** The tracker acknowledged one exact completion request; this is not success evidence. */
 export const CompletionTaskAcknowledgement = Schema.Struct({ operationId: OperationId, taskId: TaskId })
@@ -100,13 +64,11 @@ export class CompletionTaskRequestLookupFailure extends Schema.TaggedError<Compl
 
 export interface CompletionTaskBoundaryService {
   readonly readFocusedTaskCompletion: (
-    taskId: TaskId,
-    target: TrackerTarget,
-    operationId: OperationId
+    request: FocusedTaskCompletionReadRequest
   ) => Effect.Effect<FocusedTaskCompletionFacts, FocusedTaskCompletionReadFailure>
   readonly completeTask: (
     request: CompletionTaskRequest
-  ) => Effect.Effect<CompletionTaskAcknowledgement, CompletionTaskRequestFailure>
+  ) => Effect.Effect<CompletionTaskAcknowledgement, CompletionTaskRequestFailure | TaskTrackerMutationThrottled>
   readonly readCompletionRequest: (
     request: CompletionTaskRequest
   ) => Effect.Effect<CompletionTaskRequestLookup, CompletionTaskRequestLookupFailure>
@@ -307,6 +269,17 @@ export type CompletionClaimDeletionAttemptIntendedEvent = typeof CompletionClaim
 
 /** Why Dalph reread the exact completion claim during its bounded deletion cleanup. */
 export const CompletionClaimDeletionReadPurpose = Schema.TaggedUnion({
+  BeforeOriginalClaimRelease: { readOrdinal: CompletionClaimCleanupReadOrdinal },
+  /** Current tracker proof, after one exact marker reread, that the already-released original claim remains absent. */
+  ConfirmOriginalClaimReleased: {
+    attemptOrdinal: CompletionClaimRequestOrdinal,
+    readOrdinal: CompletionClaimCleanupReadOrdinal
+  },
+  /** Current tracker proof, after marker-specific absence, that no active claim now occupies the task. */
+  ConfirmNoActiveClaimAfterMarkerAbsent: {
+    attemptOrdinal: CompletionClaimRequestOrdinal,
+    readOrdinal: CompletionClaimCleanupReadOrdinal
+  },
   BeforeDeletionAttempt: {
     attemptOrdinal: CompletionClaimRequestOrdinal,
     readOrdinal: CompletionClaimCleanupReadOrdinal
@@ -326,7 +299,7 @@ export type CompletionClaimDeletionReadPurpose = typeof CompletionClaimDeletionR
 
 /** The exact claim state returned by one cleanup reread before deletion or terminal reconciliation. */
 export const CompletionClaimDeletionReadObservedEvent = Schema.TaggedStruct("CompletionClaimDeletionReadObserved", {
-  observation: CompletionClaimObservation,
+  observation: CompletionClaimCleanupObservation,
   purpose: CompletionClaimDeletionReadPurpose,
   replacementOperationId: OperationId,
   request: CompletionClaimDeletionRequest,
@@ -521,5 +494,4 @@ export const completionClaimDeletionRequestFor = (
 
 // Keep these imports in the module's public type surface without making callers
 // re-import the claim observation identities from the provider adapter.
-export type { ActiveTaskClaim, TaskClaimObservation }
-export { isExactTaskClaim }
+export { type ActiveTaskClaim, isExactTaskClaim, type TaskClaimObservation }

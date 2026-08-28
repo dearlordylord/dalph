@@ -9,8 +9,22 @@ import type {
 
 export type InterruptibleWorkflowBoundaryFamily = "Git" | "TaskTracker"
 
-/** One exact tracker call within a bounded completion-claim cleanup sequence. */
+/**
+ * One interruption-owned step within a bounded completion-claim cleanup.
+ * Read and delete steps cross one exact tracker call; ReleaseOriginalClaim
+ * delegates to the generic bounded reread-before-retry release protocol.
+ */
 export type CompletionClaimCleanupBoundaryCall = Data.TaggedEnum<{
+  ReadBeforeOriginalClaimRelease: { readonly readOrdinal: CompletionClaimCleanupReadOrdinal }
+  ReleaseOriginalClaim: Record<never, never>
+  ConfirmOriginalClaimReleased: {
+    readonly attemptOrdinal: CompletionClaimRequestOrdinal
+    readonly readOrdinal: CompletionClaimCleanupReadOrdinal
+  }
+  ConfirmNoActiveClaimAfterMarkerAbsent: {
+    readonly attemptOrdinal: CompletionClaimRequestOrdinal
+    readonly readOrdinal: CompletionClaimCleanupReadOrdinal
+  }
   ReadBeforeDeletionAttempt: {
     readonly attemptOrdinal: CompletionClaimRequestOrdinal
     readonly readOrdinal: CompletionClaimCleanupReadOrdinal
@@ -28,7 +42,7 @@ export const CompletionClaimCleanupBoundaryCall = Data.taggedEnum<CompletionClai
 export const CompletionClaimCleanupSequenceId = Schema.String.pipe(Schema.brand("CompletionClaimCleanupSequenceId"))
 export type CompletionClaimCleanupSequenceId = typeof CompletionClaimCleanupSequenceId.Type
 
-/** Value-safe identity of one exact read or deletion call within a cleanup sequence. */
+/** Value-safe identity of one exact read, deletion call, or nested release-protocol step. */
 export const CompletionClaimCleanupBoundaryCallId = Schema.String.pipe(
   Schema.brand("CompletionClaimCleanupBoundaryCallId")
 )
@@ -45,7 +59,12 @@ const callIdFor = (
   call: CompletionClaimCleanupBoundaryCall
 ): CompletionClaimCleanupBoundaryCallId =>
   CompletionClaimCleanupBoundaryCallId.make(
-    JSON.stringify([sequenceId, call._tag, call.attemptOrdinal, "readOrdinal" in call ? call.readOrdinal : "mutation"])
+    JSON.stringify([
+      sequenceId,
+      call._tag,
+      "attemptOrdinal" in call ? call.attemptOrdinal : "original",
+      "readOrdinal" in call ? call.readOrdinal : "mutation"
+    ])
   )
 
 /** Exact acknowledged workflow intent and owning external family for one interruptible local wait. */

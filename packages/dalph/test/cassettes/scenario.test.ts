@@ -33,6 +33,7 @@ import {
   CompletionClaimReplacementIntendedEvent,
   CompletionTaskClaim,
   CompletionTaskBoundary,
+  FocusedTaskCompletionReadRequest,
   completionClaimReplacementOperationIdFor,
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
@@ -2665,8 +2666,15 @@ const completeSingletonDeliveryCassette = (() => {
                 taskId: "A",
                 unfinishedPrerequisiteTaskIds: []
               },
-              { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
+              { _tag: "CompletionClaimReadReturned", claim: "CompletionMarker", taskId: "A" },
+              { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+              { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
+              { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+              { _tag: "CompletionClaimReadReturned", claim: "CompletionMarker", taskId: "A" },
+              { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
               { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
+              { _tag: "CompletionClaimReadReturned", claim: "CompletionMarkerAbsent", taskId: "A" },
+              { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
               {
                 _tag: "CoordinatorActivationReturned",
                 decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -2717,9 +2725,12 @@ it.effect("settles a promoted authored task through the real completion-claim bo
         expected: "authored focused completion read found UnclaimedTask for A",
         invoke: (boundary: CompletionTaskBoundary["Service"]) =>
           boundary.readFocusedTaskCompletion(
-            request.taskId,
-            FixtureTarget.make("cassette-target"),
-            OperationId.make("hostile-authored-focused-read")
+            FocusedTaskCompletionReadRequest.make({
+              expectedClaim: request.claim,
+              operationId: OperationId.make("hostile-authored-focused-read"),
+              target: FixtureTarget.make("cassette-target"),
+              taskId: request.taskId
+            })
           ),
         item: {
           _tag: "CompletionTaskFocusedReadReturned",
@@ -7548,6 +7559,7 @@ it.effect("replays definite completion-claim boundary rejections as terminal typ
       boundaryResults: [
         { _tag: "ReadCompletionClaim" },
         { _tag: "ReadCompletionClaim" },
+        { _tag: "ReadCompletionClaim" },
         { _tag: "DeletionDefinitelyNotApplied", detail: "tracker rejected deletion" }
       ],
       initialClaim: "Completion",
@@ -7569,9 +7581,13 @@ it.effect("replays definite completion-claim boundary rejections as terminal typ
               "TaskTrackerFactsObserved",
               "CompletionClaimDeletionIntended",
               "CompletionClaimDeletionReadObserved",
+              "TaskClaimReleaseIntended",
+              "TaskClaimReleased",
+              "CompletionClaimDeletionReadObserved",
+              "CompletionClaimDeletionReadObserved",
               "CompletionClaimDeletionAttemptIntended"
             ],
-            readCalls: 2,
+            readCalls: 3,
             replacementCalls: 0
           }
         }
@@ -7695,7 +7711,10 @@ it.effect("deletes only the exact completion claim after focused task success", 
     ).toBe(true)
     expect(run.journalTags).toContain("IntegrationFinalitySettled")
     expect(
-      run.records.findLast(({ event }) => event._tag === "CompletionClaimDeletionReadObserved")?.event
+      run.records.find(
+        ({ event }) =>
+          event._tag === "CompletionClaimDeletionReadObserved" && event.purpose._tag === "BeforeDeletionAttempt"
+      )?.event
     ).toMatchObject({
       observation: replaced.claim,
       purpose: { _tag: "BeforeDeletionAttempt", attemptOrdinal: 1, readOrdinal: 1 }
@@ -7729,9 +7748,12 @@ it.effect("reconstructs and round-trips interrupted and settled completion-clean
     const runId = run.records[0]?.runId
     if (runId === undefined) return yield* Effect.die("the completion-cleanup cassette must begin a Run")
     const interruptedHistory = reduceWorkflowJournalHistory(runId, interruptedPrefix)
-    expect(interruptedHistory._tag).toBe("ValidWorkflowJournalHistory")
     if (interruptedHistory._tag !== "ValidWorkflowJournalHistory") {
-      return yield* Effect.die("the interrupted completion-cleanup Run prefix must reconstruct")
+      return yield* Effect.die(
+        `the interrupted completion-cleanup Run prefix must reconstruct: ${interruptedHistory.issues
+          .map((issue) => ("detail" in issue ? issue.detail : issue._tag))
+          .join("; ")}`
+      )
     }
     expect(interruptedPrefix.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
     expect(interruptedPrefix.at(-1)?.event).toMatchObject({
@@ -7741,7 +7763,8 @@ it.effect("reconstructs and round-trips interrupted and settled completion-clean
     expect(interruptedPrefix.some(({ event }) => event._tag === "CompletionClaimDeletionReadObserved")).toBe(true)
 
     const interruptedRead = interruptedPrefix.find(
-      ({ event }) => event._tag === "CompletionClaimDeletionReadObserved"
+      ({ event }) =>
+        event._tag === "CompletionClaimDeletionReadObserved" && event.purpose._tag === "BeforeDeletionAttempt"
     )?.event
     const interruptedAttempt = interruptedPrefix.find(
       ({ event }) => event._tag === "CompletionClaimDeletionAttemptIntended"
@@ -7763,16 +7786,26 @@ it.effect("reconstructs and round-trips interrupted and settled completion-clean
     expect(settledHistory._tag).toBe("ValidWorkflowJournalHistory")
     expect(run.journalTags.slice(deletionAttemptAt + 1)).toEqual([
       "CompletionClaimDeletionReadObserved",
+      "CompletionClaimDeletionReadObserved",
       "CompletionClaimDeleted",
       "IntegrationFinalitySettled"
     ])
     expect(run.deletionCalls).toBe(1)
     expect(
-      run.records.findLast(({ event }) => event._tag === "CompletionClaimDeletionReadObserved")?.event
-    ).toMatchObject({
-      observation: expect.objectContaining({ _tag: "UnclaimedTask" }),
-      purpose: { _tag: "BeforeDeletionAttempt", attemptOrdinal: 2, readOrdinal: 1 }
-    })
+      run.records
+        .filter(({ event }) => event._tag === "CompletionClaimDeletionReadObserved")
+        .slice(-2)
+        .map(({ event }) => event)
+    ).toMatchObject([
+      {
+        observation: { _tag: "CompletionClaimMarkerAbsent" },
+        purpose: { _tag: "BeforeDeletionAttempt", attemptOrdinal: 2, readOrdinal: 1 }
+      },
+      {
+        observation: { _tag: "UnclaimedTask" },
+        purpose: { _tag: "ConfirmNoActiveClaimAfterMarkerAbsent", attemptOrdinal: 2, readOrdinal: 1 }
+      }
+    ])
     expect(run.records.some(({ event }) => event._tag === "IntegratorSessionFixed")).toBe(true)
   })
 )

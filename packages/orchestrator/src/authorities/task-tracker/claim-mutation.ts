@@ -4,6 +4,7 @@ import type { CoordinatorOwnershipError } from "../coordinator-ownership/ownersh
 import { TaskId } from "@dalph/contracts"
 import { ClaimOwner, ClaimToken } from "./claim.js"
 import { OperationId } from "../../workflow/identity.js"
+import type { TaskTrackerMutationThrottled } from "./mutation-throttling.js"
 
 /** Requests atomic ownership of one tracker task under one stable operation. */
 export const TaskClaimAcquisition = Schema.Struct({
@@ -78,14 +79,22 @@ export interface TrackerMutationService {
     acquisition: TaskClaimAcquisition
   ) => Effect.Effect<
     ActiveTaskClaim,
-    CoordinatorOwnershipError | TaskClaimConflict | TaskClaimReadFailure | TaskClaimRequestFailure
+    | CoordinatorOwnershipError
+    | TaskClaimConflict
+    | TaskClaimReadFailure
+    | TaskClaimRequestFailure
+    | TaskTrackerMutationThrottled
   >
   readonly readTaskClaim: (taskId: TaskId) => Effect.Effect<TaskClaimObservation, TaskClaimReadFailure>
   readonly releaseTaskClaim: (
     release: TaskClaimRelease
   ) => Effect.Effect<
     void,
-    CoordinatorOwnershipError | TaskClaimOwnershipConflict | TaskClaimReadFailure | TaskClaimReleaseFailure
+    | CoordinatorOwnershipError
+    | TaskClaimOwnershipConflict
+    | TaskClaimReadFailure
+    | TaskClaimReleaseFailure
+    | TaskTrackerMutationThrottled
   >
 }
 

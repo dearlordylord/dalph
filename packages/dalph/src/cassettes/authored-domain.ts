@@ -656,8 +656,11 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   CoordinatorProcessDies: {},
   /** The tracker applied deletion of the exact promotion-correlated completion claim. */
   CompletionClaimDeletionApplied: { taskId: TaskId },
-  /** The tracker reports which exact claim kind is current for finality reconciliation. */
-  CompletionClaimReadReturned: { claim: Schema.Literals(["Active", "Completion"]), taskId: TaskId },
+  /** The tracker reports one exact active-record or completion-marker state for finality reconciliation. */
+  CompletionClaimReadReturned: {
+    claim: Schema.Literals(["Active", "CompletionMarker", "CompletionMarkerAbsent", "Unclaimed"]),
+    taskId: TaskId
+  },
   /** Another tracker client reopened the prerequisite before exact request Q was acknowledged. */
   CompletionTaskPrerequisiteReopened: { graph: AuthoredTrackerGraph },
   /** The tracker applied replacement of the active claim with the exact completion claim. */
@@ -1123,7 +1126,14 @@ const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof Au
   const finalityItems = cassette.story.filter(isCompletionFinalityStoryItem)
   if (finalityItems.length === 0) return undefined
   const taskIds = Array.from(new Set(finalityItems.map(({ taskId }) => taskId)))
-  const expectedSteps = ["Read:Active", "Replace", "Read:Completion", "Delete"]
+  const expectedSteps = [
+    "Read:Active",
+    "Replace",
+    "Read:CompletionMarker",
+    "Read:CompletionMarker",
+    "Delete",
+    "Read:CompletionMarkerAbsent"
+  ]
   const incompleteTaskId = taskIds.find((taskId) => {
     const actualSteps = finalityItems
       .filter((item) => item.taskId === taskId)
@@ -1138,7 +1148,7 @@ const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof Au
   })?.[0]
   return incompleteTaskId === undefined
     ? undefined
-    : `authored completion finality for ${incompleteTaskId} must be an exact prefix of read Active, replace, read Completion, and delete`
+    : `authored completion finality for ${incompleteTaskId} must be an exact prefix of active-record presence, replacement, two completion-marker presence reads, completion-marker deletion, and completion-marker absence`
 })
 
 const heldPauseOffset = 1

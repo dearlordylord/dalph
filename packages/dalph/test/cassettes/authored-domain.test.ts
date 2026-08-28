@@ -7,7 +7,7 @@ it("accepts an exact in-flight prefix of the completion-finality boundary chrono
   const withoutDeletion = {
     ...deliveryFinalitySpineAuthoredCassette,
     story: deliveryFinalitySpineAuthoredCassette.story
-      .filter((item) => item._tag !== "CompletionClaimReadReturned" || item.claim !== "Completion")
+      .filter((item) => item._tag !== "CompletionClaimReadReturned" || item.claim === "Active")
       .filter((item) => item._tag !== "CompletionClaimDeletionApplied")
   }
 
@@ -23,6 +23,22 @@ it("rejects a skipped step in the authored completion-finality boundary chronolo
   }
 
   expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutReplacement)).toThrow(
-    /must be an exact prefix of read Active, replace, read Completion, and delete/u
+    /must be an exact prefix of active-record presence, replacement, two completion-marker presence reads, completion-marker deletion, and completion-marker absence/u
   )
+})
+
+it("keeps active-record absence distinct from completion-marker absence in authored finality", () => {
+  const distinctMarkerReads = deliveryFinalitySpineAuthoredCassette
+
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(distinctMarkerReads)).not.toThrow()
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+      ...distinctMarkerReads,
+      story: distinctMarkerReads.story.map((item) =>
+        item._tag === "CompletionClaimReadReturned" && item.claim === "CompletionMarkerAbsent"
+          ? { ...item, claim: "Unclaimed" }
+          : item
+      )
+    })
+  ).toThrow(/completion-marker absence/u)
 })

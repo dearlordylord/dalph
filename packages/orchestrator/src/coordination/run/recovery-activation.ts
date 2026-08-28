@@ -2425,6 +2425,15 @@ export const continuationDecisionFor = (
   }
   if (transition._tag !== "ContinuePlannedAttemptExecutorWork") return { transition }
   const plannedAttempt = transition.plannedAttempt
+  const currentExecutorEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
+  /**
+   * A current Running report proves that the executor already owns this exact
+   * responsibility. StartOrContinue may recover its report stream using the
+   * originally planned specification; it must not turn that report recovery
+   * into a fresh tracker-instruction read that pretends to authorize work
+   * which the Running report proves is already executing.
+   */
+  if (currentExecutorEvidence?.report._tag === "Running") return { transition }
   /* v8 ignore next -- @preserve A recovered executor-work responsibility always has its journaled task plan. */
   const planOperationId = plannedAttemptPlanOperationId(records, plannedAttempt)
   if (currentGraphObservation === undefined) {

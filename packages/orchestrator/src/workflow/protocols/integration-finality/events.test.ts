@@ -8,6 +8,7 @@ import {
   CompletionClaimDeletionReadPurpose,
   CompletionClaimCleanupReadOrdinal,
   CompletionClaimDeletionRequest,
+  CompletionClaimReadRequest,
   CompletionClaimRequestOrdinal,
   CompletionClaimReplacementFailure,
   CompletionTaskClaim,
@@ -18,14 +19,17 @@ import {
   CompletionTaskRequest,
   completionSuccessObservationEquals,
   completionClaimDeletionRequestFor,
+  completionClaimReadRequestFor,
   completionClaimReplacementRequestFor,
+  completionOriginalTaskClaimReleaseFor,
   completionTaskFocusedReadPurposeEquals,
   PostPromotionBlockerCandidateAncestryObservedEvent,
   PostPromotionBlockerCandidateAncestryReadIntendedEvent,
   PostPromotionBlockerClearAuthorization,
   postPromotionBlockerAncestryOperationIdFor,
   FocusedCompletedTaskObservation,
-  FocusedTaskCompletionFacts
+  FocusedTaskCompletionFacts,
+  FocusedTaskCompletionReadRequest
 } from "./events.js"
 import { controlledCompletionClaimBoundaryLayerFrom } from "./controlled-boundaries.js"
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
@@ -120,6 +124,9 @@ it("rejects completion claims and deletion proofs that bind a different task", (
     })
   ).toBe(false)
   expect(
+    Schema.is(CompletionClaimReadRequest)({ ...completionClaimReadRequestFor(fixture.claim), taskId: foreignTaskId })
+  ).toBe(false)
+  expect(
     Schema.is(CompletionClaimDeletionRequest)({
       ...completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation),
       successObservation: { ...fixture.successObservation, taskId: foreignTaskId }
@@ -202,6 +209,22 @@ it("rejects Q operation substitution and compares every focused cleanup-proof id
   ).toBe(false)
 })
 
+it("rejects a focused completion read that separates the named task from its expected claim", () => {
+  const exact = FocusedTaskCompletionReadRequest.make({
+    expectedClaim: fixture.claim,
+    operationId: OperationId.make("events-focused-completion-read"),
+    target: fixture.target,
+    taskId: fixture.taskId
+  })
+  expect(Schema.is(FocusedTaskCompletionReadRequest)(exact)).toBe(true)
+  expect(
+    Schema.is(FocusedTaskCompletionReadRequest)({
+      ...exact,
+      taskId: TaskId.make("events-focused-completion-foreign-task")
+    })
+  ).toBe(false)
+})
+
 it("rejects focused success that names another task or task revision", () => {
   const focused = FocusedCompletedTaskObservation.make({
     claim: fixture.claim,
@@ -226,13 +249,20 @@ it("rejects focused success that names another task or task revision", () => {
 })
 
 it("represents target membership and non-membership as complete focused facts", () => {
-  expect(Schema.is(FocusedTaskCompletionFacts)(fixture.focusedSuccessFactsEvent.observation.facts)).toBe(true)
+  const facts = fixture.focusedSuccessFactsEvent.observation.facts
+  expect(Schema.is(FocusedTaskCompletionFacts)(facts)).toBe(true)
+  expect(Schema.is(FocusedTaskCompletionFacts)({ ...facts, targetMembership: "NotMember" })).toBe(true)
+  expect(
+    Schema.is(FocusedTaskCompletionFacts)({ ...facts, taskId: TaskId.make("events-focused-facts-foreign-task") })
+  ).toBe(false)
+  expect(Schema.is(FocusedTaskCompletionFacts)({ ...facts, unfinishedPrerequisiteTaskIds: [facts.taskId] })).toBe(false)
+  const prerequisiteTaskId = TaskId.make("events-focused-facts-prerequisite")
   expect(
     Schema.is(FocusedTaskCompletionFacts)({
-      ...fixture.focusedSuccessFactsEvent.observation.facts,
-      targetMembership: "NotMember"
+      ...facts,
+      unfinishedPrerequisiteTaskIds: [prerequisiteTaskId, prerequisiteTaskId]
     })
-  ).toBe(true)
+  ).toBe(false)
 })
 
 it("compares focused read purposes exhaustively by variant and ordinal", () => {
@@ -317,7 +347,7 @@ effectIt.effect("fails closed for absent or foreign claims and preserves exact b
   })
 )
 
-effectIt.effect("recognizes an exact completion claim, deletes it, and makes repeated absence harmless", () =>
+effectIt.effect("deletes only the completion marker and keeps both record deletions idempotent", () =>
   Effect.gen(function* () {
     const replacement = completionClaimReplacementRequestFor(fixture.claim)
     const deletion = completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation)
@@ -329,12 +359,15 @@ effectIt.effect("recognizes an exact completion claim, deletes it, and makes rep
         const replayed = yield* boundary.replaceTaskClaim(replacement)
         yield* boundary.deleteTaskClaim(deletion)
         yield* boundary.deleteTaskClaim(deletion)
-        const absent = yield* boundary.readTaskClaim(fixture.taskId)
-        return { absent, replaced, replayed }
+        const activeAfterMarkerDelete = yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))
+        yield* boundary.releaseOriginalTaskClaim(completionOriginalTaskClaimReleaseFor(fixture.claim))
+        const absent = yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))
+        return { absent, activeAfterMarkerDelete, replaced, replayed }
       })
     )
     expect(observations.replaced).toEqual(fixture.claim)
     expect(observations.replayed).toEqual(fixture.claim)
+    expect(observations.activeAfterMarkerDelete).toEqual(fixture.activeClaim)
     expect(observations.absent._tag).toBe("UnclaimedTask")
   })
 )

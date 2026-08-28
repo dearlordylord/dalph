@@ -28,6 +28,7 @@ import {
   AllocatedWorkflowRunId,
   ClaimOwner,
   ClaimToken,
+  CompletionClaimMarkerAbsent,
   CompletionTaskAcknowledgement,
   type CompletionTaskClaim,
   CompletionTaskRequestLookup,
@@ -78,7 +79,7 @@ import { productionWorkflowInterpreterLayer } from "../../src/application/produc
 import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
 
 type TaskKey = "A" | "B" | "D"
-type TrackerClaim = ActiveTaskClaim | CompletionTaskClaim | UnclaimedTask
+type TrackerClaim = ActiveTaskClaim | UnclaimedTask
 type Lifecycle = "Open" | "CompletedSuccessfully"
 
 const taskKeys: ReadonlyArray<TaskKey> = ["A", "B", "D"]
@@ -207,6 +208,7 @@ it.effect(
         const claims = yield* Ref.make(
           new Map<TaskKey, TrackerClaim>(taskKeys.map((task) => [task, UnclaimedTask.make({ taskId: taskIdOf(task) })]))
         )
+        const completionMarkers = yield* Ref.make(new Map<TaskKey, CompletionTaskClaim>())
         const completedRequests = yield* Ref.make(new Map<TaskKey, ReturnType<typeof completionTaskRequestFor>>())
         const acceptedEvidence = yield* Ref.make(new Map<TaskKey, EvidenceReference>())
         const executorReports = yield* Ref.make(new Map<TaskKey, PlannedAttemptExecutorReport>())
@@ -268,11 +270,9 @@ it.effect(
               Effect.flatMap((current) => {
                 const task = taskKeys.find((candidate) => taskId === taskIdOf(candidate))
                 const claim = task === undefined ? undefined : current.get(task)
-                return claim?._tag === "CompletionTaskClaim"
-                  ? Effect.die("ordinary claim read cannot represent a completion claim")
-                  : claim === undefined
-                    ? Effect.die(`hermetic tracker has no claim for ${taskId}`)
-                    : Effect.succeed(claim)
+                return claim === undefined
+                  ? Effect.die(`hermetic tracker has no claim for ${taskId}`)
+                  : Effect.succeed(claim)
               })
             ),
           releaseTaskClaim: (release) =>
@@ -288,63 +288,77 @@ it.effect(
         })
 
         const completionClaim: CompletionClaimBoundaryService = {
-          readTaskClaim: (taskId) =>
-            Ref.get(claims).pipe(
-              Effect.flatMap((current) => {
-                const task = taskKeys.find((candidate) => taskId === taskIdOf(candidate))
+          readCompletionClaimMarker: (request) =>
+            Ref.get(completionMarkers).pipe(
+              Effect.map((markers) => {
+                const task = taskKeys.find((candidate) => request.taskId === taskIdOf(candidate))
+                const marker = task === undefined ? undefined : markers.get(task)
+                return marker ?? CompletionClaimMarkerAbsent.make({ taskId: request.taskId })
+              })
+            ),
+          readOriginalTaskClaim: trackerMutation.readTaskClaim,
+          readTaskClaim: (request) =>
+            Effect.all([Ref.get(claims), Ref.get(completionMarkers)]).pipe(
+              Effect.flatMap(([current, markers]) => {
+                const task = taskKeys.find((candidate) => request.taskId === taskIdOf(candidate))
                 const claim = task === undefined ? undefined : current.get(task)
+                const marker = task === undefined ? undefined : markers.get(task)
                 return claim === undefined
-                  ? Effect.die(`hermetic tracker has no completion claim for ${taskId}`)
-                  : Effect.succeed(claim)
+                  ? Effect.die(`hermetic tracker has no completion claim for ${request.taskId}`)
+                  : Effect.succeed(marker ?? claim)
               })
             ),
           replaceTaskClaim: (request) =>
-            Ref.modify(claims, (current) => {
-              const task = taskKeys.find((candidate) => taskIdOf(candidate) === request.claim.plannedAttempt.taskId)
-              const existing = task === undefined ? undefined : current.get(task)
-              return task !== undefined &&
-                existing?._tag === "ActiveTaskClaim" &&
-                isExactTaskClaim(existing, request.claim.originalClaim)
-                ? [Effect.succeed(request.claim), new Map(current).set(task, request.claim)]
-                : [Effect.die("completion claim replacement lacked exact active claim"), current]
-            }).pipe(Effect.flatten),
+            Ref.get(claims).pipe(
+              Effect.flatMap((current) => {
+                const task = taskKeys.find((candidate) => taskIdOf(candidate) === request.claim.plannedAttempt.taskId)
+                const existing = task === undefined ? undefined : current.get(task)
+                return task !== undefined &&
+                  existing?._tag === "ActiveTaskClaim" &&
+                  isExactTaskClaim(existing, request.claim.originalClaim)
+                  ? Ref.update(completionMarkers, (markers) => new Map(markers).set(task, request.claim)).pipe(
+                      Effect.as(request.claim)
+                    )
+                  : Effect.die("completion claim replacement lacked exact active claim")
+              })
+            ),
+          releaseOriginalTaskClaim: trackerMutation.releaseTaskClaim,
           deleteTaskClaim: (request) =>
-            Ref.modify(claims, (current) => {
+            Ref.modify(completionMarkers, (current) => {
               const task = taskKeys.find((candidate) => taskIdOf(candidate) === request.claim.plannedAttempt.taskId)
               const existing = task === undefined ? undefined : current.get(task)
-              return task !== undefined &&
-                existing?._tag === "CompletionTaskClaim" &&
-                completionTaskClaimEquals(existing, request.claim)
-                ? [Effect.void, new Map(current).set(task, UnclaimedTask.make({ taskId: taskIdOf(task) }))]
+              return task !== undefined && existing !== undefined && completionTaskClaimEquals(existing, request.claim)
+                ? (() => {
+                    const next = new Map(current)
+                    next.delete(task)
+                    return [Effect.void, next] as const
+                  })()
                 : [Effect.die("completion claim deletion lacked exact completion claim"), current]
             }).pipe(Effect.flatten)
         }
 
         const completionTask: CompletionTaskBoundaryService = {
-          readFocusedTaskCompletion: (taskId, focusedTarget, operationId) =>
+          readFocusedTaskCompletion: (readRequest) =>
             Effect.gen(function* () {
-              const task = taskKeys.find((candidate) => taskId === taskIdOf(candidate))
-              if (task === undefined) return yield* Effect.die(`unknown focused task ${taskId}`)
-              const currentClaim = yield* Ref.get(claims).pipe(
+              const task = taskKeys.find((candidate) => readRequest.taskId === taskIdOf(candidate))
+              if (task === undefined) return yield* Effect.die(`unknown focused task ${readRequest.taskId}`)
+              const currentClaim = yield* Ref.get(completionMarkers).pipe(
                 Effect.map((current) => current.get(task)),
                 Effect.flatMap((claim) =>
                   claim === undefined ? Effect.die(`missing focused claim for ${task}`) : Effect.succeed(claim)
                 )
               )
-              if (currentClaim._tag !== "CompletionTaskClaim") {
-                return yield* Effect.die(`focused completion read lacked completion claim for ${task}`)
-              }
               const specification = specifications.get(task)
               if (specification === undefined) return yield* Effect.die(`missing specification for ${task}`)
               return {
                 currentClaim,
                 lifecycle: yield* Ref.get(lifecycle).pipe(Effect.map((current) => current.get(task) ?? "Open")),
-                operationId,
-                target: focusedTarget,
+                operationId: readRequest.operationId,
+                target: readRequest.target,
                 targetMembership: "Member" as const,
-                taskId,
+                taskId: readRequest.taskId,
                 taskRevision: specification.fingerprint,
-                trackerRevision: TrackerRevision.make(`hermetic-focused:${task}:${operationId}`),
+                trackerRevision: TrackerRevision.make(`hermetic-focused:${task}:${readRequest.operationId}`),
                 unfinishedPrerequisiteTaskIds:
                   task === "D"
                     ? [...(yield* Ref.get(lifecycle)).entries()].flatMap(([candidate, state]) =>
@@ -1007,6 +1021,7 @@ it.effect(
         expect(yield* Ref.get(claims)).toEqual(
           new Map<TaskKey, TrackerClaim>(taskKeys.map((task) => [task, UnclaimedTask.make({ taskId: taskIdOf(task) })]))
         )
+        expect(yield* Ref.get(completionMarkers)).toEqual(new Map())
         expect(yield* fileSystem.exists(journalFilename)).toBe(true)
         expect(yield* fileSystem.exists(evidenceDirectory)).toBe(true)
         expect(yield* fileSystem.exists(repository)).toBe(true)

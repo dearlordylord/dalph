@@ -8,6 +8,13 @@ import {
   type TrackerMutationService
 } from "../../../authorities/task-tracker/claim-mutation.js"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
+import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
+
+/** The exact provider-neutral calls needed to release one active task claim. */
+export interface TaskClaimReleaseBoundary {
+  readonly readTaskClaim: TrackerMutationService["readTaskClaim"]
+  readonly releaseTaskClaim: TrackerMutationService["releaseTaskClaim"]
+}
 
 const taskClaimReleaseRequestBound = 3
 
@@ -28,7 +35,7 @@ export const AuthoritativeTaskClaimReleased = Schema.TaggedStruct("Authoritative
  * edited.
  */
 export const runTaskClaimReleaseProtocol = Effect.fn("TrackerMutation.runTaskClaimReleaseProtocol")(function* (
-  tracker: TrackerMutationService,
+  tracker: TaskClaimReleaseBoundary,
   release: TaskClaimRelease
 ): Effect.fn.Return<
   typeof AuthoritativeTaskClaimReleased.Type,
@@ -37,6 +44,7 @@ export const runTaskClaimReleaseProtocol = Effect.fn("TrackerMutation.runTaskCla
   | TaskClaimReadFailure
   | TaskClaimReleaseDidNotConverge
   | TaskClaimReleaseFailure
+  | TaskTrackerMutationThrottled
 > {
   for (let attempts = 0; attempts <= taskClaimReleaseRequestBound; attempts += 1) {
     const observed = yield* tracker.readTaskClaim(release.claim.taskId)

@@ -480,8 +480,15 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       taskId: "A",
       unfinishedPrerequisiteTaskIds: []
     },
-    { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
+    { _tag: "CompletionClaimReadReturned", claim: "CompletionMarker", taskId: "A" },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "CompletionClaimReadReturned", claim: "CompletionMarker", taskId: "A" },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
     { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
+    { _tag: "CompletionClaimReadReturned", claim: "CompletionMarkerAbsent", taskId: "A" },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }

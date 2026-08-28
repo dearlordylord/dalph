@@ -26,6 +26,7 @@ import {
   AllocatedWorkflowRunId,
   ClaimOwner,
   ClaimToken,
+  CompletionClaimMarkerAbsent,
   CompletionTaskAcknowledgement,
   type CompletionTaskClaim,
   CompletionTaskRequestLookup,
@@ -72,7 +73,7 @@ import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
 
-type TrackerClaim = ActiveTaskClaim | CompletionTaskClaim | UnclaimedTask
+type TrackerClaim = ActiveTaskClaim | UnclaimedTask
 const maxActivationPasses = 64
 
 const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
@@ -131,6 +132,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       })
       const lifecycle = yield* Ref.make<"Open" | "CompletedSuccessfully">("Open")
       const trackerClaim = yield* Ref.make<TrackerClaim>(UnclaimedTask.make({ taskId }))
+      const completionMarker = yield* Ref.make<Option.Option<CompletionTaskClaim>>(Option.none())
       const completedRequest = yield* Ref.make<Option.Option<ReturnType<typeof completionTaskRequestFor>>>(
         Option.none()
       )
@@ -159,19 +161,12 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
               const claim = ActiveTaskClaim.make(acquisition)
               return [Effect.succeed(claim), claim] as const
             }
-            if (current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, ActiveTaskClaim.make(acquisition))) {
+            if (isExactTaskClaim(current, ActiveTaskClaim.make(acquisition))) {
               return [Effect.succeed(current), current] as const
             }
             return [Effect.die("hermetic tracker found a conflicting claim"), current] as const
           }).pipe(Effect.flatten),
-        readTaskClaim: () =>
-          Ref.get(trackerClaim).pipe(
-            Effect.flatMap((current) =>
-              current._tag === "CompletionTaskClaim"
-                ? Effect.die("ordinary claim read cannot represent a completion claim")
-                : Effect.succeed(current)
-            )
-          ),
+        readTaskClaim: () => Ref.get(trackerClaim),
         releaseTaskClaim: (release) =>
           Ref.modify(trackerClaim, (current) =>
             current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, release.claim)
@@ -181,37 +176,51 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       })
 
       const completionClaim: CompletionClaimBoundaryService = {
-        readTaskClaim: () => Ref.get(trackerClaim),
+        readCompletionClaimMarker: () =>
+          Ref.get(completionMarker).pipe(
+            Effect.map((marker) =>
+              Option.isSome(marker) ? marker.value : CompletionClaimMarkerAbsent.make({ taskId })
+            )
+          ),
+        readOriginalTaskClaim: () => Ref.get(trackerClaim),
+        readTaskClaim: () =>
+          Effect.gen(function* () {
+            const marker = yield* Ref.get(completionMarker)
+            return Option.isSome(marker) ? marker.value : yield* Ref.get(trackerClaim)
+          }),
         replaceTaskClaim: (request) =>
-          Ref.modify(trackerClaim, (current) =>
-            current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, request.claim.originalClaim)
-              ? ([Effect.succeed(request.claim), request.claim] as const)
-              : ([Effect.die("completion claim replacement lacked the exact active claim"), current] as const)
-          ).pipe(Effect.flatten),
+          Ref.get(trackerClaim).pipe(
+            Effect.flatMap((current) =>
+              current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, request.claim.originalClaim)
+                ? Ref.set(completionMarker, Option.some(request.claim)).pipe(Effect.as(request.claim))
+                : Effect.die("completion claim replacement lacked the exact active claim")
+            )
+          ),
+        releaseOriginalTaskClaim: trackerMutation.releaseTaskClaim,
         deleteTaskClaim: (request) =>
-          Ref.modify(trackerClaim, (current) =>
-            current._tag === "CompletionTaskClaim" && completionTaskClaimEquals(current, request.claim)
-              ? ([Effect.void, UnclaimedTask.make({ taskId })] as const)
+          Ref.modify(completionMarker, (current) =>
+            Option.isSome(current) && completionTaskClaimEquals(current.value, request.claim)
+              ? ([Effect.void, Option.none()] as const)
               : ([Effect.die("completion claim deletion lacked the exact completion claim"), current] as const)
           ).pipe(Effect.flatten)
       }
 
       const completionTask: CompletionTaskBoundaryService = {
-        readFocusedTaskCompletion: (_taskId, focusedTarget, operationId) =>
+        readFocusedTaskCompletion: (readRequest) =>
           Effect.gen(function* () {
-            const currentClaim = yield* Ref.get(trackerClaim)
-            if (currentClaim._tag !== "CompletionTaskClaim") {
+            const currentClaim = yield* Ref.get(completionMarker)
+            if (Option.isNone(currentClaim)) {
               return yield* Effect.die("focused completion read lacked the exact completion claim")
             }
             return {
-              currentClaim,
+              currentClaim: currentClaim.value,
               lifecycle: yield* Ref.get(lifecycle),
-              operationId,
-              target: focusedTarget,
+              operationId: readRequest.operationId,
+              target: readRequest.target,
               targetMembership: "Member" as const,
               taskId,
               taskRevision: specification.fingerprint,
-              trackerRevision: TrackerRevision.make(`hermetic-focused:${operationId}`),
+              trackerRevision: TrackerRevision.make(`hermetic-focused:${readRequest.operationId}`),
               unfinishedPrerequisiteTaskIds: []
             }
           }),

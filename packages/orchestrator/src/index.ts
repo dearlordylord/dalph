@@ -112,6 +112,14 @@ export {
 } from "./control/task-work-capacity.js"
 export { workflowJournalEventVersion } from "./workflow/kernel/event.js"
 export { ClaimOwner, ClaimToken } from "./authorities/task-tracker/claim.js"
+export {
+  TaskTrackerMutationOperation,
+  TaskTrackerMutationThrottled,
+  taskTrackerMutationOperations,
+  TaskTrackerThrottleResetEpochSeconds,
+  TaskTrackerThrottleTimingEvidence,
+  TaskTrackerThrottleRetryAfterSeconds
+} from "./authorities/task-tracker/mutation-throttling.js"
 export { FixtureTarget } from "./authorities/task-tracker/fixture/target.js"
 export {
   GithubIssueNumber,
@@ -213,11 +221,22 @@ export {
   GithubLabelNodeId,
   GithubRepositoryNodeId
 } from "./authorities/task-tracker/github/graphql-client.js"
-export { githubTrackerGraphReaderNodeLayer } from "./authorities/task-tracker/github/graph-reader.js"
+export {
+  githubTrackerGraphReaderLayer,
+  githubTrackerGraphReaderNodeLayer
+} from "./authorities/task-tracker/github/graph-reader.js"
+export { githubTaskIdFor } from "./authorities/task-tracker/github/task-identity.js"
 export {
   githubTrackerMutationLayer,
   githubTrackerMutationNodeLayer
 } from "./authorities/task-tracker/github/claim-mutation.js"
+export {
+  githubCompletionClaimBoundaryLayer,
+  githubCompletionClaimFingerprintFor,
+  GithubCompletionClaimFingerprintFailure
+} from "./authorities/task-tracker/github/completion-claim.js"
+export { githubCompletionTaskBoundaryLayer } from "./authorities/task-tracker/github/completion-task.js"
+export { githubDeliveryAuthorityLayer } from "./authorities/task-tracker/github/delivery-authority.js"
 export * from "./workflow-journal/event-codec.js"
 export * from "./workflow-journal/identity.js"
 export { describeJournalEvent } from "./workflow/registry/event-descriptor.js"
@@ -638,6 +657,7 @@ export {
   CompletionTaskAuthorizationReadOrdinal,
   CompletionTaskConfirmationReadOrdinal,
   CompletionTaskFocusedReadPurpose,
+  FocusedTaskCompletionReadRequest,
   CompletionTaskResponseLostEvent,
   FocusedCompletedTaskObservation,
   FocusedTaskCompletionFacts,
@@ -645,14 +665,18 @@ export {
   completionTaskRequestLimit,
   CompletionTaskRequestLimit,
   CompletionClaimDeletedEvent,
+  CompletionClaimFingerprint,
+  CompletionClaimMarkerAbsent,
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletionReadObservedEvent,
   CompletionClaimDeletionReadPurpose,
   CompletionClaimCleanupReadOrdinal,
+  CompletionClaimCleanupObservation,
   CompletionClaimDeletionFailure,
   CompletionClaimDeletionIntendedEvent,
   CompletionClaimDeletionRequest,
   CompletionClaimOwnershipConflict,
+  CompletionClaimReadRequest,
   CompletionClaimReadFailure,
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
@@ -661,15 +685,19 @@ export {
   CompletionClaimReplacementRequest,
   CompletionClaimRequestOrdinal,
   CompletionTaskClaim,
+  ForeignCompletionClaim,
   IntegrationFinalitySettledEvent,
   completionClaimDeletionOperationIdFor,
   completionClaimDeletionRequestFor,
+  completionClaimReadRequestFor,
   completionClaimReplacementOperationIdFor,
   completionClaimReplacementRequestFor,
   completionClaimRequestLimit,
   completionTaskClaimEquals,
   completionTaskRequestFor,
+  focusedTaskCompletionReadRequestFor,
   type CompletionClaimBoundaryService,
+  type CompletionClaimMarkerObservation,
   type CompletionTaskBoundaryService
 } from "./workflow/protocols/integration-finality/events.js"
 export {
