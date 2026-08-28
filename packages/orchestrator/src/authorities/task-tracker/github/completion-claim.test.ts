@@ -77,13 +77,22 @@ const prepareForTaskId = (taskId: TaskId) => {
 }
 
 const prepared = prepareForTaskId(taskId)
+const preparedSuccessObservation = FocusedCompletedTaskObservation.make({
+  ...integrationFinalityFixture.successObservation,
+  claim: prepared.claim,
+  taskId,
+  taskRevision: prepared.plannedAttempt.taskRevision
+})
+const preparedDeletionRequest = completionClaimDeletionRequestFor(prepared.claim, preparedSuccessObservation)
 
 type StoredLabel = { readonly description: string; readonly id: GithubLabelNodeId; readonly name: GithubLabelName }
 
 type HarnessOptions = {
   readonly activeDescription?: string
   readonly completionDescription?: string
+  readonly includeActive?: boolean
   readonly loseFirstCreateResponse?: boolean
+  readonly loseFirstDeleteResponse?: boolean
 }
 
 const activeDescriptionFor = (claim: ActiveTaskClaim): string =>
@@ -149,17 +158,20 @@ const makeHarness = Effect.fn("GithubCompletionClaimTest.makeHarness")(function*
   const labels = yield* Ref.make<ReadonlyMap<string, StoredLabel>>(new Map())
   const calls = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest>>([])
   const createResponsesLost = yield* Ref.make(0)
+  const deleteResponsesLost = yield* Ref.make(0)
 
   const seed = (name: string, description: string, id: string) =>
     Ref.update(labels, (current) =>
       new Map(current).set(name, { description, id: GithubLabelNodeId.make(id), name: GithubLabelName.make(name) })
     )
 
-  yield* seed(
-    `dalph-claim-${digest}`,
-    options.activeDescription ?? activeDescriptionFor(prepared.activeClaim),
-    "active-label-node"
-  )
+  if (options.includeActive !== false) {
+    yield* seed(
+      `dalph-claim-${digest}`,
+      options.activeDescription ?? activeDescriptionFor(prepared.activeClaim),
+      "active-label-node"
+    )
+  }
   if (options.completionDescription !== undefined) {
     yield* seed(`dalph-completion-${digest}`, options.completionDescription, "completion-label-node")
   }
@@ -186,6 +198,22 @@ const makeHarness = Effect.fn("GithubCompletionClaimTest.makeHarness")(function*
         return yield* new GithubGraphqlRequestError({ detail: "response lost after create", operation: request._tag })
       }
       return { body: { data: { createLabel: { label } } } }
+    }
+    if (request._tag === "DeleteClaimLabel") {
+      yield* Ref.update(labels, (current) => {
+        const next = new Map(current)
+        for (const [name, label] of next) {
+          if (label.id === request.labelNodeId) next.delete(name)
+        }
+        return next
+      })
+      if (
+        options.loseFirstDeleteResponse === true &&
+        (yield* Ref.getAndUpdate(deleteResponsesLost, (count) => count + 1)) === 0
+      ) {
+        return yield* new GithubGraphqlRequestError({ detail: "response lost after delete", operation: request._tag })
+      }
+      return { body: { data: { deleteLabel: { clientMutationId: request.operationId } } } }
     }
     return yield* Effect.die(`unexpected GitHub request ${request._tag}`)
   })
@@ -245,6 +273,94 @@ it.effect("creates one expected completion fingerprint beside the exact active c
     if (completion?._tag !== "CreateClaimLabel") return
     expect(completion.description).toMatch(/^1\|sha256\|[0-9a-f]{64}$/)
     expect(completion.description.length).toBeLessThanOrEqual(100)
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("deletes only the exact completion marker and preserves the active claim", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const fingerprint = yield* githubCompletionClaimFingerprintFor(crypto, prepared.claim)
+    const harness = yield* makeHarness({ completionDescription: `1|sha256|${fingerprint}` })
+    yield* Effect.gen(function* () {
+      const boundary = yield* CompletionClaimBoundary
+      yield* boundary.deleteTaskClaim(preparedDeletionRequest)
+      expect(yield* boundary.readOriginalTaskClaim(taskId)).toEqual(prepared.activeClaim)
+    }).pipe(Effect.provide(harness.layer))
+
+    expect((yield* Ref.get(harness.calls)).filter((call) => call._tag === "DeleteClaimLabel")).toEqual([
+      expect.objectContaining({
+        labelNodeId: GithubLabelNodeId.make("completion-label-node"),
+        operationId: preparedDeletionRequest.operationId
+      })
+    ])
+    const remaining = yield* Ref.get(harness.labels)
+    expect([...remaining.keys()].filter((name) => name.startsWith("dalph-claim-"))).toHaveLength(1)
+    expect([...remaining.keys()].filter((name) => name.startsWith("dalph-completion-"))).toHaveLength(0)
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reads the exact completion marker before reporting a foreign recreated active claim", () =>
+  Effect.gen(function* () {
+    const foreignActive = ActiveTaskClaim.make({
+      ...prepared.activeClaim,
+      token: ClaimToken.make("recreated-foreign-active-token")
+    })
+    const crypto = yield* Crypto.Crypto
+    const fingerprint = yield* githubCompletionClaimFingerprintFor(crypto, prepared.claim)
+    const harness = yield* makeHarness({
+      activeDescription: activeDescriptionFor(foreignActive),
+      completionDescription: `1|sha256|${fingerprint}`
+    })
+    yield* Effect.gen(function* () {
+      const boundary = yield* CompletionClaimBoundary
+      expect(yield* boundary.readCompletionClaimMarker(completionClaimReadRequestFor(prepared.claim))).toEqual(
+        prepared.claim
+      )
+      expect(yield* boundary.readOriginalTaskClaim(taskId)).toEqual(foreignActive)
+    }).pipe(Effect.provide(harness.layer))
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rereads after a lost completion-marker response without sending a second delete", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const fingerprint = yield* githubCompletionClaimFingerprintFor(crypto, prepared.claim)
+    const harness = yield* makeHarness({
+      completionDescription: `1|sha256|${fingerprint}`,
+      includeActive: false,
+      loseFirstDeleteResponse: true
+    })
+    const first = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(preparedDeletionRequest).pipe(Effect.flip)
+    }).pipe(Effect.provide(harness.layer))
+    expect(first).toBeInstanceOf(CompletionClaimDeletionFailure)
+    expect(first).toMatchObject({ outcome: "Unknown", request: preparedDeletionRequest })
+
+    yield* Effect.gen(function* () {
+      yield* (yield* CompletionClaimBoundary).deleteTaskClaim(preparedDeletionRequest)
+    }).pipe(Effect.provide(harness.layer))
+    expect((yield* Ref.get(harness.calls)).filter((call) => call._tag === "DeleteClaimLabel")).toHaveLength(1)
+    expect((yield* Ref.get(harness.labels)).size).toBe(0)
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("refuses a foreign completion marker without deleting either claim record", () =>
+  Effect.gen(function* () {
+    const foreign = CompletionTaskClaim.make({
+      ...prepared.claim,
+      originalClaim: ActiveTaskClaim.make({ ...prepared.activeClaim, token: ClaimToken.make("foreign-deletion-token") })
+    })
+    const crypto = yield* Crypto.Crypto
+    const foreignFingerprint = yield* githubCompletionClaimFingerprintFor(crypto, foreign)
+    const harness = yield* makeHarness({ completionDescription: `1|sha256|${foreignFingerprint}` })
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(preparedDeletionRequest).pipe(Effect.flip)
+    }).pipe(Effect.provide(harness.layer))
+
+    expect(failure).toBeInstanceOf(CompletionClaimDeletionFailure)
+    expect(failure).toMatchObject({ outcome: "DefinitelyNotApplied", request: preparedDeletionRequest })
+    expect((yield* Ref.get(harness.calls)).filter((call) => call._tag === "DeleteClaimLabel")).toHaveLength(0)
+    expect((yield* Ref.get(harness.labels)).size).toBe(2)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
@@ -427,7 +543,7 @@ it.effect("maps task-identity and digest failures before any unsafe completion m
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("classifies every ambiguous GitHub create acknowledgement and leaves deletion to authorized cleanup", () =>
+it.effect("classifies ambiguous create acknowledgements and refuses deletion when exact lookup is unreadable", () =>
   Effect.gen(function* () {
     const replacement = completionClaimReplacementRequestFor(prepared.claim)
     const responseCases: ReadonlyArray<{
@@ -484,7 +600,13 @@ it.effect("classifies every ambiguous GitHub create acknowledgement and leaves d
       taskRevision: prepared.plannedAttempt.taskRevision
     })
     const deletion = completionClaimDeletionRequestFor(prepared.claim, successObservation)
-    const deletionLayer = adapterLayer(() => Effect.die("create-only adapter must not delete a GitHub label"))
+    const deletionLayer = adapterLayer((request) =>
+      request._tag === "FindClaimLabel"
+        ? Effect.fail(
+            new GithubGraphqlRequestError({ detail: "completion lookup unavailable", operation: request._tag })
+          )
+        : Effect.die("unreadable completion evidence must not delete a GitHub label")
+    )
     const deletionFailure = yield* Effect.gen(function* () {
       return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(deletion).pipe(Effect.flip)
     }).pipe(Effect.provide(deletionLayer))

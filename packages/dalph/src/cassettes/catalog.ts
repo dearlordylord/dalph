@@ -2299,7 +2299,7 @@ const targetPromotionGitReadReturned = (repository: string, candidateCommit: str
 
 const pipelineIntegrationPositions = {
   A: { queuedAt: 20, startedAt: 21, targetLineageObservedAt: 31 },
-  B: { queuedAt: 75, startedAt: 76, targetLineageObservedAt: 86 }
+  B: { queuedAt: 81, startedAt: 82, targetLineageObservedAt: 92 }
 } as const
 
 const pipelineIntegrationFinality = (
@@ -2381,8 +2381,15 @@ const pipelineIntegrationFinality = (
       taskId,
       unfinishedPrerequisiteTaskIds: []
     },
-    { _tag: "CompletionClaimReadReturned" as const, claim: "Completion" as const, taskId },
-    { _tag: "CompletionClaimDeletionApplied" as const, taskId }
+    { _tag: "CompletionClaimReadReturned" as const, claim: "CompletionMarker" as const, taskId },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
+    { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
+    { _tag: "CompletionClaimReadReturned" as const, claim: "CompletionMarker" as const, taskId },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
+    { _tag: "CompletionClaimDeletionApplied" as const, taskId },
+    { _tag: "CompletionClaimReadReturned" as const, claim: "CompletionMarkerAbsent" as const, taskId },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
   ]
 }
 
@@ -3727,8 +3734,15 @@ const deliveryFinalityBase = (() => {
         taskId: "A",
         unfinishedPrerequisiteTaskIds: []
       },
-      { _tag: "CompletionClaimReadReturned", claim: "Completion", taskId: "A" },
+      { _tag: "CompletionClaimReadReturned", claim: "CompletionMarker", taskId: "A" },
+      { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+      { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
+      { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+      { _tag: "CompletionClaimReadReturned", claim: "CompletionMarker", taskId: "A" },
+      { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
       { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
+      { _tag: "CompletionClaimReadReturned", claim: "CompletionMarkerAbsent", taskId: "A" },
+      { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
       {
         _tag: "CoordinatorActivationReturned",
         decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4372,10 +4386,10 @@ const defaultDiamondIntegrationPositions = {
 
 const fiveTaskDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 102, startedAt: 109, targetLineageObservedAt: 124 },
-  C: { queuedAt: 106, startedAt: 150, targetLineageObservedAt: 152 },
-  D: { queuedAt: 224, startedAt: 225, targetLineageObservedAt: 235 },
-  E: { queuedAt: 110, startedAt: 178, targetLineageObservedAt: 180 },
+  B: { queuedAt: 108, startedAt: 115, targetLineageObservedAt: 130 },
+  C: { queuedAt: 112, startedAt: 162, targetLineageObservedAt: 164 },
+  D: { queuedAt: 248, startedAt: 249, targetLineageObservedAt: 259 },
+  E: { queuedAt: 116, startedAt: 196, targetLineageObservedAt: 198 },
   F: defaultDiamondIntegrationPositions,
   G: defaultDiamondIntegrationPositions,
   H: defaultDiamondIntegrationPositions,
@@ -4505,8 +4519,15 @@ const doubleDiamondIntegrationFinality = (
       taskId: attempt.taskId,
       unfinishedPrerequisiteTaskIds: []
     },
-    { _tag: "CompletionClaimReadReturned" as const, claim: "Completion" as const, taskId: attempt.taskId },
-    { _tag: "CompletionClaimDeletionApplied" as const, taskId: attempt.taskId }
+    { _tag: "CompletionClaimReadReturned" as const, claim: "CompletionMarker" as const, taskId: attempt.taskId },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: attempt.taskId },
+    { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: attempt.taskId } },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: attempt.taskId },
+    { _tag: "CompletionClaimReadReturned" as const, claim: "CompletionMarker" as const, taskId: attempt.taskId },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: attempt.taskId },
+    { _tag: "CompletionClaimDeletionApplied" as const, taskId: attempt.taskId },
+    { _tag: "CompletionClaimReadReturned" as const, claim: "CompletionMarkerAbsent" as const, taskId: attempt.taskId },
+    { _tag: "TaskClaimCurrentReadReturned" as const, taskId: attempt.taskId }
   ]
 }
 

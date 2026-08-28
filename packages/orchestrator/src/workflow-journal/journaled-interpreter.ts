@@ -7,8 +7,6 @@ import {
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquisitionRejectedEvent,
-  TaskClaimReleaseIntendedEvent,
-  TaskClaimReleasedEvent,
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TargetLineageObservedEvent,
@@ -41,7 +39,7 @@ import {
   type InterruptibleWorkflowBoundaryExecution
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
-import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
+import { runJournaledTaskClaimRelease } from "../workflow/protocols/task-claim-release/journaled.js"
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
 import { journaledTrackerGraphRead } from "../workflow/protocols/task-tracker-read/protocol.js"
 
@@ -320,33 +318,11 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        yield* Effect.uninterruptible(
-          journal
-            .append(
-              runId,
-              intentRecordKey(operation.release.operationId),
-              TaskClaimReleaseIntendedEvent.make({ operation, version: workflowJournalEventVersion })
-            )
-            .pipe(Effect.andThen(onIntentRecorded))
-        )
-        const existing = (yield* journal.read(runId)).some(
-          ({ event }) =>
-            event._tag === "TaskClaimReleased" && event.release.operationId === operation.release.operationId
-        )
-        if (existing) return AuthoritativeTaskClaimReleased.make({ release: operation.release })
-        return yield* runInterruptibleBoundary(
-          interruptibleBoundary,
-          InterruptibleWorkflowBoundaryIntent.TaskClaimCleanup({ family: "TaskTracker", operation }),
-          interpreter.releaseTaskClaim(operation),
-          (result) =>
-            journal
-              .append(
-                runId,
-                outcomeRecordKey(operation.release.operationId),
-                TaskClaimReleasedEvent.make({ release: operation.release, version: workflowJournalEventVersion })
-              )
-              .pipe(Effect.as(result))
-        )
+        return yield* runJournaledTaskClaimRelease(runId, operation, interpreter.releaseTaskClaim(operation), {
+          boundaryIntent: InterruptibleWorkflowBoundaryIntent.TaskClaimCleanup({ family: "TaskTracker", operation }),
+          execution: interruptibleBoundary,
+          onIntentRecorded
+        }).pipe(Effect.provideService(InRunJournal, journal))
       })
 
       const recordTaskAttemptPlan = Effect.fn("WorkflowInterpreter.Journaled.recordTaskAttemptPlan")(function* (

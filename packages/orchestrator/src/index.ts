@@ -664,10 +664,12 @@ export {
   CompletionTaskRequestLimit,
   CompletionClaimDeletedEvent,
   CompletionClaimFingerprint,
+  CompletionClaimMarkerAbsent,
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletionReadObservedEvent,
   CompletionClaimDeletionReadPurpose,
   CompletionClaimCleanupReadOrdinal,
+  CompletionClaimCleanupObservation,
   CompletionClaimDeletionFailure,
   CompletionClaimDeletionIntendedEvent,
   CompletionClaimDeletionRequest,
@@ -693,6 +695,7 @@ export {
   completionTaskRequestFor,
   focusedTaskCompletionReadRequestFor,
   type CompletionClaimBoundaryService,
+  type CompletionClaimMarkerObservation,
   type CompletionTaskBoundaryService
 } from "./workflow/protocols/integration-finality/events.js"
 export {

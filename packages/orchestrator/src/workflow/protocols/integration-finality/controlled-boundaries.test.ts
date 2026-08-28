@@ -13,7 +13,7 @@ import {
 } from "./controlled-boundaries.js"
 import {
   CompletionClaimBoundary,
-  CompletionClaimDeletionFailure,
+  CompletionClaimMarkerAbsent,
   CompletionClaimReplacementFailure,
   CompletionTaskBoundary,
   CompletionTaskClaim,
@@ -25,6 +25,7 @@ import {
   completionClaimDeletionRequestFor,
   completionClaimReadRequestFor,
   completionClaimReplacementRequestFor,
+  completionOriginalTaskClaimReleaseFor,
   completionTaskRequestEquals
 } from "./events.js"
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
@@ -298,9 +299,10 @@ it.effect("fails closed for the remaining explicit unclaimed and mismatched clai
     const activeDeletion = yield* Effect.gen(function* () {
       const boundary = yield* CompletionClaimBoundary
       expect(yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))).toEqual(fixture.activeClaim)
-      return yield* boundary.deleteTaskClaim(deletion).pipe(Effect.flip)
+      yield* boundary.deleteTaskClaim(deletion)
+      return yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))
     }).pipe(Effect.provide(controlledCompletionClaimBoundaryLayerFrom([fixture.activeClaim])))
-    expect(activeDeletion).toBeInstanceOf(CompletionClaimDeletionFailure)
+    expect(activeDeletion).toEqual(fixture.activeClaim)
 
     const foreignActiveClaim = ActiveTaskClaim.make({
       ...fixture.activeClaim,
@@ -313,4 +315,36 @@ it.effect("fails closed for the remaining explicit unclaimed and mismatched clai
     }).pipe(Effect.provide(controlledCompletionClaimBoundaryLayerFrom([foreignCompletionClaim])))
     expect(completionReplacement).toBeInstanceOf(CompletionClaimReplacementFailure)
   })
+)
+
+const independentTaskId = TaskId.make("controlled-independent-task-b")
+const independentClaim = ActiveTaskClaim.make({
+  ...fixture.activeClaim,
+  operationId: OperationId.make("controlled-independent-claim-b"),
+  taskId: independentTaskId,
+  token: ClaimToken.make("controlled-independent-token-b")
+})
+
+it.effect("removes A's original claim before its marker while leaving independent B available", () =>
+  Effect.gen(function* () {
+    const boundary = yield* CompletionClaimBoundary
+
+    expect(yield* boundary.readCompletionClaimMarker(completionClaimReadRequestFor(fixture.claim))).toEqual(
+      fixture.claim
+    )
+    yield* boundary.releaseOriginalTaskClaim(completionOriginalTaskClaimReleaseFor(fixture.claim))
+    expect(yield* boundary.readOriginalTaskClaim(fixture.taskId)).toEqual(
+      UnclaimedTask.make({ taskId: fixture.taskId })
+    )
+    expect(yield* boundary.readCompletionClaimMarker(completionClaimReadRequestFor(fixture.claim))).toEqual(
+      fixture.claim
+    )
+    expect(yield* boundary.readOriginalTaskClaim(independentTaskId)).toEqual(independentClaim)
+
+    yield* boundary.deleteTaskClaim(completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation))
+    expect(yield* boundary.readCompletionClaimMarker(completionClaimReadRequestFor(fixture.claim))).toEqual(
+      CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId })
+    )
+    expect(yield* boundary.readOriginalTaskClaim(independentTaskId)).toEqual(independentClaim)
+  }).pipe(Effect.provide(controlledCompletionClaimBoundaryLayerFrom([fixture.claim, independentClaim])))
 )

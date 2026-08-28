@@ -221,6 +221,16 @@ const deliveryFinalityAcquireBStoryPosition = Option.getOrThrow(
   Option.some(deliveryFinalityAcquireBAt).pipe(Option.filter((index) => index !== missingStoryItemIndex))
 )
 
+const followsCompletionMarkerAbsence = (
+  item: AuthoredCassetteStoryItem,
+  index: number,
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): boolean => {
+  if (item._tag !== "TaskClaimCurrentReadReturned") return false
+  const previous = story[index - 1]
+  return previous?._tag === "CompletionClaimReadReturned" && previous.claim === "CompletionMarkerAbsent"
+}
+
 /**
  * Alice cancels after A's admitted integration compare-and-set.  The existing
  * completion-finality tail settles A and releases its exact completion claim;
@@ -233,8 +243,8 @@ export const integrationRunCancellationAuthoredCassette = Schema.decodeUnknownSy
   story: [
     ...deliveryFinalitySpineAuthoredCassette.story
       .slice(0, deliveryFinalityAcquireBStoryPosition)
-      .flatMap((item) =>
-        item._tag === "CompletionClaimDeletionApplied" ? [item, { _tag: "OperatorAppliesRunCancellation" }] : [item]
+      .flatMap((item, index, story) =>
+        followsCompletionMarkerAbsence(item, index, story) ? [item, { _tag: "OperatorAppliesRunCancellation" }] : [item]
       ),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
     {

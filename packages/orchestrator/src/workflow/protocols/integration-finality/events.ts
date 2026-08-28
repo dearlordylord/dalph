@@ -11,7 +11,7 @@ import {
 import { TargetPromotionGitReadObservation } from "../target-promotion/events.js"
 import {
   CompletionClaimDeletionRequest,
-  CompletionClaimObservation,
+  CompletionClaimCleanupObservation,
   CompletionClaimReplacementRequest,
   CompletionSuccessObservation,
   completionTaskClaimEquals,
@@ -269,6 +269,17 @@ export type CompletionClaimDeletionAttemptIntendedEvent = typeof CompletionClaim
 
 /** Why Dalph reread the exact completion claim during its bounded deletion cleanup. */
 export const CompletionClaimDeletionReadPurpose = Schema.TaggedUnion({
+  BeforeOriginalClaimRelease: { readOrdinal: CompletionClaimCleanupReadOrdinal },
+  /** Current tracker proof, after one exact marker reread, that the already-released original claim remains absent. */
+  ConfirmOriginalClaimReleased: {
+    attemptOrdinal: CompletionClaimRequestOrdinal,
+    readOrdinal: CompletionClaimCleanupReadOrdinal
+  },
+  /** Current tracker proof, after marker-specific absence, that no active claim now occupies the task. */
+  ConfirmNoActiveClaimAfterMarkerAbsent: {
+    attemptOrdinal: CompletionClaimRequestOrdinal,
+    readOrdinal: CompletionClaimCleanupReadOrdinal
+  },
   BeforeDeletionAttempt: {
     attemptOrdinal: CompletionClaimRequestOrdinal,
     readOrdinal: CompletionClaimCleanupReadOrdinal
@@ -288,7 +299,7 @@ export type CompletionClaimDeletionReadPurpose = typeof CompletionClaimDeletionR
 
 /** The exact claim state returned by one cleanup reread before deletion or terminal reconciliation. */
 export const CompletionClaimDeletionReadObservedEvent = Schema.TaggedStruct("CompletionClaimDeletionReadObserved", {
-  observation: CompletionClaimObservation,
+  observation: CompletionClaimCleanupObservation,
   purpose: CompletionClaimDeletionReadPurpose,
   replacementOperationId: OperationId,
   request: CompletionClaimDeletionRequest,

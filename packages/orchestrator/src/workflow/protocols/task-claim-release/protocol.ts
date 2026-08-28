@@ -10,6 +10,12 @@ import {
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 
+/** The exact provider-neutral calls needed to release one active task claim. */
+export interface TaskClaimReleaseBoundary {
+  readonly readTaskClaim: TrackerMutationService["readTaskClaim"]
+  readonly releaseTaskClaim: TrackerMutationService["releaseTaskClaim"]
+}
+
 const taskClaimReleaseRequestBound = 3
 
 /** Three exact release requests completed without authoritative absence. */
@@ -29,7 +35,7 @@ export const AuthoritativeTaskClaimReleased = Schema.TaggedStruct("Authoritative
  * edited.
  */
 export const runTaskClaimReleaseProtocol = Effect.fn("TrackerMutation.runTaskClaimReleaseProtocol")(function* (
-  tracker: TrackerMutationService,
+  tracker: TaskClaimReleaseBoundary,
   release: TaskClaimRelease
 ): Effect.fn.Return<
   typeof AuthoritativeTaskClaimReleased.Type,

@@ -13,10 +13,12 @@ import {
   CompletionClaimDeletionReadObservedEvent,
   CompletionClaimDeletionReadPurpose,
   CompletionClaimCleanupReadOrdinal,
+  CompletionClaimMarkerAbsent,
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimFinalityJournalEvent,
+  completionOriginalTaskClaimReleaseFor,
   CompletionTaskAcknowledgement,
   CompletionTaskAcknowledgedEvent,
   CompletionTaskAttemptIntendedEvent,
@@ -48,8 +50,18 @@ import {
   latestFocusedCompletedTaskObservationFor
 } from "./state.js"
 import { integrationFinalityFixture as fixture, prerequisiteRecordEvents } from "./fixtures.js"
-import { makeCompletionTaskFactsObservationOperation, makeTaskAttemptPlanOperation } from "../../registry/operation.js"
-import { taskTrackerReadIntent, TaskAttemptPlannedEvent } from "../../registry/event.js"
+import {
+  makeCompletionTaskFactsObservationOperation,
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimReleaseOperation,
+  TaskClaimReleaseAuthority
+} from "../../registry/operation.js"
+import {
+  taskTrackerReadIntent,
+  TaskAttemptPlannedEvent,
+  TaskClaimReleasedEvent,
+  TaskClaimReleaseIntendedEvent
+} from "../../registry/event.js"
 import { describeJournalEvent } from "../../registry/event-descriptor.js"
 import { journaledIntegrationEvidenceOf } from "../../../coordination/delivery/delivery-evidence.js"
 import {
@@ -68,6 +80,12 @@ const record = (position: number, event: JournalRecord["event"], key = `history:
 })
 
 const successObservation = { ...fixture.successObservation, observedAt: JournalPosition.make(9) }
+
+const cleanupReleaseOperation = makeTaskClaimReleaseOperation({
+  authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+  predecessorOperationIds: [fixture.activeClaim.operationId, successObservation.operationId],
+  release: completionOriginalTaskClaimReleaseFor(fixture.claim)
+})
 
 const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
   const promotion = record(
@@ -115,8 +133,54 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
       version: workflowJournalEventVersion
     })
   )
-  const deletionAttempt = record(
+  const originalReleaseRead = record(
     11,
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: fixture.claim,
+      purpose: CompletionClaimDeletionReadPurpose.cases.BeforeOriginalClaimRelease.make({
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    })
+  )
+  const releaseIntent = record(
+    12,
+    TaskClaimReleaseIntendedEvent.make({ operation: cleanupReleaseOperation, version: workflowJournalEventVersion })
+  )
+  const released = record(
+    13,
+    TaskClaimReleasedEvent.make({ release: cleanupReleaseOperation.release, version: workflowJournalEventVersion })
+  )
+  const deletionRead = record(
+    14,
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: fixture.claim,
+      purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    })
+  )
+  const releaseConfirmed = record(
+    15,
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: { _tag: "UnclaimedTask", taskId: fixture.taskId },
+      purpose: CompletionClaimDeletionReadPurpose.cases.ConfirmOriginalClaimReleased.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    })
+  )
+  const deletionAttempt = record(
+    16,
     CompletionClaimDeletionAttemptIntendedEvent.make({
       attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
       claim: fixture.claim,
@@ -125,8 +189,34 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
       version: workflowJournalEventVersion
     })
   )
+  const deletionAbsent = record(
+    17,
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId }),
+      purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(2),
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    })
+  )
+  const activeAbsentAfterMarker = record(
+    18,
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: { _tag: "UnclaimedTask", taskId: fixture.taskId },
+      purpose: CompletionClaimDeletionReadPurpose.cases.ConfirmNoActiveClaimAfterMarkerAbsent.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(2),
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    })
+  )
   const deleted = record(
-    12,
+    19,
     CompletionClaimDeletedEvent.make({
       claim: fixture.claim,
       operationId: deletionOperationId,
@@ -135,7 +225,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const settled = record(
-    13,
+    20,
     IntegrationFinalitySettledEvent.make({
       claim: fixture.claim,
       deletionOperationId,
@@ -155,7 +245,14 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     focusedIntent,
     focusedFacts,
     deletionIntent,
+    originalReleaseRead,
+    releaseIntent,
+    released,
+    deletionRead,
+    releaseConfirmed,
     deletionAttempt,
+    deletionAbsent,
+    activeAbsentAfterMarker,
     deleted,
     settled
   ]
@@ -168,6 +265,39 @@ const validationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<
     indexes = validation.indexes
     return validation.detail === undefined ? [] : [validation.detail]
   })
+}
+
+const completeValidationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> => {
+  let indexes = makeIntegrationFinalityHistoryIndexes()
+  const errors: Array<string> = []
+  for (const current of records) {
+    indexes = validateIntegrationFinalityHistoryRecord(
+      current,
+      fixture.runId,
+      records,
+      indexes,
+      (detail) => errors.push(detail),
+      (detail) => errors.push(detail)
+    )
+  }
+  return errors
+}
+
+const insertBeforeDeletionAttempt = (event: JournalRecord["event"]): ReadonlyArray<JournalRecord> => {
+  const records = validFinalityRecords()
+  const attemptIndex = records.findIndex(
+    ({ event: candidate }) => candidate._tag === "CompletionClaimDeletionAttemptIntended"
+  )
+  const attempt = records[attemptIndex]
+  expect(attempt).toBeDefined()
+  if (attempt === undefined) return records
+  return [
+    ...records.slice(0, attemptIndex),
+    record(Number(attempt.position), event, "history:contradictory-pre-delete-read"),
+    ...records
+      .slice(attemptIndex)
+      .map((candidate) => ({ ...candidate, position: JournalPosition.make(Number(candidate.position) + 1) }))
+  ]
 }
 
 it("accepts only the exact next cleanup reread identity after deletion intent", () => {
@@ -245,12 +375,184 @@ it("accepts one complete promotion, replacement, fresh-success deletion, and set
   expect(journaledIntegrationEvidenceOf(records).at(-1)?._tag).toBe("IntegrationFinalitySettlement")
 })
 
+it("rejects cleanup release or marker deletion when either exact cleanup read is absent", () => {
+  const records = validFinalityRecords()
+  expect(validationErrors(records.filter(({ event }) => event._tag !== "CompletionClaimDeletionReadObserved"))).toEqual(
+    expect.arrayContaining([
+      "completion cleanup release intent requires a fresh exact completion-marker observation",
+      expect.stringContaining("completion-claim deletion attempt")
+    ])
+  )
+  expect(validationErrors(records.filter(({ event }) => event._tag !== "TaskClaimReleased"))).toContainEqual(
+    expect.stringContaining("completion-claim deletion attempt")
+  )
+  expect(
+    validationErrors(
+      records.filter(
+        ({ event }) =>
+          event._tag !== "CompletionClaimDeletionReadObserved" || event.purpose._tag !== "ConfirmOriginalClaimReleased"
+      )
+    )
+  ).toContainEqual(expect.stringContaining("completion-claim deletion attempt"))
+  expect(
+    validationErrors(
+      records.filter(
+        ({ event }) =>
+          event._tag !== "CompletionClaimDeletionReadObserved" || event.purpose._tag !== "BeforeDeletionAttempt"
+      )
+    )
+  ).toContainEqual(expect.stringContaining("completion-claim deletion attempt"))
+})
+
+it("rejects marker deletion when the current active-record read predates the exact marker reread", () => {
+  const records = validFinalityRecords()
+  const markerIndex = records.findIndex(
+    ({ event }) =>
+      event._tag === "CompletionClaimDeletionReadObserved" && event.purpose._tag === "BeforeDeletionAttempt"
+  )
+  const confirmationIndex = records.findIndex(
+    ({ event }) =>
+      event._tag === "CompletionClaimDeletionReadObserved" && event.purpose._tag === "ConfirmOriginalClaimReleased"
+  )
+  const marker = records[markerIndex]
+  const confirmation = records[confirmationIndex]
+  expect(marker).toBeDefined()
+  expect(confirmation).toBeDefined()
+  if (marker === undefined || confirmation === undefined) return
+  const reversed = records.map((candidate, index) =>
+    index === markerIndex
+      ? { ...confirmation, position: candidate.position }
+      : index === confirmationIndex
+        ? { ...marker, position: candidate.position }
+        : candidate
+  )
+  expect(completeValidationErrors(reversed)).toContainEqual(expect.stringContaining("completion claim cleanup read"))
+  expect(completeValidationErrors(reversed)).toContainEqual(
+    expect.stringContaining("completion-claim deletion attempt")
+  )
+})
+
+it("rejects a deletion attempt after later absent or foreign marker reads contradict the earlier exact marker", () => {
+  const foreignMarker = CompletionTaskClaim.make({
+    ...fixture.claim,
+    originalClaim: { ...fixture.activeClaim, operationId: OperationId.make("history-later-foreign-completion-marker") }
+  })
+  for (const observation of [CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId }), foreignMarker]) {
+    const contradictoryMarker = CompletionClaimDeletionReadObservedEvent.make({
+      observation,
+      purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(2)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    })
+
+    expect(completeValidationErrors(insertBeforeDeletionAttempt(contradictoryMarker))).toContainEqual(
+      expect.stringContaining("completion-claim deletion attempt")
+    )
+  }
+})
+
+it("rejects a deletion attempt after later exact or foreign active reads contradict the earlier absence", () => {
+  const foreignActive = { ...fixture.activeClaim, operationId: OperationId.make("history-later-foreign-active-claim") }
+  for (const observation of [fixture.activeClaim, foreignActive]) {
+    const contradictoryActive = CompletionClaimDeletionReadObservedEvent.make({
+      observation,
+      purpose: CompletionClaimDeletionReadPurpose.cases.ConfirmOriginalClaimReleased.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(2)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    })
+
+    expect(completeValidationErrors(insertBeforeDeletionAttempt(contradictoryActive))).toContainEqual(
+      expect.stringContaining("completion-claim deletion attempt")
+    )
+  }
+})
+
+it("rejects an active-record absence observation as proof that the completion marker was deleted", () => {
+  const records = validFinalityRecords().map((candidate) =>
+    candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
+    candidate.event.purpose._tag === "BeforeDeletionAttempt" &&
+    candidate.event.observation._tag === "CompletionClaimMarkerAbsent"
+      ? {
+          ...candidate,
+          event: CompletionClaimDeletionReadObservedEvent.make({
+            ...candidate.event,
+            observation: { _tag: "UnclaimedTask", taskId: fixture.taskId }
+          })
+        }
+      : candidate
+  )
+  const errors = completeValidationErrors(records)
+  expect(errors).toContainEqual(expect.stringContaining("cleanup read observation kind"))
+  expect(errors).toContainEqual(expect.stringContaining("completion-claim deletion outcome"))
+})
+
+it("rejects completion-marker absence as an active-record confirmation", () => {
+  const records = validFinalityRecords().map((candidate) =>
+    candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
+    candidate.event.purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent"
+      ? {
+          ...candidate,
+          event: CompletionClaimDeletionReadObservedEvent.make({
+            ...candidate.event,
+            observation: CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId })
+          })
+        }
+      : candidate
+  )
+  expect(completeValidationErrors(records)).toContainEqual(expect.stringContaining("cleanup read observation kind"))
+})
+
+it("rejects marker-deletion settlement without a fresh active-record absence after marker absence", () => {
+  const records = validFinalityRecords().filter(
+    ({ event }) =>
+      event._tag !== "CompletionClaimDeletionReadObserved" ||
+      event.purpose._tag !== "ConfirmNoActiveClaimAfterMarkerAbsent"
+  )
+  expect(completeValidationErrors(records)).toContainEqual(expect.stringContaining("completion-claim deletion outcome"))
+})
+
+it("rejects marker-deletion settlement when a later active-record read contradicts the recorded absence", () => {
+  const records = validFinalityRecords()
+  const contradictoryRead = record(
+    19,
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: fixture.activeClaim,
+      purpose: CompletionClaimDeletionReadPurpose.cases.ConfirmNoActiveClaimAfterMarkerAbsent.make({
+        attemptOrdinal: CompletionClaimRequestOrdinal.make(2),
+        readOrdinal: CompletionClaimCleanupReadOrdinal.make(2)
+      }),
+      replacementOperationId,
+      request: { claim: fixture.claim, operationId: deletionOperationId, successObservation },
+      version: workflowJournalEventVersion
+    })
+  )
+  const chronology = [
+    ...records.slice(0, -2),
+    contradictoryRead,
+    ...records
+      .slice(-2)
+      .map((candidate) => ({ ...candidate, position: JournalPosition.make(Number(candidate.position) + 1) }))
+  ]
+
+  expect(completeValidationErrors(chronology)).toContainEqual(
+    expect.stringContaining("completion-claim deletion outcome")
+  )
+})
+
 it("projects each phase from exact stored evidence without rescanning authority state", () => {
   const records = validFinalityRecords()
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 4), fixture.claim)?._tag).toBe("ReplacementPending")
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 6), fixture.claim)?._tag).toBe("CompletionClaimReplaced")
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 10), fixture.claim)?._tag).toBe("DeletionPending")
-  expect(deriveIntegrationFinalityStateFor(records.slice(0, 12), fixture.claim)?._tag).toBe("CompletionClaimDeleted")
+  expect(deriveIntegrationFinalityStateFor(records.slice(0, 19), fixture.claim)?._tag).toBe("CompletionClaimDeleted")
   expect(deriveIntegrationFinalityStateFor(records, fixture.claim)?._tag).toBe("IntegrationFinalitySettled")
 })
 
@@ -375,7 +677,7 @@ it("does not settle from a terminal occurrence with different operation evidence
       version: workflowJournalEventVersion
     })
   )
-  expect(deriveIntegrationFinalityStateFor([...records.slice(0, 12), mismatchedSettlement], fixture.claim)?._tag).toBe(
+  expect(deriveIntegrationFinalityStateFor([...records.slice(0, 19), mismatchedSettlement], fixture.claim)?._tag).toBe(
     "CompletionClaimDeleted"
   )
 })
@@ -595,7 +897,7 @@ it("rejects duplicate terminal outcomes and settlement without exact deletion pr
   expect(validationErrors([...records, duplicateSettlement])).toHaveLength(1)
   expect(
     validationErrors([
-      ...records.slice(0, 11),
+      ...records.slice(0, 16),
       record(
         11,
         IntegrationFinalitySettledEvent.make({

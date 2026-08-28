@@ -1,6 +1,12 @@
 import { Context, type Effect, Schema } from "effect"
 import { PlannedTaskAttempt, plannedTaskAttemptEquivalence, TaskId, TaskRevision } from "@dalph/contracts"
-import { ActiveTaskClaim, isExactTaskClaim, UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
+import {
+  ActiveTaskClaim,
+  isExactTaskClaim,
+  TaskClaimRelease,
+  type TrackerMutationService,
+  UnclaimedTask
+} from "../../../authorities/task-tracker/claim-mutation.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -110,6 +116,17 @@ export const CompletionClaimDeletionRequest = Schema.Struct({
 )
 export type CompletionClaimDeletionRequest = typeof CompletionClaimDeletionRequest.Type
 
+/** Stable operation identity for deleting the exact original active record after task success. */
+export const completionOriginalTaskClaimReleaseOperationIdFor = (claim: CompletionTaskClaim): OperationId =>
+  OperationId.make(`completion-original-claim-release:${claim.promotionCorrelation.requestId}`)
+
+/** Derives the generic exact-claim release nested inside completion cleanup. */
+export const completionOriginalTaskClaimReleaseFor = (claim: CompletionTaskClaim): TaskClaimRelease =>
+  TaskClaimRelease.make({
+    claim: claim.originalClaim,
+    operationId: completionOriginalTaskClaimReleaseOperationIdFor(claim)
+  })
+
 /** Current provider evidence can be active, exact completion, foreign completion, or absent. */
 export const CompletionClaimObservation = Schema.Union([
   ActiveTaskClaim,
@@ -118,6 +135,22 @@ export const CompletionClaimObservation = Schema.Union([
   UnclaimedTask
 ])
 export type CompletionClaimObservation = typeof CompletionClaimObservation.Type
+
+/** Proves only that the task's distinct completion-marker record is currently absent. */
+export const CompletionClaimMarkerAbsent = Schema.TaggedStruct("CompletionClaimMarkerAbsent", { taskId: TaskId })
+export type CompletionClaimMarkerAbsent = typeof CompletionClaimMarkerAbsent.Type
+
+/** Current provider evidence for the completion marker alone, independent of any active claim record. */
+export const CompletionClaimMarkerObservation = Schema.Union([
+  CompletionTaskClaim,
+  ForeignCompletionClaim,
+  CompletionClaimMarkerAbsent
+])
+export type CompletionClaimMarkerObservation = typeof CompletionClaimMarkerObservation.Type
+
+/** One cleanup read, preserving whether absence applies to the active record or completion marker. */
+export const CompletionClaimCleanupObservation = Schema.Union([CompletionClaimObservation, CompletionClaimMarkerAbsent])
+export type CompletionClaimCleanupObservation = typeof CompletionClaimCleanupObservation.Type
 
 const CompletionClaimRequestOutcome = Schema.Literals(["DefinitelyNotApplied", "Unknown"])
 export type CompletionClaimRequestOutcome = typeof CompletionClaimRequestOutcome.Type
@@ -143,20 +176,28 @@ export class CompletionClaimDeletionFailure extends Schema.TaggedError<Completio
 /** A fresh read found a claim other than the exact claim Dalph is authorized to change. */
 export class CompletionClaimOwnershipConflict extends Schema.TaggedError<CompletionClaimOwnershipConflict>()(
   "IntegrationFinality.CompletionClaimOwnershipConflict",
-  { attempted: CompletionTaskClaim, observed: CompletionClaimObservation }
+  { attempted: CompletionTaskClaim, observed: CompletionClaimCleanupObservation }
 ) {}
 
 /** Provider-neutral tracker boundary used by replacement and cleanup protocols. */
 export interface CompletionClaimBoundaryService {
+  /** Reads the original active record independently of the coexisting completion marker. */
+  readonly readOriginalTaskClaim: TrackerMutationService["readTaskClaim"]
   readonly readTaskClaim: (
     request: CompletionClaimReadRequest
   ) => Effect.Effect<CompletionClaimObservation, CompletionClaimReadFailure>
+  /** Reads only the completion marker so cleanup can prove it before rereading the active record. */
+  readonly readCompletionClaimMarker: (
+    request: CompletionClaimReadRequest
+  ) => Effect.Effect<CompletionClaimMarkerObservation, CompletionClaimReadFailure>
   readonly replaceTaskClaim: (
     request: CompletionClaimReplacementRequest
   ) => Effect.Effect<CompletionTaskClaim, CompletionClaimReplacementFailure | TaskTrackerMutationThrottled>
   readonly deleteTaskClaim: (
     request: CompletionClaimDeletionRequest
   ) => Effect.Effect<void, CompletionClaimDeletionFailure | TaskTrackerMutationThrottled>
+  /** Deletes only the exact original active record through the generic claim-release boundary. */
+  readonly releaseOriginalTaskClaim: TrackerMutationService["releaseTaskClaim"]
 }
 
 /** The ordinary Effect service for the task-tracker completion-claim boundary. */

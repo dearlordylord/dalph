@@ -162,6 +162,17 @@ authority observations and are not persisted as substitutes for those facts.
 Cleanup for every owned resource is disposition-typed, exact, recoverable, and
 fail-closed.
 
+Integration-finality policy owns completion-claim cleanup across tracker
+providers. After a fresh focused success, it uses the generic task-claim
+release protocol to observe and release the exact original active claim, then
+rereads the exact completion marker, rereads the current active record to prove
+it is still absent, and deletes the exact marker last. After observing that the
+marker is absent, it rereads the current active record again before recording
+deletion or settlement; the earlier release history and pre-delete reread
+cannot prove current absence after that boundary. Provider adapters translate
+those two typed mutations and independent reads; they do not decide their
+order, infer success from an acknowledgement, or repair a foreign replacement.
+
 Issue #69 materializes three separate cleanup authority modules: planned-attempt
 worktree disposal, planned branch disposal gated by settled worktree removal,
 and quarantined Integrator predecessor-candidate disposal. Each module has its

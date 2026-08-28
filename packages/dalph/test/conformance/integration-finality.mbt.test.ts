@@ -4,6 +4,9 @@ import { quintIt } from "@firfi/quint-connect/vitest"
 import { AcceptedResultEvidenceManifest, TaskId, TaskRevision } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
+  CompletionClaimCleanupReadOrdinal,
+  CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimMarkerAbsent,
   CompletionClaimDeletionFailure,
   CompletionClaimReplacementFailure,
   CompletionTaskAcknowledgement,
@@ -32,6 +35,7 @@ import {
   deriveIntegrationFinalityStateFor,
   deriveRunFinalityDecision,
   JournalPosition,
+  isExactTaskClaim,
   UnclaimedTask,
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol,
@@ -47,6 +51,7 @@ import {
   type CompletionSuccessObservation,
   type CompletionTaskBoundaryService,
   type JournalRecord,
+  type TaskClaimObservation,
   WorkflowJournalEvent
 } from "@dalph/orchestrator"
 import { Deferred, Effect, Fiber, Option, Schema } from "effect"
@@ -732,7 +737,10 @@ const promotionRecord = (): JournalRecord => ({
 // and settlement records; no finality records are reconstructed from model state.
 const makeProductionState = () => {
   let records: ReadonlyArray<JournalRecord> = []
-  let claimObservation: CompletionClaimObservation = productionClaimIdentity.originalClaim
+  let activeClaimObservation: TaskClaimObservation = productionClaimIdentity.originalClaim
+  let completionClaimObservation:
+    | Extract<CompletionClaimObservation, { readonly _tag: "CompletionTaskClaim" | "ForeignCompletionClaim" }>
+    | undefined
   let replacementDisposition: ProductionMutationDisposition = "Rejected"
   let deletionDisposition: ProductionMutationDisposition = "Rejected"
   let successObservation: CompletionSuccessObservation | undefined
@@ -752,6 +760,22 @@ const makeProductionState = () => {
   let pendingCompletion: Fiber.Fiber<unknown, unknown> | undefined
   let completionBoundaryCalls = 0
   let completionEvidenceReads = 0
+
+  const currentClaimObservation = (): CompletionClaimObservation =>
+    activeClaimObservation._tag === "ActiveTaskClaim" &&
+    !isExactTaskClaim(activeClaimObservation, productionClaimIdentity.originalClaim)
+      ? activeClaimObservation
+      : (completionClaimObservation ?? activeClaimObservation)
+
+  const setClaimObservation = (observation: CompletionClaimObservation): void => {
+    if (observation._tag === "CompletionTaskClaim" || observation._tag === "ForeignCompletionClaim") {
+      activeClaimObservation = productionClaimIdentity.originalClaim
+      completionClaimObservation = observation
+      return
+    }
+    activeClaimObservation = observation
+    completionClaimObservation = undefined
+  }
 
   const journal = InRunJournal.of({
     append: (runId, key, event) =>
@@ -784,16 +808,28 @@ const makeProductionState = () => {
   })
 
   const boundary = CompletionClaimBoundary.of({
+    readCompletionClaimMarker: (request) =>
+      Effect.sync(() =>
+        request.taskId === productionClaimIdentity.plannedAttempt.taskId
+          ? (completionClaimObservation ?? CompletionClaimMarkerAbsent.make({ taskId: request.taskId }))
+          : CompletionClaimMarkerAbsent.make({ taskId: request.taskId })
+      ),
     readTaskClaim: (request) =>
       Effect.sync(() =>
         request.taskId === productionClaimIdentity.plannedAttempt.taskId
-          ? claimObservation
+          ? currentClaimObservation()
           : UnclaimedTask.make({ taskId: request.taskId })
+      ),
+    readOriginalTaskClaim: (taskId) =>
+      Effect.sync(() =>
+        taskId === productionClaimIdentity.plannedAttempt.taskId
+          ? activeClaimObservation
+          : UnclaimedTask.make({ taskId })
       ),
     replaceTaskClaim: (request) =>
       replacementDisposition === "Applied"
         ? Effect.sync(() => {
-            claimObservation = request.claim
+            completionClaimObservation = request.claim
             return request.claim
           })
         : Effect.fail(
@@ -806,7 +842,7 @@ const makeProductionState = () => {
     deleteTaskClaim: (request) =>
       deletionDisposition === "Applied"
         ? Effect.sync(() => {
-            claimObservation = UnclaimedTask.make({ taskId: request.claim.plannedAttempt.taskId })
+            completionClaimObservation = undefined
           })
         : Effect.fail(
             new CompletionClaimDeletionFailure({
@@ -814,7 +850,16 @@ const makeProductionState = () => {
               outcome: "DefinitelyNotApplied",
               request
             })
-          )
+          ),
+    releaseOriginalTaskClaim: (release) =>
+      Effect.sync(() => {
+        if (
+          activeClaimObservation._tag === "ActiveTaskClaim" &&
+          isExactTaskClaim(activeClaimObservation, release.claim)
+        ) {
+          activeClaimObservation = UnclaimedTask.make({ taskId: release.claim.taskId })
+        }
+      })
   })
 
   const completionBoundary: CompletionTaskBoundaryService = {
@@ -827,7 +872,7 @@ const makeProductionState = () => {
             })
           )
         : Effect.succeed({
-            currentClaim: claimObservation,
+            currentClaim: currentClaimObservation(),
             lifecycle: focusedLifecycle,
             operationId: readRequest.operationId,
             target: readRequest.target,
@@ -1150,7 +1195,7 @@ const makeProductionState = () => {
   }
 
   const observeFocusedCompletionSuccess = (observation: CompletionClaimObservation): void => {
-    claimObservation = observation
+    setClaimObservation(observation)
     focusedLifecycle = "CompletedSuccessfully"
     if (
       !records.some(
@@ -1291,7 +1336,8 @@ const makeProductionState = () => {
 
   const reset = (): void => {
     records = [promotionRecord()]
-    claimObservation = productionClaimIdentity.originalClaim
+    activeClaimObservation = productionClaimIdentity.originalClaim
+    completionClaimObservation = undefined
     replacementDisposition = "Rejected"
     deletionDisposition = "Rejected"
     successObservation = undefined
@@ -1339,8 +1385,11 @@ const makeProductionState = () => {
     crossCompletionBoundaryCutPoint,
     readState,
     reset,
+    setCompletionClaimMarkerAbsent: (): void => {
+      completionClaimObservation = undefined
+    },
     setClaimObservation: (observation: CompletionClaimObservation): void => {
-      claimObservation = observation
+      setClaimObservation(observation)
     }
   }
 }
@@ -1408,6 +1457,203 @@ const assertProductionFinality = (current: ModelState, productionState: Producti
   }
   if (current.promoted.settled && projectedTag !== "IntegrationFinalitySettled") {
     failTest("model settlement did not reach production integration finality")
+  }
+
+  // Negative control for the provider's two-record representation: the model's
+  // one abstract deletion may settle only after production durably released
+  // the exact original claim, and the completion marker must be deleted last.
+  const latestMarkerReadAt = (
+    records: ReadonlyArray<JournalRecord>,
+    before: number,
+    operationId: OperationId
+  ): number =>
+    records.findLastIndex(
+      ({ event: candidate }, index) =>
+        index < before &&
+        candidate._tag === "CompletionClaimDeletionReadObserved" &&
+        candidate.request.operationId === operationId &&
+        (candidate.purpose._tag === "BeforeOriginalClaimRelease" ||
+          candidate.purpose._tag === "BeforeDeletionAttempt" ||
+          candidate.purpose._tag === "AfterDeletionAttemptsExhausted")
+    )
+  const latestActiveReadAt = (
+    records: ReadonlyArray<JournalRecord>,
+    before: number,
+    operationId: OperationId
+  ): number =>
+    records.findLastIndex(
+      ({ event: candidate }, index) =>
+        index < before &&
+        candidate._tag === "CompletionClaimDeletionReadObserved" &&
+        candidate.request.operationId === operationId &&
+        (candidate.purpose._tag === "ConfirmOriginalClaimReleased" ||
+          candidate.purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent")
+    )
+  const invalidMarkerDeletionAttemptIn = (records: ReadonlyArray<JournalRecord>): number => {
+    const originalReleaseAt = records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskClaimReleased" &&
+        isExactTaskClaim(event.release.claim, productionClaimIdentity.originalClaim)
+    )
+    return records.findIndex(({ event }, attemptAt) => {
+      if (event._tag !== "CompletionClaimDeletionAttemptIntended") return false
+      const markerReadAt = latestMarkerReadAt(records, attemptAt, event.operationId)
+      const activeReadAt = latestActiveReadAt(records, attemptAt, event.operationId)
+      const markerRead = records[markerReadAt]?.event
+      const activeRead = records[activeReadAt]?.event
+      const exactPreDeleteProof =
+        markerRead?._tag === "CompletionClaimDeletionReadObserved" &&
+        activeRead?._tag === "CompletionClaimDeletionReadObserved" &&
+        markerRead.purpose._tag === "BeforeDeletionAttempt" &&
+        activeRead.purpose._tag === "ConfirmOriginalClaimReleased" &&
+        markerRead.purpose.attemptOrdinal === event.attemptOrdinal &&
+        activeRead.purpose.attemptOrdinal === event.attemptOrdinal &&
+        markerRead.observation._tag === "CompletionTaskClaim" &&
+        completionTaskClaimEquals(markerRead.observation, productionClaimIdentity) &&
+        activeRead.observation._tag === "UnclaimedTask"
+      return !(
+        originalReleaseAt >= 0 &&
+        originalReleaseAt < markerReadAt &&
+        markerReadAt < activeReadAt &&
+        activeReadAt < attemptAt &&
+        exactPreDeleteProof
+      )
+    })
+  }
+  const invalidMarkerDeletionAttempt = invalidMarkerDeletionAttemptIn(productionState.records)
+  if (invalidMarkerDeletionAttempt >= 0) {
+    failTest("production completion marker deletion lacked its later current active-record proof")
+  }
+  const invalidMarkerDeletionOutcomeIn = (records: ReadonlyArray<JournalRecord>): number =>
+    records.findIndex(({ event }, outcomeAt) => {
+      if (event._tag !== "CompletionClaimDeleted") return false
+      const deletionAttemptAt = records.findLastIndex(
+        ({ event: candidate }, index) =>
+          index < outcomeAt &&
+          candidate._tag === "CompletionClaimDeletionAttemptIntended" &&
+          candidate.operationId === event.operationId
+      )
+      const markerReadAt = latestMarkerReadAt(records, outcomeAt, event.operationId)
+      const activeReadAt = latestActiveReadAt(records, outcomeAt, event.operationId)
+      const markerRead = records[markerReadAt]?.event
+      const activeRead = records[activeReadAt]?.event
+      const exactAbsenceProof =
+        markerRead?._tag === "CompletionClaimDeletionReadObserved" &&
+        activeRead?._tag === "CompletionClaimDeletionReadObserved" &&
+        markerRead.observation._tag === "CompletionClaimMarkerAbsent" &&
+        activeRead.observation._tag === "UnclaimedTask" &&
+        activeRead.purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent" &&
+        (markerRead.purpose._tag === "BeforeDeletionAttempt" ||
+          markerRead.purpose._tag === "AfterDeletionAttemptsExhausted") &&
+        activeRead.purpose.attemptOrdinal === markerRead.purpose.attemptOrdinal
+      return !(
+        deletionAttemptAt >= 0 &&
+        deletionAttemptAt < markerReadAt &&
+        markerReadAt < activeReadAt &&
+        exactAbsenceProof
+      )
+    })
+  const invalidMarkerDeletionOutcome = invalidMarkerDeletionOutcomeIn(productionState.records)
+  if (invalidMarkerDeletionOutcome >= 0) {
+    failTest("production completion marker outcome lacked a later current active-record absence observation")
+  }
+  const deletionAttemptAt = productionState.records.findIndex(
+    ({ event }) => event._tag === "CompletionClaimDeletionAttemptIntended"
+  )
+  if (deletionAttemptAt >= 0) {
+    const exactMarker = productionState.records.findLast(
+      ({ event }, index) =>
+        index < deletionAttemptAt &&
+        event._tag === "CompletionClaimDeletionReadObserved" &&
+        event.purpose._tag === "BeforeDeletionAttempt" &&
+        event.observation._tag === "CompletionTaskClaim"
+    )
+    const activeAbsence = productionState.records.findLast(
+      ({ event }, index) =>
+        index < deletionAttemptAt &&
+        event._tag === "CompletionClaimDeletionReadObserved" &&
+        event.purpose._tag === "ConfirmOriginalClaimReleased" &&
+        event.observation._tag === "UnclaimedTask"
+    )
+    if (
+      exactMarker?.event._tag === "CompletionClaimDeletionReadObserved" &&
+      exactMarker.event.purpose._tag === "BeforeDeletionAttempt" &&
+      activeAbsence?.event._tag === "CompletionClaimDeletionReadObserved" &&
+      activeAbsence.event.purpose._tag === "ConfirmOriginalClaimReleased"
+    ) {
+      const laterMarkerContradiction: JournalRecord = {
+        ...exactMarker,
+        event: CompletionClaimDeletionReadObservedEvent.make({
+          ...exactMarker.event,
+          observation: CompletionClaimMarkerAbsent.make({ taskId: productionClaimIdentity.plannedAttempt.taskId }),
+          purpose: {
+            ...exactMarker.event.purpose,
+            readOrdinal: CompletionClaimCleanupReadOrdinal.make(Number(exactMarker.event.purpose.readOrdinal) + 1)
+          }
+        })
+      }
+      const laterActiveContradiction: JournalRecord = {
+        ...activeAbsence,
+        event: CompletionClaimDeletionReadObservedEvent.make({
+          ...activeAbsence.event,
+          observation: productionClaimIdentity.originalClaim,
+          purpose: {
+            ...activeAbsence.event.purpose,
+            readOrdinal: CompletionClaimCleanupReadOrdinal.make(Number(activeAbsence.event.purpose.readOrdinal) + 1)
+          }
+        })
+      }
+      for (const contradiction of [laterMarkerContradiction, laterActiveContradiction]) {
+        const contradicted = [
+          ...productionState.records.slice(0, deletionAttemptAt),
+          contradiction,
+          ...productionState.records.slice(deletionAttemptAt)
+        ]
+        if (invalidMarkerDeletionAttemptIn(contradicted) < 0) {
+          failTest("completion finality MBT negative control accepted a later contradictory pre-delete read")
+        }
+      }
+    }
+  }
+  if (productionState.records.some(({ event }) => event._tag === "CompletionClaimDeleted")) {
+    const withoutPostMarkerActiveAbsence = productionState.records.filter(
+      ({ event: candidate }) =>
+        candidate._tag !== "CompletionClaimDeletionReadObserved" ||
+        candidate.purpose._tag !== "ConfirmNoActiveClaimAfterMarkerAbsent"
+    )
+    if (invalidMarkerDeletionOutcomeIn(withoutPostMarkerActiveAbsence) < 0) {
+      failTest("completion finality MBT negative control accepted settlement without post-marker active absence")
+    }
+    const deletionOutcomeAt = productionState.records.findIndex(({ event }) => event._tag === "CompletionClaimDeleted")
+    const activeAbsence = productionState.records.findLast(
+      ({ event }, index) =>
+        index < deletionOutcomeAt &&
+        event._tag === "CompletionClaimDeletionReadObserved" &&
+        event.purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent" &&
+        event.observation._tag === "UnclaimedTask"
+    )
+    if (
+      activeAbsence?.event._tag === "CompletionClaimDeletionReadObserved" &&
+      activeAbsence.event.purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent" &&
+      activeAbsence.event.observation._tag === "UnclaimedTask" &&
+      deletionOutcomeAt >= 0
+    ) {
+      const laterContradiction: JournalRecord = {
+        ...activeAbsence,
+        event: CompletionClaimDeletionReadObservedEvent.make({
+          ...activeAbsence.event,
+          observation: productionClaimIdentity.originalClaim
+        })
+      }
+      const withLaterContradiction = [
+        ...productionState.records.slice(0, deletionOutcomeAt),
+        laterContradiction,
+        ...productionState.records.slice(deletionOutcomeAt)
+      ]
+      if (invalidMarkerDeletionOutcomeIn(withLaterContradiction) < 0) {
+        failTest("completion finality MBT negative control accepted a later contradictory active-record read")
+      }
+    }
   }
 
   const completionEvents = productionState.records.map(({ event }) => event._tag)
@@ -2000,9 +2246,7 @@ const integrationFinalityDriver = defineDriver(
         }),
       observeCompletionClaimDeleted: () =>
         Effect.sync(() => {
-          productionState.setClaimObservation(
-            UnclaimedTask.make({ taskId: productionClaimIdentity.plannedAttempt.taskId })
-          )
+          productionState.setCompletionClaimMarkerAbsent()
           productionState.invokeDeletion("Applied")
           updatePromoted((subject) => ({
             ...subject,
@@ -2016,9 +2260,7 @@ const integrationFinalityDriver = defineDriver(
         Effect.sync(() => updatePromoted((subject) => ({ ...subject, phase: "DeleteResponseLost" }))),
       reconcileDeletionAsAbsent: () =>
         Effect.sync(() => {
-          productionState.setClaimObservation(
-            UnclaimedTask.make({ taskId: productionClaimIdentity.plannedAttempt.taskId })
-          )
+          productionState.setCompletionClaimMarkerAbsent()
           productionState.invokeDeletion("Applied")
           updatePromoted((subject) => ({
             ...subject,

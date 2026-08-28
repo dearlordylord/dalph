@@ -21,6 +21,7 @@ import {
   completionClaimDeletionRequestFor,
   completionClaimReadRequestFor,
   completionClaimReplacementRequestFor,
+  completionOriginalTaskClaimReleaseFor,
   completionTaskFocusedReadPurposeEquals,
   PostPromotionBlockerCandidateAncestryObservedEvent,
   PostPromotionBlockerCandidateAncestryReadIntendedEvent,
@@ -346,7 +347,7 @@ effectIt.effect("fails closed for absent or foreign claims and preserves exact b
   })
 )
 
-effectIt.effect("recognizes an exact completion claim, deletes it, and makes repeated absence harmless", () =>
+effectIt.effect("deletes only the completion marker and keeps both record deletions idempotent", () =>
   Effect.gen(function* () {
     const replacement = completionClaimReplacementRequestFor(fixture.claim)
     const deletion = completionClaimDeletionRequestFor(fixture.claim, fixture.successObservation)
@@ -358,12 +359,15 @@ effectIt.effect("recognizes an exact completion claim, deletes it, and makes rep
         const replayed = yield* boundary.replaceTaskClaim(replacement)
         yield* boundary.deleteTaskClaim(deletion)
         yield* boundary.deleteTaskClaim(deletion)
+        const activeAfterMarkerDelete = yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))
+        yield* boundary.releaseOriginalTaskClaim(completionOriginalTaskClaimReleaseFor(fixture.claim))
         const absent = yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))
-        return { absent, replaced, replayed }
+        return { absent, activeAfterMarkerDelete, replaced, replayed }
       })
     )
     expect(observations.replaced).toEqual(fixture.claim)
     expect(observations.replayed).toEqual(fixture.claim)
+    expect(observations.activeAfterMarkerDelete).toEqual(fixture.activeClaim)
     expect(observations.absent._tag).toBe("UnclaimedTask")
   })
 )

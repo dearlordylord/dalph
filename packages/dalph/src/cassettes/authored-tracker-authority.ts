@@ -2,12 +2,15 @@ import { Effect, Layer, Match, Option, Ref } from "effect"
 import type { TaskId } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
+  CompletionClaimMarkerAbsent,
   CompletionTaskAcknowledgement,
   CompletionTaskBoundary,
   type CompletionTaskRequest,
   CompletionTaskRequestFailure,
   CompletionTaskRequestLookup,
   type CompletionClaimObservation,
+  type CompletionClaimMarkerObservation,
+  type CompletionClaimReadRequest,
   completionTaskClaimEquals,
   isExactTaskClaim,
   OperationId,
@@ -24,6 +27,31 @@ import { AuthoredCassetteInteractionMismatch, type StoryCursor } from "./authore
 type AuthoredInteractionMismatchReporter = (failure: AuthoredCassetteInteractionMismatch) => Effect.Effect<void>
 type AuthoredAcquisitionOperationLookup = (operationId: OperationId) => Effect.Effect<Option.Option<TaskId>>
 type AuthoredBeforeCompletionTask = (request: CompletionTaskRequest) => Effect.Effect<void>
+type ExactAuthoredCompletionObservation = Exclude<
+  CompletionClaimObservation | CompletionClaimMarkerObservation,
+  { readonly _tag: "ForeignCompletionClaim" }
+>
+
+const authoredCompletionClaimKind = (
+  observation: ExactAuthoredCompletionObservation
+): "Active" | "CompletionMarker" | "CompletionMarkerAbsent" | "Unclaimed" => {
+  if (observation._tag === "CompletionTaskClaim") return "CompletionMarker"
+  if (observation._tag === "CompletionClaimMarkerAbsent") return "CompletionMarkerAbsent"
+  return observation._tag === "ActiveTaskClaim" ? "Active" : "Unclaimed"
+}
+
+const authoredCompletionClaimIsExact = (
+  observation: ExactAuthoredCompletionObservation,
+  request: CompletionClaimReadRequest
+): boolean => {
+  if (observation._tag === "CompletionTaskClaim") {
+    return completionTaskClaimEquals(observation, request.expectedClaim)
+  }
+  if (observation._tag === "ActiveTaskClaim") {
+    return isExactTaskClaim(observation, request.expectedClaim.originalClaim)
+  }
+  return true
+}
 
 interface ControlledTrackerAuthorityOptions {
   readonly reportInteractionMismatch?: AuthoredInteractionMismatchReporter
@@ -48,26 +76,35 @@ export const controlledTrackerAuthorityLayer = (
       const reportInteractionMismatch = options.reportInteractionMismatch ?? (() => Effect.void)
       const lookupAcquisitionOperationTask =
         options.lookupAcquisitionOperationTask ?? (() => Effect.succeed(Option.none()))
-      const authoredObservations = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimObservation>>(new Map())
+      const authoredObservations = yield* Ref.make<ReadonlyMap<TaskId, TaskClaimObservation>>(new Map())
+      const completionObservations = yield* Ref.make<
+        ReadonlyMap<
+          TaskId,
+          Extract<CompletionClaimObservation, { readonly _tag: "CompletionTaskClaim" | "ForeignCompletionClaim" }>
+        >
+      >(new Map())
       const currentObservation: TrackerMutation["Service"]["readTaskClaim"] = (taskId) =>
         Ref.get(authoredObservations).pipe(
           Effect.flatMap((observations) => {
             const observation = observations.get(taskId)
             if (observation === undefined) return tracker.readTaskClaim(taskId)
-            /* v8 ignore start -- @preserve Production planning never routes an active-claim read through a task whose completion-finality protocol owns the current claim. */
-            return observation._tag === "CompletionTaskClaim" || observation._tag === "ForeignCompletionClaim"
-              ? Effect.fail(
-                  new TaskClaimReadFailure({
-                    detail: "the task currently has a promotion-correlated completion claim",
-                    taskId
-                  })
-                )
-              : Effect.succeed(observation)
-            /* v8 ignore stop -- @preserve */
+            return Effect.succeed(observation)
           })
         )
-      const setObservation = (taskId: TaskId, observation: CompletionClaimObservation) =>
+      const setObservation = (taskId: TaskId, observation: TaskClaimObservation) =>
         Ref.update(authoredObservations, (observations) => new Map(observations).set(taskId, observation))
+      const setCompletionObservation = (
+        taskId: TaskId,
+        observation: Extract<
+          CompletionClaimObservation,
+          { readonly _tag: "CompletionTaskClaim" | "ForeignCompletionClaim" }
+        >
+      ) => Ref.update(completionObservations, (observations) => new Map(observations).set(taskId, observation))
+      const removeCompletionObservation = (taskId: TaskId) =>
+        Ref.update(
+          completionObservations,
+          (observations) => new Map([...observations].filter(([candidate]) => candidate !== taskId))
+        )
       const applyAuthoredObservation = (observation: TaskClaimObservation) =>
         Effect.gen(function* () {
           if (observation._tag === "UnclaimedTask") {
@@ -164,11 +201,6 @@ export const controlledTrackerAuthorityLayer = (
               if (observed._tag === "UnclaimedTask") {
                 return applyAcquisition(acquisition)
               }
-              /* v8 ignore start -- @preserve A completion claim retains integration-finality ownership and cannot return to fresh task acquisition. */
-              if (observed._tag === "CompletionTaskClaim" || observed._tag === "ForeignCompletionClaim") {
-                return Effect.die(`authored tracker cannot acquire ${acquisition.taskId} over completion evidence`)
-              }
-              /* v8 ignore stop -- @preserve */
               return isExactTaskClaim(observed, attempted)
                 ? Effect.succeed(observed)
                 : Effect.fail(new TaskClaimConflict({ attempted: acquisition, observed }))
@@ -188,11 +220,6 @@ export const controlledTrackerAuthorityLayer = (
                       setObservation(release.claim.taskId, UnclaimedTask.make({ taskId: release.claim.taskId }))
                     )
                   )
-              }
-              if (observed._tag === "CompletionTaskClaim" || observed._tag === "ForeignCompletionClaim") {
-                return Effect.die(
-                  `authored tracker cannot release active claim ${release.claim.taskId} over completion evidence`
-                )
               }
               if (observed._tag === "UnclaimedTask") {
                 return Effect.fail(new TaskClaimOwnershipConflict({ attempted: release.claim, observed }))
@@ -225,42 +252,54 @@ export const controlledTrackerAuthorityLayer = (
         }
         /* v8 ignore stop -- @preserve */
       })
-      const currentCompletionObservation = (taskId: TaskId) =>
-        Ref.get(authoredObservations).pipe(
-          Effect.flatMap((observations) => {
-            const observation = observations.get(taskId)
-            /* v8 ignore next -- @preserve Completion-finality cassette reads follow the authored replacement that establishes the controlled observation. */
-            return observation === undefined ? tracker.readTaskClaim(taskId) : Effect.succeed(observation)
-          })
-        )
+      const currentCompletionObservation = (
+        taskId: TaskId
+      ): Effect.Effect<CompletionClaimObservation, TaskClaimReadFailure> =>
+        Effect.gen(function* () {
+          const completion = (yield* Ref.get(completionObservations)).get(taskId)
+          return completion ?? (yield* currentObservation(taskId))
+        })
+      const validateAuthoredCompletionRead = Effect.fn("AuthoredTrackerAuthority.validateCompletionClaimRead")(
+        function* <Observation extends CompletionClaimObservation | CompletionClaimMarkerObservation>(
+          request: CompletionClaimReadRequest,
+          current: Observation
+        ) {
+          const returned = yield* cursor.consumeCompletionClaimReadReturned.pipe(Effect.orDie)
+          /* v8 ignore start -- @preserve The authored finality chronology binds every controlled response to the production-requested task. */
+          if (returned.taskId !== request.taskId) {
+            return yield* Effect.die(
+              `authored completion-claim read returned ${returned.taskId} while reading ${request.taskId}`
+            )
+          }
+          if (current._tag === "ForeignCompletionClaim") {
+            return yield* Effect.die(
+              `authored completion-claim read expected ${returned.claim} for ${request.taskId}, received ${current._tag}`
+            )
+          }
+          const kind = authoredCompletionClaimKind(current)
+          const exact = authoredCompletionClaimIsExact(current, request)
+          if (kind !== returned.claim || !exact) {
+            return yield* Effect.die(
+              `authored completion-claim read expected exact ${returned.claim} for ${request.taskId}, received ${current._tag}`
+            )
+          }
+          /* v8 ignore stop -- @preserve */
+          return current
+        }
+      )
       const completionClaimBoundary = CompletionClaimBoundary.of({
+        readOriginalTaskClaim: readTaskClaim,
         readTaskClaim: (request) =>
           Effect.gen(function* () {
-            const returned = yield* cursor.consumeCompletionClaimReadReturned.pipe(Effect.orDie)
-            /* v8 ignore start -- @preserve The authored finality chronology binds every controlled response to the production-requested task. */
-            if (returned.taskId !== request.taskId) {
-              return yield* Effect.die(
-                `authored completion-claim read returned ${returned.taskId} while reading ${request.taskId}`
-              )
-            }
             const current = yield* currentCompletionObservation(request.taskId).pipe(Effect.orDie)
-            if (current._tag === "UnclaimedTask" || current._tag === "ForeignCompletionClaim") {
-              return yield* Effect.die(
-                `authored completion-claim read expected ${returned.claim} for ${request.taskId}, received ${current._tag}`
-              )
-            }
-            const kind = current._tag === "CompletionTaskClaim" ? "Completion" : "Active"
-            const exact =
-              current._tag === "CompletionTaskClaim"
-                ? completionTaskClaimEquals(current, request.expectedClaim)
-                : isExactTaskClaim(current, request.expectedClaim.originalClaim)
-            if (kind !== returned.claim || !exact) {
-              return yield* Effect.die(
-                `authored completion-claim read expected exact ${returned.claim} for ${request.taskId}, received ${current._tag}`
-              )
-            }
-            /* v8 ignore stop -- @preserve */
-            return current
+            return yield* validateAuthoredCompletionRead(request, current)
+          }),
+        readCompletionClaimMarker: (request) =>
+          Effect.gen(function* () {
+            const current =
+              (yield* Ref.get(completionObservations)).get(request.taskId) ??
+              CompletionClaimMarkerAbsent.make({ taskId: request.taskId })
+            return yield* validateAuthoredCompletionRead(request, current)
           }),
         replaceTaskClaim: (request) =>
           Effect.gen(function* () {
@@ -277,9 +316,13 @@ export const controlledTrackerAuthorityLayer = (
               return yield* Effect.die(`authored completion-claim replacement lacked exact active claim ${taskId}`)
             }
             /* v8 ignore stop -- @preserve */
-            yield* setObservation(taskId, request.claim)
+            yield* setCompletionObservation(taskId, request.claim)
             return request.claim
           }),
+        releaseOriginalTaskClaim: (release) =>
+          cursor
+            .consumeDalphSelectionFor({ _tag: "ReleaseTaskClaim", taskId: release.claim.taskId })
+            .pipe(Effect.orDie, Effect.andThen(trackerMutation.releaseTaskClaim(release))),
         deleteTaskClaim: (request) =>
           Effect.gen(function* () {
             const applied = yield* cursor.consumeCompletionClaimDeletionApplied.pipe(Effect.orDie)
@@ -295,7 +338,7 @@ export const controlledTrackerAuthorityLayer = (
               return yield* Effect.die(`authored completion-claim deletion lacked exact completion claim ${taskId}`)
             }
             /* v8 ignore stop -- @preserve */
-            yield* setObservation(taskId, UnclaimedTask.make({ taskId }))
+            yield* removeCompletionObservation(taskId)
           })
       })
       const completionTaskBoundary = CompletionTaskBoundary.of({

@@ -1,12 +1,18 @@
 import type { TaskId } from "@dalph/contracts"
 import { Effect, Layer, Ref } from "effect"
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
-import { UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
+import {
+  controlledTrackerMutationLayerFrom,
+  TrackerMutation
+} from "../../../authorities/task-tracker/claim-mutation.js"
 import type { OperationId } from "../../identity.js"
 import {
   CompletionClaimBoundary,
+  CompletionClaimMarkerAbsent,
   type CompletionClaimDeletionRequest,
   CompletionClaimDeletionFailure,
+  CompletionClaimReadFailure,
+  type CompletionClaimMarkerObservation,
   type CompletionClaimObservation,
   type CompletionClaimReadRequest,
   type CompletionClaimReplacementRequest,
@@ -31,42 +37,95 @@ export const controlledCompletionClaimBoundaryLayerFrom = (initial: ReadonlyArra
     Effect.gen(function* () {
       const taskIdOf = (claim: CompletionClaimObservation): TaskId =>
         claim._tag === "CompletionTaskClaim" ? claim.plannedAttempt.taskId : claim.taskId
-      const claims = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimObservation>>(
-        new Map(initial.map((claim) => [taskIdOf(claim), claim] as const))
+      const completionClaims = yield* Ref.make<
+        ReadonlyMap<
+          TaskId,
+          Extract<CompletionClaimMarkerObservation, { readonly _tag: "CompletionTaskClaim" | "ForeignCompletionClaim" }>
+        >
+      >(
+        new Map(
+          initial.flatMap((claim) =>
+            claim._tag === "CompletionTaskClaim" || claim._tag === "ForeignCompletionClaim"
+              ? ([[taskIdOf(claim), claim]] as const)
+              : []
+          )
+        )
       )
+      const activeClaimLayer = controlledTrackerMutationLayerFrom(
+        initial.flatMap((claim) =>
+          claim._tag === "ActiveTaskClaim" ? [claim] : claim._tag === "CompletionTaskClaim" ? [claim.originalClaim] : []
+        )
+      )
+      const activeClaims = yield* TrackerMutation.pipe(Effect.provide(activeClaimLayer))
+      const readOriginalTaskClaim = activeClaims.readTaskClaim
+      const releaseOriginalTaskClaim = activeClaims.releaseTaskClaim
       const readTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.readTaskClaim")(function* (
         request: CompletionClaimReadRequest
       ) {
-        const current = (yield* Ref.get(claims)).get(request.taskId)
-        return current ?? UnclaimedTask.make({ taskId: request.taskId })
+        const active = yield* readOriginalTaskClaim(request.taskId).pipe(
+          Effect.mapError((cause) => new CompletionClaimReadFailure({ detail: cause.detail, taskId: request.taskId }))
+        )
+        if (active._tag === "ActiveTaskClaim" && !isExactTaskClaim(active, request.expectedClaim.originalClaim)) {
+          return active
+        }
+        const completion = (yield* Ref.get(completionClaims)).get(request.taskId)
+        return completion ?? active
       })
+      const readCompletionClaimMarker = Effect.fn("CompletionClaimBoundary.Controlled.readCompletionClaimMarker")(
+        function* (request: CompletionClaimReadRequest) {
+          return (
+            (yield* Ref.get(completionClaims)).get(request.taskId) ??
+            CompletionClaimMarkerAbsent.make({ taskId: request.taskId })
+          )
+        }
+      )
       const replaceTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.replaceTaskClaim")(function* (
         request: CompletionClaimReplacementRequest
       ) {
-        const current = (yield* Ref.get(claims)).get(request.claim.plannedAttempt.taskId)
-        if (current === undefined || current._tag === "UnclaimedTask") {
+        const currentCompletion = (yield* Ref.get(completionClaims)).get(request.claim.plannedAttempt.taskId)
+        if (
+          currentCompletion?._tag === "CompletionTaskClaim" &&
+          completionTaskClaimEquals(currentCompletion, request.claim)
+        ) {
+          return currentCompletion
+        }
+        if (currentCompletion !== undefined) {
+          return yield* new CompletionClaimReplacementFailure({
+            detail: "current completion claim is foreign",
+            outcome: "DefinitelyNotApplied",
+            request
+          })
+        }
+        const current = yield* readOriginalTaskClaim(request.claim.plannedAttempt.taskId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CompletionClaimReplacementFailure({ detail: cause.detail, outcome: "DefinitelyNotApplied", request })
+          )
+        )
+        if (current._tag === "UnclaimedTask") {
           return yield* new CompletionClaimReplacementFailure({
             detail: "active claim is absent",
             outcome: "DefinitelyNotApplied",
             request
           })
         }
-        if (current._tag === "CompletionTaskClaim" && completionTaskClaimEquals(current, request.claim)) return current
-        if (current._tag !== "ActiveTaskClaim" || !isExactTaskClaim(current, request.claim.originalClaim)) {
+        if (!isExactTaskClaim(current, request.claim.originalClaim)) {
           return yield* new CompletionClaimReplacementFailure({
             detail: "current claim is not the exact active claim",
             outcome: "DefinitelyNotApplied",
             request
           })
         }
-        yield* Ref.update(claims, (all) => new Map(all).set(request.claim.plannedAttempt.taskId, request.claim))
+        yield* Ref.update(completionClaims, (all) =>
+          new Map(all).set(request.claim.plannedAttempt.taskId, request.claim)
+        )
         return request.claim
       })
       const deleteTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.deleteTaskClaim")(function* (
         request: CompletionClaimDeletionRequest
       ) {
-        const current = (yield* Ref.get(claims)).get(request.claim.plannedAttempt.taskId)
-        if (current === undefined || current._tag === "UnclaimedTask") return
+        const current = (yield* Ref.get(completionClaims)).get(request.claim.plannedAttempt.taskId)
+        if (current === undefined) return
         if (current._tag !== "CompletionTaskClaim" || !completionTaskClaimEquals(current, request.claim)) {
           return yield* new CompletionClaimDeletionFailure({
             detail: "current claim is not the exact completion claim",
@@ -74,13 +133,20 @@ export const controlledCompletionClaimBoundaryLayerFrom = (initial: ReadonlyArra
             request
           })
         }
-        yield* Ref.update(claims, (all) => {
+        yield* Ref.update(completionClaims, (all) => {
           const next = new Map(all)
           next.delete(request.claim.plannedAttempt.taskId)
           return next
         })
       })
-      return CompletionClaimBoundary.of({ readTaskClaim, replaceTaskClaim, deleteTaskClaim })
+      return CompletionClaimBoundary.of({
+        deleteTaskClaim,
+        readCompletionClaimMarker,
+        readOriginalTaskClaim,
+        readTaskClaim,
+        releaseOriginalTaskClaim,
+        replaceTaskClaim
+      })
     })
   )
 

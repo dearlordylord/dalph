@@ -800,6 +800,24 @@ exact completion claim. It identifies evidence for comparison and cannot by
 itself reconstruct or authorize the claim.
 _Avoid_: Completion claim, claim token, task revision
 
+**Completion-claim cleanup disposition**:
+The recoverable, task-local removal of the two tracker records retained after
+fresh focused task success. Dalph first confirms that the exact completion
+claim still witnesses the cleanup, then records generic intent and confirms
+release of the exact original active claim. It deletes the exact completion
+claim only after a new marker read followed by a current active-record read
+that proves the original claim remains absent. Marker absence is not finality:
+after observing it, Dalph reads the current active record again, and only its
+fresh absence permits deletion evidence and settlement. A mutation
+acknowledgement is not an observation: after a lost response or restart, Dalph
+rereads the exact remaining record before deciding whether any request is
+still authorized. A missing original claim is acceptable only while the exact
+completion claim remains; a recreated exact active claim is a premise
+contradiction, while foreign, malformed, stale, or incomplete evidence
+authorizes no deletion.
+_Avoid_: Single-record claim deletion, acknowledged cleanup, reusable cleanup
+approval, foreign-claim repair
+
 **Planned task attempt**:
 One immutable Dalph decision to try one exact task revision fingerprint in one
 run from one exact Base SHA. It binds its attempt identity, branch ref,

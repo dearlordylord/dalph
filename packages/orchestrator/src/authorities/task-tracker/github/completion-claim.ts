@@ -2,6 +2,7 @@ import { Crypto, Effect, Layer, Schema } from "effect"
 import {
   CompletionClaimBoundary,
   CompletionClaimDeletionFailure,
+  CompletionClaimMarkerAbsent,
   CompletionClaimFingerprint,
   completionClaimReadRequestFor,
   CompletionClaimReadFailure,
@@ -15,11 +16,17 @@ import {
 import { isExactTaskClaim, TrackerMutation } from "../claim-mutation.js"
 import { githubTrackerMutationLayer } from "./claim-mutation.js"
 import { githubTaskClaimLabelDigestFor } from "./claim-label-identity.js"
-import { CreateClaimLabelResponse, FindClaimLabelResponse, GithubGraphqlErrors } from "./claim-label-response.js"
+import {
+  CreateClaimLabelResponse,
+  DeleteClaimLabelResponse,
+  FindClaimLabelResponse,
+  GithubGraphqlErrors
+} from "./claim-label-response.js"
 import { mapGithubMutationFailure } from "./mutation-throttling.js"
 import {
   GithubGraphqlClient,
   GithubGraphqlRequest,
+  type GithubLabelNodeId,
   GithubLabelName,
   type GithubRepositoryNodeId
 } from "./graphql-client.js"
@@ -137,7 +144,20 @@ const githubCompletionClaimBoundaryWithTrackerLayer = Layer.effect(
           taskId: request.taskId
         })
       }
-      return yield* fingerprintFromDescription(request, label.description)
+      return { fingerprint: yield* fingerprintFromDescription(request, label.description), labelId: label.id }
+    })
+
+    const classifyCompletionRecord = Effect.fn("GithubCompletionClaim.classifyCompletionRecord")(function* (
+      request: CompletionClaimReadRequest,
+      record: { readonly fingerprint: CompletionClaimFingerprint; readonly labelId: GithubLabelNodeId } | undefined
+    ) {
+      if (record === undefined) return CompletionClaimMarkerAbsent.make({ taskId: request.taskId })
+      const expectedFingerprint = yield* githubCompletionClaimFingerprintFor(crypto, request.expectedClaim).pipe(
+        Effect.mapError((cause) => new CompletionClaimReadFailure({ detail: cause.detail, taskId: request.taskId }))
+      )
+      return record.fingerprint === expectedFingerprint
+        ? request.expectedClaim
+        : ForeignCompletionClaim.make({ fingerprint: record.fingerprint, taskId: request.taskId })
     })
 
     const readTaskClaim = Effect.fn("GithubCompletionClaim.readTaskClaim")(function* (
@@ -151,17 +171,21 @@ const githubCompletionClaimBoundaryWithTrackerLayer = Layer.effect(
         .pipe(
           Effect.mapError((cause) => new CompletionClaimReadFailure({ detail: cause.detail, taskId: request.taskId }))
         )
-      const completionFingerprint = yield* readCompletionFingerprint(request, repositoryNodeId)
+      const completionRecord = yield* readCompletionFingerprint(request, repositoryNodeId)
       if (active._tag === "ActiveTaskClaim" && !isExactTaskClaim(active, request.expectedClaim.originalClaim)) {
         return active
       }
-      if (completionFingerprint === undefined) return active
-      const expectedFingerprint = yield* githubCompletionClaimFingerprintFor(crypto, request.expectedClaim).pipe(
+      const marker = yield* classifyCompletionRecord(request, completionRecord)
+      return marker._tag === "CompletionClaimMarkerAbsent" ? active : marker
+    })
+
+    const readCompletionClaimMarker = Effect.fn("GithubCompletionClaim.readCompletionClaimMarker")(function* (
+      request: CompletionClaimReadRequest
+    ) {
+      const [repositoryNodeId] = yield* githubTaskCoordinatesFor(request.taskId).pipe(
         Effect.mapError((cause) => new CompletionClaimReadFailure({ detail: cause.detail, taskId: request.taskId }))
       )
-      return completionFingerprint === expectedFingerprint
-        ? request.expectedClaim
-        : ForeignCompletionClaim.make({ fingerprint: completionFingerprint, taskId: request.taskId })
+      return yield* classifyCompletionRecord(request, yield* readCompletionFingerprint(request, repositoryNodeId))
     })
 
     const replaceTaskClaim = Effect.fn("GithubCompletionClaim.replaceTaskClaim")(function* (
@@ -236,14 +260,83 @@ const githubCompletionClaimBoundaryWithTrackerLayer = Layer.effect(
     const deleteTaskClaim = Effect.fn("GithubCompletionClaim.deleteTaskClaim")(function* (
       request: CompletionClaimDeletionRequest
     ) {
-      return yield* new CompletionClaimDeletionFailure({
-        detail: "GitHub completion-claim deletion is outside issue #282's create protocol slice",
-        outcome: "DefinitelyNotApplied",
-        request
-      })
+      const readRequest = completionClaimReadRequestFor(request.claim)
+      const [repositoryNodeId] = yield* githubTaskCoordinatesFor(readRequest.taskId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new CompletionClaimDeletionFailure({ detail: cause.detail, outcome: "DefinitelyNotApplied", request })
+        )
+      )
+      const record = yield* readCompletionFingerprint(readRequest, repositoryNodeId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new CompletionClaimDeletionFailure({ detail: cause.detail, outcome: "DefinitelyNotApplied", request })
+        )
+      )
+      if (record === undefined) return
+      const expectedFingerprint = yield* githubCompletionClaimFingerprintFor(crypto, request.claim).pipe(
+        Effect.mapError(
+          (cause) =>
+            new CompletionClaimDeletionFailure({ detail: cause.detail, outcome: "DefinitelyNotApplied", request })
+        )
+      )
+      if (record.fingerprint !== expectedFingerprint) {
+        return yield* new CompletionClaimDeletionFailure({
+          detail: "GitHub completion claim label no longer names the exact expected claim",
+          outcome: "DefinitelyNotApplied",
+          request
+        })
+      }
+      const response = yield* client
+        .execute(
+          GithubGraphqlRequest.cases.DeleteClaimLabel.make({
+            labelNodeId: record.labelId,
+            operationId: request.operationId
+          })
+        )
+        .pipe(
+          Effect.mapError(
+            mapGithubMutationFailure(
+              "DeleteCompletionClaim",
+              request.operationId,
+              (cause) => new CompletionClaimDeletionFailure({ detail: cause.detail, outcome: "Unknown", request })
+            )
+          )
+        )
+      const header = yield* Schema.decodeUnknownEffect(GithubGraphqlErrors)(response.body).pipe(
+        Effect.mapError(
+          (cause) => new CompletionClaimDeletionFailure({ detail: String(cause), outcome: "Unknown", request })
+        )
+      )
+      if (header.errors !== undefined && header.errors.length > 0) {
+        return yield* new CompletionClaimDeletionFailure({
+          detail: header.errors.map(({ message }) => message).join("; "),
+          outcome: "Unknown",
+          request
+        })
+      }
+      const acknowledgement = yield* Schema.decodeUnknownEffect(DeleteClaimLabelResponse)(response.body).pipe(
+        Effect.mapError(
+          (cause) => new CompletionClaimDeletionFailure({ detail: String(cause), outcome: "Unknown", request })
+        )
+      )
+      if (acknowledgement.data.deleteLabel.clientMutationId !== request.operationId) {
+        return yield* new CompletionClaimDeletionFailure({
+          detail: "GitHub did not acknowledge the exact completion claim deletion operation",
+          outcome: "Unknown",
+          request
+        })
+      }
     })
 
-    return CompletionClaimBoundary.of({ deleteTaskClaim, readTaskClaim, replaceTaskClaim })
+    return CompletionClaimBoundary.of({
+      deleteTaskClaim,
+      readCompletionClaimMarker,
+      readOriginalTaskClaim: activeClaims.readTaskClaim,
+      readTaskClaim,
+      releaseOriginalTaskClaim: activeClaims.releaseTaskClaim,
+      replaceTaskClaim
+    })
   })
 )
 
