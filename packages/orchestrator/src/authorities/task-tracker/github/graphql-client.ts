@@ -5,6 +5,15 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
 import { GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
 import { OperationId } from "../../../workflow/identity.js"
+import {
+  GithubGraphqlOperation,
+  githubGraphqlForbiddenStatus,
+  type GithubGraphqlThrottled,
+  githubGraphqlThrottleFromResponse,
+  githubGraphqlTooManyRequestsStatus
+} from "./graphql-throttling.js"
+
+export { GithubGraphqlThrottled } from "./graphql-throttling.js"
 
 /** Identifies one GitHub issue node at the provider boundary, not a tracker-neutral task. */
 export const GithubIssueNodeId = Schema.NonEmptyString.pipe(Schema.brand("GithubIssueNodeId"))
@@ -59,32 +68,15 @@ export type GithubGraphqlRequest = typeof GithubGraphqlRequest.Type
 export const GithubGraphqlResponse = Schema.Struct({ body: Schema.Unknown })
 export type GithubGraphqlResponse = typeof GithubGraphqlResponse.Type
 
-const GithubGraphqlOperation = Schema.Literals([
-  "AddBlockedBy",
-  "AddIssueComment",
-  "AddSubIssue",
-  "CloseIssue",
-  "CreateClaimLabel",
-  "CreateIssue",
-  "DeleteIssue",
-  "DeleteClaimLabel",
-  "FindClaimLabel",
-  "ReadBlockedBy",
-  "ReadIssueDetails",
-  "ReadIssue",
-  "ReadSubIssues",
-  "ReopenIssue",
-  "ResolveRepository",
-  "ResolveIssue"
-])
-
 export class GithubGraphqlRequestError extends Schema.TaggedError<GithubGraphqlRequestError>()(
   "GithubGraphqlClient.RequestError",
   { detail: Schema.String, operation: GithubGraphqlOperation }
 ) {}
 
 interface GithubGraphqlClientService {
-  readonly execute: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError>
+  readonly execute: (
+    request: GithubGraphqlRequest
+  ) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlThrottled>
 }
 
 /** Executes authenticated GitHub GraphQL requests; adapter services retain domain authority. */
@@ -328,6 +320,38 @@ const requestBody = (
 const requestError = (operation: typeof GithubGraphqlOperation.Type, cause: unknown) =>
   new GithubGraphqlRequestError({ detail: String(cause), operation })
 
+const ensureResponseCanHaveGraphqlBody = Effect.fn("GithubGraphqlClient.ensureResponseCanHaveGraphqlBody")(function* (
+  operation: typeof GithubGraphqlOperation.Type,
+  response: HttpClientResponse.HttpClientResponse
+) {
+  // A 403 body can distinguish an explicit secondary limit from exhausted
+  // primary-limit headers, so parse it before choosing between those kinds.
+  if (response.status === githubGraphqlTooManyRequestsStatus) {
+    const tooManyRequests = githubGraphqlThrottleFromResponse(operation, response)
+    if (tooManyRequests !== undefined) return yield* tooManyRequests
+  }
+  if (response.status === githubGraphqlForbiddenStatus) return
+  yield* HttpClientResponse.filterStatusOk(response).pipe(Effect.mapError((cause) => requestError(operation, cause)))
+})
+
+const decodeGraphqlResponse = Effect.fn("GithubGraphqlClient.decodeResponse")(function* (
+  operation: typeof GithubGraphqlOperation.Type,
+  response: HttpClientResponse.HttpClientResponse
+) {
+  yield* ensureResponseCanHaveGraphqlBody(operation, response)
+  const bodyResult = yield* response.json.pipe(Effect.result)
+  if (bodyResult._tag === "Failure") {
+    const headerThrottle = githubGraphqlThrottleFromResponse(operation, response)
+    if (headerThrottle !== undefined) return yield* headerThrottle
+    yield* HttpClientResponse.filterStatusOk(response).pipe(Effect.mapError((cause) => requestError(operation, cause)))
+    return yield* requestError(operation, bodyResult.failure)
+  }
+  const bodyThrottle = githubGraphqlThrottleFromResponse(operation, response, bodyResult.success)
+  if (bodyThrottle !== undefined) return yield* bodyThrottle
+  yield* HttpClientResponse.filterStatusOk(response).pipe(Effect.mapError((cause) => requestError(operation, cause)))
+  return GithubGraphqlResponse.make({ body: bodyResult.success })
+})
+
 const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (token: Redacted.Redacted<string>) {
   const httpClient = yield* HttpClient.HttpClient
   const execute = Effect.fn("GithubGraphqlClient.execute")(function* (request: GithubGraphqlRequest) {
@@ -338,12 +362,10 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (token: Redac
       HttpClientRequest.setHeader("x-github-next-global-id", nextGlobalIdHeaderValue),
       HttpClientRequest.bodyJsonUnsafe(requestBody(request))
     )
-    const response = yield* httpClient.execute(httpRequest).pipe(
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
-      Effect.mapError((cause) => requestError(request._tag, cause))
-    )
-    const body = yield* response.json.pipe(Effect.mapError((cause) => requestError(request._tag, cause)))
-    return GithubGraphqlResponse.make({ body })
+    const response = yield* httpClient
+      .execute(httpRequest)
+      .pipe(Effect.mapError((cause) => requestError(request._tag, cause)))
+    return yield* decodeGraphqlResponse(request._tag, response)
   })
 
   return GithubGraphqlClient.of({ execute })

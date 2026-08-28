@@ -42,6 +42,7 @@ import {
   type CompletionClaimObservation,
   type CompletionClaimBoundaryService
 } from "./events.js"
+import { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 import { targetPromotionCorrelationEquals } from "../target-promotion/events.js"
 import { OperationId } from "../../identity.js"
 import { latestFocusedCompletedTaskObservationFor } from "./state.js"
@@ -324,8 +325,9 @@ const appendReplacementOutcome = Effect.fn("IntegrationFinality.appendReplacemen
 })
 
 const replacementFailureResult = Effect.fn("IntegrationFinality.replacementFailureResult")(function* (
-  failure: CompletionClaimReplacementFailure
+  failure: CompletionClaimReplacementFailure | TaskTrackerMutationThrottled
 ) {
+  if (failure instanceof TaskTrackerMutationThrottled) return yield* failure
   /* v8 ignore next -- @preserve Maintained cassettes cover ambiguous loss; this exact typed provider rejection is terminal and performs no retry. */
   if (failure.outcome === "DefinitelyNotApplied") return yield* failure
   return undefined
@@ -488,8 +490,9 @@ const appendDeletionOutcomeAndSettlement = Effect.fn("IntegrationFinality.append
 )
 
 const deletionFailureResult = Effect.fn("IntegrationFinality.deletionFailureResult")(function* (
-  failure: CompletionClaimDeletionFailure
+  failure: CompletionClaimDeletionFailure | TaskTrackerMutationThrottled
 ) {
+  if (failure instanceof TaskTrackerMutationThrottled) return yield* failure
   /* v8 ignore next -- @preserve Maintained cassettes cover ambiguous loss; definite rejection is a terminal typed boundary result. */
   if (failure.outcome === "DefinitelyNotApplied") return yield* failure
   return undefined

@@ -3,7 +3,7 @@ import { it } from "@effect/vitest"
 import { Context, Crypto, Effect, Layer, Match, PlatformError, Ref } from "effect"
 import { expect } from "vitest"
 import type { GithubGraphqlRequest, GithubGraphqlResponse } from "./graphql-client.js"
-import { GithubGraphqlRequestError } from "./graphql-client.js"
+import { GithubGraphqlRequestError, GithubGraphqlThrottled } from "./graphql-client.js"
 import { githubTaskIdFor } from "./task-identity.js"
 import { TaskId } from "@dalph/contracts"
 import {
@@ -22,6 +22,9 @@ import {
   TaskClaimReadFailure,
   TaskClaimReleaseFailure,
   TaskClaimRequestFailure,
+  TaskTrackerMutationThrottled,
+  TaskTrackerThrottleRetry,
+  TaskTrackerThrottleRetryAfterSeconds,
   TrackerMutation
 } from "../../../index.js"
 import {
@@ -107,7 +110,9 @@ const layer = githubTrackerMutationLayer.pipe(Layer.provide(githubClaimFixtureLa
 trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })
 
 const adapterLayer = (
-  execute: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError>
+  execute: (
+    request: GithubGraphqlRequest
+  ) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlThrottled>
 ) =>
   githubTrackerMutationLayer.pipe(
     Layer.provide(Layer.succeed(GithubGraphqlClient, GithubGraphqlClient.of({ execute }))),
@@ -264,6 +269,29 @@ it.effect("maps malformed and failed GitHub observations to typed read failures"
     }).pipe(Effect.provide(transportLayer))
     expect(transportFailure).toBeInstanceOf(TaskClaimReadFailure)
 
+    const throttledReadCalls = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest["_tag"]>>([])
+    const throttleDetail = "GitHub primary rate limit rejected the GraphQL request"
+    const throttledReadLayer = adapterLayer((request) =>
+      Ref.update(throttledReadCalls, (calls) => [...calls, request._tag]).pipe(
+        Effect.andThen(
+          Effect.fail(
+            new GithubGraphqlThrottled({
+              detail: throttleDetail,
+              kind: "Primary",
+              operation: request._tag,
+              retry: null
+            })
+          )
+        )
+      )
+    )
+    const throttledReadFailure = yield* Effect.gen(function* () {
+      const tracker = yield* TrackerMutation
+      return yield* tracker.readTaskClaim(taskId).pipe(Effect.flip)
+    }).pipe(Effect.provide(throttledReadLayer))
+    expect(throttledReadFailure).toEqual(new TaskClaimReadFailure({ detail: throttleDetail, taskId }))
+    expect(yield* Ref.get(throttledReadCalls)).toEqual(["FindClaimLabel"])
+
     const cryptoFailureLayer = githubTrackerMutationLayer.pipe(
       Layer.provide(
         Layer.succeed(GithubGraphqlClient, GithubGraphqlClient.of({ execute: () => Effect.die("unexpected request") }))
@@ -332,6 +360,77 @@ it.effect("classifies ambiguous create outcomes after a fresh observation", () =
     if (transportFailure instanceof TaskClaimRequestFailure) {
       expect(transportFailure.outcome).toBe("Unknown")
     }
+  })
+)
+
+it.effect("maps GitHub claim creation and release throttles without another mutation", () =>
+  Effect.gen(function* () {
+    const requested = acquisition("throttled", "throttled-token")
+    const retry = TaskTrackerThrottleRetry.cases.RetryAfter.make({
+      seconds: TaskTrackerThrottleRetryAfterSeconds.make(29)
+    })
+    const throttled = (operation: "CreateClaimLabel" | "DeleteClaimLabel") =>
+      new GithubGraphqlThrottled({
+        detail: "GitHub secondary rate limit rejected the GraphQL request",
+        kind: "Secondary",
+        operation,
+        retry
+      })
+
+    const createCalls = yield* Ref.make(0)
+    const createFailure = yield* Effect.gen(function* () {
+      const tracker = yield* TrackerMutation
+      return yield* tracker.acquireTaskClaim(requested).pipe(Effect.flip)
+    }).pipe(
+      Effect.provide(
+        adapterLayer((request) =>
+          request._tag === "CreateClaimLabel"
+            ? Ref.update(createCalls, (count) => count + 1).pipe(
+                Effect.andThen(Effect.fail(throttled("CreateClaimLabel")))
+              )
+            : Effect.die("unexpected claim-create request")
+        )
+      )
+    )
+    expect(createFailure).toEqual(
+      new TaskTrackerMutationThrottled({
+        detail: "GitHub secondary rate limit rejected the GraphQL request",
+        operation: "AcquireTaskClaim",
+        operationId: requested.operationId,
+        retry
+      })
+    )
+    expect(yield* Ref.get(createCalls)).toBe(1)
+
+    const claim = ActiveTaskClaim.make(requested)
+    const releaseOperationId = OperationId.make("throttled-release")
+    const deleteCalls = yield* Ref.make(0)
+    const releaseFailure = yield* Effect.gen(function* () {
+      const tracker = yield* TrackerMutation
+      return yield* tracker.releaseTaskClaim({ claim, operationId: releaseOperationId }).pipe(Effect.flip)
+    }).pipe(
+      Effect.provide(
+        adapterLayer((request) => {
+          if (request._tag === "FindClaimLabel") {
+            return Effect.succeed(findResponse(request, `1|${claim.operationId}|${claim.owner}|${claim.token}`))
+          }
+          return request._tag === "DeleteClaimLabel"
+            ? Ref.update(deleteCalls, (count) => count + 1).pipe(
+                Effect.andThen(Effect.fail(throttled("DeleteClaimLabel")))
+              )
+            : Effect.die("unexpected claim-release request")
+        })
+      )
+    )
+    expect(releaseFailure).toEqual(
+      new TaskTrackerMutationThrottled({
+        detail: "GitHub secondary rate limit rejected the GraphQL request",
+        operation: "ReleaseTaskClaim",
+        operationId: releaseOperationId,
+        retry
+      })
+    )
+    expect(yield* Ref.get(deleteCalls)).toBe(1)
   })
 )
 

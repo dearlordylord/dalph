@@ -1,5 +1,6 @@
 import { Effect, Schedule, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
+import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 import {
   ActiveTaskClaim,
   type ActiveTaskClaim as ActiveTaskClaimValue,
@@ -78,6 +79,7 @@ export const runTaskClaimAcquisitionProtocol = Effect.fn("TrackerMutation.runTas
         | TaskClaimConflict
         | TaskClaimReadFailure
         | TaskClaimRequestFailure
+        | TaskTrackerMutationThrottled
       > =>
         failure instanceof RepeatTaskClaimObservation
           ? Effect.gen(function* () {

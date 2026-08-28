@@ -22,6 +22,7 @@ import {
   UnclaimedTask
 } from "../claim-mutation.js"
 import type { TaskClaimAcquisition, TaskClaimRelease } from "../claim-mutation.js"
+import { mapGithubMutationFailure } from "./mutation-throttling.js"
 
 const githubTaskIdEncodingVersion = "t1."
 const GithubTaskCoordinates = Schema.Tuple([GithubRepositoryNodeId, GithubIssueNodeId])
@@ -204,7 +205,11 @@ export const githubTrackerMutationLayer = Layer.effect(
         )
         .pipe(
           Effect.mapError(
-            (cause) => new TaskClaimRequestFailure({ acquisition, detail: cause.detail, outcome: "Unknown" })
+            mapGithubMutationFailure(
+              "AcquireTaskClaim",
+              acquisition.operationId,
+              (cause) => new TaskClaimRequestFailure({ acquisition, detail: cause.detail, outcome: "Unknown" })
+            )
           )
         )
       const header = yield* Schema.decodeUnknownEffect(GraphqlErrors)(response.body).pipe(
@@ -245,7 +250,15 @@ export const githubTrackerMutationLayer = Layer.effect(
             operationId: release.operationId
           })
         )
-        .pipe(Effect.mapError((cause) => new TaskClaimReleaseFailure({ release, detail: cause.detail })))
+        .pipe(
+          Effect.mapError(
+            mapGithubMutationFailure(
+              "ReleaseTaskClaim",
+              release.operationId,
+              (cause) => new TaskClaimReleaseFailure({ release, detail: cause.detail })
+            )
+          )
+        )
       yield* Schema.decodeUnknownEffect(DeleteClaimLabelResponse)(response.body).pipe(
         Effect.mapError((cause) => new TaskClaimReleaseFailure({ release, detail: String(cause) }))
       )

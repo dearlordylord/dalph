@@ -61,6 +61,7 @@ import {
 } from "./completion-task-protocol.js"
 import { invalidCompletionTaskHistory } from "./completion-task-history.js"
 import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
+import { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 
 const encode = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
 
@@ -452,7 +453,7 @@ it.effect("reuses unresolved focused-read intents after restart", () =>
 )
 
 const protocolHarness = (
-  outcomes: ReadonlyArray<"Applied" | "DefinitelyRejected" | "UnknownNotApplied">,
+  outcomes: ReadonlyArray<"Applied" | "DefinitelyRejected" | "Throttled" | "UnknownNotApplied">,
   options: {
     readonly focusedLifecycle?: "CompletedSuccessfully" | "Open" | "TerminalWithoutSuccess"
     readonly lookup?: "Applied" | "NotApplied" | "Unreadable"
@@ -463,6 +464,7 @@ const protocolHarness = (
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const calls = yield* Ref.make(0)
+    const completionOperationIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
     const lookupCalls = yield* Ref.make(0)
     const focusedLifecycle = yield* Ref.make(options.focusedLifecycle ?? "Open")
     const remaining = yield* Ref.make([...outcomes])
@@ -471,10 +473,19 @@ const protocolHarness = (
         Effect.gen(function* () {
           yield* Ref.update(chronology, (current) => [...current, "Tracker.completeTask"])
           yield* Ref.update(calls, (count) => count + 1)
+          yield* Ref.update(completionOperationIds, (current) => [...current, request.operationId])
           const outcome = yield* Ref.modify(
             remaining,
             (current) => [current[0] ?? "Applied", current.slice(1)] as const
           )
+          if (outcome === "Throttled") {
+            return yield* new TaskTrackerMutationThrottled({
+              detail: "GitHub secondary rate limit rejected the GraphQL request",
+              operation: "CompleteTask",
+              operationId: request.operationId,
+              retry: null
+            })
+          }
           return outcome === "Applied"
             ? CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId })
             : yield* new CompletionTaskRequestFailure({
@@ -514,6 +525,7 @@ const protocolHarness = (
     return {
       calls: yield* Ref.get(calls),
       chronology: yield* Ref.get(chronology),
+      completionOperationIds: yield* Ref.get(completionOperationIds),
       lookupCalls: yield* Ref.get(lookupCalls),
       firstOutcome,
       outcome,
@@ -542,6 +554,51 @@ it.effect("restart returns the durable acknowledgement without another tracker c
     expect(result.firstOutcome._tag).toBe("Success")
     expect(result.outcome._tag).toBe("Success")
     expect(result.calls).toBe(1)
+  })
+)
+
+it.effect("completion task throttling bypasses Unknown reconciliation and the bounded retry loop", () =>
+  Effect.gen(function* () {
+    const result = yield* protocolHarness(["Throttled"])
+    expect(result.outcome._tag).toBe("Failure")
+    if (result.outcome._tag !== "Failure") return
+    expect(result.outcome.failure).toEqual(
+      new TaskTrackerMutationThrottled({
+        detail: "GitHub secondary rate limit rejected the GraphQL request",
+        operation: "CompleteTask",
+        operationId: fixture.completionRequest.operationId,
+        retry: null
+      })
+    )
+    expect(result.calls).toBe(1)
+    expect(result.lookupCalls).toBe(0)
+    expect(result.chronology).toEqual([
+      "Authorization.read",
+      "CompletionTaskIntended",
+      "CompletionTaskAttemptIntended",
+      "Tracker.completeTask"
+    ])
+  })
+)
+
+it.effect("restart reads owning completion facts before a later mutation with the same identity", () =>
+  Effect.gen(function* () {
+    const result = yield* protocolHarness(["Throttled", "Applied"], { reactivationFocusedLifecycle: "Open" })
+    expect(result.firstOutcome._tag).toBe("Failure")
+    expect(result.outcome._tag).toBe("Success")
+    expect(result.calls).toBe(2)
+    expect(result.lookupCalls).toBe(1)
+    expect(result.completionOperationIds).toEqual([
+      fixture.completionRequest.operationId,
+      fixture.completionRequest.operationId
+    ])
+    const firstMutation = result.chronology.indexOf("Tracker.completeTask")
+    const restartRead = result.chronology.indexOf("Tracker.readFocusedTaskCompletion")
+    const restartLookup = result.chronology.indexOf("Tracker.readCompletionRequest")
+    const laterMutation = result.chronology.lastIndexOf("Tracker.completeTask")
+    expect(firstMutation).toBeLessThan(restartRead)
+    expect(restartRead).toBeLessThan(restartLookup)
+    expect(restartLookup).toBeLessThan(laterMutation)
   })
 )
 

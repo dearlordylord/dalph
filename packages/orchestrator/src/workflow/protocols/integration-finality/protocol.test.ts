@@ -60,12 +60,13 @@ import { makeApplicationExitLifecycle } from "../../../coordination/application-
 import { InterruptibleWorkflowBoundaryIntent } from "../../interpretation/interpreter.js"
 import { CompletionClaimCleanupBoundaryCall } from "../../interpretation/interruptible-boundary.js"
 import { deriveIntegrationFinalityStateFor } from "./state.js"
+import { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 
 const deletionOperationFor = completionClaimDeletionOperationIdFor
 const replacementOperationFor = completionClaimReplacementOperationIdFor
 const firstCleanupReadOrdinal = CompletionClaimCleanupReadOrdinal.make(1)
 
-type MutationOutcome = "Applied" | "DefinitelyNotApplied" | "Unknown" | "UnknownApplied"
+type MutationOutcome = "Applied" | "DefinitelyNotApplied" | "Throttled" | "Unknown" | "UnknownApplied"
 
 const appendJournalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
   Layer.succeed(
@@ -270,6 +271,7 @@ const makeBoundary = (input: {
   readonly replacementCalls: Ref.Ref<number>
   readonly deletionCalls: Ref.Ref<number>
   readonly readCalls: Ref.Ref<number>
+  readonly chronology?: Ref.Ref<ReadonlyArray<"delete" | "read" | "replace">>
 }) =>
   (() => {
     let current = new Map<string, CompletionClaimObservation>(
@@ -280,14 +282,26 @@ const makeBoundary = (input: {
     )
     const replacements = [...(input.replacement ?? [])]
     const deletions = [...(input.deletion ?? [])]
+    const recordBoundaryCall = (call: "delete" | "read" | "replace") =>
+      input.chronology === undefined ? Effect.void : Ref.update(input.chronology, (current) => [...current, call])
     const readTaskClaim = (taskId: typeof fixture.taskId) =>
-      Ref.update(input.readCalls, (count) => count + 1).pipe(
+      recordBoundaryCall("read").pipe(
+        Effect.andThen(Ref.update(input.readCalls, (count) => count + 1)),
         Effect.map(() => current.get(String(taskId)) ?? { _tag: "UnclaimedTask" as const, taskId })
       )
     const replaceTaskClaim = (request: CompletionClaimReplacementRequest) =>
       Effect.gen(function* () {
+        yield* recordBoundaryCall("replace")
         yield* Ref.update(input.replacementCalls, (count) => count + 1)
         const step = replacements.shift() ?? "Applied"
+        if (step === "Throttled") {
+          return yield* new TaskTrackerMutationThrottled({
+            detail: "GitHub secondary rate limit rejected the GraphQL request",
+            operation: "ReplaceCompletionClaim",
+            operationId: request.operationId,
+            retry: null
+          })
+        }
         if (step === "DefinitelyNotApplied") {
           return yield* new CompletionClaimReplacementFailure({
             detail: "tracker rejected replacement",
@@ -309,8 +323,17 @@ const makeBoundary = (input: {
       })
     const deleteTaskClaim = (request: CompletionClaimDeletionRequest) =>
       Effect.gen(function* () {
+        yield* recordBoundaryCall("delete")
         yield* Ref.update(input.deletionCalls, (count) => count + 1)
         const step = deletions.shift() ?? "Applied"
+        if (step === "Throttled") {
+          return yield* new TaskTrackerMutationThrottled({
+            detail: "GitHub primary rate limit rejected the GraphQL request",
+            operation: "DeleteCompletionClaim",
+            operationId: request.operationId,
+            retry: null
+          })
+        }
         if (step === "DefinitelyNotApplied") {
           return yield* new CompletionClaimDeletionFailure({
             detail: "tracker rejected deletion",
@@ -432,6 +455,112 @@ it.effect("stops immediately after definite replacement or deletion rejection", 
     ).toBe("IntegrationFinality.CompletionClaimDeletionFailure")
     expect(yield* Ref.get(deletionCalls)).toBe(1)
   })
+)
+
+it.effect(
+  "completion claim replacement and deletion throttles each stop after one mutation and restart reads first",
+  () =>
+    Effect.gen(function* () {
+      const replacementRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+      const replacementCalls = yield* Ref.make(0)
+      const deletionCalls = yield* Ref.make(0)
+      const readCalls = yield* Ref.make(0)
+      const replacementChronology = yield* Ref.make<ReadonlyArray<"delete" | "read" | "replace">>([])
+      const replacementRequest = completionClaimReplacementRequestFor(fixture.claim)
+      const throttledReplacement = makeBoundary({
+        chronology: replacementChronology,
+        deletionCalls,
+        initial: [fixture.activeClaim],
+        readCalls,
+        replacement: ["Throttled"],
+        replacementCalls
+      })
+
+      expect(
+        yield* runWith(
+          runCompletionClaimReplacementProtocol(throttledReplacement, replacementRequest).pipe(Effect.flip),
+          replacementRecords
+        )
+      ).toEqual(
+        new TaskTrackerMutationThrottled({
+          detail: "GitHub secondary rate limit rejected the GraphQL request",
+          operation: "ReplaceCompletionClaim",
+          operationId: replacementRequest.operationId,
+          retry: null
+        })
+      )
+      expect(yield* Ref.get(replacementCalls)).toBe(1)
+      expect(yield* Ref.get(replacementChronology)).toEqual(["read", "replace"])
+
+      yield* runWith(
+        runCompletionClaimReplacementProtocol(
+          makeBoundary({
+            chronology: replacementChronology,
+            deletionCalls,
+            initial: [fixture.activeClaim],
+            readCalls,
+            replacementCalls
+          }),
+          replacementRequest
+        ),
+        replacementRecords
+      )
+      expect(yield* Ref.get(replacementChronology)).toEqual(["read", "replace", "read", "replace"])
+      expect(yield* Ref.get(replacementCalls)).toBe(2)
+
+      const deletionRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        promotionRecord,
+        replacementRecord(),
+        ...focusedSuccessRecords
+      ])
+      const deletionChronology = yield* Ref.make<ReadonlyArray<"delete" | "read" | "replace">>([])
+      const deletionRequest = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
+      const throttledDeletion = makeBoundary({
+        chronology: deletionChronology,
+        deletion: ["Throttled"],
+        deletionCalls,
+        initial: [fixture.claim],
+        readCalls,
+        replacementCalls
+      })
+
+      expect(
+        yield* runWith(
+          runCompletionClaimDeletionProtocol(
+            throttledDeletion,
+            deletionRequest,
+            replacementOperationFor(fixture.claim)
+          ).pipe(Effect.flip),
+          deletionRecords
+        )
+      ).toEqual(
+        new TaskTrackerMutationThrottled({
+          detail: "GitHub primary rate limit rejected the GraphQL request",
+          operation: "DeleteCompletionClaim",
+          operationId: deletionRequest.operationId,
+          retry: null
+        })
+      )
+      expect(yield* Ref.get(deletionCalls)).toBe(1)
+      expect(yield* Ref.get(deletionChronology)).toEqual(["read", "delete"])
+
+      yield* runWith(
+        runCompletionClaimDeletionProtocol(
+          makeBoundary({
+            chronology: deletionChronology,
+            deletionCalls,
+            initial: [fixture.claim],
+            readCalls,
+            replacementCalls
+          }),
+          deletionRequest,
+          replacementOperationFor(fixture.claim)
+        ),
+        deletionRecords
+      )
+      expect(yield* Ref.get(deletionChronology)).toEqual(["read", "delete", "read", "delete"])
+      expect(yield* Ref.get(deletionCalls)).toBe(2)
+    })
 )
 
 it.effect("writes replacement intent first and reconciles an unknown response by a fresh claim read", () =>

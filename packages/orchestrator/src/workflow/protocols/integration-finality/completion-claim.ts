@@ -5,6 +5,7 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
+import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 import {
   TargetPromotionCorrelation,
   targetPromotionCorrelationEquals,
@@ -116,10 +117,10 @@ export interface CompletionClaimBoundaryService {
   readonly readTaskClaim: (taskId: TaskId) => Effect.Effect<CompletionClaimObservation, CompletionClaimReadFailure>
   readonly replaceTaskClaim: (
     request: CompletionClaimReplacementRequest
-  ) => Effect.Effect<CompletionTaskClaim, CompletionClaimReplacementFailure>
+  ) => Effect.Effect<CompletionTaskClaim, CompletionClaimReplacementFailure | TaskTrackerMutationThrottled>
   readonly deleteTaskClaim: (
     request: CompletionClaimDeletionRequest
-  ) => Effect.Effect<void, CompletionClaimDeletionFailure>
+  ) => Effect.Effect<void, CompletionClaimDeletionFailure | TaskTrackerMutationThrottled>
 }
 
 /** The ordinary Effect service for the task-tracker completion-claim boundary. */

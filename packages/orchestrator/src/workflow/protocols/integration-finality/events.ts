@@ -19,6 +19,7 @@ import {
 } from "./completion-claim.js"
 import type { FocusedTaskCompletionFacts } from "./focused-task-completion-facts.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
+import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 
 export * from "./completion-claim.js"
 export * from "./focused-task-completion-facts.js"
@@ -106,7 +107,7 @@ export interface CompletionTaskBoundaryService {
   ) => Effect.Effect<FocusedTaskCompletionFacts, FocusedTaskCompletionReadFailure>
   readonly completeTask: (
     request: CompletionTaskRequest
-  ) => Effect.Effect<CompletionTaskAcknowledgement, CompletionTaskRequestFailure>
+  ) => Effect.Effect<CompletionTaskAcknowledgement, CompletionTaskRequestFailure | TaskTrackerMutationThrottled>
   readonly readCompletionRequest: (
     request: CompletionTaskRequest
   ) => Effect.Effect<CompletionTaskRequestLookup, CompletionTaskRequestLookupFailure>

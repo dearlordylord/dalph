@@ -68,6 +68,7 @@ import {
   completionTaskFocusedReadOperationIdFor,
   completionTaskRequestLookupOperationIdFor
 } from "./completion-task-operation-identity.js"
+import { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 
 /** The authorization facts consumed by one completion request attempt. */
 export const CompletionTaskAuthorization = Schema.Struct({
@@ -905,8 +906,9 @@ const handleCompletionRequestFailure = Effect.fn("IntegrationFinality.handleComp
   request: CompletionTaskRequest,
   ordinal: CompletionTaskRequestOrdinal,
   target: TrackerTarget,
-  failure: CompletionTaskRequestFailure
+  failure: CompletionTaskRequestFailure | TaskTrackerMutationThrottled
 ) {
+  if (failure instanceof TaskTrackerMutationThrottled) return yield* failure
   if (failure.outcome !== "DefinitelyNotApplied") {
     const confirmed = yield* reconcileAmbiguousCompletionAttempt(boundary, request, ordinal, target)
     return confirmed === undefined ? ({ _tag: "Retry" } as const) : ({ _tag: "Completed", result: confirmed } as const)
