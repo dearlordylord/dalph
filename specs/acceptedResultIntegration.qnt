@@ -2898,4 +2898,36 @@ module acceptedResultIntegration {
     observeTargetFactsOne,
     observeIncompatibleTargetLineageOne,
   }
+
+  // The canonical sampler gives this long promotion chronology one additional
+  // exploration opportunity per step. Every branch remains an existing atomic
+  // protocol action; exhaustive verification and runtime semantics use `step`.
+  action promotionWitnessCoverageStep: bool = any {
+    acceptResultOne,
+    queueAcceptedResultOne,
+    startIntegrationOne,
+    fixIntegratorSessionOne,
+    invokeIntegratorOne,
+    reportIntegratorCandidateOne31,
+    recordCandidateGitReadIntentOne,
+    readCandidateGitOne,
+    observeExactCandidateOne,
+    offerPromotionPremiseOne,
+    recordPromotionIntentOne,
+    observePromotionExactExpectedHeadOne,
+    recordPromotionAttemptIntentOne,
+    sendPromotionAttemptOne,
+    losePromotionAttemptResponseOne,
+    recoverCoordinatorStep,
+    observeTrackerFactsStep,
+    observeTargetFactsOne,
+    reconcilePromotionOne,
+    reconcilePromotionReadOnlyOne,
+    resumePromotionRetryWithAuthorityOne,
+  }
+
+  action acceptedResultIntegrationSampleStep: bool = any {
+    promotionWitnessCoverageStep,
+    step,
+  }
 }

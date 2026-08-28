@@ -22,6 +22,7 @@ import {
 import { quintGateBatchResults, runQuintGateFamily } from "./quint-gate-concurrency.mjs"
 import { createQuintGateTiming, quintCommandKindForArgs, runWithQuintGateTiming } from "./quint-gate-timing.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { assertRequiredWitnessesObserved } from "./quint-witness-coverage.mjs"
 
 const pnpmEntryPoint = process.env.npm_execpath
 
@@ -885,7 +886,7 @@ await runWithQuintGateTiming({
       acceptedResultIntegrationQuarantineProofObligations.witnesses
 
     await run("accepted-result integration model typecheck", ["typecheck", "specs/acceptedResultIntegration.qnt"])
-    await runFamily([
+    const acceptedResultIntegrationResults = await runFamily([
       {
         name: "accepted-result integration deterministic tests",
         args: ["test", "specs/acceptedResultIntegration_test.qnt", "--main", "acceptedResultIntegrationTest"]
@@ -908,15 +909,20 @@ await runWithQuintGateTiming({
           ...acceptedResultIntegrationInvariants,
           "--witnesses",
           ...acceptedResultIntegrationWitnesses,
+          "--step",
+          "acceptedResultIntegrationSampleStep",
           "--max-steps",
-          "35",
+          "45",
           "--max-samples",
           "10000",
+          "--seed",
+          "270",
           "--verbosity",
           "1"
         ]
       }
     ])
+    assertRequiredWitnessesObserved(acceptedResultIntegrationResults[2].output, acceptedResultIntegrationWitnesses)
     // The canonical model retains the full accepted-result vocabulary, collected
     // scenarios, and sampled obligations. Its issue #68 quarantine product is
     // exhaustively enumerated by the subject-scoped projection below, as allowed
