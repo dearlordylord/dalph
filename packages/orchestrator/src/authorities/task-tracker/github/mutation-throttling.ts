@@ -15,6 +15,6 @@ export const mapGithubMutationFailure =
           detail: failure.detail,
           operation,
           operationId,
-          timingEvidence: failure.timingEvidence
+          retry: failure.timingEvidence
         })
       : otherwise(failure)

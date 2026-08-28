@@ -760,7 +760,7 @@ it.effect("stops the production GitHub claim composition after one controlled th
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         operation: "AcquireTaskClaim",
         operationId: acquisition.operationId,
-        timingEvidence: TaskTrackerThrottleTimingEvidence.cases.RetryAfter.make({
+        retry: TaskTrackerThrottleTimingEvidence.cases.RetryAfter.make({
           seconds: TaskTrackerThrottleRetryAfterSeconds.make(11)
         })
       })

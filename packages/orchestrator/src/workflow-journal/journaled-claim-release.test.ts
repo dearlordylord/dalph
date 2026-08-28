@@ -156,7 +156,7 @@ it.effect("recovers an unfinished exact release intent after throttle and reread
                     detail: "GitHub primary rate limit rejected the GraphQL request",
                     operation: "ReleaseTaskClaim",
                     operationId: request.operationId,
-                    timingEvidence: null
+                    retry: null
                   })
                 )
               : Ref.set(current, undefined)
@@ -216,9 +216,7 @@ it.effect("recovers an unfinished exact release intent after throttle and reread
       "TaskClaimReleaseIntended"
     ])
     expect(
-      throttledRecords.every(
-        ({ event }) => !("timingEvidence" in event) && !("retryDeadline" in event) && !("retryAt" in event)
-      )
+      throttledRecords.every(({ event }) => !("retry" in event) && !("retryDeadline" in event) && !("retryAt" in event))
     ).toBe(true)
     expect(reduceWorkflowJournalHistory(recoveryRunId, throttledRecords)._tag).toBe("ValidWorkflowJournalHistory")
     const retainedIntent = throttledRecords.find(({ event }) => event._tag === "TaskClaimReleaseIntended")?.event

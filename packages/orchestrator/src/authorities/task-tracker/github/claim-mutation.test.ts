@@ -397,7 +397,7 @@ it.effect("maps GitHub claim creation and release throttles without another muta
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         operation: "AcquireTaskClaim",
         operationId: requested.operationId,
-        timingEvidence
+        retry: timingEvidence
       })
     )
     expect(yield* Ref.get(createCalls)).toBe(1)
@@ -427,7 +427,7 @@ it.effect("maps GitHub claim creation and release throttles without another muta
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         operation: "ReleaseTaskClaim",
         operationId: releaseOperationId,
-        timingEvidence
+        retry: timingEvidence
       })
     )
     expect(yield* Ref.get(deleteCalls)).toBe(1)

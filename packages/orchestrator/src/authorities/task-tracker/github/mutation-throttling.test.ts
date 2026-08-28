@@ -29,6 +29,8 @@ it("maps every authoritative tracker-mutation family with diagnostic timing evid
         timingEvidence
       })
     )
+    expect(mapped).toHaveProperty("retry", timingEvidence)
+    expect(mapped).not.toHaveProperty("timingEvidence")
 
     expect(mapped).toBeInstanceOf(TaskTrackerMutationThrottled)
     expect(mapped).toEqual(
@@ -36,7 +38,7 @@ it("maps every authoritative tracker-mutation family with diagnostic timing evid
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         operation,
         operationId,
-        timingEvidence
+        retry: timingEvidence
       })
     )
   }

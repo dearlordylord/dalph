@@ -483,7 +483,7 @@ const protocolHarness = (
               detail: "GitHub secondary rate limit rejected the GraphQL request",
               operation: "CompleteTask",
               operationId: request.operationId,
-              timingEvidence: null
+              retry: null
             })
           }
           return outcome === "Applied"
@@ -579,7 +579,7 @@ it.effect("completion task throttling bypasses Unknown reconciliation and the bo
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         operation: "CompleteTask",
         operationId: fixture.completionRequest.operationId,
-        timingEvidence: null
+        retry: null
       })
     )
     expect(result.calls).toBe(1)

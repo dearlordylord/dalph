@@ -299,7 +299,7 @@ const makeBoundary = (input: {
             detail: "GitHub secondary rate limit rejected the GraphQL request",
             operation: "ReplaceCompletionClaim",
             operationId: request.operationId,
-            timingEvidence: null
+            retry: null
           })
         }
         if (step === "DefinitelyNotApplied") {
@@ -331,7 +331,7 @@ const makeBoundary = (input: {
             detail: "GitHub primary rate limit rejected the GraphQL request",
             operation: "DeleteCompletionClaim",
             operationId: request.operationId,
-            timingEvidence: null
+            retry: null
           })
         }
         if (step === "DefinitelyNotApplied") {
@@ -486,7 +486,7 @@ it.effect(
           detail: "GitHub secondary rate limit rejected the GraphQL request",
           operation: "ReplaceCompletionClaim",
           operationId: replacementRequest.operationId,
-          timingEvidence: null
+          retry: null
         })
       )
       expect(yield* Ref.get(replacementCalls)).toBe(1)
@@ -556,7 +556,7 @@ it.effect(
           detail: "GitHub primary rate limit rejected the GraphQL request",
           operation: "DeleteCompletionClaim",
           operationId: deletionRequest.operationId,
-          timingEvidence: null
+          retry: null
         })
       )
       expect(yield* Ref.get(deletionCalls)).toBe(1)

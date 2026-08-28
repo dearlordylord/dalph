@@ -149,7 +149,7 @@ it.effect("recovers an unfinished exact claim intent after throttle and rereads 
                     detail: "GitHub secondary rate limit rejected the GraphQL request",
                     operation: "AcquireTaskClaim",
                     operationId: request.operationId,
-                    timingEvidence: null
+                    retry: null
                   })
                 )
               : Ref.set(current, ActiveTaskClaim.make(request)).pipe(Effect.as(ActiveTaskClaim.make(request)))
@@ -196,9 +196,7 @@ it.effect("recovers an unfinished exact claim intent after throttle and rereads 
       "TaskClaimAcquisitionIntended"
     ])
     expect(
-      throttledRecords.every(
-        ({ event }) => !("timingEvidence" in event) && !("retryDeadline" in event) && !("retryAt" in event)
-      )
+      throttledRecords.every(({ event }) => !("retry" in event) && !("retryDeadline" in event) && !("retryAt" in event))
     ).toBe(true)
     expect(reduceWorkflowJournalHistory(runId, throttledRecords)._tag).toBe("ValidWorkflowJournalHistory")
     const retainedIntent = throttledRecords.find(({ event }) => event._tag === "TaskClaimAcquisitionIntended")?.event

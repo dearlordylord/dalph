@@ -41,6 +41,7 @@ export class TaskTrackerMutationThrottled extends Schema.TaggedError<TaskTracker
     detail: Schema.String,
     operation: TaskTrackerMutationOperation,
     operationId: OperationId,
-    timingEvidence: Schema.NullOr(TaskTrackerThrottleTimingEvidence)
+    /** Provider timing evidence only; this neither authorizes nor schedules another request. */
+    retry: Schema.NullOr(TaskTrackerThrottleTimingEvidence)
   }
 ) {}
