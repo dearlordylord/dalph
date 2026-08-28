@@ -23,6 +23,7 @@ import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeRunRecoveryProjection } from "./recovery-activation.js"
+import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 import { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
@@ -267,7 +268,15 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       })
     )
 
-    const recovery = yield* makeRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(
+      runId,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      false,
+      RunActivationOpportunity.ActiveWorkAuthorityRefresh({ source: "Timer" })
+    )
     const graphRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("expected current graph read")
@@ -380,6 +389,7 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
         version: workflowJournalEventVersion
       })
     )
+
     expect((yield* recovery.readDeliveryProjection).frontier).toEqual({
       explanations: [
         { _tag: "Settlement", operationId: acquisition.operationId, outcome: "ResponsibilityCompleted", taskId },
@@ -514,7 +524,15 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       })
     )
 
-    const recovery = yield* makeRunRecoveryProjection(runId)
+    const recovery = yield* makeRunRecoveryProjection(
+      runId,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      false,
+      RunActivationOpportunity.ActiveWorkAuthorityRefresh({ source: "TrackerNotification" })
+    )
     const graphTransition = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (graphTransition?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("expected current graph read")
