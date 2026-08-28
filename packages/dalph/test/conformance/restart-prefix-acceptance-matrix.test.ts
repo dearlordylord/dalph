@@ -1,18 +1,13 @@
 import { NodeCrypto } from "@effect/platform-node"
-import type { PlannedTaskAttempt } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import {
   InRunJournal,
   acquireStartedIntegrationTarget,
   authorizedClaimForAttempt,
-  deriveIntegrationAdmission,
-  deriveIntegrationFrontier,
   integratorRunCorrelationForSession,
   IntegratorRunOrdinal,
-  reduceWorkflowJournalHistory,
-  RunnableFrontierTransition,
   targetPromotionCorrelationEquals,
   appendPromotionStaleIntegrationQuarantine,
   type JournalRecord,
@@ -21,6 +16,7 @@ import {
 import {
   WorkflowInterpreter,
   WorkflowTrace,
+  AuthoritativeTaskClaimObserved,
   AuthoritativeTargetLineageObserved
 } from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
@@ -49,9 +45,13 @@ import {
   type IntegratorSuccessorPreparationInput as IntegratorSuccessorPreparationInputType
 } from "../../../orchestrator/src/workflow/protocols/integrator/session.js"
 import type { TargetPromotionRuntimeInput } from "../../../orchestrator/src/workflow/protocols/target-promotion/runtime.js"
+import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
+import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 
 const lanes: ReadonlyArray<RecoveryStoreLane> = ["memory", "sqlite"]
-const restartAcceptanceTimeout = 600_000
+const fullPrefixReplayTimeout = 60_000
+const bothStoreFrontierTimeout = 30_000
+const successorIdentityTimeout = 20_000
 const restartPrefixCutLabels = [
   "AttemptIntended",
   "Stale",
@@ -63,14 +63,53 @@ const restartPrefixCutLabels = [
 ] as const
 type RestartPrefixCutLabel = (typeof restartPrefixCutLabels)[number]
 
-const sourceRun = () =>
-  runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone).pipe(
-    Effect.provide(NodeCrypto.layer)
+const cachedRun = Effect.runSync(
+  Effect.cached(
+    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone).pipe(
+      Effect.provide(NodeCrypto.layer)
+    )
   )
+)
 
 const exactlyOne = <A>(values: ReadonlyArray<A>, description: string): A => {
   const value = values.length === 1 ? values[0] : undefined
   return value === undefined ? expect.fail("expected one " + description + ", received " + values.length) : value
+}
+
+/** Reconstructs the provider result for a fresh graph read from this prefix's latest complete graph fact. */
+const currentGraphBoundaryFactFrom = (records: ReadonlyArray<JournalRecord>) => {
+  const graphRecord = records.findLast(
+    ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
+  )
+  if (
+    graphRecord?.event._tag !== "TaskTrackerFactsObserved" ||
+    graphRecord.event.observation._tag !== "CompleteTaskTrackerFacts"
+  ) {
+    return expect.fail("restart prefix lacks a complete current tracker graph boundary fact")
+  }
+  const [identities, lifecycles, prerequisites, groupings] = graphRecord.event.observation.factFamilies
+  const tasks = identities.taskIds.map((taskId) => {
+    const lifecycle = lifecycles.lifecycles.find((entry) => entry.taskId === taskId)
+    const prerequisitesForTask = prerequisites.prerequisites.find((entry) => entry.taskId === taskId)
+    const grouping = groupings.groupings.find((entry) => entry.taskId === taskId)
+    if (lifecycle === undefined || prerequisitesForTask === undefined || grouping === undefined) {
+      return expect.fail("restart prefix complete graph fact has inconsistent families")
+    }
+    return {
+      id: taskId,
+      lifecycle: lifecycle.lifecycle,
+      parentTaskId: grouping.parentTaskId,
+      prerequisiteIds: prerequisitesForTask.prerequisiteTaskIds
+    }
+  })
+  const projected = projectTrackerSnapshot({
+    revision: identities.contentIdentity,
+    rootTaskId: graphRecord.event.observation.rootTaskId,
+    tasks
+  })
+  return projected._tag === "Valid"
+    ? projected.snapshot
+    : expect.fail("restart prefix complete graph fact does not project to a valid current boundary fact")
 }
 
 const isTargetLineageReadIntent = (record: JournalRecord): boolean =>
@@ -237,172 +276,212 @@ const productionRestartProjection = <Cut extends string>(
     })
   )
 
-/**
- * Reconstructs the integration-owned frontier at its accepted runtime-facts
- * seam. Unrelated continuation refresh actions may precede this frontier in
- * the run-wide scheduler, but cannot replace its exact A/C/S/M authority or
- * authorize a successor.
- */
-const reconstructedIntegrationFrontier = (
-  records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt
-) => {
-  const runId = records[0]?.runId
-  if (runId === undefined) return expect.fail("restart-prefix integration reconstruction lacks a run")
-  const reduction = reduceWorkflowJournalHistory(runId, records)
-  if (reduction._tag !== "ValidWorkflowJournalHistory") {
-    return expect.fail("restart-prefix integration reconstruction requires valid durable history")
+const expectedIntegrationActionTag: Readonly<Record<RestartPrefixCutLabel, string | undefined>> = {
+  AttemptIntended: "RunTargetPromotion",
+  Stale: "RecordPromotionStaleIntegrationQuarantine",
+  Quarantined: undefined,
+  DirectionApplied: "ObservePlannedAttemptContinuationTargetLineage",
+  FreshReadIntent: "ObservePlannedAttemptContinuationTargetLineage",
+  FreshLineage: "FixIntegratorSuccessorSession",
+  SuccessorFixed: "RunIntegrator"
+}
+
+/** Git's current boundary fact after H moved to the stale record's observed H2. */
+const currentTargetLineageBoundaryFactFor = (matrix: RestartPrefixMatrix) => {
+  if (
+    matrix.stale.event._tag !== "TargetPromotionStale" ||
+    matrix.attempt.event._tag !== "TargetPromotionAttemptIntended"
+  ) {
+    return expect.fail("restart-prefix matrix lacks stale promotion lineage inputs")
   }
-  const responsibility = exactlyOne(
-    deriveIntegrationAdmission(records).responsibilities.filter(
-      (candidate) =>
-        candidate._tag === "StartedIntegrationResponsibility" &&
-        candidate.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-        candidate.plannedAttempt.runId === plannedAttempt.runId
-    ),
-    "started integration responsibility for the stale promotion"
-  )
-  if (responsibility._tag !== "StartedIntegrationResponsibility") {
-    return expect.fail("restart-prefix integration responsibility narrowing failed")
-  }
-  const claim = authorizedClaimForAttempt(records, responsibility.plannedAttempt)?.claim
-  if (claim === undefined) {
-    return expect.fail("restart-prefix integration reconstruction lacks the exact authorized task claim")
-  }
-  const lineage = records.findLast(
-    ({ event }) =>
-      event._tag === "TargetLineageObserved" &&
-      event.plannedAttempt.attemptId === responsibility.plannedAttempt.attemptId &&
-      event.plannedAttempt.runId === responsibility.plannedAttempt.runId
-  )
-  return deriveIntegrationFrontier(reduction.runState, {
-    activeClaimByAttemptId: new Map([[responsibility.plannedAttempt.attemptId, claim]]),
-    activeResponsibilityPositions: new Set(),
-    completionTaskConfigured: true,
-    currentTrackerTaskIds: new Set([responsibility.plannedAttempt.taskId]),
-    heldResponsibilityPositions: new Set([responsibility.queuedAt]),
-    integrationFinalityConfigured: true,
-    integrationTarget: Option.some(responsibility.integrationTarget),
-    targetLineageByAttemptId:
-      lineage?.event._tag === "TargetLineageObserved"
-        ? new Map([[responsibility.plannedAttempt.attemptId, lineage.event.observation]])
-        : new Map(),
-    targetLineageRefreshRequiredAttemptIds: new Set(),
-    targetPromotionConfigured: true,
-    taskClaimAuthorityByAttemptId: new Map([[responsibility.plannedAttempt.attemptId, { _tag: "Exact" }]])
+  const plannedAttempt = matrix.attempt.event.correlation.qualifiedCandidate.run.session.plannedAttempt
+  return TargetLineageObservation.make({
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: plannedAttempt.baseSha,
+    targetHeadSha: matrix.stale.event.observation.observedHeadSha
   })
 }
 
-const restartFrontierAtAcceptedSeam = (
-  records: ReadonlyArray<JournalRecord>,
-  matrix: RestartPrefixMatrix,
-  cut: RestartPrefixCutLabel
+const executeRecoveredTransition = (
+  transition: RunRecoveryProjectionSnapshot["frontier"]["transitions"][number],
+  journal: InRunJournal["Service"],
+  interpreterLayer: Layer.Layer<WorkflowInterpreter, never, InRunJournal>
 ) => {
-  if (matrix.attempt.event._tag !== "TargetPromotionAttemptIntended") {
-    return expect.fail("restart-prefix attempt event narrowing failed")
-  }
-  const frontier = reconstructedIntegrationFrontier(
-    records,
-    matrix.attempt.event.correlation.qualifiedCandidate.run.session.plannedAttempt
-  )
-  if (cut !== "DirectionApplied" && cut !== "FreshReadIntent") return frontier
+  const action = newRecoveredActionOf(transition)
+  const operationId = operationIdOf(transition)
   if (
-    matrix.successorReadIntent.event._tag !== "GitReadIntentRecorded" ||
-    matrix.successorReadIntent.event.operation._tag !== "ReadTargetLineage"
+    action === undefined ||
+    operationId === undefined ||
+    (action._tag !== "ReadTrackerGraph" && action._tag !== "ReadTaskClaim" && action._tag !== "ReadTargetLineage")
   ) {
-    return expect.fail("restart-prefix matrix lacks the exact successor target-lineage operation")
+    return Effect.die("restart current-facts action identity was not reconstructed")
   }
-  expect(
-    frontier.transitions.some(({ _tag }) => _tag === "FixIntegratorSuccessorSession" || _tag === "RunIntegrator")
-  ).toBe(false)
-  return {
-    ...frontier,
-    transitions: [
-      ...frontier.transitions,
-      RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
-        operation: matrix.successorReadIntent.event.operation,
-        plannedAttempt: matrix.successorReadIntent.event.operation.plannedAttempt
-      })
-    ]
-  }
+  return executeRestartRecoveredObservation(
+    { action, operationId },
+    {
+      forwardBoundary: {
+        _tag: "InterruptibleBoundary",
+        execution: { run: (_intent, effect, recordResult) => effect.pipe(Effect.flatMap(recordResult)) }
+      },
+      recordIntent: () => Effect.void
+    }
+  ).pipe(
+    Effect.provide(interpreterLayer),
+    Effect.provideService(InRunJournal, journal),
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+  )
 }
+
+const withProductionIntegrationRestart = <A>(
+  prefix: RecoveryPrefix<RestartPrefixCutLabel>,
+  matrix: RestartPrefixMatrix,
+  lane: RecoveryStoreLane,
+  use: (context: {
+    readonly frontier: NonNullable<RunRecoveryProjectionSnapshot["integrationFrontier"]>
+    readonly journal: InRunJournal["Service"]
+    readonly transition: RunRecoveryProjectionSnapshot["frontier"]["transitions"][number] | undefined
+  }) => Effect.Effect<A, unknown>
+) =>
+  withRecoveryPrefixStore(prefix, lane, (storage) =>
+    Effect.gen(function* () {
+      const runId = prefix.records[0].runId
+      const began = prefix.records[0]
+      if (began.event._tag !== "WorkflowRunBegan" || matrix.attempt.event._tag !== "TargetPromotionAttemptIntended") {
+        return yield* Effect.die("restart prefix lacks its run or exact promotion attempt authority")
+      }
+      const initialRecords = yield* storage.read(runId)
+      const plannedAttempt = matrix.attempt.event.correlation.qualifiedCandidate.run.session.plannedAttempt
+      const claim = authorizedClaimForAttempt(initialRecords, plannedAttempt)?.claim
+      if (claim === undefined) return yield* Effect.die("restart prefix lacks its exact durable task claim")
+      const graph = currentGraphBoundaryFactFrom(initialRecords)
+      const resources = yield* makeIntegrationTargetResourceController()
+      const journal = InRunJournal.of({ append: storage.append, read: storage.read })
+      const recovery = yield* makeRunRecoveryProjection(
+        runId,
+        matrix.attempt.event.correlation.qualifiedCandidate.run.session.integrationTarget,
+        resources,
+        disabledTargetPromotionRuntime,
+        true,
+        true
+      ).pipe(Effect.provideService(InRunJournal, journal))
+      const beforeAcquire = yield* recovery.readDeliveryProjection
+      const acquire = beforeAcquire.frontier.transitions.find(
+        (transition) =>
+          transition._tag === "AcquireStartedIntegrationTarget" &&
+          transition.responsibility.plannedAttempt.attemptId === plannedAttempt.attemptId
+      )
+      if (acquire?._tag === "AcquireStartedIntegrationTarget") {
+        yield* acquireStartedIntegrationTarget(resources, acquire)
+      }
+      const interpreter = WorkflowInterpreter.of({
+        acquireTaskClaim: () => Effect.die("unused restart test interpreter operation"),
+        readTrackerGraph: () => Effect.succeed(graph),
+        readTaskClaim: () => Effect.succeed(AuthoritativeTaskClaimObserved.make({ observation: claim })),
+        readTaskWorktree: () => Effect.die("unused restart test interpreter operation"),
+        readTargetLineage: () =>
+          Effect.succeed(
+            AuthoritativeTargetLineageObserved.make({ observation: currentTargetLineageBoundaryFactFor(matrix) })
+          ),
+        releaseTaskClaim: () => Effect.die("unused restart test interpreter operation"),
+        readTaskWorkSpecification: () => Effect.die("unused restart test interpreter operation"),
+        reconcileTaskWorktree: () => Effect.die("unused restart test interpreter operation"),
+        recordTaskAttemptPlan: () => Effect.die("unused restart test interpreter operation")
+      })
+      const interpreterLayer = journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, interpreter))
+
+      for (let turn = 0; turn < 6; turn += 1) {
+        const projection = yield* recovery.readDeliveryProjection
+        const frontier = projection.integrationFrontier
+        if (frontier === undefined) return yield* Effect.die("authoritative recovery omitted its integration frontier")
+        const expectedTag = expectedIntegrationActionTag[prefix.cut]
+        const transition = frontier.transitions.find(({ _tag }) => _tag === expectedTag)
+        if (transition !== undefined) return yield* use({ frontier, journal, transition })
+        const refresh =
+          frontier.transitions.find(
+            (candidate) =>
+              (candidate._tag === "AcquireStartedIntegrationTarget" &&
+                candidate.responsibility.plannedAttempt.attemptId === plannedAttempt.attemptId) ||
+              (candidate._tag === "ObserveResponsibleTaskClaim" && candidate.taskId === plannedAttempt.taskId) ||
+              (candidate._tag === "ObservePlannedAttemptContinuationGraph" &&
+                candidate.plannedAttempt.attemptId === plannedAttempt.attemptId) ||
+              (candidate._tag === "ObservePlannedAttemptContinuationTargetLineage" &&
+                (prefix.cut === "FreshLineage" || prefix.cut === "SuccessorFixed") &&
+                candidate.plannedAttempt.attemptId === plannedAttempt.attemptId)
+          ) ??
+          projection.frontier.transitions.find(
+            (candidate) =>
+              candidate._tag === "ObservePlannedAttemptContinuationGraph" ||
+              (candidate._tag === "ObserveResponsibleTaskClaim" && candidate.taskId === plannedAttempt.taskId) ||
+              (candidate._tag === "AcquireStartedIntegrationTarget" &&
+                candidate.responsibility.plannedAttempt.attemptId === plannedAttempt.attemptId)
+          )
+        if (refresh === undefined) {
+          if (expectedTag === undefined && frontier.transitions.length === 0) {
+            return yield* use({ frontier, journal, transition: undefined })
+          }
+          return yield* Effect.die(
+            `production recovery did not expose ${expectedTag} or a current graph/claim gate: run=${projection.frontier.transitions.map((candidate) => `${candidate._tag}:${"plannedAttempt" in candidate ? candidate.plannedAttempt.taskId : "taskId" in candidate ? candidate.taskId : "responsibility" in candidate ? candidate.responsibility.plannedAttempt.taskId : "none"}`).join(",")}; integration=${JSON.stringify(frontier.transitions)}; explanations=${JSON.stringify(frontier.explanations)}`
+          )
+        }
+        if (refresh._tag === "AcquireStartedIntegrationTarget") {
+          yield* acquireStartedIntegrationTarget(resources, refresh)
+        } else {
+          yield* executeRecoveredTransition(refresh, journal, interpreterLayer)
+        }
+      }
+      return yield* Effect.die(
+        "production recovery did not settle its initial graph, claim, post-claim graph, and resource gates within six turns"
+      )
+    })
+  )
+
+const integrationRestartSnapshot = (
+  prefix: RecoveryPrefix<RestartPrefixCutLabel>,
+  matrix: RestartPrefixMatrix,
+  lane: RecoveryStoreLane
+) =>
+  withProductionIntegrationRestart(prefix, matrix, lane, ({ frontier, journal }) =>
+    journal.read(prefix.records[0].runId).pipe(Effect.map((records) => ({ frontier, records })))
+  )
 
 const integrationRestartFrontier = (
   prefix: RecoveryPrefix<RestartPrefixCutLabel>,
   matrix: RestartPrefixMatrix,
   lane: RecoveryStoreLane
-) =>
-  withRecoveryPrefixStore(prefix, lane, (storage) =>
-    Effect.gen(function* () {
-      const records = yield* storage.read(prefix.records[0].runId)
-      return restartFrontierAtAcceptedSeam(records, matrix, prefix.cut)
-    })
-  )
+) => integrationRestartSnapshot(prefix, matrix, lane).pipe(Effect.map(({ frontier }) => frontier))
 
 const resumeFreshTargetLineage = (
   prefix: RecoveryPrefix<RestartPrefixCutLabel>,
   matrix: RestartPrefixMatrix,
   lane: RecoveryStoreLane
 ) =>
-  withRecoveryPrefixStore(prefix, lane, (storage) =>
+  withProductionIntegrationRestart(prefix, matrix, lane, ({ journal, transition }) =>
     Effect.gen(function* () {
       const runId = prefix.records[0].runId
-      const began = prefix.records[0]
-      if (began.event._tag !== "WorkflowRunBegan") {
-        return yield* Effect.die("restart prefix has no WorkflowRunBegan authority")
+      if (transition?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
+        return yield* Effect.die("production recovery selected a non-lineage action for the lineage cut")
       }
-      if (
-        matrix.successor.event._tag !== "IntegratorSuccessorSessionFixed" ||
-        matrix.successorLineage.event._tag !== "TargetLineageObserved" ||
-        matrix.successorReadIntent.event._tag !== "GitReadIntentRecorded" ||
-        matrix.successorReadIntent.event.operation._tag !== "ReadTargetLineage"
-      ) {
-        return yield* Effect.die("restart prefix lacks typed successor lineage evidence")
-      }
-      const successorLineageEvent = matrix.successorLineage.event
-      const journal = InRunJournal.of({ append: storage.append, read: storage.read })
-      const genericInterpreter = WorkflowInterpreter.of({
+      const boundaryRecordsBefore = (yield* journal.read(runId)).length
+      const interpreter = WorkflowInterpreter.of({
         acquireTaskClaim: () => Effect.die("unused restart test interpreter operation"),
         readTrackerGraph: () => Effect.die("unused restart test interpreter operation"),
         readTaskClaim: () => Effect.die("unused restart test interpreter operation"),
         readTaskWorktree: () => Effect.die("unused restart test interpreter operation"),
         readTargetLineage: () =>
-          Effect.succeed(AuthoritativeTargetLineageObserved.make({ observation: successorLineageEvent.observation })),
+          Effect.succeed(
+            AuthoritativeTargetLineageObserved.make({ observation: currentTargetLineageBoundaryFactFor(matrix) })
+          ),
         releaseTaskClaim: () => Effect.die("unused restart test interpreter operation"),
         readTaskWorkSpecification: () => Effect.die("unused restart test interpreter operation"),
         reconcileTaskWorktree: () => Effect.die("unused restart test interpreter operation"),
         recordTaskAttemptPlan: () => Effect.die("unused restart test interpreter operation")
       })
-      const interpreterLayer = Layer.succeed(WorkflowInterpreter, genericInterpreter)
-      const journaledLayer = journaledWorkflowInterpreterLayer(runId, interpreterLayer)
-      const records = yield* storage.read(runId)
-      const frontier = restartFrontierAtAcceptedSeam(records, matrix, prefix.cut)
-      const lineageTransition = frontier.transitions.find(
-        ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+      yield* executeRecoveredTransition(
+        transition,
+        journal,
+        journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, interpreter))
       )
-      if (lineageTransition?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
-        return yield* Effect.die("restart prefix lacks fresh target-lineage action")
-      }
-      const action = newRecoveredActionOf(lineageTransition)
-      const operationId = operationIdOf(lineageTransition)
-      if (action?._tag !== "ReadTargetLineage" || operationId === undefined) {
-        return yield* Effect.die("restart target-lineage action identity was not reconstructed")
-      }
-      yield* executeRestartRecoveredObservation(
-        { action, operationId },
-        {
-          forwardBoundary: {
-            _tag: "InterruptibleBoundary",
-            execution: { run: (_intent, effect, recordResult) => effect.pipe(Effect.flatMap(recordResult)) }
-          },
-          recordIntent: () => Effect.void
-        }
-      ).pipe(
-        Effect.provide(journaledLayer),
-        Effect.provideService(InRunJournal, journal),
-        Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
-      )
-      return yield* storage.read(runId)
+      return { boundaryRecordsBefore, records: yield* journal.read(runId), transition }
     })
   )
 
@@ -438,7 +517,7 @@ it.effect(
   "reconstructs every #255 restart prefix through both journal-store lanes",
   () =>
     Effect.gen(function* () {
-      const run = yield* sourceRun()
+      const run = yield* cachedRun
       const matrix = restartPrefixesFrom(run.records)
       expect(matrix.prefixes).toHaveLength(restartPrefixCutLabels.length)
       if (matrix.prefixes.length !== restartPrefixCutLabels.length) {
@@ -469,187 +548,195 @@ it.effect(
 
       expect(executions.flat()).toHaveLength(restartPrefixCutLabels.length * lanes.length)
     }),
-  restartAcceptanceTimeout
+  fullPrefixReplayTimeout
 )
 
-it.effect(
-  "selects the exact #255 action after each retained prefix",
-  () =>
-    Effect.gen(function* () {
-      const run = yield* sourceRun()
-      const matrix = restartPrefixesFrom(run.records)
-      expect(matrix.prefixes).toHaveLength(restartPrefixCutLabels.length)
-      if (matrix.prefixes.length !== restartPrefixCutLabels.length) {
-        return yield* Effect.die("delivery-story capstone lacks the required #255 restart prefixes")
-      }
-      if (
-        matrix.attempt.event._tag !== "TargetPromotionAttemptIntended" ||
-        matrix.stale.event._tag !== "TargetPromotionStale" ||
-        matrix.quarantine.event._tag !== "IntegrationQuarantined" ||
-        matrix.direction.event._tag !== "IntegrationQuarantineDirectionApplied" ||
-        matrix.successorReadIntent.event._tag !== "GitReadIntentRecorded" ||
-        matrix.successorLineage.event._tag !== "TargetLineageObserved" ||
-        matrix.successor.event._tag !== "IntegratorSuccessorSessionFixed"
-      ) {
-        return yield* Effect.die("restart-prefix fixture event narrowing failed")
-      }
+it.effect("selects the exact #255 action after each retained prefix", () =>
+  Effect.gen(function* () {
+    const run = yield* cachedRun
+    const matrix = restartPrefixesFrom(run.records)
+    expect(matrix.prefixes).toHaveLength(restartPrefixCutLabels.length)
+    if (matrix.prefixes.length !== restartPrefixCutLabels.length) {
+      return yield* Effect.die("delivery-story capstone lacks the required #255 restart prefixes")
+    }
+    if (
+      matrix.attempt.event._tag !== "TargetPromotionAttemptIntended" ||
+      matrix.stale.event._tag !== "TargetPromotionStale" ||
+      matrix.quarantine.event._tag !== "IntegrationQuarantined" ||
+      matrix.direction.event._tag !== "IntegrationQuarantineDirectionApplied" ||
+      matrix.successorReadIntent.event._tag !== "GitReadIntentRecorded" ||
+      matrix.successorLineage.event._tag !== "TargetLineageObserved" ||
+      matrix.successor.event._tag !== "IntegratorSuccessorSessionFixed"
+    ) {
+      return yield* Effect.die("restart-prefix fixture event narrowing failed")
+    }
 
-      const afterAcquire = (cut: RestartPrefixCutLabel) =>
-        integrationRestartFrontier(prefixAt(matrix, cut), matrix, "memory").pipe(
-          Effect.map((frontier) => ({ frontier }))
-        )
+    const afterAcquire = (cut: RestartPrefixCutLabel) =>
+      integrationRestartSnapshot(prefixAt(matrix, cut), matrix, "memory")
 
-      for (const cut of ["Stale", "Quarantined"] as const) {
-        const projection = yield* productionRestartProjection(prefixAt(matrix, cut), "memory")
-        expect(
-          integrationTransitionsFor(
-            projection.beforeAcquire,
-            matrix.stale.event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
-          ).filter(({ _tag }) => _tag === "AcquireStartedIntegrationTarget")
-        ).toHaveLength(0)
-      }
+    for (const cut of ["Stale", "Quarantined"] as const) {
+      const projection = yield* productionRestartProjection(prefixAt(matrix, cut), "memory")
+      expect(
+        integrationTransitionsFor(
+          projection.beforeAcquire,
+          matrix.stale.event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
+        ).filter(({ _tag }) => _tag === "AcquireStartedIntegrationTarget")
+      ).toHaveLength(0)
+    }
 
-      const attemptIntendedSnapshot = yield* afterAcquire("AttemptIntended")
-      const attemptIntendedPromotions = integrationTransitionsFor(
+    const attemptIntendedSnapshot = yield* afterAcquire("AttemptIntended")
+    const attemptIntendedPromotions = integrationTransitionsFor(
+      attemptIntendedSnapshot,
+      matrix.attempt.event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
+    ).filter((transition) => transition._tag === "RunTargetPromotion")
+    expect(attemptIntendedPromotions).toHaveLength(1)
+    expect(
+      integrationTransitionsFor(
         attemptIntendedSnapshot,
         matrix.attempt.event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
-      ).filter((transition) => transition._tag === "RunTargetPromotion")
-      expect(attemptIntendedPromotions).toHaveLength(1)
-      expect(
-        integrationTransitionsFor(
-          attemptIntendedSnapshot,
-          matrix.attempt.event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
-        ).map(({ _tag }) => _tag)
-      ).toEqual(["RunTargetPromotion"])
-      if (attemptIntendedPromotions[0]?._tag === "RunTargetPromotion") {
-        expect(attemptIntendedPromotions[0].candidate).toEqual(matrix.attempt.event.correlation.qualifiedCandidate)
-        expect(attemptIntendedPromotions[0].responsibility.plannedAttempt).toEqual(
-          matrix.attempt.event.correlation.qualifiedCandidate.run.session.plannedAttempt
-        )
-      }
+      ).map(({ _tag }) => _tag)
+    ).toEqual(["RunTargetPromotion"])
+    if (attemptIntendedPromotions[0]?._tag === "RunTargetPromotion") {
+      expect(attemptIntendedPromotions[0].candidate).toEqual(matrix.attempt.event.correlation.qualifiedCandidate)
+      expect(attemptIntendedPromotions[0].responsibility.plannedAttempt).toEqual(
+        matrix.attempt.event.correlation.qualifiedCandidate.run.session.plannedAttempt
+      )
+    }
 
-      const staleSnapshot = yield* afterAcquire("Stale")
-      const staleQuarantines = integrationTransitionsFor(
+    const staleSnapshot = yield* afterAcquire("Stale")
+    const staleQuarantines = integrationTransitionsFor(
+      staleSnapshot,
+      matrix.stale.event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
+    ).filter((transition) => transition._tag === "RecordPromotionStaleIntegrationQuarantine")
+    expect(staleQuarantines).toHaveLength(1)
+    expect(
+      integrationTransitionsFor(
         staleSnapshot,
         matrix.stale.event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
-      ).filter((transition) => transition._tag === "RecordPromotionStaleIntegrationQuarantine")
-      expect(staleQuarantines).toHaveLength(1)
-      expect(
-        integrationTransitionsFor(
-          staleSnapshot,
-          matrix.stale.event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
-        ).map(({ _tag }) => _tag)
-      ).toEqual(["RecordPromotionStaleIntegrationQuarantine"])
-      if (staleQuarantines[0]?._tag === "RecordPromotionStaleIntegrationQuarantine") {
-        expect(staleQuarantines[0].input).toEqual({
-          correlation: matrix.stale.event.correlation,
-          targetPromotionStaleAt: matrix.stale.position
-        })
-        expect(staleQuarantines[0].responsibility.plannedAttempt).toEqual(
-          matrix.stale.event.correlation.qualifiedCandidate.run.session.plannedAttempt
-        )
-      }
-
-      const quarantinedSnapshot = yield* afterAcquire("Quarantined")
-      expect(
-        integrationTransitionsFor(quarantinedSnapshot, matrix.quarantine.event.correlation.plannedAttempt.taskId).map(
-          ({ _tag }) => _tag
-        )
-      ).toEqual(["ReleaseStartedIntegrationTarget"])
-
-      const directionAppliedSnapshot = yield* afterAcquire("DirectionApplied")
-      const directionAppliedTags = integrationTransitionsFor(
-        directionAppliedSnapshot,
-        matrix.quarantine.event.correlation.plannedAttempt.taskId
       ).map(({ _tag }) => _tag)
-      expect(directionAppliedTags).toEqual(["ObservePlannedAttemptContinuationTargetLineage"])
+    ).toEqual(["RecordPromotionStaleIntegrationQuarantine"])
+    if (staleQuarantines[0]?._tag === "RecordPromotionStaleIntegrationQuarantine") {
+      expect(staleQuarantines[0].input).toEqual({
+        correlation: matrix.stale.event.correlation,
+        targetPromotionStaleAt: matrix.stale.position
+      })
+      expect(staleQuarantines[0].responsibility.plannedAttempt).toEqual(
+        matrix.stale.event.correlation.qualifiedCandidate.run.session.plannedAttempt
+      )
+    }
 
-      const successorTaskId = matrix.successor.event.successor.plannedAttempt.taskId
-      const freshReadIntentSnapshot = yield* afterAcquire("FreshReadIntent")
-      const freshReadIntentReads = integrationTransitionsFor(freshReadIntentSnapshot, successorTaskId).filter(
-        (transition) => transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
+    const quarantinedSnapshot = yield* afterAcquire("Quarantined")
+    expect(
+      integrationTransitionsFor(quarantinedSnapshot, matrix.quarantine.event.correlation.plannedAttempt.taskId).map(
+        ({ _tag }) => _tag
       )
-      expect(integrationTransitionsFor(freshReadIntentSnapshot, successorTaskId).map(({ _tag }) => _tag)).toEqual([
-        "ObservePlannedAttemptContinuationTargetLineage"
-      ])
-      expect(freshReadIntentReads).toHaveLength(1)
-      if (freshReadIntentReads[0]?._tag === "ObservePlannedAttemptContinuationTargetLineage") {
-        expect(freshReadIntentReads[0].operation).toEqual(matrix.successorReadIntent.event.operation)
-        expect(freshReadIntentReads[0].plannedAttempt).toEqual(
-          matrix.successorReadIntent.event.operation.plannedAttempt
-        )
-      }
+    ).toEqual([])
+    expect(quarantinedSnapshot.frontier.explanations).toContainEqual(
+      expect.objectContaining({
+        _tag: "IntegrationInProgress",
+        plannedAttempt: matrix.quarantine.event.correlation.plannedAttempt
+      })
+    )
 
-      const freshLineageSnapshot = yield* afterAcquire("FreshLineage")
-      const freshLineageFixes = integrationTransitionsFor(freshLineageSnapshot, successorTaskId).filter(
-        (transition) => transition._tag === "FixIntegratorSuccessorSession"
-      )
-      expect(freshLineageFixes).toHaveLength(1)
-      expect(integrationTransitionsFor(freshLineageSnapshot, successorTaskId).map(({ _tag }) => _tag)).toEqual([
-        "FixIntegratorSuccessorSession"
-      ])
-      if (freshLineageFixes[0]?._tag === "FixIntegratorSuccessorSession") {
-        expect(freshLineageFixes[0].input).toEqual(successorPreparationInputFor(matrix))
-        expect(freshLineageFixes[0].responsibility.plannedAttempt).toEqual(
-          matrix.successor.event.successor.plannedAttempt
-        )
-      }
+    const directionAppliedSnapshot = yield* afterAcquire("DirectionApplied")
+    const directionAppliedTags = integrationTransitionsFor(
+      directionAppliedSnapshot,
+      matrix.quarantine.event.correlation.plannedAttempt.taskId
+    ).map(({ _tag }) => _tag)
+    expect(directionAppliedTags).toEqual(["ObservePlannedAttemptContinuationTargetLineage"])
 
-      const successorFixedSnapshot = yield* afterAcquire("SuccessorFixed")
-      const successorFixedFixes = integrationTransitionsFor(successorFixedSnapshot, successorTaskId).filter(
-        (transition) => transition._tag === "FixIntegratorSuccessorSession"
+    const successorTaskId = matrix.successor.event.successor.plannedAttempt.taskId
+    const freshReadIntentSnapshot = yield* afterAcquire("FreshReadIntent")
+    const freshReadIntentReads = integrationTransitionsFor(freshReadIntentSnapshot, successorTaskId).filter(
+      (transition) => transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
+    )
+    expect(integrationTransitionsFor(freshReadIntentSnapshot, successorTaskId).map(({ _tag }) => _tag)).toEqual([
+      "ObservePlannedAttemptContinuationTargetLineage"
+    ])
+    expect(freshReadIntentReads).toHaveLength(1)
+    if (freshReadIntentReads[0]?._tag === "ObservePlannedAttemptContinuationTargetLineage") {
+      expect(freshReadIntentReads[0].operation).toEqual(matrix.successorReadIntent.event.operation)
+      expect(freshReadIntentReads[0].plannedAttempt).toEqual(matrix.successorReadIntent.event.operation.plannedAttempt)
+    }
+
+    const freshLineageSnapshot = yield* afterAcquire("FreshLineage")
+    const freshLineageFixes = integrationTransitionsFor(freshLineageSnapshot, successorTaskId).filter(
+      (transition) => transition._tag === "FixIntegratorSuccessorSession"
+    )
+    expect(freshLineageFixes).toHaveLength(1)
+    expect(integrationTransitionsFor(freshLineageSnapshot, successorTaskId).map(({ _tag }) => _tag)).toEqual([
+      "FixIntegratorSuccessorSession"
+    ])
+    if (freshLineageFixes[0]?._tag === "FixIntegratorSuccessorSession") {
+      const currentLineage = freshLineageSnapshot.records.findLast(
+        ({ event }) => event._tag === "TargetLineageObserved"
       )
-      expect(successorFixedFixes).toHaveLength(0)
-      const successorFixedRuns = integrationTransitionsFor(successorFixedSnapshot, successorTaskId).filter(
-        (transition) => transition._tag === "RunIntegrator"
+      expect(currentLineage?.event._tag).toBe("TargetLineageObserved")
+      expect(freshLineageFixes[0].input).toEqual({
+        ...successorPreparationInputFor(matrix),
+        targetLineageObservedAt: currentLineage?.position
+      })
+      expect(freshLineageFixes[0].responsibility.plannedAttempt).toEqual(
+        matrix.successor.event.successor.plannedAttempt
       )
-      expect(successorFixedRuns).toHaveLength(1)
-      expect(integrationTransitionsFor(successorFixedSnapshot, successorTaskId).map(({ _tag }) => _tag)).toEqual([
-        "RunIntegrator"
-      ])
-      if (successorFixedRuns[0]?._tag === "RunIntegrator") {
-        expect(successorFixedRuns[0].lineage).toEqual(matrix.successorLineage.event.observation)
-        expect(successorFixedRuns[0].lineageObservedAt).toBe(matrix.successorLineage.position)
-        expect(successorFixedRuns[0].responsibility.plannedAttempt).toEqual(
-          matrix.successor.event.successor.plannedAttempt
-        )
-        expect(successorFixedRuns[0].run).toEqual(
-          integratorRunCorrelationForSession(matrix.successor.event.successor, IntegratorRunOrdinal.make(1))
-        )
-      }
-    }),
-  restartAcceptanceTimeout
+    }
+
+    const successorFixedSnapshot = yield* afterAcquire("SuccessorFixed")
+    const successorFixedFixes = integrationTransitionsFor(successorFixedSnapshot, successorTaskId).filter(
+      (transition) => transition._tag === "FixIntegratorSuccessorSession"
+    )
+    expect(successorFixedFixes).toHaveLength(0)
+    const successorFixedRuns = integrationTransitionsFor(successorFixedSnapshot, successorTaskId).filter(
+      (transition) => transition._tag === "RunIntegrator"
+    )
+    expect(successorFixedRuns).toHaveLength(1)
+    expect(integrationTransitionsFor(successorFixedSnapshot, successorTaskId).map(({ _tag }) => _tag)).toEqual([
+      "RunIntegrator"
+    ])
+    if (successorFixedRuns[0]?._tag === "RunIntegrator") {
+      expect(successorFixedRuns[0].lineage).toEqual(matrix.successorLineage.event.observation)
+      expect(successorFixedRuns[0].lineageObservedAt).toBe(matrix.successorLineage.position)
+      expect(successorFixedRuns[0].responsibility.plannedAttempt).toEqual(
+        matrix.successor.event.successor.plannedAttempt
+      )
+      expect(successorFixedRuns[0].run).toEqual(
+        integratorRunCorrelationForSession(matrix.successor.event.successor, IntegratorRunOrdinal.make(1))
+      )
+    }
+  })
 )
 
-it.effect(
-  "executes recovered target-lineage observations through the production interpreter",
-  () =>
-    Effect.gen(function* () {
-      const run = yield* sourceRun()
-      const matrix = restartPrefixesFrom(run.records)
-      for (const cut of ["DirectionApplied", "FreshReadIntent"] as const) {
-        const prefix = prefixAt(matrix, cut)
-        for (const lane of lanes) {
-          const records = yield* resumeFreshTargetLineage(prefix, matrix, lane)
-          const suffix = records.slice(prefix.records.length)
-          expect(
-            suffix.map(({ event }) => event._tag),
-            cut + " / " + lane
-          ).toEqual(
-            cut === "DirectionApplied" ? ["GitReadIntentRecorded", "TargetLineageObserved"] : ["TargetLineageObserved"]
-          )
-          expect(suffix.at(-1)?.event).toEqual(matrix.successorLineage.event)
-        }
+it.effect("executes recovered target-lineage observations through the production interpreter", () =>
+  Effect.gen(function* () {
+    const run = yield* cachedRun
+    const matrix = restartPrefixesFrom(run.records)
+    for (const cut of ["DirectionApplied", "FreshReadIntent"] as const) {
+      const prefix = prefixAt(matrix, cut)
+      for (const lane of lanes) {
+        const resumed = yield* resumeFreshTargetLineage(prefix, matrix, lane)
+        const suffix = resumed.records.slice(resumed.boundaryRecordsBefore)
+        expect(
+          suffix.map(({ event }) => event._tag),
+          cut + " / " + lane
+        ).toEqual(
+          cut === "DirectionApplied" ? ["GitReadIntentRecorded", "TargetLineageObserved"] : ["TargetLineageObserved"]
+        )
+        const observed = suffix.at(-1)?.event
+        expect(observed).toMatchObject({
+          _tag: "TargetLineageObserved",
+          observation: currentTargetLineageBoundaryFactFor(matrix),
+          operationId: resumed.transition.operation.operationId
+        })
       }
-    }),
-  restartAcceptanceTimeout
+    }
+  })
 )
 
 it.effect(
   "retains the exact visible action tag in both restart-store lanes",
   () =>
     Effect.gen(function* () {
-      const run = yield* sourceRun()
+      const run = yield* cachedRun
       const matrix = restartPrefixesFrom(run.records)
       const taskId =
         matrix.successor.event._tag === "IntegratorSuccessorSessionFixed"
@@ -658,7 +745,7 @@ it.effect(
       const expectedTags: Readonly<Record<RestartPrefixCutLabel, ReadonlyArray<string>>> = {
         AttemptIntended: ["RunTargetPromotion"],
         Stale: ["RecordPromotionStaleIntegrationQuarantine"],
-        Quarantined: ["ReleaseStartedIntegrationTarget"],
+        Quarantined: [],
         DirectionApplied: ["ObservePlannedAttemptContinuationTargetLineage"],
         FreshReadIntent: ["ObservePlannedAttemptContinuationTargetLineage"],
         FreshLineage: ["FixIntegratorSuccessorSession"],
@@ -672,14 +759,14 @@ it.effect(
         }
       }
     }),
-  restartAcceptanceTimeout
+  bothStoreFrontierTimeout
 )
 
 it.effect(
   "reuses one exact successor identity and rejects an out-of-order restart",
   () =>
     Effect.gen(function* () {
-      const run = yield* sourceRun()
+      const run = yield* cachedRun
       const matrix = restartPrefixesFrom(run.records)
       expect(matrix.prefixes).toHaveLength(restartPrefixCutLabels.length)
       if (matrix.prefixes.length !== restartPrefixCutLabels.length) {
@@ -784,5 +871,5 @@ it.effect(
 
       expect(executions).toEqual(["memory", "sqlite"])
     }),
-  restartAcceptanceTimeout
+  successorIdentityTimeout
 )
