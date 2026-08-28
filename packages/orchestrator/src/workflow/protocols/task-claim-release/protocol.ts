@@ -8,6 +8,7 @@ import {
   type TrackerMutationService
 } from "../../../authorities/task-tracker/claim-mutation.js"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
+import type { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 
 const taskClaimReleaseRequestBound = 3
 
@@ -37,6 +38,7 @@ export const runTaskClaimReleaseProtocol = Effect.fn("TrackerMutation.runTaskCla
   | TaskClaimReadFailure
   | TaskClaimReleaseDidNotConverge
   | TaskClaimReleaseFailure
+  | TaskTrackerMutationThrottled
 > {
   for (let attempts = 0; attempts <= taskClaimReleaseRequestBound; attempts += 1) {
     const observed = yield* tracker.readTaskClaim(release.claim.taskId)

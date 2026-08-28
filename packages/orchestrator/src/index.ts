@@ -112,6 +112,14 @@ export {
 } from "./control/task-work-capacity.js"
 export { workflowJournalEventVersion } from "./workflow/kernel/event.js"
 export { ClaimOwner, ClaimToken } from "./authorities/task-tracker/claim.js"
+export {
+  TaskTrackerMutationOperation,
+  TaskTrackerMutationThrottled,
+  taskTrackerMutationOperations,
+  TaskTrackerThrottleResetEpochSeconds,
+  TaskTrackerThrottleTimingEvidence,
+  TaskTrackerThrottleRetryAfterSeconds
+} from "./authorities/task-tracker/mutation-throttling.js"
 export { FixtureTarget } from "./authorities/task-tracker/fixture/target.js"
 export {
   GithubIssueNumber,

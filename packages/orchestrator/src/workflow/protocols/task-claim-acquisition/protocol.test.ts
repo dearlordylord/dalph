@@ -15,6 +15,7 @@ import {
   type TaskClaimObservation,
   TaskClaimReadFailure,
   TaskClaimRequestFailure,
+  TaskTrackerMutationThrottled,
   TrackerMutation,
   UnclaimedTask
 } from "../../../index.js"
@@ -297,4 +298,51 @@ it.effect("preserves non-request acquisition failures", () =>
     const failure = yield* runTaskClaimAcquisitionProtocol(failed, acquisition).pipe(Effect.flip)
     expect(failure).toBeInstanceOf(TaskClaimReadFailure)
   }).pipe(Effect.provide(controlledTrackerMutationLayer))
+)
+
+it.effect("claim acquisition throttling sends one mutation and restart reads before using the same intent", () =>
+  Effect.gen(function* () {
+    const current = yield* Ref.make<TaskClaimObservation>(UnclaimedTask.make({ taskId: acquisition.taskId }))
+    const throttled = yield* Ref.make(true)
+    const calls = yield* Ref.make<ReadonlyArray<TaskClaimBoundaryCall>>([])
+    const requests = yield* Ref.make<ReadonlyArray<TaskClaimAcquisition>>([])
+    const tracker = TrackerMutation.of({
+      acquireTaskClaim: (request) =>
+        recordTaskClaimBoundaryCall(calls, "acquire").pipe(
+          Effect.andThen(Ref.update(requests, (observed) => [...observed, request])),
+          Effect.flatMap(() => Ref.get(throttled)),
+          Effect.flatMap((isThrottled) =>
+            isThrottled
+              ? Effect.fail(
+                  new TaskTrackerMutationThrottled({
+                    detail: "GitHub primary rate limit rejected the GraphQL request",
+                    operation: "AcquireTaskClaim",
+                    operationId: request.operationId,
+                    retry: null
+                  })
+                )
+              : Ref.set(current, ActiveTaskClaim.make(request)).pipe(Effect.as(ActiveTaskClaim.make(request)))
+          )
+        ),
+      readTaskClaim: () => recordTaskClaimBoundaryCall(calls, "read").pipe(Effect.andThen(Ref.get(current))),
+      releaseTaskClaim: () => Effect.void
+    })
+
+    const failure = yield* runTaskClaimAcquisitionProtocol(tracker, acquisition).pipe(Effect.flip)
+    expect(failure).toEqual(
+      new TaskTrackerMutationThrottled({
+        detail: "GitHub primary rate limit rejected the GraphQL request",
+        operation: "AcquireTaskClaim",
+        operationId: acquisition.operationId,
+        retry: null
+      })
+    )
+    expect(yield* Ref.get(calls)).toEqual(["read", "acquire"])
+    expect(yield* Ref.get(requests)).toEqual([acquisition])
+
+    yield* Ref.set(throttled, false)
+    expect(yield* runTaskClaimAcquisitionProtocol(tracker, acquisition)).toEqual(ActiveTaskClaim.make(acquisition))
+    expect(yield* Ref.get(calls)).toEqual(["read", "acquire", "read", "acquire", "read"])
+    expect(yield* Ref.get(requests)).toEqual([acquisition, acquisition])
+  })
 )

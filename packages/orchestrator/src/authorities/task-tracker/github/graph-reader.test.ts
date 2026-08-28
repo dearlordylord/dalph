@@ -16,6 +16,7 @@ import {
   GithubRepositoryNodeId
 } from "./graphql-client.js"
 import { GithubGraphqlReadThrottled, GithubGraphqlThrottleEvidence } from "./graphql-read-throttle.js"
+import { githubGraphqlTestClient } from "./graphql-client.test-fixture.js"
 import { githubTaskIdFor } from "./task-identity.js"
 import { githubTrackerGraphReaderLayer } from "./graph-reader.js"
 import { githubConnectionPageLimit, githubSnapshotTaskLimit } from "./read-limits.js"
@@ -754,16 +755,17 @@ it.effect("maps a transport-classified GitHub throttle to the focused typed read
     Effect.provide(
       Layer.succeed(
         GithubGraphqlClient,
-        GithubGraphqlClient.of({
-          execute: (request) =>
-            request._tag === "ReadTaskWorkSpecification"
-              ? new GithubGraphqlReadThrottled({
+        githubGraphqlTestClient((request) =>
+          request._tag === "ReadTaskWorkSpecification"
+            ? Effect.fail(
+                new GithubGraphqlReadThrottled({
                   detail: "GitHub request throttled",
                   operation: request._tag,
                   retry: GithubGraphqlThrottleEvidence.cases.Unavailable.make({})
                 })
-              : Effect.succeed(responseFor(request))
-        })
+              )
+            : Effect.succeed(responseFor(request))
+        )
       )
     )
   )

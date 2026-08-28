@@ -11,6 +11,7 @@ import {
   TaskClaimReadFailure,
   TaskClaimRelease,
   TaskClaimReleaseFailure,
+  TaskTrackerMutationThrottled,
   UnclaimedTask
 } from "../../../index.js"
 import type { TrackerMutationService } from "../../../authorities/task-tracker/claim-mutation.js"
@@ -130,5 +131,46 @@ it.effect("tries to delete the exact claim at most three times", () =>
     const failure = yield* runTaskClaimReleaseProtocol(tracker, release).pipe(Effect.flip)
     expect(failure).toBeInstanceOf(TaskClaimReleaseDidNotConverge)
     expect(yield* Ref.get(requests)).toBe(3)
+  })
+)
+
+it.effect("claim release throttling sends one mutation and restart reads before using the same intent", () =>
+  Effect.gen(function* () {
+    const current = yield* Ref.make<typeof claim | undefined>(claim)
+    const throttled = yield* Ref.make(true)
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const tracker: TrackerMutationService = {
+      acquireTaskClaim: unusedAcquisition,
+      readTaskClaim: () =>
+        Ref.update(calls, (items) => [...items, "read"]).pipe(
+          Effect.andThen(Ref.get(current)),
+          Effect.map((observed) => observed ?? UnclaimedTask.make({ taskId }))
+        ),
+      releaseTaskClaim: (request) =>
+        Ref.update(calls, (items) => [...items, `release:${request.operationId}`]).pipe(
+          Effect.andThen(Ref.get(throttled)),
+          Effect.flatMap((isThrottled) =>
+            isThrottled
+              ? Effect.fail(
+                  new TaskTrackerMutationThrottled({
+                    detail: "GitHub secondary rate limit rejected the GraphQL request",
+                    operation: "ReleaseTaskClaim",
+                    operationId: request.operationId,
+                    retry: null
+                  })
+                )
+              : Ref.set(current, undefined)
+          )
+        )
+    }
+
+    expect(yield* runTaskClaimReleaseProtocol(tracker, release).pipe(Effect.flip)).toBeInstanceOf(
+      TaskTrackerMutationThrottled
+    )
+    expect(yield* Ref.get(calls)).toEqual(["read", "release:claim-release"])
+
+    yield* Ref.set(throttled, false)
+    expect((yield* runTaskClaimReleaseProtocol(tracker, release))._tag).toBe("AuthoritativeTaskClaimReleased")
+    expect(yield* Ref.get(calls)).toEqual(["read", "release:claim-release", "read", "release:claim-release", "read"])
   })
 )

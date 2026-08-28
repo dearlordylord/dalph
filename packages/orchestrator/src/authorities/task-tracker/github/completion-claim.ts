@@ -16,6 +16,7 @@ import { isExactTaskClaim, TrackerMutation } from "../claim-mutation.js"
 import { githubTrackerMutationLayer } from "./claim-mutation.js"
 import { githubTaskClaimLabelDigestFor } from "./claim-label-identity.js"
 import { CreateClaimLabelResponse, FindClaimLabelResponse, GithubGraphqlErrors } from "./claim-label-response.js"
+import { mapGithubMutationFailure } from "./mutation-throttling.js"
 import {
   GithubGraphqlClient,
   GithubGraphqlRequest,
@@ -197,7 +198,11 @@ const githubCompletionClaimBoundaryWithTrackerLayer = Layer.effect(
         )
         .pipe(
           Effect.mapError(
-            (cause) => new CompletionClaimReplacementFailure({ detail: cause.detail, outcome: "Unknown", request })
+            mapGithubMutationFailure(
+              "ReplaceCompletionClaim",
+              request.operationId,
+              (cause) => new CompletionClaimReplacementFailure({ detail: cause.detail, outcome: "Unknown", request })
+            )
           )
         )
       const header = yield* Schema.decodeUnknownEffect(GithubGraphqlErrors)(response.body).pipe(

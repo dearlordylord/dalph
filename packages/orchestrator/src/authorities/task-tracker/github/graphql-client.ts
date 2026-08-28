@@ -4,11 +4,17 @@ import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import { GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
 import { OperationId } from "../../../workflow/identity.js"
+import { GithubGraphqlReadOperation, type GithubGraphqlReadThrottled } from "./graphql-read-throttle.js"
+import type { GithubGraphqlThrottled } from "./graphql-throttling.js"
 import {
-  GithubGraphqlReadOperation,
-  GithubGraphqlReadThrottled,
-  observeGithubGraphqlReadThrottle
-} from "./graphql-read-throttle.js"
+  decodeGithubGraphqlMutationResponse,
+  decodeGithubGraphqlReadResponse,
+  GithubGraphqlRequestError,
+  type GithubGraphqlResponse
+} from "./graphql-response.js"
+
+export { GithubGraphqlThrottled } from "./graphql-throttling.js"
+export { GithubGraphqlRequestError, GithubGraphqlResponse } from "./graphql-response.js"
 
 /** Identifies one GitHub issue node at the provider boundary, not a tracker-neutral task. */
 export const GithubIssueNodeId = Schema.NonEmptyString.pipe(Schema.brand("GithubIssueNodeId"))
@@ -61,38 +67,24 @@ export const GithubGraphqlRequest = Schema.TaggedUnion({
 })
 export type GithubGraphqlRequest = typeof GithubGraphqlRequest.Type
 
-export const GithubGraphqlResponse = Schema.Struct({ body: Schema.Unknown })
-export type GithubGraphqlResponse = typeof GithubGraphqlResponse.Type
-
-const GithubGraphqlOperation = Schema.Literals([
-  "AddBlockedBy",
-  "AddIssueComment",
-  "AddSubIssue",
-  "CloseIssue",
-  "CreateClaimLabel",
-  "CreateIssue",
-  "DeleteIssue",
-  "DeleteClaimLabel",
-  "FindClaimLabel",
-  "ReadBlockedBy",
-  "ReadIssueDetails",
-  "ReadTaskWorkSpecification",
-  "ReadIssue",
-  "ReadSubIssues",
-  "ReopenIssue",
-  "ResolveRepository",
-  "ResolveIssue"
-])
-
-export class GithubGraphqlRequestError extends Schema.TaggedError<GithubGraphqlRequestError>()(
-  "GithubGraphqlClient.RequestError",
-  { detail: Schema.String, operation: GithubGraphqlOperation }
-) {}
+type GithubGraphqlReadRequest = Extract<GithubGraphqlRequest, { readonly _tag: GithubGraphqlReadOperation }>
+type GithubGraphqlMutationRequest = Exclude<GithubGraphqlRequest, GithubGraphqlReadRequest>
 
 interface GithubGraphqlClientService {
-  readonly execute: (
-    request: GithubGraphqlRequest
-  ) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlReadThrottled>
+  readonly execute: {
+    (
+      request: GithubGraphqlReadRequest
+    ): Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlReadThrottled>
+    (
+      request: GithubGraphqlMutationRequest
+    ): Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlThrottled>
+    (
+      request: GithubGraphqlRequest
+    ): Effect.Effect<
+      GithubGraphqlResponse,
+      GithubGraphqlRequestError | GithubGraphqlReadThrottled | GithubGraphqlThrottled
+    >
+  }
 }
 
 /** Executes authenticated GitHub GraphQL requests; adapter services retain domain authority. */
@@ -103,7 +95,6 @@ export class GithubGraphqlClient extends Context.Service<GithubGraphqlClient, Gi
 const graphqlEndpoint = "https://api.github.com/graphql"
 const githubUserAgent = "dalph-orchestrator"
 const connectionPageSize = 100
-const httpSuccessStatus = { exclusiveMax: 300, min: 200 } as const
 // Stable identity format guidance:
 // https://docs.github.com/en/graphql/guides/migrating-graphql-global-node-ids
 const nextGlobalIdHeaderValue = "1"
@@ -350,14 +341,13 @@ const requestBody = (
   })
 }
 
-const requestError = (operation: typeof GithubGraphqlOperation.Type, cause: unknown) =>
-  new GithubGraphqlRequestError({ detail: String(cause), operation })
-
 const readOperation = Schema.decodeUnknownOption(GithubGraphqlReadOperation)
+const isReadRequest = (request: GithubGraphqlRequest): request is GithubGraphqlReadRequest =>
+  Option.isSome(readOperation(request._tag))
 
 const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (token: Redacted.Redacted<string>) {
   const httpClient = yield* HttpClient.HttpClient
-  const execute = Effect.fn("GithubGraphqlClient.execute")(function* (request: GithubGraphqlRequest) {
+  const executeHttp = Effect.fn("GithubGraphqlClient.executeHttp")(function* (request: GithubGraphqlRequest) {
     const httpRequest = HttpClientRequest.post(graphqlEndpoint).pipe(
       HttpClientRequest.acceptJson,
       HttpClientRequest.bearerToken(token),
@@ -367,24 +357,39 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (token: Redac
     )
     const response = yield* httpClient
       .execute(httpRequest)
-      .pipe(Effect.mapError((cause) => requestError(request._tag, cause)))
-    const read = readOperation(request._tag)
-    if (Option.isSome(read)) {
-      const throttled = yield* observeGithubGraphqlReadThrottle(response)
-      if (Option.isSome(throttled)) {
-        return yield* new GithubGraphqlReadThrottled({
-          detail: "GitHub request throttled",
-          operation: read.value,
-          retry: throttled.value
-        })
-      }
-    }
-    if (response.status < httpSuccessStatus.min || response.status >= httpSuccessStatus.exclusiveMax) {
-      return yield* requestError(request._tag, `GitHub returned HTTP ${response.status}`)
-    }
-    const body = yield* response.json.pipe(Effect.mapError((cause) => requestError(request._tag, cause)))
-    return GithubGraphqlResponse.make({ body })
+      .pipe(
+        Effect.mapError((cause) => new GithubGraphqlRequestError({ detail: String(cause), operation: request._tag }))
+      )
+    return response
   })
+
+  const executeRead = Effect.fn("GithubGraphqlClient.executeRead")(function* (request: GithubGraphqlReadRequest) {
+    const response = yield* executeHttp(request)
+    return yield* decodeGithubGraphqlReadResponse(request._tag, response)
+  })
+
+  const executeMutation = Effect.fn("GithubGraphqlClient.executeMutation")(function* (
+    request: GithubGraphqlMutationRequest
+  ) {
+    const response = yield* executeHttp(request)
+    return yield* decodeGithubGraphqlMutationResponse(request._tag, response)
+  })
+
+  function execute(
+    request: GithubGraphqlReadRequest
+  ): Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlReadThrottled>
+  function execute(
+    request: GithubGraphqlMutationRequest
+  ): Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlThrottled>
+  function execute(
+    request: GithubGraphqlRequest
+  ): Effect.Effect<
+    GithubGraphqlResponse,
+    GithubGraphqlRequestError | GithubGraphqlReadThrottled | GithubGraphqlThrottled
+  >
+  function execute(request: GithubGraphqlRequest) {
+    return isReadRequest(request) ? executeRead(request) : executeMutation(request)
+  }
 
   return GithubGraphqlClient.of({ execute })
 })

@@ -4,6 +4,7 @@ import { expect, it } from "@effect/vitest"
 import { Crypto, Effect, Layer, PlatformError, Ref, Schema } from "effect"
 import { ActiveTaskClaim, isExactTaskClaim } from "../claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../claim.js"
+import { TaskTrackerMutationThrottled } from "../mutation-throttling.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
 import { targetPromotionObservedSuccessRecordKey } from "../../../workflow-journal/record-key.js"
@@ -33,6 +34,7 @@ import {
   type GithubGraphqlRequest,
   type GithubGraphqlResponse,
   GithubGraphqlRequestError,
+  GithubGraphqlThrottled,
   GithubIssueNodeId,
   GithubLabelName,
   GithubLabelNodeId,
@@ -44,6 +46,7 @@ import {
   GithubCompletionClaimFingerprintFailure
 } from "./completion-claim.js"
 import { githubTaskClaimLabelDigestFor } from "./claim-label-identity.js"
+import { githubGraphqlTestClient } from "./graphql-client.test-fixture.js"
 
 const repositoryNodeId = GithubRepositoryNodeId.make("completion-repository-node")
 const issueNodeId = GithubIssueNodeId.make("completion-issue-node")
@@ -118,11 +121,13 @@ const completionFindResponse = (
 })
 
 const adapterLayer = (
-  execute: (request: GithubGraphqlRequest) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError>,
+  execute: (
+    request: GithubGraphqlRequest
+  ) => Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlThrottled>,
   cryptoLayer: Layer.Layer<Crypto.Crypto> = NodeCrypto.layer
 ) =>
   githubCompletionClaimBoundaryLayer.pipe(
-    Layer.provide(Layer.succeed(GithubGraphqlClient, GithubGraphqlClient.of({ execute }))),
+    Layer.provide(Layer.succeed(GithubGraphqlClient, githubGraphqlTestClient(execute))),
     Layer.provide(cryptoLayer)
   )
 
@@ -487,6 +492,40 @@ it.effect("classifies every ambiguous GitHub create acknowledgement and leaves d
     if (deletionFailure instanceof CompletionClaimDeletionFailure) {
       expect(deletionFailure.outcome).toBe("DefinitelyNotApplied")
     }
+  })
+)
+
+it.effect("stops after one throttled completion-claim create and preserves its operation identity", () =>
+  Effect.gen(function* () {
+    const replacement = completionClaimReplacementRequestFor(prepared.claim)
+    const calls = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest>>([])
+    const layer = adapterLayer((request) =>
+      Ref.update(calls, (current) => [...current, request]).pipe(
+        Effect.andThen(
+          request._tag === "CreateClaimLabel"
+            ? Effect.fail(
+                new GithubGraphqlThrottled({
+                  detail: "GitHub secondary rate limit rejected the GraphQL request",
+                  kind: "Secondary",
+                  operation: request._tag,
+                  timingEvidence: null
+                })
+              )
+            : Effect.die("unexpected read")
+        )
+      )
+    )
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionClaimBoundary).replaceTaskClaim(replacement).pipe(Effect.flip)
+    }).pipe(Effect.provide(layer))
+
+    expect(failure).toBeInstanceOf(TaskTrackerMutationThrottled)
+    expect(failure).toMatchObject({
+      operation: "ReplaceCompletionClaim",
+      operationId: replacement.operationId,
+      retry: null
+    })
+    expect((yield* Ref.get(calls)).filter((request) => request._tag === "CreateClaimLabel")).toHaveLength(1)
   })
 )
 

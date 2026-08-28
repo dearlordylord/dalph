@@ -768,6 +768,15 @@ token currently own the task. It does not prove that the task remains open or
 inside the Run's current Run task graph.
 _Avoid_: Claim request acknowledged, claimed task eligibility observed
 
+**Task-tracker mutation throttled**:
+The typed boundary failure returned when the task tracker conclusively refuses
+one acknowledged exact claim, completion-claim, completion, or cleanup mutation
+because of provider throttling. It names the logical mutation and its existing
+operation identity, and may retain safe decoded timing evidence for diagnosis;
+it neither authorizes nor schedules another request. A later invocation must
+first read the owning tracker facts under the existing protocol.
+_Avoid_: Ambiguous mutation outcome, retry deadline, provider payload
+
 **Explicit task-claim reacquisition authority**:
 The durable authority linking one replacement task-claim acquisition intent to
 one earlier applied Operator direction for that Run and task. The direction's

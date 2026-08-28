@@ -12,6 +12,7 @@ import {
   githubGraphqlClientConfigLayer,
   githubGraphqlClientLayer,
   GithubGraphqlRequest,
+  GithubGraphqlThrottled,
   GithubIssueNodeId,
   GithubLabelName,
   GithubLabelNodeId,
@@ -197,9 +198,9 @@ it.effect("executes authenticated GitHub GraphQL requests", () =>
   })
 )
 
-const executeRequest = (
-  request: GithubGraphqlRequest,
+const executeResponse = (
   response: Response,
+  request: GithubGraphqlRequest,
   layerFactory: typeof githubGraphqlClientLayer = githubGraphqlClientLayer
 ) => {
   const httpClient = HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, response)))
@@ -213,7 +214,7 @@ const executeRequest = (
 }
 
 const executeResolve = (response: Response, layerFactory: typeof githubGraphqlClientLayer = githubGraphqlClientLayer) =>
-  executeRequest(GithubGraphqlRequest.cases.ResolveIssue.make({ target }), response, layerFactory)
+  executeResponse(response, GithubGraphqlRequest.cases.ResolveIssue.make({ target }), layerFactory)
 
 it.effect("classifies HTTP and JSON failures", () =>
   Effect.gen(function* () {
@@ -284,15 +285,92 @@ it.effect("leaves throttled mutation responses outside the read-only classifier"
     const failures = yield* Effect.forEach(
       [
         new Response("", { headers: { "retry-after": "7" }, status: 429 }),
-        new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), { status: 403 })
+        new Response(JSON.stringify({ errors: [{ message: "You have exceeded a secondary rate limit." }] }), {
+          status: 403
+        })
       ],
-      (response) => executeRequest(request, response).pipe(Effect.flip, Effect.orDie)
+      (response) => executeResponse(response, request).pipe(Effect.flip, Effect.orDie)
     )
 
     for (const failure of failures) {
       expect(failure).not.toBeInstanceOf(GithubGraphqlReadThrottled)
-      expect(failure).toMatchObject({ _tag: "GithubGraphqlClient.RequestError", operation: "CreateIssue" })
+      expect(failure).toBeInstanceOf(GithubGraphqlThrottled)
+      expect(failure).toMatchObject({ kind: "Secondary", operation: "CreateIssue" })
     }
+  })
+)
+
+it.effect("classifies primary and secondary GitHub mutation limits before generic request failure mapping", () =>
+  Effect.gen(function* () {
+    const credential = "credential-must-stay-redacted"
+    const providerPayload = "provider-payload-must-stay-redacted"
+    const request = GithubGraphqlRequest.cases.CloseIssue.make({
+      issueNodeId: GithubIssueNodeId.make("rate-limited-issue"),
+      operationId: OperationId.make("rate-limited-close")
+    })
+    const failures = yield* Effect.forEach(
+      [
+        new Response(JSON.stringify({ errors: [{ message: providerPayload }] }), {
+          headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "2000" },
+          status: 200
+        }),
+        new Response(
+          JSON.stringify({ errors: [{ message: `You have exceeded a secondary rate limit: ${providerPayload}` }] }),
+          {
+            headers: { "retry-after": "17", "x-private-credential": credential, "x-ratelimit-remaining": "0" },
+            status: 403
+          }
+        )
+      ],
+      (response) => executeResponse(response, request).pipe(Effect.flip, Effect.orDie)
+    )
+
+    expect(failures).toHaveLength(2)
+    const [primary, secondary] = failures
+    expect(primary).toBeInstanceOf(GithubGraphqlThrottled)
+    expect(primary).toMatchObject({
+      kind: "Primary",
+      operation: "CloseIssue",
+      timingEvidence: { _tag: "ResetAt", epochSeconds: 2_000 }
+    })
+    expect(secondary).toBeInstanceOf(GithubGraphqlThrottled)
+    expect(secondary).toMatchObject({
+      kind: "Secondary",
+      operation: "CloseIssue",
+      timingEvidence: { _tag: "RetryAfter", seconds: 17 }
+    })
+    const publicFailure = JSON.stringify(failures)
+    expect(publicFailure).not.toContain(credential)
+    expect(publicFailure).not.toContain(providerPayload)
+    expect(publicFailure).not.toContain("x-private-credential")
+  })
+)
+
+it.effect("keeps throttled GitHub reads in the read-only classifier with only safe timing evidence", () =>
+  Effect.gen(function* () {
+    const unsafeHeader = "unsafe-retry-evidence"
+    const request = GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId: GithubIssueNodeId.make("throttled-read") })
+    const failures = yield* Effect.forEach(
+      [
+        new Response("not-provider-json", {
+          headers: { "retry-after": unsafeHeader, "x-ratelimit-reset": "-1" },
+          status: 429
+        }),
+        new Response(JSON.stringify({ errors: [{ message: "primary limit" }] }), {
+          headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "2100" },
+          status: 200
+        })
+      ],
+      (response) => executeResponse(response, request).pipe(Effect.flip, Effect.orDie)
+    )
+
+    for (const failure of failures) expect(failure).toBeInstanceOf(GithubGraphqlReadThrottled)
+    expect(failures[0]).toMatchObject({ operation: "ReadIssue", retry: { _tag: "Unavailable" } })
+    expect(failures[1]).toMatchObject({
+      operation: "ReadIssue",
+      retry: { _tag: "RateLimitResetEpochSeconds", epochSeconds: 2_100 }
+    })
+    expect(JSON.stringify(failures)).not.toContain(unsafeHeader)
   })
 )
 

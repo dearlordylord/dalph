@@ -1,6 +1,7 @@
 import { Context, Effect, Schema } from "effect"
 import { TaskId } from "@dalph/contracts"
 import type { CoordinatorOwnershipError } from "../../authorities/coordinator-ownership/ownership.js"
+import type { TaskTrackerMutationThrottled } from "../../authorities/task-tracker/mutation-throttling.js"
 import type {
   GitWorktreeCreateFailure,
   GitWorktreeObservationError,
@@ -79,6 +80,7 @@ export interface WorkflowInterpreterService {
     | TaskClaimOwnershipConflict
     | TaskClaimReadFailure
     | TaskClaimRequestFailure
+    | TaskTrackerMutationThrottled
   >
   readonly readTrackerGraph: (
     operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
@@ -121,6 +123,7 @@ export interface WorkflowInterpreterService {
     | TaskClaimReadFailure
     | TaskClaimReleaseDidNotConverge
     | TaskClaimReleaseFailure
+    | TaskTrackerMutationThrottled
   >
   readonly readTaskWorkSpecification: (
     operation: typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type,
