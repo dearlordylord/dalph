@@ -318,7 +318,7 @@ it.effect("claim acquisition throttling sends one mutation and restart reads bef
                     detail: "GitHub primary rate limit rejected the GraphQL request",
                     operation: "AcquireTaskClaim",
                     operationId: request.operationId,
-                    retry: null
+                    timingEvidence: null
                   })
                 )
               : Ref.set(current, ActiveTaskClaim.make(request)).pipe(Effect.as(ActiveTaskClaim.make(request)))
@@ -334,7 +334,7 @@ it.effect("claim acquisition throttling sends one mutation and restart reads bef
         detail: "GitHub primary rate limit rejected the GraphQL request",
         operation: "AcquireTaskClaim",
         operationId: acquisition.operationId,
-        retry: null
+        timingEvidence: null
       })
     )
     expect(yield* Ref.get(calls)).toEqual(["read", "acquire"])

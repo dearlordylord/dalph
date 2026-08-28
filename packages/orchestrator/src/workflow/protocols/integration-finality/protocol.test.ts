@@ -299,7 +299,7 @@ const makeBoundary = (input: {
             detail: "GitHub secondary rate limit rejected the GraphQL request",
             operation: "ReplaceCompletionClaim",
             operationId: request.operationId,
-            retry: null
+            timingEvidence: null
           })
         }
         if (step === "DefinitelyNotApplied") {
@@ -331,7 +331,7 @@ const makeBoundary = (input: {
             detail: "GitHub primary rate limit rejected the GraphQL request",
             operation: "DeleteCompletionClaim",
             operationId: request.operationId,
-            retry: null
+            timingEvidence: null
           })
         }
         if (step === "DefinitelyNotApplied") {
@@ -486,11 +486,29 @@ it.effect(
           detail: "GitHub secondary rate limit rejected the GraphQL request",
           operation: "ReplaceCompletionClaim",
           operationId: replacementRequest.operationId,
-          retry: null
+          timingEvidence: null
         })
       )
       expect(yield* Ref.get(replacementCalls)).toBe(1)
       expect(yield* Ref.get(replacementChronology)).toEqual(["read", "replace"])
+
+      const afterReplacementThrottle = yield* Ref.get(replacementRecords)
+      expect(afterReplacementThrottle.map(({ event }) => event._tag)).toEqual([
+        "TargetPromotionObservedSuccess",
+        "CompletionClaimReplacementIntended",
+        "CompletionClaimReplacementAttemptIntended"
+      ])
+      expect(JSON.stringify(afterReplacementThrottle)).not.toMatch(/throttl|retry|deadline/i)
+      expect(deriveIntegrationFinalityStateFor(afterReplacementThrottle, fixture.claim)?._tag).toBe(
+        "ReplacementPending"
+      )
+      const retainedReplacementIntent = afterReplacementThrottle.find(
+        ({ event }) => event._tag === "CompletionClaimReplacementIntended"
+      )?.event
+      if (retainedReplacementIntent?._tag !== "CompletionClaimReplacementIntended") {
+        return yield* Effect.die("expected retained completion-claim replacement intent")
+      }
+      const recoveredReplacementRequest = completionClaimReplacementRequestFor(retainedReplacementIntent.claim)
 
       yield* runWith(
         runCompletionClaimReplacementProtocol(
@@ -501,7 +519,7 @@ it.effect(
             readCalls,
             replacementCalls
           }),
-          replacementRequest
+          recoveredReplacementRequest
         ),
         replacementRecords
       )
@@ -538,11 +556,31 @@ it.effect(
           detail: "GitHub primary rate limit rejected the GraphQL request",
           operation: "DeleteCompletionClaim",
           operationId: deletionRequest.operationId,
-          retry: null
+          timingEvidence: null
         })
       )
       expect(yield* Ref.get(deletionCalls)).toBe(1)
       expect(yield* Ref.get(deletionChronology)).toEqual(["read", "delete"])
+
+      const afterDeletionThrottle = yield* Ref.get(deletionRecords)
+      expect(afterDeletionThrottle.slice(-3).map(({ event }) => event._tag)).toEqual([
+        "CompletionClaimDeletionIntended",
+        "CompletionClaimDeletionReadObserved",
+        "CompletionClaimDeletionAttemptIntended"
+      ])
+      expect(JSON.stringify(afterDeletionThrottle)).not.toMatch(/throttl|retry|deadline/i)
+      expect(afterDeletionThrottle.some(({ event }) => event._tag === "CompletionClaimDeleted")).toBe(false)
+      expect(afterDeletionThrottle.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(false)
+      const retainedDeletionIntent = afterDeletionThrottle.find(
+        ({ event }) => event._tag === "CompletionClaimDeletionIntended"
+      )?.event
+      if (retainedDeletionIntent?._tag !== "CompletionClaimDeletionIntended") {
+        return yield* Effect.die("expected retained completion-claim deletion intent")
+      }
+      const recoveredDeletionRequest = completionClaimDeletionRequestFor(
+        retainedDeletionIntent.claim,
+        retainedDeletionIntent.successObservation
+      )
 
       yield* runWith(
         runCompletionClaimDeletionProtocol(
@@ -553,8 +591,8 @@ it.effect(
             readCalls,
             replacementCalls
           }),
-          deletionRequest,
-          replacementOperationFor(fixture.claim)
+          recoveredDeletionRequest,
+          replacementOperationFor(retainedDeletionIntent.claim)
         ),
         deletionRecords
       )

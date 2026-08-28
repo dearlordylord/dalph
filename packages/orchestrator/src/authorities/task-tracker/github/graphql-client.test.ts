@@ -250,13 +250,13 @@ it.effect("classifies primary and secondary GitHub mutation limits before generi
     expect(primary).toMatchObject({
       kind: "Primary",
       operation: "CloseIssue",
-      retry: { _tag: "ResetAt", epochSeconds: 2_000 }
+      timingEvidence: { _tag: "ResetAt", epochSeconds: 2_000 }
     })
     expect(secondary).toBeInstanceOf(GithubGraphqlThrottled)
     expect(secondary).toMatchObject({
       kind: "Secondary",
       operation: "CloseIssue",
-      retry: { _tag: "RetryAfter", seconds: 17 }
+      timingEvidence: { _tag: "RetryAfter", seconds: 17 }
     })
     const publicFailure = JSON.stringify(failures)
     expect(publicFailure).not.toContain(credential)
@@ -265,7 +265,7 @@ it.effect("classifies primary and secondary GitHub mutation limits before generi
   })
 )
 
-it.effect("classifies a throttled GitHub read with only safe retry evidence", () =>
+it.effect("classifies a throttled GitHub read with only safe timing evidence", () =>
   Effect.gen(function* () {
     const unsafeHeader = "unsafe-retry-evidence"
     const failure = yield* executeResponse(
@@ -277,7 +277,7 @@ it.effect("classifies a throttled GitHub read with only safe retry evidence", ()
     ).pipe(Effect.flip, Effect.orDie)
 
     expect(failure).toBeInstanceOf(GithubGraphqlThrottled)
-    expect(failure).toMatchObject({ kind: "Secondary", operation: "ReadIssue", retry: null })
+    expect(failure).toMatchObject({ kind: "Secondary", operation: "ReadIssue", timingEvidence: null })
     expect(JSON.stringify(failure)).not.toContain(unsafeHeader)
   })
 )

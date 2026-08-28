@@ -115,8 +115,9 @@ export { ClaimOwner, ClaimToken } from "./authorities/task-tracker/claim.js"
 export {
   TaskTrackerMutationOperation,
   TaskTrackerMutationThrottled,
+  taskTrackerMutationOperations,
   TaskTrackerThrottleResetEpochSeconds,
-  TaskTrackerThrottleRetry,
+  TaskTrackerThrottleTimingEvidence,
   TaskTrackerThrottleRetryAfterSeconds
 } from "./authorities/task-tracker/mutation-throttling.js"
 export { FixtureTarget } from "./authorities/task-tracker/fixture/target.js"

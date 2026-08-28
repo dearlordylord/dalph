@@ -14,20 +14,21 @@ export const TaskTrackerThrottleResetEpochSeconds = Schema.Int.check(Schema.isGr
 export type TaskTrackerThrottleResetEpochSeconds = typeof TaskTrackerThrottleResetEpochSeconds.Type
 
 /** Safe provider timing evidence retained without scheduling or authorizing another tracker request. */
-export const TaskTrackerThrottleRetry = Schema.TaggedUnion({
+export const TaskTrackerThrottleTimingEvidence = Schema.TaggedUnion({
   ResetAt: { epochSeconds: TaskTrackerThrottleResetEpochSeconds },
   RetryAfter: { seconds: TaskTrackerThrottleRetryAfterSeconds }
 })
-export type TaskTrackerThrottleRetry = typeof TaskTrackerThrottleRetry.Type
+export type TaskTrackerThrottleTimingEvidence = typeof TaskTrackerThrottleTimingEvidence.Type
 
 /** The closed tracker-mutation families that can be stopped by one provider throttle. */
-export const TaskTrackerMutationOperation = Schema.Literals([
+export const taskTrackerMutationOperations = [
   "AcquireTaskClaim",
   "ReleaseTaskClaim",
   "ReplaceCompletionClaim",
   "DeleteCompletionClaim",
   "CompleteTask"
-])
+] as const
+export const TaskTrackerMutationOperation = Schema.Literals(taskTrackerMutationOperations)
 export type TaskTrackerMutationOperation = typeof TaskTrackerMutationOperation.Type
 
 /**
@@ -40,6 +41,6 @@ export class TaskTrackerMutationThrottled extends Schema.TaggedError<TaskTracker
     detail: Schema.String,
     operation: TaskTrackerMutationOperation,
     operationId: OperationId,
-    retry: Schema.NullOr(TaskTrackerThrottleRetry)
+    timingEvidence: Schema.NullOr(TaskTrackerThrottleTimingEvidence)
   }
 ) {}

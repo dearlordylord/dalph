@@ -156,7 +156,7 @@ it.effect("claim release throttling sends one mutation and restart reads before 
                     detail: "GitHub secondary rate limit rejected the GraphQL request",
                     operation: "ReleaseTaskClaim",
                     operationId: request.operationId,
-                    retry: null
+                    timingEvidence: null
                   })
                 )
               : Ref.set(current, undefined)

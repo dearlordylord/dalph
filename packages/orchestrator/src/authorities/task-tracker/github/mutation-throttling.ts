@@ -11,5 +11,10 @@ export const mapGithubMutationFailure =
   ) =>
   (failure: GithubGraphqlRequestError | GithubGraphqlThrottled): E | TaskTrackerMutationThrottled =>
     failure instanceof GithubGraphqlThrottled
-      ? new TaskTrackerMutationThrottled({ detail: failure.detail, operation, operationId, retry: failure.retry })
+      ? new TaskTrackerMutationThrottled({
+          detail: failure.detail,
+          operation,
+          operationId,
+          timingEvidence: failure.timingEvidence
+        })
       : otherwise(failure)

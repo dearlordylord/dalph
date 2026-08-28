@@ -2,8 +2,7 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { NodeCrypto, NodeHttpClient } from "@effect/platform-node"
 import { expect, it } from "@effect/vitest"
-import { Config, Context, Crypto, Effect, Layer, Ref, Schema, Semaphore } from "effect"
-import type { Redacted } from "effect"
+import { Config, Context, Crypto, Effect, Layer, Redacted, Ref, Schema, Semaphore } from "effect"
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
@@ -18,6 +17,9 @@ import {
   TaskClaimAcquisition,
   TaskClaimConflict,
   TaskLifecycle,
+  TaskTrackerMutationThrottled,
+  TaskTrackerThrottleRetryAfterSeconds,
+  TaskTrackerThrottleTimingEvidence,
   TrackerGraphReader,
   TrackerMutation
 } from "../../../index.js"
@@ -26,6 +28,7 @@ import {
   GithubGraphqlRequest,
   GithubGraphqlResponse,
   GithubGraphqlRequestError,
+  githubGraphqlClientLayer,
   githubGraphqlClientNodeLayer,
   GithubIssueNodeId,
   GithubLabelName,
@@ -41,6 +44,13 @@ import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepos
 const qualificationEnabled = globalThis.process.env["DALPH_GITHUB_QUALIFICATION"] === "1"
 const qualificationTimeoutMilliseconds = 10 * 60 * 1_000
 const defaultBlockerCount = 2
+
+const EncodedHttpRequestBody = Schema.Struct({ body: Schema.String })
+const ControlledGraphqlRequestBody = Schema.fromJsonString(Schema.Struct({ query: Schema.String }))
+const controlledGraphqlQuery = (request: HttpClientRequest.HttpClientRequest): string => {
+  const encoded = Schema.decodeUnknownSync(EncodedHttpRequestBody)(request.body.toJSON())
+  return Schema.decodeUnknownSync(ControlledGraphqlRequestBody)(encoded.body).query
+}
 
 const GithubQualificationRepository = Schema.Struct({ owner: GithubRepositoryOwner, repository: GithubRepositoryName })
 type GithubQualificationRepository = typeof GithubQualificationRepository.Type
@@ -699,6 +709,63 @@ it.effect("retains exact GitHub fixture locators when cleanup cannot finish", ()
     const failure = yield* cleanFixture(noOpCleanupApi(second.nodeId), resources).pipe(Effect.flip)
     expect(failure).toBeInstanceOf(GithubFixtureCleanupFailure)
     expect(failure.remaining).toEqual({ issues: [first, second], labels: [], repository: resources.repository })
+  })
+)
+
+it.effect("stops the production GitHub claim composition after one controlled throttled mutation", () =>
+  Effect.gen(function* () {
+    const repositoryNodeId = GithubRepositoryNodeId.make("controlled-throttle-repository")
+    const issueNodeId = GithubIssueNodeId.make("controlled-throttle-issue")
+    const acquisition = TaskClaimAcquisition.make({
+      operationId: OperationId.make("controlled-throttle-acquire"),
+      owner: ClaimOwner.make("controlled-throttle-owner"),
+      taskId: githubTaskIdFor(repositoryNodeId, issueNodeId),
+      token: ClaimToken.make("controlled-throttle-token")
+    })
+    const requests = yield* Ref.make<ReadonlyArray<"FindClaimLabel" | "CreateClaimLabel">>([])
+    const httpClient = HttpClient.make((request) =>
+      Effect.gen(function* () {
+        const query = controlledGraphqlQuery(request)
+        if (query.includes("query FindClaimLabel")) {
+          yield* Ref.update(requests, (current) => [...current, "FindClaimLabel" as const])
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify({ data: { node: { id: repositoryNodeId, label: null } } }), { status: 200 })
+          )
+        }
+        if (query.includes("mutation CreateClaimLabel")) {
+          yield* Ref.update(requests, (current) => [...current, "CreateClaimLabel" as const])
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify({ errors: [{ message: "You have exceeded a secondary rate limit" }] }), {
+              headers: { "retry-after": "11" },
+              status: 403
+            })
+          )
+        }
+        return yield* Effect.die(`unexpected controlled GitHub request after throttle: ${query}`)
+      })
+    )
+    const clientLayer = githubGraphqlClientLayer({ token: Redacted.make("controlled-qualification-token") }).pipe(
+      Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient))
+    )
+    const mutationLayer = githubTrackerMutationLayer.pipe(Layer.provide(clientLayer), Layer.provide(NodeCrypto.layer))
+    const failure = yield* Effect.gen(function* () {
+      const tracker = yield* TrackerMutation
+      return yield* runTaskClaimAcquisitionProtocol(tracker, acquisition).pipe(Effect.flip)
+    }).pipe(Effect.provide(mutationLayer))
+
+    expect(failure).toEqual(
+      new TaskTrackerMutationThrottled({
+        detail: "GitHub secondary rate limit rejected the GraphQL request",
+        operation: "AcquireTaskClaim",
+        operationId: acquisition.operationId,
+        timingEvidence: TaskTrackerThrottleTimingEvidence.cases.RetryAfter.make({
+          seconds: TaskTrackerThrottleRetryAfterSeconds.make(11)
+        })
+      })
+    )
+    expect(yield* Ref.get(requests)).toEqual(["FindClaimLabel", "CreateClaimLabel"])
   })
 )
 

@@ -483,7 +483,7 @@ const protocolHarness = (
               detail: "GitHub secondary rate limit rejected the GraphQL request",
               operation: "CompleteTask",
               operationId: request.operationId,
-              retry: null
+              timingEvidence: null
             })
           }
           return outcome === "Applied"
@@ -512,16 +512,28 @@ const protocolHarness = (
         })
     }
     const request = completionTaskRequestFor(fixture.claim)
-    const run = runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-      Ref.update(chronology, (current) => [...current, "Authorization.read"]).pipe(
-        Effect.as(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
-      )
-    ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.result)
-    const firstOutcome = yield* run
+    const run = (currentRequest: typeof request) =>
+      runCompletionTaskProtocol(boundary, currentRequest, fixture.target, () =>
+        Ref.update(chronology, (current) => [...current, "Authorization.read"]).pipe(
+          Effect.as(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
+        )
+      ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.result)
+    const firstOutcome = yield* run(request)
+    const restart = (lifecycle: NonNullable<typeof options.reactivationFocusedLifecycle>) =>
+      Effect.gen(function* () {
+        yield* Ref.set(focusedLifecycle, lifecycle)
+        const retainedIntent = (yield* Ref.get(records)).find(
+          ({ event }) => event._tag === "CompletionTaskIntended"
+        )?.event
+        if (retainedIntent?._tag !== "CompletionTaskIntended") {
+          return yield* Effect.die("expected retained completion-task intent")
+        }
+        return yield* run(retainedIntent.request)
+      })
     const outcome =
       options.reactivationFocusedLifecycle === undefined
         ? firstOutcome
-        : yield* Ref.set(focusedLifecycle, options.reactivationFocusedLifecycle).pipe(Effect.andThen(run))
+        : yield* restart(options.reactivationFocusedLifecycle)
     return {
       calls: yield* Ref.get(calls),
       chronology: yield* Ref.get(chronology),
@@ -567,11 +579,16 @@ it.effect("completion task throttling bypasses Unknown reconciliation and the bo
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         operation: "CompleteTask",
         operationId: fixture.completionRequest.operationId,
-        retry: null
+        timingEvidence: null
       })
     )
     expect(result.calls).toBe(1)
     expect(result.lookupCalls).toBe(0)
+    expect(result.records.map(({ event }) => event._tag)).toEqual([
+      "CompletionTaskIntended",
+      "CompletionTaskAttemptIntended"
+    ])
+    expect(JSON.stringify(result.records)).not.toMatch(/throttl|retry|deadline/i)
     expect(result.chronology).toEqual([
       "Authorization.read",
       "CompletionTaskIntended",

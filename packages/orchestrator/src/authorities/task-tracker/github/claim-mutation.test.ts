@@ -23,7 +23,7 @@ import {
   TaskClaimReleaseFailure,
   TaskClaimRequestFailure,
   TaskTrackerMutationThrottled,
-  TaskTrackerThrottleRetry,
+  TaskTrackerThrottleTimingEvidence,
   TaskTrackerThrottleRetryAfterSeconds,
   TrackerMutation
 } from "../../../index.js"
@@ -279,7 +279,7 @@ it.effect("maps malformed and failed GitHub observations to typed read failures"
               detail: throttleDetail,
               kind: "Primary",
               operation: request._tag,
-              retry: null
+              timingEvidence: null
             })
           )
         )
@@ -366,7 +366,7 @@ it.effect("classifies ambiguous create outcomes after a fresh observation", () =
 it.effect("maps GitHub claim creation and release throttles without another mutation", () =>
   Effect.gen(function* () {
     const requested = acquisition("throttled", "throttled-token")
-    const retry = TaskTrackerThrottleRetry.cases.RetryAfter.make({
+    const timingEvidence = TaskTrackerThrottleTimingEvidence.cases.RetryAfter.make({
       seconds: TaskTrackerThrottleRetryAfterSeconds.make(29)
     })
     const throttled = (operation: "CreateClaimLabel" | "DeleteClaimLabel") =>
@@ -374,7 +374,7 @@ it.effect("maps GitHub claim creation and release throttles without another muta
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         kind: "Secondary",
         operation,
-        retry
+        timingEvidence
       })
 
     const createCalls = yield* Ref.make(0)
@@ -397,7 +397,7 @@ it.effect("maps GitHub claim creation and release throttles without another muta
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         operation: "AcquireTaskClaim",
         operationId: requested.operationId,
-        retry
+        timingEvidence
       })
     )
     expect(yield* Ref.get(createCalls)).toBe(1)
@@ -427,7 +427,7 @@ it.effect("maps GitHub claim creation and release throttles without another muta
         detail: "GitHub secondary rate limit rejected the GraphQL request",
         operation: "ReleaseTaskClaim",
         operationId: releaseOperationId,
-        retry
+        timingEvidence
       })
     )
     expect(yield* Ref.get(deleteCalls)).toBe(1)

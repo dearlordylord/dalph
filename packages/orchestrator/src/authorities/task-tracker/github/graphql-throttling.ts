@@ -3,7 +3,7 @@ import * as Headers from "effect/unstable/http/Headers"
 import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
 import {
   TaskTrackerThrottleResetEpochSeconds,
-  TaskTrackerThrottleRetry,
+  TaskTrackerThrottleTimingEvidence,
   TaskTrackerThrottleRetryAfterSeconds
 } from "../mutation-throttling.js"
 
@@ -38,7 +38,7 @@ export class GithubGraphqlThrottled extends Schema.TaggedError<GithubGraphqlThro
     detail: Schema.String,
     kind: GithubGraphqlThrottleKind,
     operation: GithubGraphqlOperation,
-    retry: Schema.NullOr(TaskTrackerThrottleRetry)
+    timingEvidence: Schema.NullOr(TaskTrackerThrottleTimingEvidence)
   }
 ) {}
 
@@ -56,17 +56,17 @@ const headerSeconds = (headers: Headers.Headers, name: string): number | undefin
     Headers.get(headers, name).pipe(Option.flatMap((value) => Schema.decodeUnknownOption(HeaderSeconds)(value)))
   )
 
-const throttleRetryFrom = (headers: Headers.Headers): TaskTrackerThrottleRetry | null => {
+const throttleTimingEvidenceFrom = (headers: Headers.Headers): TaskTrackerThrottleTimingEvidence | null => {
   const retryAfterSeconds = headerSeconds(headers, "retry-after")
   if (retryAfterSeconds !== undefined) {
-    return TaskTrackerThrottleRetry.cases.RetryAfter.make({
+    return TaskTrackerThrottleTimingEvidence.cases.RetryAfter.make({
       seconds: TaskTrackerThrottleRetryAfterSeconds.make(retryAfterSeconds)
     })
   }
   const resetEpochSeconds = headerSeconds(headers, "x-ratelimit-reset")
   return resetEpochSeconds === undefined
     ? null
-    : TaskTrackerThrottleRetry.cases.ResetAt.make({
+    : TaskTrackerThrottleTimingEvidence.cases.ResetAt.make({
         epochSeconds: TaskTrackerThrottleResetEpochSeconds.make(resetEpochSeconds)
       })
 }
@@ -98,6 +98,6 @@ export const githubGraphqlThrottleFromResponse = (
         detail: `GitHub ${kind.toLowerCase()} rate limit rejected the GraphQL request`,
         kind,
         operation,
-        retry: throttleRetryFrom(response.headers)
+        timingEvidence: throttleTimingEvidenceFrom(response.headers)
       })
 }
