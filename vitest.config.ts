@@ -7,6 +7,8 @@ const coverageThresholds = Object.fromEntries(
 )
 
 const mbtTestPattern = "packages/**/*.mbt.test.ts"
+const acceptedResultIntegrationMbtTestPattern =
+  "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts"
 // These ordinary tests exercise production conformance seams; their exhaustive
 // Quint traces remain mode-gated by quintIt itself.
 const coverageExcludedMbtTestPattern =
@@ -45,6 +47,33 @@ export default defineConfig(({ mode }) => ({
     ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
     maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,
+    ...(mode === "mbt"
+      ? {
+          // Running the accepted-result model beside the other MBTs can starve
+          // their shorter deadlines. Finish the four-worker group first, then
+          // give that model one worker without weakening either trace budget.
+          projects: [
+            {
+              test: {
+                exclude: [acceptedResultIntegrationMbtTestPattern],
+                include: [mbtTestPattern],
+                maxWorkers: ordinaryWorkerCount,
+                name: "mbt",
+                sequence: { groupOrder: 0 }
+              }
+            },
+            {
+              test: {
+                fileParallelism: false,
+                include: [acceptedResultIntegrationMbtTestPattern],
+                maxWorkers: 1,
+                name: "accepted-result-integration-mbt",
+                sequence: { groupOrder: 1 }
+              }
+            }
+          ]
+        }
+      : {}),
     testTimeout: mode === "coverage" ? coverageTestTimeoutMilliseconds : ordinaryTestTimeoutMilliseconds
   }
 }))
