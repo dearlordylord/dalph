@@ -1,7 +1,7 @@
 import { Cause, Effect, Exit, Fiber, Option, Schema } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "vitest"
-import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
+import { type AttemptId, GitCommitSha, GitRepositoryLocator, type TaskId } from "@dalph/contracts"
 import { TaskWorkCapacity } from "@dalph/orchestrator"
 import {
   AuthoredCassetteStoryItem,
@@ -34,6 +34,126 @@ const findStoryItemOf = <Tag extends AuthoredCassetteStoryItem["_tag"]>(tag: Tag
   )
 
 const findStoryItem = findStoryItemOf
+
+type WorkAuthorizationChronologyItem =
+  | { readonly _tag: "CoordinatorProcessDies" }
+  | { readonly _tag: "TaskWorkSpecificationReadSelected"; readonly taskId: TaskId }
+  | {
+      readonly _tag: "ExecutorReport"
+      readonly attemptId: AttemptId
+      readonly report: "Running" | "SafelySuspended" | "Terminal"
+      readonly request: "StartOrContinue" | "Suspend"
+    }
+
+const projectWorkAuthorizationChronology = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): ReadonlyArray<WorkAuthorizationChronologyItem> =>
+  story.flatMap((item): ReadonlyArray<WorkAuthorizationChronologyItem> => {
+    if (item._tag === "CoordinatorProcessDies") return [{ _tag: item._tag }] as const
+    if (item._tag === "DalphSelects" && item.operation._tag === "ReadTaskWorkSpecification") {
+      return [{ _tag: "TaskWorkSpecificationReadSelected" as const, taskId: item.operation.taskId }]
+    }
+    if (item._tag === "PlannedAttemptExecutorWorkReported") {
+      return [
+        {
+          _tag: "ExecutorReport" as const,
+          attemptId: item.report.attemptId,
+          report: item.report._tag,
+          request: item.request
+        }
+      ]
+    }
+    return []
+  })
+
+it("authors distinct instruction-read chronology for fresh, safely suspended, and already-executing work", () => {
+  expect(projectWorkAuthorizationChronology(maintainedAuthoredCassetteCatalog.singletonTaskCompletes.story)).toEqual([
+    { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Running", request: "StartOrContinue" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Terminal", request: "StartOrContinue" }
+  ])
+
+  expect(
+    projectWorkAuthorizationChronology(maintainedAuthoredCassetteCatalog.runUnpauseAfterSafeSuspension.story)
+  ).toEqual([
+    { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Running", request: "StartOrContinue" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "SafelySuspended", request: "Suspend" },
+    { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Terminal", request: "StartOrContinue" }
+  ])
+
+  expect(
+    projectWorkAuthorizationChronology(maintainedAuthoredCassetteCatalog.compatibleTargetAdvanceContinues.story)
+  ).toEqual([
+    { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Running", request: "StartOrContinue" },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "SafelySuspended", request: "StartOrContinue" },
+    { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
+    { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Terminal", request: "StartOrContinue" }
+  ])
+})
+
+type RestartAddedTaskChronologyItem =
+  | { readonly _tag: "CoordinatorProcessDies" }
+  | { readonly _tag: "ExistingAttemptAccepted"; readonly attemptId: AttemptId }
+  | { readonly _tag: "RestartAddedAttemptRunning"; readonly attemptId: AttemptId }
+  | { readonly _tag: "RestartAddedTaskClaimSelected"; readonly taskId: TaskId }
+  | { readonly _tag: "RestartAddedTaskSpecificationSelected"; readonly taskId: TaskId }
+  | { readonly _tag: "RestartAddedTaskPlanSelected"; readonly attemptId: AttemptId }
+  | { readonly _tag: "RestartAddedTaskWorktreeSelected"; readonly attemptId: AttemptId }
+
+const projectRestartAddedTaskChronology = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): ReadonlyArray<RestartAddedTaskChronologyItem> =>
+  story.flatMap((item): ReadonlyArray<RestartAddedTaskChronologyItem> => {
+    if (item._tag === "CoordinatorProcessDies") return [{ _tag: item._tag }] as const
+    if (
+      item._tag === "PlannedAttemptExecutorWorkReported" &&
+      item.report._tag === "Terminal" &&
+      item.report.result._tag === "Accepted" &&
+      (item.report.attemptId === "attempt:B:0" || item.report.attemptId === "attempt:C:1")
+    ) {
+      return [{ _tag: "ExistingAttemptAccepted" as const, attemptId: item.report.attemptId }]
+    }
+    if (
+      item._tag === "PlannedAttemptExecutorWorkReported" &&
+      item.report._tag === "Running" &&
+      item.report.attemptId === "attempt:X:0"
+    ) {
+      return [{ _tag: "RestartAddedAttemptRunning" as const, attemptId: item.report.attemptId }]
+    }
+    if (item._tag !== "DalphSelects") return []
+    const operation = item.operation
+    if (operation._tag === "AcquireTaskClaim" && operation.taskId === "X") {
+      return [{ _tag: "RestartAddedTaskClaimSelected" as const, taskId: operation.taskId }]
+    }
+    if (operation._tag === "ReadTaskWorkSpecification" && operation.taskId === "X") {
+      return [{ _tag: "RestartAddedTaskSpecificationSelected" as const, taskId: operation.taskId }]
+    }
+    if (operation._tag === "RecordTaskAttemptPlan" && operation.taskId === "X") {
+      return [{ _tag: "RestartAddedTaskPlanSelected" as const, attemptId: operation.attemptId }]
+    }
+    if (operation._tag === "ReconcileTaskWorktree" && operation.taskId === "X") {
+      return [{ _tag: "RestartAddedTaskWorktreeSelected" as const, attemptId: operation.attemptId }]
+    }
+    return []
+  })
+
+it("authors restart-added X only after recovered capacity and its own focused specification", () => {
+  expect(projectRestartAddedTaskChronology(maintainedAuthoredCassetteCatalog.deliveryInvariantStory.story)).toEqual([
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "ExistingAttemptAccepted", attemptId: "attempt:B:0" },
+    { _tag: "ExistingAttemptAccepted", attemptId: "attempt:C:1" },
+    { _tag: "RestartAddedTaskClaimSelected", taskId: "X" },
+    { _tag: "RestartAddedTaskSpecificationSelected", taskId: "X" },
+    { _tag: "RestartAddedTaskPlanSelected", attemptId: "attempt:X:0" },
+    { _tag: "RestartAddedTaskWorktreeSelected", attemptId: "attempt:X:0" },
+    { _tag: "RestartAddedAttemptRunning", attemptId: "attempt:X:0" }
+  ])
+})
 
 it("renders every maintained authored story item through both public presentation seams", () => {
   const items = Object.values(maintainedAuthoredCassetteCatalog).flatMap(({ story }) => story)

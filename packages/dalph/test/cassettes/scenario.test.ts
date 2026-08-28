@@ -4622,8 +4622,6 @@ it.effect(
           },
           { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
           { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
           { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("B") } },
           { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
           { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
@@ -4652,6 +4650,8 @@ it.effect(
             report: { _tag: "Terminal", attemptId: bAttemptId, result: { _tag: "Completed" } },
             request: "StartOrContinue"
           },
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
           {
             _tag: "ExpectedBehavior",
             orchestration: [
@@ -4794,14 +4794,36 @@ it.effect(
           ? { ...item, graph: changedInstructionsGraph }
           : item
       )
-      const firstChangedGraphAt = changedGraphStory.findIndex(
-        (item) => item._tag === "TrackerGraphReadReturned" && item.graph === changedInstructionsGraph
+      const changedInstructionsSuspensionAt = changedGraphStory.findIndex(
+        (item) =>
+          item._tag === "PlannedAttemptExecutorWorkReported" &&
+          item.report?._tag === "SafelySuspended" &&
+          item.report.attemptId === aAttemptId
       )
+      const changedInstructionsPostSafeGraphAt = changedGraphStory.findIndex(
+        (item, index) => index > changedInstructionsSuspensionAt && item._tag === "TrackerGraphReadReturned"
+      )
+      const changedInstructionsAcquireBAt = changedGraphStory.findIndex(
+        (item, index) =>
+          index > changedInstructionsPostSafeGraphAt &&
+          item._tag === "DalphSelects" &&
+          item.operation?._tag === "AcquireTaskClaim" &&
+          item.operation.taskId === TaskId.make("B")
+      )
+      expect(changedInstructionsSuspensionAt).toBeGreaterThan(-1)
+      expect(changedInstructionsPostSafeGraphAt).toBeGreaterThan(changedInstructionsSuspensionAt)
+      expect(changedInstructionsAcquireBAt).toBeGreaterThan(changedInstructionsPostSafeGraphAt)
       const changedInstructionsCassette = {
         ...localizedCassette,
         name: "A instructions change while independent B continues",
         story: [
-          ...changedGraphStory.slice(0, firstChangedGraphAt + 1),
+          ...changedGraphStory.slice(0, changedInstructionsSuspensionAt),
+          {
+            _tag: "PlannedAttemptExecutorWorkReported" as const,
+            report: { _tag: "SafelySuspended" as const, attemptId: aAttemptId },
+            request: "StartOrContinue" as const
+          },
+          ...changedGraphStory.slice(changedInstructionsSuspensionAt + 1, changedInstructionsPostSafeGraphAt + 1),
           {
             _tag: "DalphSelects" as const,
             operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: TaskId.make("A") }
@@ -4812,7 +4834,18 @@ it.effect(
             taskId: TaskId.make("A"),
             title: "Complete changed A"
           },
-          ...changedGraphStory.slice(firstChangedGraphAt + 1)
+          ...changedGraphStory.slice(changedInstructionsPostSafeGraphAt + 1, changedInstructionsAcquireBAt + 1),
+          {
+            _tag: "DalphSelects" as const,
+            operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: TaskId.make("A") }
+          },
+          {
+            _tag: "TaskWorkSpecificationReadReturned" as const,
+            body: "Complete changed task A without pretending the old attempt incorporated this text.",
+            taskId: TaskId.make("A"),
+            title: "Complete changed A"
+          },
+          ...changedGraphStory.slice(changedInstructionsAcquireBAt + 1)
         ]
       }
       const changedInstructionsRun = yield* runAuthoredScenarioCassette(changedInstructionsCassette)
@@ -5179,6 +5212,11 @@ it.effect("drives a public operator claim-reacquisition request through a later 
       name: "an operator replaces a missing claim with a fresh claim identity",
       story: [
         ...storyBeforeAssertions,
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+          request: "StartOrContinue"
+        },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
         {
           _tag: "TaskWorkSpecificationReadReturned",
@@ -5188,11 +5226,6 @@ it.effect("drives a public operator claim-reacquisition request through a later 
         },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
         { _tag: "TaskClaimReadReturned", observation: UnclaimedTask.make({ taskId: TaskId.make("A") }) },
-        {
-          _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
-          request: "Suspend"
-        },
         { _tag: "OperatorDirectsTaskClaimReacquisition", requestId, taskId: "A" },
         { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
         { _tag: "TrackerGraphReadReturned", graph: singleton.startingFacts.trackerGraph },

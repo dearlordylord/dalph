@@ -204,15 +204,17 @@ acceptance test that checks its evidence; a catalog key by itself is not proof.
 `keeps every delivery-story beat linked to maintained evidence or an explicit
 implementation gap` checks both directions, exact catalog keys, exact test
 declarations, and the byte-for-byte manifest block. `consumes a staggered graph
-while reconstructed positions delay restart-added X` runs the executable graph slice
+while restart-added X waits for recovered capacity` runs the executable graph slice
 through `runAuthoredScenarioCassette` and checks that it reaches its declared
 end.
 
-- `consumes a staggered graph while reconstructed positions delay restart-added
-  X` checks the exact twelve prerequisite edges,
+- `consumes a staggered graph while restart-added X waits for recovered
+  capacity` checks the exact twelve prerequisite edges,
   ordered eligible waves A, B+C, B+C+X after restart, D+X, E+F, H+I, G, and empty, plus the held
-  sequence B+C, C, D+X, X, E+F, F, H+I, I, G; it also checks all ten accepted
-  results settle in order and that no coarse executor-completion result appears.
+  sequence B+C, C, X, D, E+F, F, H+I, I, G; it also checks X's exact
+  specification precedes its first plan, recovered capacity precedes its
+  worktree, all ten accepted results settle in order, and no coarse
+  executor-completion result appears.
 - `preserves the double-diamond middle positions across coordinator restart` checks
   that B and C both hold task-work positions before death and that recovered
   publications retain the same Run and Attempt identities.
@@ -231,7 +233,7 @@ end.
 
 <!-- DELIVERY-STORY-MANIFEST:START -->
 cassette|authored:deliveryInvariantStory
-cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#consumes a staggered graph while reconstructed positions delay restart-added X
+cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#consumes a staggered graph while restart-added X waits for recovered capacity
 cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
 DS-01|NotImplemented|The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks.
 DS-02|NotImplemented|No maintained run admits A, B, and C together yet.

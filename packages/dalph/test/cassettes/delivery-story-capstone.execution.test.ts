@@ -15,7 +15,7 @@ const cachedRun = Effect.runSync(
 )
 
 it.effect(
-  "consumes a staggered graph while reconstructed positions delay restart-added X",
+  "consumes a staggered graph while restart-added X waits for recovered capacity",
   () =>
     Effect.gen(function* () {
       const run = yield* cachedRun
@@ -48,7 +48,7 @@ it.effect(
         previousFrontier = eligibleSets.indexOf(frontier, previousFrontier + 1)
         return previousFrontier
       })
-      const expectedOverlaps = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
+      const expectedOverlaps = ["B+C", "C", "X", "D", "E+F", "F", "H+I", "I", "G"]
       let previousOverlap = lastItemIndex
       const overlapPositions = expectedOverlaps.map((overlap) => {
         previousOverlap = heldSets.indexOf(overlap, previousOverlap + 1)
@@ -107,7 +107,7 @@ it.effect(
         run.records.flatMap(({ event }) =>
           event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
         )
-      ).toEqual(["A", "B", "C", "D", "X", "E", "F", "H", "I", "G"])
+      ).toEqual(["A", "B", "C", "X", "D", "E", "F", "H", "I", "G"])
       expect(
         run.records.some(
           ({ event }) =>

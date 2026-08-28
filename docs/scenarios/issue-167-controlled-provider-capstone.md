@@ -69,11 +69,15 @@ X to use capacity. B and C return accepted commits. Their exact integration
 responsibilities run in journal order through one outer Integrator result, Git
 qualification of its explicitly reported candidate, promotion, tracker
 completion, focused success confirmation,
-completion-claim deletion, and settlement. Later complete graph observations
-release D and X, then E and F, then H and I, then G. Every executor returns an
-accepted commit and every task crosses the same finality boundary before the
-next dependency wave. The final complete graph read reports all ten tasks
-successfully complete and the Run terminates with no held or retained work.
+completion-claim deletion, and settlement. Once both accepted reports release
+their reconstructed positions, Dalph reads X's exact current specification,
+plans X's first attempt, and starts it after B's promotion compare-and-set while
+B completion finality continues. A later complete graph observation proves B
+and C successful and releases D; later observations release E and F, then H and
+I, then G. Every executor returns an accepted commit and every task crosses the
+same finality boundary before its dependants advance. The final complete graph
+read reports all ten tasks successfully complete and the Run terminates with no
+held or retained work.
 
 The process death itself is not a workflow occurrence and is not journaled.
 Recovery allocates no replacement attempt. The maintainer sees the same Run
@@ -83,7 +87,7 @@ release a dependant from focused success alone, or terminate early.
 
 Acceptance seams:
 
-- `consumes a staggered graph while reconstructed positions delay restart-added X`
+- `consumes a staggered graph while restart-added X waits for recovered capacity`
 - `preserves the double-diamond middle positions across coordinator restart`
 
 ## The maintained A-to-B story releases B only after A settles
@@ -140,7 +144,7 @@ cassette <catalog-key> through the composed production coordinator`.
 | Scenario | Concrete result | Acceptance test |
 |---|---|---|
 | Five-task diamond | D starts only after B, C, and E have tracker-confirmed success; all five accepted results settle | `runs the five-task controlled-provider diamond through exact accepted-result finality` |
-| Ten-task restart story | Same B/C attempts survive restart and all ten tasks use accepted-result finality | `consumes a staggered graph while reconstructed positions delay restart-added X`; `preserves the double-diamond middle positions across coordinator restart` |
+| Ten-task restart story | Same B/C attempts survive restart and all ten tasks use accepted-result finality | `consumes a staggered graph while restart-added X waits for recovered capacity`; `preserves the double-diamond middle positions across coordinator restart` |
 | A-to-B maintained story | B starts only after A's accepted result reaches completion finality and a later complete graph releases it | `releases B only after A's accepted-result finality in one Run` |
 | Maintained catalog | Every shared registry entry executes through the public production runner | generated `runs maintained authored cassette <catalog-key> through the composed production coordinator` tests, plus the three stronger capstone tests above |
 

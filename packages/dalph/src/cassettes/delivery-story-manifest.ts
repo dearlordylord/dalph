@@ -73,7 +73,7 @@ const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
   sourceFile: "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
 })
 
-const topologyTest = capstoneTest("consumes a staggered graph while reconstructed positions delay restart-added X")
+const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
 
 const spine = (
