@@ -809,11 +809,15 @@ describe("capability registration gate", () => {
     expect(providerCalled).toBe(false)
   })
 
-  it("is part of check:all", () => {
+  it("allows capability registration two minutes in check:all and preserves the one-minute check:ci watchdog", () => {
     const packageJson = readFileSync("package.json", "utf8")
     const qualityGate = readFileSync("scripts/run-quality-gate.mjs", "utf8")
 
     expect(packageJson).toContain('"test:capability-registration"')
-    expect(qualityGate).toContain("test:capability-registration")
+    expect(qualityGate).toContain(`{
+    args: ["test:capability-registration"],
+    name: "capability registration",
+    timeout: withoutQuint ? 60 * SECOND : 2 * 60 * SECOND
+  }`)
   })
 })
