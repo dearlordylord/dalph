@@ -515,63 +515,17 @@ export const authorizeCompletionTaskAttempt = Effect.fn("IntegrationFinality.aut
   }
 )
 
-const focusedCompletionObservationFor = (
-  request: CompletionTaskRequest,
-  facts: FocusedTaskCompletionFacts,
-  observedAt: JournalRecord["position"],
-  target: TrackerTarget
-): FocusedCompletedTaskObservation | undefined => {
-  if (
-    facts.lifecycle !== "CompletedSuccessfully" ||
-    facts.taskId !== request.taskId ||
-    facts.taskRevision !== request.taskRevision ||
-    taskTrackerTargetKey(facts.target) !== taskTrackerTargetKey(target) ||
-    facts.targetMembership !== "Member" ||
-    facts.currentClaim._tag !== "CompletionTaskClaim" ||
-    !completionTaskClaimEquals(facts.currentClaim, request.claim)
-  ) {
-    return undefined
-  }
-  return FocusedCompletedTaskObservation.make({
-    claim: facts.currentClaim,
-    lifecycle: "CompletedSuccessfully",
-    observedAt,
-    operationId: facts.operationId,
-    taskId: facts.taskId,
-    taskRevision: facts.taskRevision,
-    trackerRevision: facts.trackerRevision,
-    target: facts.target
-  })
+type CompletionTaskConflictDisposition = {
+  readonly _tag: "Conflict"
+  readonly detail: string
+  readonly reason: CompletionTaskConflictReason
 }
-
-const authorizeCurrentFocusedCompletion = Effect.fn("IntegrationFinality.authorizeCurrentFocusedCompletion")(function* (
-  request: CompletionTaskRequest,
-  focused: { readonly facts: FocusedTaskCompletionFacts; readonly observedAt: JournalRecord["position"] },
-  target: TrackerTarget
-) {
-  if (focused.facts.lifecycle !== "CompletedSuccessfully") return undefined
-  const observation = focusedCompletionObservationFor(request, focused.facts, focused.observedAt, target)
-  if (observation !== undefined) return observation
-  const issue =
-    focusedTaskAuthorizationIssue(focused.facts, target, request) ??
-    completionClaimAuthorizationIssue(focused.facts, request)
-  return yield* new CompletionTaskAuthorizationConflict({
-    detail: issue?.detail ?? "current completion evidence does not prove the exact requested claim",
-    reason: issue?.reason ?? "CompletionClaimForeign",
-    request
-  })
-})
-
-/** Pure current task-local classification shared by live confirmation and reconstructed diagnostics. */
-export type CompletionTaskConfirmationDisposition =
-  | { readonly _tag: "CompletedSuccessfully"; readonly claim: CompletionTaskRequest["claim"] }
-  | { readonly _tag: "Pending" }
-  | { readonly _tag: "Conflict"; readonly detail: string; readonly reason: CompletionTaskConflictReason }
 
 type CurrentCompletionClaimDisposition =
   | { readonly _tag: "Exact"; readonly claim: CompletionTaskRequest["claim"] }
-  | Extract<CompletionTaskConfirmationDisposition, { readonly _tag: "Conflict" }>
+  | CompletionTaskConflictDisposition
 
+/** Classifies the current tracker claim once for both restart and post-close completion reads. */
 const currentCompletionClaimDisposition = (
   request: CompletionTaskRequest,
   facts: FocusedTaskCompletionFacts
@@ -601,6 +555,69 @@ const currentCompletionClaimDisposition = (
       reason: "CompletionClaimMissing" as const
     })
   })
+
+const focusedCompletionObservationIssue = (
+  request: CompletionTaskRequest,
+  facts: FocusedTaskCompletionFacts,
+  target: TrackerTarget
+): CompletionTaskAuthorizationIssue | undefined => {
+  if (facts.taskId !== request.taskId || facts.taskRevision !== request.taskRevision) {
+    return {
+      detail: "focused task revision or identity differs from the immutable request",
+      reason: "TaskIdentityOrRevisionChanged"
+    }
+  }
+  if (taskTrackerTargetKey(facts.target) !== taskTrackerTargetKey(target)) {
+    return { detail: "focused task facts came from another tracker target", reason: "TrackerTargetChanged" }
+  }
+  if (facts.targetMembership !== "Member") {
+    return { detail: "focused task is not a member of the tracker target", reason: "TaskNotInTarget" }
+  }
+  return undefined
+}
+
+const focusedCompletionObservationFrom = (
+  claim: CompletionTaskRequest["claim"],
+  facts: FocusedTaskCompletionFacts,
+  observedAt: JournalRecord["position"]
+): FocusedCompletedTaskObservation =>
+  FocusedCompletedTaskObservation.make({
+    claim,
+    lifecycle: "CompletedSuccessfully",
+    observedAt,
+    operationId: facts.operationId,
+    taskId: facts.taskId,
+    taskRevision: facts.taskRevision,
+    trackerRevision: facts.trackerRevision,
+    target: facts.target
+  })
+
+const authorizeCurrentFocusedCompletion = Effect.fn("IntegrationFinality.authorizeCurrentFocusedCompletion")(function* (
+  request: CompletionTaskRequest,
+  focused: { readonly facts: FocusedTaskCompletionFacts; readonly observedAt: JournalRecord["position"] },
+  target: TrackerTarget
+) {
+  if (focused.facts.lifecycle !== "CompletedSuccessfully") return undefined
+  const observationIssue = focusedCompletionObservationIssue(request, focused.facts, target)
+  if (observationIssue !== undefined) {
+    return yield* new CompletionTaskAuthorizationConflict({ ...observationIssue, request })
+  }
+  const claimDisposition = currentCompletionClaimDisposition(request, focused.facts)
+  if (claimDisposition._tag === "Conflict") {
+    return yield* new CompletionTaskAuthorizationConflict({
+      detail: claimDisposition.detail,
+      reason: claimDisposition.reason,
+      request
+    })
+  }
+  return focusedCompletionObservationFrom(claimDisposition.claim, focused.facts, focused.observedAt)
+})
+
+/** Pure current task-local classification shared by live confirmation and reconstructed diagnostics. */
+export type CompletionTaskConfirmationDisposition =
+  | { readonly _tag: "CompletedSuccessfully"; readonly claim: CompletionTaskRequest["claim"] }
+  | { readonly _tag: "Pending" }
+  | CompletionTaskConflictDisposition
 
 export const completionTaskConfirmationDisposition = (
   request: CompletionTaskRequest,

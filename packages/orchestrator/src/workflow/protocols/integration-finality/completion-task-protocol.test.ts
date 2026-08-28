@@ -170,17 +170,23 @@ const authorization = CompletionTaskAuthorization.make({
 
 const nonExactCurrentClaimExamples: ReadonlyArray<{
   readonly claim: CompletionClaimObservation
+  readonly expectedReason: "CompletionClaimForeign" | "CompletionClaimMissing"
   readonly label: string
 }> = [
-  { claim: fixture.activeClaim, label: "active claim" },
+  { claim: fixture.activeClaim, expectedReason: "CompletionClaimForeign", label: "active claim" },
   {
     claim: ForeignCompletionClaim.make({
       fingerprint: CompletionClaimFingerprint.make("f".repeat(64)),
       taskId: fixture.taskId
     }),
+    expectedReason: "CompletionClaimForeign",
     label: "foreign completion claim"
   },
-  { claim: { _tag: "UnclaimedTask", taskId: fixture.taskId }, label: "unclaimed task" }
+  {
+    claim: { _tag: "UnclaimedTask", taskId: fixture.taskId },
+    expectedReason: "CompletionClaimMissing",
+    label: "unclaimed task"
+  }
 ]
 
 it.effect("rereads accepted-result and Integrator-returned evidence before task completion", () =>
@@ -1022,13 +1028,16 @@ it.effect("checks A after losing the completion response and records fresh succe
 
 it.effect("does not turn completed lifecycle into success without the exact current completion claim", () =>
   Effect.gen(function* () {
-    for (const { claim, label } of nonExactCurrentClaimExamples) {
+    for (const { claim, expectedReason, label } of nonExactCurrentClaimExamples) {
       const result = yield* protocolHarness(["UnknownNotApplied"], {
         focusedClaim: claim,
         focusedLifecycle: "CompletedSuccessfully"
       })
 
       expect(result.outcome._tag, label).toBe("Failure")
+      if (result.outcome._tag === "Failure") {
+        expect(result.outcome.failure, label).toMatchObject({ reason: expectedReason })
+      }
       expect(result.calls, label).toBe(1)
       expect(result.lookupCalls, label).toBe(0)
       expect(
@@ -1450,7 +1459,7 @@ it.effect("accepts a tracker client's successful completion after Q without anot
 it.effect("restart authorization rejects completed lifecycle without the exact current completion claim", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    for (const { claim, label } of nonExactCurrentClaimExamples) {
+    for (const { claim, expectedReason, label } of nonExactCurrentClaimExamples) {
       const replacementOperationId = completionClaimReplacementOperationIdFor(fixture.claim)
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
         {
@@ -1500,6 +1509,7 @@ it.effect("restart authorization rejects completed lifecycle without the exact c
       )
 
       expect(conflict, label).toBeInstanceOf(CompletionTaskAuthorizationConflict)
+      expect(conflict, label).toMatchObject({ reason: expectedReason })
       expect(yield* Ref.get(chronology), label).not.toContain("CompletionTaskAttemptIntended")
     }
   }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
