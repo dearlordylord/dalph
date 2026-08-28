@@ -45,6 +45,7 @@ import {
   completionTaskClaimEquals,
   completionTaskFocusedReadPurposeEquals,
   completionTaskRequestEquals,
+  focusedTaskCompletionReadRequestFor,
   type CompletionTaskAcknowledgement,
   type CompletionTaskBoundaryService,
   type CompletionTaskRequestFailure
@@ -335,7 +336,9 @@ export const readCompletionFocusedFacts = Effect.fn("IntegrationFinality.readCom
     /* v8 ignore stop -- @preserve */
     return { facts: existingObservation.facts, observedAt: existing.position, operationId } as const
   }
-  const facts = yield* boundary.readFocusedTaskCompletion(request.taskId, target, operationId)
+  const facts = yield* boundary.readFocusedTaskCompletion(
+    focusedTaskCompletionReadRequestFor(request, target, operationId)
+  )
   if (facts.operationId !== operationId) {
     return yield* new CompletionTaskAuthorizationConflict({
       detail: "focused completion facts do not correlate to their durable read intent",

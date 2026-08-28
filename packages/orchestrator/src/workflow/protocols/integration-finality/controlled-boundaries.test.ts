@@ -20,6 +20,7 @@ import {
   CompletionTaskRequest,
   CompletionTaskRequestFailure,
   FocusedTaskCompletionFacts,
+  FocusedTaskCompletionReadRequest,
   FocusedTaskCompletionReadFailure,
   completionClaimDeletionRequestFor,
   completionClaimReadRequestFor,
@@ -34,6 +35,9 @@ const openFacts = FocusedTaskCompletionFacts.make({
   operationId: OperationId.make("controlled-completion-initial-facts")
 })
 
+const focusedReadRequest = (taskId: TaskId, target: typeof fixture.target, operationId: OperationId) =>
+  FocusedTaskCompletionReadRequest.make({ expectedClaim: fixture.claim, operationId, target, taskId })
+
 completionBoundaryContract({
   expectedOpenFacts: openFacts,
   layer: controlledCompletionTaskBoundaryLayerFrom([openFacts]),
@@ -47,34 +51,44 @@ const rejectAndReadCurrentFacts = (currentFacts: FocusedTaskCompletionFacts) =>
     const boundary = yield* CompletionTaskBoundary
     const failure = yield* boundary.completeTask(fixture.completionRequest).pipe(Effect.flip)
     const readOperationId = OperationId.make("controlled-completion-rejected-state-read")
-    const observed = yield* boundary.readFocusedTaskCompletion(fixture.taskId, fixture.target, readOperationId)
+    const observed = yield* boundary.readFocusedTaskCompletion(
+      focusedReadRequest(fixture.taskId, fixture.target, readOperationId)
+    )
     return { failure, observed, readOperationId }
   }).pipe(Effect.provide(controlledCompletionTaskBoundaryLayerFrom([currentFacts])))
 
 it.effect("correlates a focused completion read to its operation and rejects absent or foreign-target facts", () =>
   Effect.gen(function* () {
-    const boundary = yield* CompletionTaskBoundary
     const readOperationId = OperationId.make("controlled-completion-focused-read")
-    const observed = yield* boundary.readFocusedTaskCompletion(fixture.taskId, fixture.target, readOperationId)
-    expect(observed).toEqual({ ...openFacts, operationId: readOperationId })
-
-    const missingTaskId = TaskId.make("controlled-completion-missing-task")
-    const missing = yield* boundary
-      .readFocusedTaskCompletion(missingTaskId, fixture.target, readOperationId)
-      .pipe(Effect.flip)
-    expect(missing).toBeInstanceOf(FocusedTaskCompletionReadFailure)
-    expect(missing.taskId).toBe(missingTaskId)
-
-    const wrongTarget = yield* boundary
-      .readFocusedTaskCompletion(
-        fixture.taskId,
-        FixtureTarget.make("controlled-completion-foreign-target"),
-        readOperationId
+    yield* Effect.gen(function* () {
+      const boundary = yield* CompletionTaskBoundary
+      const observed = yield* boundary.readFocusedTaskCompletion(
+        focusedReadRequest(fixture.taskId, fixture.target, readOperationId)
       )
-      .pipe(Effect.flip)
-    expect(wrongTarget).toBeInstanceOf(FocusedTaskCompletionReadFailure)
-    expect(wrongTarget.taskId).toBe(fixture.taskId)
-  }).pipe(Effect.provide(controlledCompletionTaskBoundaryLayerFrom([openFacts])))
+      expect(observed).toEqual({ ...openFacts, operationId: readOperationId })
+
+      const wrongTarget = yield* boundary
+        .readFocusedTaskCompletion(
+          FocusedTaskCompletionReadRequest.make({
+            expectedClaim: fixture.claim,
+            operationId: readOperationId,
+            target: FixtureTarget.make("controlled-completion-foreign-target"),
+            taskId: fixture.taskId
+          })
+        )
+        .pipe(Effect.flip)
+      expect(wrongTarget).toBeInstanceOf(FocusedTaskCompletionReadFailure)
+      expect(wrongTarget.taskId).toBe(fixture.taskId)
+    }).pipe(Effect.provide(controlledCompletionTaskBoundaryLayerFrom([openFacts])))
+
+    const missing = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionTaskBoundary)
+        .readFocusedTaskCompletion(focusedReadRequest(fixture.taskId, fixture.target, readOperationId))
+        .pipe(Effect.flip)
+    }).pipe(Effect.provide(controlledCompletionTaskBoundaryLayerFrom([])))
+    expect(missing).toBeInstanceOf(FocusedTaskCompletionReadFailure)
+    expect(missing.taskId).toBe(fixture.taskId)
+  })
 )
 
 it.effect("completes only the exact task request and exposes success through a later focused read", () =>
@@ -84,7 +98,9 @@ it.effect("completes only the exact task request and exposes success through a l
     expect(acknowledgement).toEqual({ operationId: fixture.completionRequest.operationId, taskId: fixture.taskId })
 
     const confirmationOperationId = OperationId.make("controlled-completion-confirmation-read")
-    const confirmed = yield* boundary.readFocusedTaskCompletion(fixture.taskId, fixture.target, confirmationOperationId)
+    const confirmed = yield* boundary.readFocusedTaskCompletion(
+      focusedReadRequest(fixture.taskId, fixture.target, confirmationOperationId)
+    )
     expect(confirmed).toEqual({
       ...openFacts,
       lifecycle: "CompletedSuccessfully",

@@ -1,6 +1,6 @@
 import type { TaskId } from "@dalph/contracts"
 import { Effect, Layer, Ref } from "effect"
-import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import { UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
 import type { OperationId } from "../../identity.js"
 import {
@@ -17,6 +17,7 @@ import {
   CompletionTaskRequestFailure,
   CompletionTaskRequestLookup,
   type FocusedTaskCompletionFacts,
+  type FocusedTaskCompletionReadRequest,
   FocusedTaskCompletionReadFailure,
   completionTaskClaimEquals,
   completionTaskRequestEquals,
@@ -128,15 +129,15 @@ export const controlledCompletionTaskBoundaryLayerFrom = (
         facts: new Map<TaskId, FocusedTaskCompletionFacts>(initialFacts.map((fact) => [fact.taskId, fact] as const))
       })
       const readFocusedTaskCompletion = Effect.fn("CompletionTaskBoundary.Controlled.readFocusedTaskCompletion")(
-        function* (taskId: TaskId, target: TrackerTarget, operationId: OperationId) {
-          const fact = (yield* Ref.get(state)).facts.get(taskId)
-          if (fact === undefined || taskTrackerTargetKey(fact.target) !== taskTrackerTargetKey(target)) {
+        function* (request: FocusedTaskCompletionReadRequest) {
+          const fact = (yield* Ref.get(state)).facts.get(request.taskId)
+          if (fact === undefined || taskTrackerTargetKey(fact.target) !== taskTrackerTargetKey(request.target)) {
             return yield* new FocusedTaskCompletionReadFailure({
-              detail: `no focused completion facts for ${taskId}`,
-              taskId
+              detail: `no focused completion facts for ${request.taskId}`,
+              taskId: request.taskId
             })
           }
-          return { ...fact, operationId }
+          return { ...fact, operationId: request.operationId }
         }
       )
       const completeTask = Effect.fn("CompletionTaskBoundary.Controlled.completeTask")(function* (

@@ -15,6 +15,7 @@ import {
   CompletionTaskRequestFailure,
   CompletionTaskRequestLookup,
   FocusedCompletedTaskObservation,
+  FocusedTaskCompletionReadRequest,
   FocusedTaskCompletionReadFailure,
   InRunJournal,
   JournalStoreContradiction,
@@ -817,23 +818,23 @@ const makeProductionState = () => {
   })
 
   const completionBoundary: CompletionTaskBoundaryService = {
-    readFocusedTaskCompletion: (taskId, target, operationId) =>
-      confirmationReadUnavailable && String(operationId).includes(":confirmation:")
+    readFocusedTaskCompletion: (readRequest) =>
+      confirmationReadUnavailable && String(readRequest.operationId).includes(":confirmation:")
         ? Effect.fail(
             new FocusedTaskCompletionReadFailure({
               detail: "conformance cut after the lost completion response",
-              taskId
+              taskId: readRequest.taskId
             })
           )
         : Effect.succeed({
             currentClaim: claimObservation,
             lifecycle: focusedLifecycle,
-            operationId,
-            target,
+            operationId: readRequest.operationId,
+            target: readRequest.target,
             targetMembership: "Member",
             taskId: focusedTaskId,
             taskRevision: focusedTaskRevision,
-            trackerRevision: TrackerRevision.make(`completion-facts:${operationId}`),
+            trackerRevision: TrackerRevision.make(`completion-facts:${readRequest.operationId}`),
             unfinishedPrerequisiteTaskIds: []
           }),
     completeTask: (request) =>
@@ -983,9 +984,12 @@ const makeProductionState = () => {
       kind === "ForeignTask"
         ? Effect.runSync(
             completionBoundary.readFocusedTaskCompletion(
-              productionCompletionRequest.taskId,
-              integrationFinalityFixture.target,
-              priorFocusedEvent.operationId
+              FocusedTaskCompletionReadRequest.make({
+                expectedClaim: productionCompletionRequest.claim,
+                operationId: priorFocusedEvent.operationId,
+                target: integrationFinalityFixture.target,
+                taskId: productionCompletionRequest.taskId
+              })
             )
           )
         : (() => {

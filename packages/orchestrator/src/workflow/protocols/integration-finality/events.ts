@@ -1,6 +1,7 @@
 import { Context, type Effect, Match, Schema } from "effect"
 import { TaskId, TaskRevision } from "@dalph/contracts"
-import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
+import type { TrackerTarget } from "../../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -19,9 +20,11 @@ import {
 } from "./completion-claim.js"
 import type { FocusedTaskCompletionFacts } from "./focused-task-completion-facts.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { FocusedTaskCompletionReadRequest } from "./focused-task-completion-request.js"
 
 export * from "./completion-claim.js"
 export * from "./focused-task-completion-facts.js"
+export * from "./focused-task-completion-request.js"
 
 /** Stable operation identity for the one task-completion request derived from promotion. */
 export const completionTaskOperationIdFor = (claim: CompletionTaskClaim): OperationId =>
@@ -86,6 +89,14 @@ export class CompletionTaskRequestFailure extends Schema.TaggedError<CompletionT
   }
 ) {}
 
+/** Derives the exact provider read request for one immutable completion request Q. */
+export const focusedTaskCompletionReadRequestFor = (
+  request: CompletionTaskRequest,
+  target: TrackerTarget,
+  operationId: OperationId
+): FocusedTaskCompletionReadRequest =>
+  FocusedTaskCompletionReadRequest.make({ expectedClaim: request.claim, operationId, target, taskId: request.taskId })
+
 /** Focused task facts were incomplete, contradictory, or unreadable. */
 export class FocusedTaskCompletionReadFailure extends Schema.TaggedError<FocusedTaskCompletionReadFailure>()(
   "IntegrationFinality.FocusedTaskCompletionReadFailure",
@@ -100,9 +111,7 @@ export class CompletionTaskRequestLookupFailure extends Schema.TaggedError<Compl
 
 export interface CompletionTaskBoundaryService {
   readonly readFocusedTaskCompletion: (
-    taskId: TaskId,
-    target: TrackerTarget,
-    operationId: OperationId
+    request: FocusedTaskCompletionReadRequest
   ) => Effect.Effect<FocusedTaskCompletionFacts, FocusedTaskCompletionReadFailure>
   readonly completeTask: (
     request: CompletionTaskRequest
@@ -521,5 +530,4 @@ export const completionClaimDeletionRequestFor = (
 
 // Keep these imports in the module's public type surface without making callers
 // re-import the claim observation identities from the provider adapter.
-export type { ActiveTaskClaim, TaskClaimObservation }
-export { isExactTaskClaim }
+export { type ActiveTaskClaim, isExactTaskClaim, type TaskClaimObservation }

@@ -33,6 +33,7 @@ import {
   CompletionClaimReplacementIntendedEvent,
   CompletionTaskClaim,
   CompletionTaskBoundary,
+  FocusedTaskCompletionReadRequest,
   completionClaimReplacementOperationIdFor,
   decodeFreshWorkflowRunIdForDiagnostics,
   deriveIntegrationFrontier,
@@ -2717,9 +2718,12 @@ it.effect("settles a promoted authored task through the real completion-claim bo
         expected: "authored focused completion read found UnclaimedTask for A",
         invoke: (boundary: CompletionTaskBoundary["Service"]) =>
           boundary.readFocusedTaskCompletion(
-            request.taskId,
-            FixtureTarget.make("cassette-target"),
-            OperationId.make("hostile-authored-focused-read")
+            FocusedTaskCompletionReadRequest.make({
+              expectedClaim: request.claim,
+              operationId: OperationId.make("hostile-authored-focused-read"),
+              target: FixtureTarget.make("cassette-target"),
+              taskId: request.taskId
+            })
           ),
         item: {
           _tag: "CompletionTaskFocusedReadReturned",

@@ -27,7 +27,8 @@ import {
   PostPromotionBlockerClearAuthorization,
   postPromotionBlockerAncestryOperationIdFor,
   FocusedCompletedTaskObservation,
-  FocusedTaskCompletionFacts
+  FocusedTaskCompletionFacts,
+  FocusedTaskCompletionReadRequest
 } from "./events.js"
 import { controlledCompletionClaimBoundaryLayerFrom } from "./controlled-boundaries.js"
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
@@ -207,6 +208,22 @@ it("rejects Q operation substitution and compares every focused cleanup-proof id
   ).toBe(false)
 })
 
+it("rejects a focused completion read that separates the named task from its expected claim", () => {
+  const exact = FocusedTaskCompletionReadRequest.make({
+    expectedClaim: fixture.claim,
+    operationId: OperationId.make("events-focused-completion-read"),
+    target: fixture.target,
+    taskId: fixture.taskId
+  })
+  expect(Schema.is(FocusedTaskCompletionReadRequest)(exact)).toBe(true)
+  expect(
+    Schema.is(FocusedTaskCompletionReadRequest)({
+      ...exact,
+      taskId: TaskId.make("events-focused-completion-foreign-task")
+    })
+  ).toBe(false)
+})
+
 it("rejects focused success that names another task or task revision", () => {
   const focused = FocusedCompletedTaskObservation.make({
     claim: fixture.claim,
@@ -231,13 +248,20 @@ it("rejects focused success that names another task or task revision", () => {
 })
 
 it("represents target membership and non-membership as complete focused facts", () => {
-  expect(Schema.is(FocusedTaskCompletionFacts)(fixture.focusedSuccessFactsEvent.observation.facts)).toBe(true)
+  const facts = fixture.focusedSuccessFactsEvent.observation.facts
+  expect(Schema.is(FocusedTaskCompletionFacts)(facts)).toBe(true)
+  expect(Schema.is(FocusedTaskCompletionFacts)({ ...facts, targetMembership: "NotMember" })).toBe(true)
+  expect(
+    Schema.is(FocusedTaskCompletionFacts)({ ...facts, taskId: TaskId.make("events-focused-facts-foreign-task") })
+  ).toBe(false)
+  expect(Schema.is(FocusedTaskCompletionFacts)({ ...facts, unfinishedPrerequisiteTaskIds: [facts.taskId] })).toBe(false)
+  const prerequisiteTaskId = TaskId.make("events-focused-facts-prerequisite")
   expect(
     Schema.is(FocusedTaskCompletionFacts)({
-      ...fixture.focusedSuccessFactsEvent.observation.facts,
-      targetMembership: "NotMember"
+      ...facts,
+      unfinishedPrerequisiteTaskIds: [prerequisiteTaskId, prerequisiteTaskId]
     })
-  ).toBe(true)
+  ).toBe(false)
 })
 
 it("compares focused read purposes exhaustively by variant and ordinal", () => {

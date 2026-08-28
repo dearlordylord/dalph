@@ -1,6 +1,6 @@
 /* eslint-disable functional/immutable-data -- Request accumulation is private adapter scratch and never becomes authority. */
 import { Effect, Layer, Option } from "effect"
-import { TaskLifecycle } from "../task.js"
+import type { TaskLifecycle } from "../task.js"
 import { type TrackerTask } from "../task.js"
 import { type TrackerTarget } from "../target.js"
 import { GithubGraphqlClient, githubGraphqlClientNodeLayer, GithubGraphqlRequest } from "./graphql-client.js"
@@ -31,6 +31,7 @@ import {
   type GithubTrackerGraphReadRequest
 } from "./read-boundary.js"
 import { makeReadTaskWorkSpecification } from "./task-work-specification-reader.js"
+import { type GithubIssueState, type GithubIssueStateReason, githubTaskLifecycleFrom } from "./task-lifecycle.js"
 
 interface IssueProjection {
   readonly issueNodeId: GithubIssueNodeId
@@ -39,34 +40,12 @@ interface IssueProjection {
   readonly prerequisiteNodeIds: ReadonlyArray<GithubIssueNodeId>
 }
 
-const isOpenLifecycle = (
-  state: "CLOSED" | "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null
-): boolean => state === "OPEN" && (stateReason === null || stateReason === "REOPENED")
-
-const isCompletedLifecycle = (
-  state: "CLOSED" | "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null
-): boolean => state === "CLOSED" && stateReason === "COMPLETED"
-
-const isTerminalWithoutSuccessLifecycle = (
-  state: "CLOSED" | "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null
-): boolean => state === "CLOSED" && (stateReason === "DUPLICATE" || stateReason === "NOT_PLANNED")
-
 const lifecycleFrom = (
-  state: "CLOSED" | "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null
+  state: GithubIssueState,
+  stateReason: GithubIssueStateReason
 ): Effect.Effect<TaskLifecycle, TrackerAdapterReadError> => {
-  if (isOpenLifecycle(state, stateReason)) {
-    return Effect.succeed(TaskLifecycle.cases.Open.make({}))
-  }
-  if (isCompletedLifecycle(state, stateReason)) {
-    return Effect.succeed(TaskLifecycle.cases.CompletedSuccessfully.make({}))
-  }
-  if (isTerminalWithoutSuccessLifecycle(state, stateReason)) {
-    return Effect.succeed(TaskLifecycle.cases.TerminalWithoutSuccess.make({}))
-  }
+  const lifecycle = githubTaskLifecycleFrom(state, stateReason)
+  if (lifecycle !== undefined) return Effect.succeed(lifecycle)
   return Effect.fail(
     incomplete(
       "GithubTrackerGraphReader.readIssue",

@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { GithubCursor, GithubIssueNodeId, GithubRepositoryNodeId } from "./graphql-client.js"
+import { GithubIssueState, GithubIssueStateReason } from "./task-lifecycle.js"
 
 const NodeReference = Schema.Struct({ id: GithubIssueNodeId })
 const RepositoryReference = Schema.Struct({ id: GithubRepositoryNodeId })
@@ -24,8 +25,8 @@ export const ReadIssueResponse = Schema.Struct({
         id: GithubIssueNodeId,
         parent: Schema.NullOr(NodeReference),
         repository: RepositoryReference,
-        state: Schema.Literals(["CLOSED", "OPEN"]),
-        stateReason: Schema.NullOr(Schema.Literals(["COMPLETED", "DUPLICATE", "NOT_PLANNED", "REOPENED"]))
+        state: GithubIssueState,
+        stateReason: GithubIssueStateReason
       })
     )
   })
