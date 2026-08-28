@@ -1,5 +1,5 @@
 /* eslint-disable functional/no-mixed-types -- The executable Quint driver exposes imperative action controls. */
-import { it } from "@effect/vitest"
+import { expect, it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Effect, Schema } from "effect"
@@ -95,6 +95,7 @@ import {
   type IntegratorRunState
 } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 import { IntegratorSuccessorPreparationInput } from "../../../orchestrator/src/workflow/protocols/integrator/session.js"
+import { evaluateIntegratorRetryAuthorization } from "../../../orchestrator/src/workflow/protocols/integrator/retry-authorization.js"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
@@ -261,6 +262,8 @@ type ModelResult = {
   readonly quarantineRedeliveryCount: bigint
   readonly quarantineConflictCount: bigint
   readonly retryRunCount: bigint
+  readonly retryDirectionSession: bigint
+  readonly retryDirectionPosition: bigint
   readonly integratorRunOrdinal: bigint
   readonly integratorRunSession: bigint
   readonly lastRecoveryRunSession: bigint
@@ -346,6 +349,8 @@ const initialResult = (id: bigint): ModelResult => ({
   quarantineRedeliveryCount: 0n,
   quarantineConflictCount: 0n,
   retryRunCount: 0n,
+  retryDirectionSession: 0n,
+  retryDirectionPosition: 0n,
   integratorRunOrdinal: 0n,
   integratorRunSession: 0n,
   lastRecoveryRunSession: 0n,
@@ -431,6 +436,8 @@ const SpecResult = Schema.Struct({
   retryFreshQuarantineCount: ITFBigInt,
   retryNotApplicableCount: ITFBigInt,
   retryRunCount: ITFBigInt,
+  retryDirectionPosition: ITFBigInt,
+  retryDirectionSession: ITFBigInt,
   submittedCandidate: ITFBigInt,
   successorFixed: Schema.Boolean,
   successorHeadFreshlyObserved: Schema.Boolean,
@@ -463,6 +470,12 @@ const SpecProjection = Schema.Struct({
     trackerFactsCurrent: Schema.Boolean
   })
 })
+
+type RetryDirectionProjection = Pick<ModelResult, "retryDirectionPosition" | "retryDirectionSession">
+
+const retryDirectionFieldsMatch = (expected: RetryDirectionProjection, actual: RetryDirectionProjection): boolean =>
+  expected.retryDirectionPosition === actual.retryDirectionPosition &&
+  expected.retryDirectionSession === actual.retryDirectionSession
 
 const variantTag = (value: unknown): string =>
   typeof value === "object" && value !== null && "tag" in value ? String(value.tag) : String(value)
@@ -889,6 +902,7 @@ const acceptedResultIntegrationDriver = defineDriver(
   {
     acceptResultOne: {},
     acceptResultTwo: {},
+    assertRetryLineageIgnoresLaterForeignTarget: {},
     assignResultTwoIndependentTargetOne: {},
     chooseFullRerunOne: {},
     chooseRetryOne: {},
@@ -1144,10 +1158,15 @@ const acceptedResultIntegrationDriver = defineDriver(
       })
     }
 
-    const appendFreshTargetLineage = (id: bigint, targetHead: bigint, purpose: "retry" | "successor") => {
+    const appendFreshTargetLineage = (
+      id: bigint,
+      targetHead: bigint,
+      purpose: "retry" | "retry-foreign-target" | "successor",
+      integrationTarget: IntegrationTarget = targetFor(id, modelResults)
+    ) => {
       const operationId = OperationId.make(`accepted-result-integration-${purpose}-target-lineage-${id}`)
       const operation = makeTargetLineageObservationOperation({
-        integrationTarget: targetFor(id, modelResults),
+        integrationTarget,
         operationId,
         plannedAttempt: attemptFor(id),
         predecessorOperationIds: []
@@ -1179,25 +1198,17 @@ const acceptedResultIntegrationDriver = defineDriver(
       if (run.ordinal === IntegratorRunOrdinal.make(1)) {
         return makeInput(id, modelResults, runtime.readRecords())
       }
-      const direction = directionRecordFor(id, "Retry")
       const started = runtime.readRecords().find((record) => record.key === integratorRunStartedRecordKey(run))
       if (started === undefined) {
         return rejectImpossibleTransition("Retry candidate qualification lacks its exact run start")
       }
-      const lineage = runtime
-        .readRecords()
-        .filter(
-          (record) =>
-            record.event._tag === "TargetLineageObserved" &&
-            record.event.plannedAttempt.attemptId === attemptFor(id).attemptId &&
-            record.position > direction.position &&
-            record.position < started.position
-        )
-        .toSorted((left, right) => left.position - right.position)
-        .at(-1)
-      if (lineage === undefined || lineage.event._tag !== "TargetLineageObserved") {
-        return rejectImpossibleTransition("Retry candidate qualification lacks its fresh target-lineage observation")
+      const result = evaluateIntegratorRetryAuthorization(runtime.readRecords(), run, {
+        beforePosition: started.position
+      })
+      if (result._tag === "Rejected") {
+        return rejectImpossibleTransition(`Retry candidate qualification is unauthorized: ${result.detail}`)
       }
+      const lineage = result.authorization.lineage.observation
       return IntegratorPreparationInput.make({
         responsibility: responsibilityFor(id),
         targetLineage: lineage.event.observation,
@@ -1406,6 +1417,10 @@ const acceptedResultIntegrationDriver = defineDriver(
         quarantineDirectionSession: result.integrationSession,
         quarantineDirectionPosition: result.quarantinePosition,
         quarantineDirectionCount: result.quarantineDirectionCount + 1n,
+        retryDirectionSession:
+          direction === "RetryDirection" ? result.integrationSession : result.retryDirectionSession,
+        retryDirectionPosition:
+          direction === "RetryDirection" ? result.quarantinePosition : result.retryDirectionPosition,
         lastDirection: direction,
         lastDirectionSession: result.integrationSession,
         lastDirectionPosition: result.quarantinePosition
@@ -1984,6 +1999,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       Effect.gen(function* () {
         const run = currentRunFor(id)
         const candidateText = candidateTextOf(modelResultFor(id).submittedCandidate)
+        const integratorCallsBeforeGitRead = runtime.integratorCallCount()
         runtime.setGitMode(mode)
         yield* runtime.runProtocolFor(preparationForRun(id, run), run)
         if (
@@ -1992,6 +2008,9 @@ const acceptedResultIntegrationDriver = defineDriver(
             .some((record) => record.key === integratorRunCandidateGitObservedRecordKey(run, candidateText))
         ) {
           return rejectImpossibleTransition(`candidate Git observation was not recorded for exact run ${run.ordinal}`)
+        }
+        if (runtime.integratorCallCount() !== integratorCallsBeforeGitRead) {
+          return rejectImpossibleTransition(`candidate Git observation repeated Integrator run ${run.ordinal}`)
         }
         modelObserveCandidate(id, observation)
       })
@@ -2073,8 +2092,12 @@ const acceptedResultIntegrationDriver = defineDriver(
       loseCandidateGitResponseOne: () =>
         Effect.gen(function* () {
           const run = currentRunFor(1n)
+          const integratorCallsBeforeGitRead = runtime.integratorCallCount()
           runtime.failNextGitRead()
           yield* Effect.exit(runtime.runProtocolFor(preparationForRun(1n, run), run))
+          if (runtime.integratorCallCount() !== integratorCallsBeforeGitRead) {
+            return rejectImpossibleTransition(`ambiguous candidate Git read repeated Integrator run ${run.ordinal}`)
+          }
           modelLoseGit(1n)
         }),
       loseCandidateGitResponseTwo: () => Effect.void,
@@ -2188,6 +2211,39 @@ const acceptedResultIntegrationDriver = defineDriver(
           assertLostRun(run, outcome)
           modelStartRetry(1n)
         }),
+      assertRetryLineageIgnoresLaterForeignTarget: () =>
+        Effect.gen(function* () {
+          const validLineage = yield* appendFreshTargetLineage(1n, modelResultFor(1n).expectedTargetHead, "retry")
+          if (validLineage.event._tag !== "TargetLineageObserved") {
+            return rejectImpossibleTransition("Retry fresh lineage append returned a foreign event")
+          }
+          const foreignTargetLineage = yield* appendFreshTargetLineage(
+            1n,
+            modelResultFor(1n).expectedTargetHead,
+            "retry-foreign-target",
+            independentTarget
+          )
+          if (foreignTargetLineage.event._tag !== "TargetLineageObserved") {
+            return rejectImpossibleTransition("foreign-target lineage append returned a foreign event")
+          }
+          const input = IntegratorPreparationInput.make({
+            responsibility: responsibilityFor(1n),
+            targetLineage: validLineage.event.observation,
+            targetLineageObservedAt: validLineage.position
+          })
+          const run = runFor(1n, 2n)
+          runtime.failNextIntegratorCall()
+          const outcome = yield* Effect.exit(runtime.runProtocolFor(input, run))
+          assertLostRun(run, outcome)
+          const reconstructed = preparationForRun(1n, run)
+          if (foreignTargetLineage.position <= validLineage.position) {
+            return rejectImpossibleTransition("foreign-target lineage did not follow valid Retry lineage L")
+          }
+          if (reconstructed.targetLineageObservedAt !== validLineage.position) {
+            return rejectImpossibleTransition("Retry preparation selected a later foreign-target lineage record")
+          }
+          modelStartRetry(1n)
+        }),
       recordRetryNotApplicableOne: () =>
         Effect.gen(function* () {
           const lineage = yield* appendFreshTargetLineage(1n, targetHeadProof, "retry")
@@ -2275,6 +2331,45 @@ const acceptedResultIntegrationDriver = defineDriver(
       getState: () => Effect.sync(projection)
     }
   }
+)
+
+it.effect("detects a chooseRetry projection that leaves its exact direction subject at zero", () =>
+  Effect.sync(() => {
+    const expected = { ...initialResult(1n), retryDirectionSession: 1n, retryDirectionPosition: 41n }
+    const zeroedRetryDirection = { ...expected, retryDirectionSession: 0n, retryDirectionPosition: 0n }
+
+    expect(retryDirectionFieldsMatch(expected, expected)).toBe(true)
+    expect(retryDirectionFieldsMatch(expected, zeroedRetryDirection)).toBe(false)
+  })
+)
+
+it.effect(
+  "keeps Retry lineage L when a later foreign-target observation precedes run two",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* acceptedResultIntegrationDriver.create()
+      const actionNames = [
+        "init",
+        "acceptResultOne",
+        "queueAcceptedResultOne",
+        "startIntegrationOne",
+        "fixIntegratorSessionOne",
+        "invokeIntegratorOne",
+        "reportIntegratorCandidateOne31",
+        "recordCandidateGitReadIntentOne",
+        "readCandidateGitOne",
+        "observeWrongParentCandidateOne",
+        "recordQuarantineOne",
+        "chooseRetryOne",
+        "assertRetryLineageIgnoresLaterForeignTarget"
+      ] as const
+      for (const actionName of actionNames) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+      }
+    }),
+  30_000
 )
 
 quintIt(
@@ -2388,6 +2483,7 @@ quintIt(
             expected.resourceBoundHead === actual.resourceBoundHead &&
             expected.resourceBoundTarget === actual.resourceBoundTarget &&
             expected.resourceHeadCandidate === actual.resourceHeadCandidate &&
+            retryDirectionFieldsMatch(expected, actual) &&
             expected.retryFreshQuarantineCount === actual.retryFreshQuarantineCount &&
             expected.retryNotApplicableCount === actual.retryNotApplicableCount &&
             expected.retryRunCount === actual.retryRunCount &&
