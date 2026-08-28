@@ -16,8 +16,17 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { TaskWorkCapacity } from "../admission/capacity.js"
+import { InitialControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { integratorRunCandidateRecordKeyPrefix } from "../../workflow-journal/record-key.js"
+import {
+  integratorRunCandidateRecordKeyPrefix,
+  targetPromotionAttemptIntentRecordKey,
+  targetPromotionIntentRecordKey,
+  targetPromotionReconciliationDeferredRecordKey,
+  workflowRunBeganRecordKey
+} from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -35,6 +44,8 @@ import {
   TargetPromotionIntendedEvent,
   TargetPromotionNonConvergenceEvent,
   TargetPromotionNonConvergenceObservation,
+  TargetPromotionReconciliationDeferredEvent,
+  TargetPromotionReconciliationDeferral,
   TargetPromotionStaleEvent,
   TargetPromotionStaleObservation,
   TargetPromotionTerminalBasis,
@@ -44,7 +55,9 @@ import {
   TargetPromotionSuccessObservation
 } from "../../workflow/protocols/target-promotion/events.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { WorkflowRunBeganEvent } from "../../workflow/registry/event.js"
 import { invalidTargetPromotionHistory, makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
+import { reduceWorkflowJournalHistory } from "./history.js"
 
 const runId = RunId.make("promotion-history-run")
 const target = IntegrationTarget.make({
@@ -236,6 +249,189 @@ it("rejects a promotion attempt whose reason is not exact for its ordinal", () =
   const nextIndexes = acceptPromotionRecord(promotionRecord(6, intent), indexes, integratorObservations)
   expect(validationDetail(promotionRecord(7, attempt), nextIndexes, integratorObservations)).toContain(
     "expected exact sequential ordinal"
+  )
+})
+
+it("accepts exact retry-authority and target-read-failure deferrals after the latest unresolved attempt", () => {
+  const deferrals = [
+    TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({ observedHeadSha: expectedHead }),
+    TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({ detail: "target read unavailable" })
+  ] as const
+
+  for (const deferral of deferrals) {
+    const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+    const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+    const attempt = TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal,
+      correlation,
+      reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead }),
+      version: workflowJournalEventVersion
+    })
+    const deferred = TargetPromotionReconciliationDeferredEvent.make({
+      afterAttemptOrdinal: attemptOrdinal,
+      correlation,
+      deferral,
+      version: workflowJournalEventVersion
+    })
+    let nextIndexes = acceptPromotionRecord(
+      promotionRecord(6, intent),
+      makeTargetPromotionHistoryIndexes(),
+      integratorObservations
+    )
+    nextIndexes = acceptPromotionRecord(promotionRecord(7, attempt), nextIndexes, integratorObservations)
+    acceptPromotionRecord(promotionRecord(8, deferred), nextIndexes, integratorObservations)
+  }
+})
+
+it("rejects retry authority whose durable head differs from the fixed expected head", () => {
+  const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+  const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+  const attempt = TargetPromotionAttemptIntendedEvent.make({
+    attemptOrdinal,
+    correlation,
+    reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead }),
+    version: workflowJournalEventVersion
+  })
+  const deferred = TargetPromotionReconciliationDeferredEvent.make({
+    afterAttemptOrdinal: attemptOrdinal,
+    correlation,
+    deferral: TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
+      observedHeadSha: GitCommitSha.make("d".repeat(40))
+    }),
+    version: workflowJournalEventVersion
+  })
+  let nextIndexes = acceptPromotionRecord(
+    promotionRecord(6, intent),
+    makeTargetPromotionHistoryIndexes(),
+    integratorObservations
+  )
+  nextIndexes = acceptPromotionRecord(promotionRecord(7, attempt), nextIndexes, integratorObservations)
+
+  expect(validationDetail(promotionRecord(8, deferred), nextIndexes, integratorObservations)).toContain(
+    "instead of exact expected head"
+  )
+})
+
+it("full history reduction rejects retry authority whose observed head contradicts exact H", () => {
+  const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+  const malformedHead = GitCommitSha.make("d".repeat(40))
+  const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+  const attempt = TargetPromotionAttemptIntendedEvent.make({
+    attemptOrdinal,
+    correlation,
+    reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead }),
+    version: workflowJournalEventVersion
+  })
+  const deferred = TargetPromotionReconciliationDeferredEvent.make({
+    afterAttemptOrdinal: attemptOrdinal,
+    correlation,
+    deferral: TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
+      observedHeadSha: malformedHead
+    }),
+    version: workflowJournalEventVersion
+  })
+  const target = FixtureTarget.make("promotion-history-reduction-target")
+  const records: ReadonlyArray<JournalRecord> = [
+    {
+      event: WorkflowRunBeganEvent.make({
+        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        target,
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunBeganRecordKey,
+      position: JournalPosition.make(1),
+      runId
+    },
+    {
+      event: intent,
+      key: targetPromotionIntentRecordKey(correlation.requestId),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: attempt,
+      key: targetPromotionAttemptIntentRecordKey(correlation.requestId, attemptOrdinal),
+      position: JournalPosition.make(3),
+      runId
+    },
+    {
+      event: deferred,
+      key: targetPromotionReconciliationDeferredRecordKey(correlation.requestId, attemptOrdinal),
+      position: JournalPosition.make(4),
+      runId
+    }
+  ]
+  const reduction = reduceWorkflowJournalHistory(runId, records)
+
+  expect(malformedHead).not.toBe(expectedHead)
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        detail: expect.stringContaining("instead of exact expected head"),
+        position: JournalPosition.make(4)
+      })
+    ])
+  })
+})
+
+it("rejects deferral without the latest attempt, after the final attempt, or twice for one attempt", () => {
+  const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+  const deferredFor = (ordinal: number) =>
+    TargetPromotionReconciliationDeferredEvent.make({
+      afterAttemptOrdinal: TargetPromotionAttemptOrdinal.make(ordinal),
+      correlation,
+      deferral: TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({
+        detail: "target read unavailable"
+      }),
+      version: workflowJournalEventVersion
+    })
+  let nextIndexes = acceptPromotionRecord(
+    promotionRecord(6, intent),
+    makeTargetPromotionHistoryIndexes(),
+    integratorObservations
+  )
+  expect(validationDetail(promotionRecord(7, deferredFor(1)), nextIndexes, integratorObservations)).toContain(
+    "no exact latest unresolved attempt"
+  )
+
+  for (const ordinal of [1, 2, 3]) {
+    const attemptOrdinal = TargetPromotionAttemptOrdinal.make(ordinal)
+    const attempt = TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal,
+      correlation,
+      reason:
+        ordinal === 1
+          ? TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead })
+          : TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({
+              observedHeadSha: expectedHead,
+              previousAttemptOrdinal: TargetPromotionAttemptOrdinal.make(ordinal - 1)
+            }),
+      version: workflowJournalEventVersion
+    })
+    nextIndexes = acceptPromotionRecord(promotionRecord(6 + ordinal, attempt), nextIndexes, integratorObservations)
+  }
+  expect(validationDetail(promotionRecord(10, deferredFor(3)), nextIndexes, integratorObservations)).toContain(
+    "cannot defer after final attempt"
+  )
+
+  let duplicateIndexes = acceptPromotionRecord(
+    promotionRecord(6, intent),
+    makeTargetPromotionHistoryIndexes(),
+    integratorObservations
+  )
+  const firstAttempt = TargetPromotionAttemptIntendedEvent.make({
+    attemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+    correlation,
+    reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead }),
+    version: workflowJournalEventVersion
+  })
+  duplicateIndexes = acceptPromotionRecord(promotionRecord(7, firstAttempt), duplicateIndexes, integratorObservations)
+  duplicateIndexes = acceptPromotionRecord(promotionRecord(8, deferredFor(1)), duplicateIndexes, integratorObservations)
+  expect(validationDetail(promotionRecord(9, deferredFor(1)), duplicateIndexes, integratorObservations)).toContain(
+    "no exact latest unresolved attempt"
   )
 })
 

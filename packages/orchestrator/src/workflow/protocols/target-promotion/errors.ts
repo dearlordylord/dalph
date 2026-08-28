@@ -13,3 +13,9 @@ export class TargetPromotionCorrelationContradiction extends Schema.TaggedError<
   "TargetPromotionCorrelationContradiction",
   { detail: Schema.String, requestId: TargetPromotionRequestId }
 ) {}
+
+/** One decoded durable promotion prefix asserts facts the exact protocol could never record. */
+export class TargetPromotionHistoryContradiction extends Schema.TaggedError<TargetPromotionHistoryContradiction>()(
+  "TargetPromotionHistoryContradiction",
+  { detail: Schema.String, requestId: TargetPromotionRequestId }
+) {}

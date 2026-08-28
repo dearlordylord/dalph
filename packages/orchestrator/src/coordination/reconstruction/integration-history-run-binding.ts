@@ -13,6 +13,7 @@ type TargetPromotionRunBindingEvent = Extract<
     readonly _tag:
       | "TargetPromotionIntended"
       | "TargetPromotionAttemptIntended"
+      | "TargetPromotionReconciliationDeferred"
       | "TargetPromotionObservedSuccess"
       | "TargetPromotionStale"
       | "TargetPromotionNonConvergence"
@@ -208,6 +209,7 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
       AttemptStoppageIntended: (candidate) => invalidAttemptChoiceRunBinding(candidate, runId, "attempt stoppage"),
       TargetPromotionIntended: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
       TargetPromotionAttemptIntended: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
+      TargetPromotionReconciliationDeferred: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
       TargetPromotionObservedSuccess: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
       TargetPromotionStale: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),
       TargetPromotionNonConvergence: (candidate) => invalidTargetPromotionRunBinding(candidate, runId),

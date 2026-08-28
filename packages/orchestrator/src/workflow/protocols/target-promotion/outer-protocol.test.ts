@@ -17,6 +17,11 @@ import {
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import {
+  targetPromotionAttemptIntentRecordKey,
+  targetPromotionIntentRecordKey,
+  targetPromotionReconciliationDeferredRecordKey
+} from "../../../workflow-journal/record-key.js"
 import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -34,6 +39,12 @@ import {
   TargetPromotionCompareAndSetResult,
   TargetPromotionCompareAndSetFailure,
   TargetPromotionGitReadFailure,
+  TargetPromotionAttemptIntendedEvent,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionAttemptReason,
+  TargetPromotionIntendedEvent,
+  TargetPromotionReconciliationDeferredEvent,
+  TargetPromotionReconciliationDeferral,
   targetPromotionCorrelationEquals,
   type TargetPromotionGitService,
   TargetPromotionCorrelation,
@@ -46,6 +57,7 @@ import {
   reconcileTargetPromotionAttempt,
   runTargetPromotion,
   TargetPromotionCorrelationContradiction,
+  TargetPromotionHistoryContradiction,
   TargetPromotionResultContradiction
 } from "./protocol.js"
 import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
@@ -446,6 +458,71 @@ it.effect("durably waits after an authority-free exact-head reconciliation and r
     }
     expect((yield* run(authorizedService, records))._tag).toBe("PromotionSucceeded")
     expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read", "authorized-compare-and-set"])
+  })
+)
+
+it.effect("rejects a malformed durable retry-authority head before any restarted Git call", () =>
+  Effect.gen(function* () {
+    const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+    const seeded: ReadonlyArray<JournalRecord> = [
+      {
+        event: TargetPromotionIntendedEvent.make({ correlation: request, version: workflowJournalEventVersion }),
+        key: targetPromotionIntentRecordKey(request.requestId),
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: TargetPromotionAttemptIntendedEvent.make({
+          attemptOrdinal,
+          correlation: request,
+          reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead }),
+          version: workflowJournalEventVersion
+        }),
+        key: targetPromotionAttemptIntentRecordKey(request.requestId, attemptOrdinal),
+        position: JournalPosition.make(2),
+        runId
+      },
+      {
+        event: TargetPromotionReconciliationDeferredEvent.make({
+          afterAttemptOrdinal: attemptOrdinal,
+          correlation: request,
+          deferral: TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
+            observedHeadSha: changedHead
+          }),
+          version: workflowJournalEventVersion
+        }),
+        key: targetPromotionReconciliationDeferredRecordKey(request.requestId, attemptOrdinal),
+        position: JournalPosition.make(3),
+        runId
+      }
+    ]
+    const records = yield* Ref.make(seeded)
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const failure = yield* Effect.flip(
+      run(
+        {
+          compareAndSet: () =>
+            Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
+              Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
+            ),
+          read: () =>
+            Ref.update(calls, (current) => [...current, "read"]).pipe(
+              Effect.as(
+                TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+              )
+            )
+        },
+        records
+      )
+    )
+
+    expect(failure).toBeInstanceOf(TargetPromotionHistoryContradiction)
+    if (!(failure instanceof TargetPromotionHistoryContradiction)) {
+      return yield* Effect.die("malformed retry-authority prefix did not return its typed contradiction")
+    }
+    expect(failure.detail).toContain("instead of exact expected head")
+    expect(yield* Ref.get(calls)).toEqual([])
+    expect(yield* Ref.get(records)).toEqual(seeded)
   })
 )
 

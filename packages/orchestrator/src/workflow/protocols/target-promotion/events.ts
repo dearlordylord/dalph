@@ -188,6 +188,24 @@ export const TargetPromotionReconciliationDeferredEvent = Schema.TaggedStruct("T
 })
 export type TargetPromotionReconciliationDeferredEvent = typeof TargetPromotionReconciliationDeferredEvent.Type
 
+/**
+ * Rejects durable reconciliation-deferral fields that the Git read path could
+ * never truthfully produce. Retry authority proves the exact fixed H, while a
+ * final-attempt read must settle as non-convergence instead of deferring.
+ */
+export const targetPromotionReconciliationDeferralFieldIssue = (
+  event: Pick<TargetPromotionReconciliationDeferredEvent, "afterAttemptOrdinal" | "correlation" | "deferral">
+): string | undefined => {
+  const expectedHead = event.correlation.qualifiedCandidate.run.session.expectedTargetHead
+  if (Number(event.afterAttemptOrdinal) >= targetPromotionAttemptLimit) {
+    return `target promotion reconciliation cannot defer after final attempt ${event.afterAttemptOrdinal}`
+  }
+  if (event.deferral._tag === "RetryAuthorityRequired" && event.deferral.observedHeadSha !== expectedHead) {
+    return `target promotion retry authority observed ${event.deferral.observedHeadSha} instead of exact expected head ${expectedHead}`
+  }
+  return undefined
+}
+
 /** Durable proof that M was accepted or discovered in the target's exact ancestry. */
 export const TargetPromotionObservedSuccessEvent = Schema.TaggedStruct("TargetPromotionObservedSuccess", {
   basis: TargetPromotionTerminalBasis,

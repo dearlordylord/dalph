@@ -37,7 +37,11 @@ import {
   type TargetPromotionAttemptReason as TargetPromotionAttemptReasonType,
   type TargetPromotionJournalEvent
 } from "./events.js"
-import { TargetPromotionCorrelationContradiction, TargetPromotionResultContradiction } from "./errors.js"
+import {
+  TargetPromotionCorrelationContradiction,
+  TargetPromotionHistoryContradiction,
+  TargetPromotionResultContradiction
+} from "./errors.js"
 import {
   readObservationContradiction,
   successObservationForCompareAndSet,
@@ -47,6 +51,7 @@ import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import {
   deriveTargetPromotionState,
   targetPromotionCorrelationConflictFor,
+  targetPromotionReconciliationDeferralIssueFor,
   TargetPromotionPendingRetry,
   TargetPromotionState
 } from "./state.js"
@@ -55,7 +60,11 @@ export { targetPromotionCorrelationConflictFor } from "./state.js"
 export type { JournalOccurrence } from "./state.js"
 export { targetPromotionCorrelationFor, targetPromotionRequestIdForCandidate } from "./events.js"
 export { deriveTargetPromotionStateFor } from "./state-cache.js"
-export { TargetPromotionCorrelationContradiction, TargetPromotionResultContradiction } from "./errors.js"
+export {
+  TargetPromotionCorrelationContradiction,
+  TargetPromotionHistoryContradiction,
+  TargetPromotionResultContradiction
+} from "./errors.js"
 
 const ordinalFor = (value: number): TargetPromotionAttemptOrdinal => TargetPromotionAttemptOrdinal.make(value)
 
@@ -347,6 +356,10 @@ export const reconcileTargetPromotionAttempt = Effect.fn("TargetPromotion.reconc
       requestId: correlation.requestId
     })
   }
+  const deferralIssue = targetPromotionReconciliationDeferralIssueFor(records, correlation)
+  if (deferralIssue !== undefined) {
+    return yield* new TargetPromotionHistoryContradiction({ detail: deferralIssue, requestId: correlation.requestId })
+  }
   const state = deriveTargetPromotionState(records, correlation)
   if (state !== undefined && state._tag !== "PromotionPending") return state
   if (state?.retry._tag !== "NeedReconciliationRead") {
@@ -393,6 +406,10 @@ export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (
       detail: "journal contains a different exact promotion correlation for this request id",
       requestId: request.requestId
     })
+  }
+  const deferralIssue = targetPromotionReconciliationDeferralIssueFor(records, request)
+  if (deferralIssue !== undefined) {
+    return yield* new TargetPromotionHistoryContradiction({ detail: deferralIssue, requestId: request.requestId })
   }
   const state = deriveTargetPromotionState(records, request)
   if (state !== undefined && state._tag !== "PromotionPending" && state._tag !== "PromotionReconciliationDeferred") {

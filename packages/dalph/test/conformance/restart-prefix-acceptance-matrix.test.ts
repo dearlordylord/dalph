@@ -1,7 +1,6 @@
-import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { GitCommitSha } from "@dalph/contracts"
-import { Effect } from "effect"
+import { GitCommitSha, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import { Effect, Ref } from "effect"
 import { expect } from "vitest"
 import {
   InRunJournal,
@@ -18,16 +17,29 @@ import {
   acquireStartedIntegrationTarget,
   deriveIntegrationAdmission,
   deriveIntegrationQuarantineState,
+  describeJournalEvent,
+  GitReadIntentRecordedEvent,
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent,
+  IntegratorCandidateText,
+  IntegratorGitObservation,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   projectWorkflowOccurrences,
   reduceWorkflowJournalHistory,
+  runTargetPromotion,
   TargetPromotionStaleEvent,
   TargetPromotionTerminalBasis,
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
   TargetPromotionIntendedEvent,
+  TargetPromotionGit,
   TargetPromotionGitReadObservation,
   TargetPromotionGitReadFailure,
+  TargetPromotionHistoryContradiction,
+  TargetPromotionReconciliationDeferredEvent,
+  TargetPromotionReconciliationDeferral,
   TargetPromotionRuntime,
   intentRecordKey,
   integrationQuarantinedRecordKey,
@@ -38,16 +50,37 @@ import {
   targetPromotionCorrelationEquals,
   targetPromotionCorrelationFor,
   targetPromotionIntentRecordKey,
+  targetPromotionReconciliationDeferredRecordKey,
   targetPromotionStaleRecordKey,
   type IntegrationTargetResourceController,
   type JournalRecord,
   makeIntegrationTargetResourceController,
+  makeTaskAttemptPlanOperation,
+  makeTargetLineageObservationOperation,
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  TargetLineageObservation,
+  TargetLineageObservedEvent,
+  TaskAttemptPlannedEvent,
+  WorkflowRunBeganEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
+import {
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
+  IntegratorSessionCorrelation,
+  IntegratorSessionFixedEvent,
+  IntegratorResult
+} from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 import {
   expectedRecoveryPrefix,
   prefixThrough,
@@ -57,7 +90,6 @@ import {
   type RecoveryStoreReplay,
   type RecoveryStoreLane
 } from "./recovery-store-lanes.js"
-import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 import {
   makeRunRecoveryProjection,
   type RunRecoveryProjectionSnapshot
@@ -77,15 +109,6 @@ const restartPrefixCutLabels = ["AttemptIntended", "Stale", "Quarantined"] as co
 type RestartPrefixCutLabel = (typeof restartPrefixCutLabels)[number]
 type ReconciliationBoundaryMode = "CandidateAbsent" | "ExpectedHead" | "Unreadable"
 
-// One authored execution supplies immutable source records to every store replay.
-const cachedRun = Effect.runSync(
-  Effect.cached(
-    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone).pipe(
-      Effect.provide(NodeCrypto.layer)
-    )
-  )
-)
-
 const exactlyOne = <A>(values: ReadonlyArray<A>, description: string): A => {
   const value = values.length === 1 ? values[0] : undefined
   return value === undefined ? expect.fail("expected one " + description + ", received " + values.length) : value
@@ -93,7 +116,6 @@ const exactlyOne = <A>(values: ReadonlyArray<A>, description: string): A => {
 
 interface RestartPrefixMatrix {
   readonly attempt: JournalRecord
-  readonly direction: JournalRecord
   readonly prefixes: ReadonlyArray<RecoveryPrefix<RestartPrefixCutLabel>>
   readonly quarantine: JournalRecord
   readonly stale: JournalRecord
@@ -124,20 +146,12 @@ const restartPrefixesFrom = (records: ReadonlyArray<JournalRecord>): RestartPref
     records.filter(({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "PromotionStale"),
     "PromotionStale IntegrationQuarantined"
   )
-  const direction = exactlyOne(
-    records.filter(
-      ({ event }) =>
-        event._tag === "IntegrationQuarantineDirectionApplied" && event.fingerprint.direction === "FullRerun"
-    ),
-    "later FullRerun IntegrationQuarantineDirectionApplied"
-  )
   if (
     attempt.event._tag !== "TargetPromotionAttemptIntended" ||
     quarantine.event._tag !== "IntegrationQuarantined" ||
-    direction.event._tag !== "IntegrationQuarantineDirectionApplied" ||
-    direction.position <= quarantine.position
+    quarantine.position <= stale.position
   ) {
-    return expect.fail("restart-prefix fixture chronology is not attempt → stale → quarantine → Operator direction")
+    return expect.fail("restart-prefix fixture chronology is not attempt → stale → quarantine")
   }
   const endpoints: ReadonlyArray<[RestartPrefixCutLabel, JournalRecord, string]> = [
     ["AttemptIntended", attempt, "TargetPromotionAttemptIntended"],
@@ -148,7 +162,194 @@ const restartPrefixesFrom = (records: ReadonlyArray<JournalRecord>): RestartPref
     const prefix = prefixThrough(records, cut, description, records.indexOf(endpoint))
     return prefix === undefined ? expect.fail("missing retained restart prefix " + cut) : prefix
   })
-  return { attempt, direction, prefixes, quarantine, stale }
+  return { attempt, prefixes, quarantine, stale }
+}
+
+const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
+  const fixture = integrationFinalityFixture
+  const candidateText = IntegratorCandidateText.make(fixture.qualifiedCandidate.candidateText)
+  const session = IntegratorSessionCorrelation.make({
+    ...fixture.qualifiedCandidate.run.session,
+    queuedAt: JournalPosition.make(6),
+    startedAt: JournalPosition.make(7),
+    targetLineageObservedAt: JournalPosition.make(9)
+  })
+  const integratorRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+  const candidate = IntegratorRunQualifiedCandidate.make({
+    ...fixture.qualifiedCandidate,
+    candidateText,
+    qualifiedAt: JournalPosition.make(14),
+    run: integratorRun
+  })
+  const correlation = targetPromotionCorrelationFor(candidate)
+  const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+  const changedHead = GitCommitSha.make("4".repeat(40))
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: fixture.integrationTarget,
+    operationId: OperationId.make("restart-prefix-direct-target-lineage"),
+    plannedAttempt: fixture.plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("restart-prefix-direct-plan"),
+    plannedAttempt: fixture.plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(position),
+    runId: fixture.runId
+  })
+  const stale = record(
+    17,
+    TargetPromotionStaleEvent.make({
+      basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
+      correlation,
+      observation: { _tag: "CompareAndSetRejected", observedHeadSha: changedHead },
+      version: workflowJournalEventVersion
+    })
+  )
+  const quarantineBasis = IntegrationQuarantineBasis.cases.PromotionStale.make({
+    candidateCommit: candidate.candidateCommit,
+    observedTargetHead: changedHead,
+    targetPromotionStaleAt: stale.position
+  })
+  return [
+    record(
+      1,
+      WorkflowRunBeganEvent.make({
+        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        target: fixture.target,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(2, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
+    record(
+      3,
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: fixture.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      4,
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+        plannedAttempt: fixture.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      5,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+          correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
+          result: { _tag: "Accepted", acceptedResult: session.acceptedResult }
+        }),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      6,
+      IntegrationResponsibilityBeganEvent.make({
+        acceptedResult: session.acceptedResult,
+        integrationTarget: fixture.integrationTarget,
+        plannedAttempt: fixture.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      7,
+      IntegrationStartedEvent.make({
+        acceptedResult: session.acceptedResult,
+        integrationTarget: fixture.integrationTarget,
+        plannedAttempt: fixture.plannedAttempt,
+        responsibilityBeganAt: JournalPosition.make(6),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      8,
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: lineageOperation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      9,
+      TargetLineageObservedEvent.make({
+        observation: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: fixture.plannedAttempt.baseSha,
+          targetHeadSha: session.expectedTargetHead
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: lineageOperation.operationId,
+        plannedAttempt: fixture.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(10, IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })),
+    record(11, IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion })),
+    record(
+      12,
+      IntegratorRunResultRecordedEvent.make({
+        result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: integratorRun }),
+        run: integratorRun,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      13,
+      IntegratorRunCandidateGitReadIntendedEvent.make({
+        candidateText,
+        run: integratorRun,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      14,
+      IntegratorRunCandidateGitObservedEvent.make({
+        candidateText,
+        observation: IntegratorGitObservation.cases.Commit.make({
+          candidateText,
+          commit: candidate.candidateCommit,
+          directParents: candidate.directParents
+        }),
+        run: integratorRun,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(15, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
+    record(
+      16,
+      TargetPromotionAttemptIntendedEvent.make({
+        attemptOrdinal,
+        correlation,
+        reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: session.expectedTargetHead }),
+        version: workflowJournalEventVersion
+      })
+    ),
+    stale,
+    record(
+      18,
+      IntegrationQuarantinedEvent.make({
+        basis: quarantineBasis,
+        correlation: session,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
 }
 
 const disabledTargetPromotionRuntime: TargetPromotionRuntimeInput = {
@@ -255,7 +456,7 @@ const productionRestartProjection = (
         }
         // This is a current Git boundary fact, not a record copied from the
         // later authored run: the target moved to this controlled test head.
-        const reconciledTargetHead = GitCommitSha.make("2".repeat(40))
+        const reconciledTargetHead = GitCommitSha.make("4".repeat(40))
         const runtime = TargetPromotionRuntime.of({
           git: {
             compareAndSet: () =>
@@ -524,8 +725,7 @@ it.effect(
   "preserves #270 promotion intent, stale evidence, and durable quarantine through both restart stores",
   () =>
     Effect.gen(function* () {
-      const run = yield* cachedRun
-      const matrix = restartPrefixesFrom(run.records)
+      const matrix = restartPrefixesFrom(directPromotionRestartRecords())
       expect(matrix.prefixes).toHaveLength(restartPrefixCutLabels.length)
       if (
         matrix.attempt.event._tag !== "TargetPromotionAttemptIntended" ||
@@ -628,9 +828,6 @@ it.effect(
                 expect(prefix.records.at(-1)).toEqual(matrix.quarantine)
                 expect(before).toEqual([])
                 expect(after).toEqual([])
-                expect(matrix.direction.position).toBeGreaterThan(
-                  prefix.records.at(-1)?.position ?? Number.MAX_SAFE_INTEGER
-                )
               }
             }),
           { concurrency: "unbounded" }
@@ -714,6 +911,87 @@ it.effect(
               { concurrency: 1 }
             )
           }),
+        { concurrency: 1 }
+      )
+    }),
+  120_000
+)
+
+it.effect(
+  "rejects a persisted non-H retry-authority deferral before Git through both restart stores",
+  () =>
+    Effect.gen(function* () {
+      const matrix = restartPrefixesFrom(directPromotionRestartRecords())
+      const attemptPrefix = exactlyOne(
+        matrix.prefixes.filter(({ cut }) => cut === "AttemptIntended"),
+        "direct malformed retry-authority attempt prefix"
+      )
+      const began = attemptPrefix.records[0]
+      const attempt = attemptPrefix.records.at(-1)
+      if (attempt?.event._tag !== "TargetPromotionAttemptIntended") {
+        return yield* Effect.die("direct retry-authority store fixture did not retain its exact attempt")
+      }
+      const candidate = attempt.event.correlation.qualifiedCandidate
+      const malformedHead = GitCommitSha.make("f".repeat(40))
+      const malformed: JournalRecord = {
+        event: TargetPromotionReconciliationDeferredEvent.make({
+          afterAttemptOrdinal: attempt.event.attemptOrdinal,
+          correlation: attempt.event.correlation,
+          deferral: TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
+            observedHeadSha: malformedHead
+          }),
+          version: workflowJournalEventVersion
+        }),
+        key: targetPromotionReconciliationDeferredRecordKey(
+          attempt.event.correlation.requestId,
+          attempt.event.attemptOrdinal
+        ),
+        position: JournalPosition.make(Number(attempt.position) + 1),
+        runId: began.runId
+      }
+      const malformedPrefix: RecoveryPrefix<"MalformedRetryAuthority"> = {
+        cut: "MalformedRetryAuthority",
+        endpoint: "non-H TargetPromotionReconciliationDeferred",
+        records: [began, ...attemptPrefix.records.slice(1), malformed]
+      }
+
+      yield* Effect.forEach(
+        lanes,
+        (lane) =>
+          withRecoveryPrefixStore(malformedPrefix, lane, (storage) =>
+            Effect.gen(function* () {
+              const before = yield* storage.read(began.runId)
+              const reduction = reduceWorkflowJournalHistory(began.runId, before)
+              expect(reduction, lane).toMatchObject({
+                _tag: "InvalidWorkflowJournalHistory",
+                issues: expect.arrayContaining([
+                  expect.objectContaining({ detail: expect.stringContaining("instead of exact expected head") })
+                ])
+              })
+              if (reduction._tag === "InvalidWorkflowJournalHistory") expect(reduction.issues, lane).toHaveLength(1)
+              const calls = yield* Ref.make<ReadonlyArray<string>>([])
+              const git = TargetPromotionGit.of({
+                compareAndSet: () =>
+                  Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
+                    Effect.andThen(Effect.die("malformed durable history must not compare-and-set"))
+                  ),
+                read: () =>
+                  Ref.update(calls, (current) => [...current, "read"]).pipe(
+                    Effect.andThen(Effect.die("malformed durable history must not read Git"))
+                  )
+              })
+              const journal = InRunJournal.of({ append: storage.append, read: storage.read })
+              const failure = yield* Effect.flip(
+                runTargetPromotion(candidate).pipe(
+                  Effect.provideService(InRunJournal, journal),
+                  Effect.provideService(TargetPromotionGit, git)
+                )
+              )
+              expect(failure, lane).toBeInstanceOf(TargetPromotionHistoryContradiction)
+              expect(yield* Ref.get(calls), lane).toEqual([])
+              expect(yield* storage.read(began.runId), lane).toEqual(before)
+            })
+          ),
         { concurrency: 1 }
       )
     }),

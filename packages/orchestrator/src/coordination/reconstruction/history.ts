@@ -119,6 +119,7 @@ interface FoldIndexes extends IntegrationHistoryIndexes {
 
 const emptyTargetPromotionHistoryIndexes = (): TargetPromotionHistoryIndexes => ({
   attempts: HashMap.empty(),
+  deferrals: HashMap.empty(),
   intents: HashMap.empty(),
   terminals: HashSet.empty()
 })

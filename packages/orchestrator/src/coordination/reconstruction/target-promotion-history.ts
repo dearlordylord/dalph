@@ -11,6 +11,7 @@ import {
 import {
   targetPromotionAttemptLimit,
   targetPromotionCorrelationEquals,
+  targetPromotionReconciliationDeferralFieldIssue,
   targetPromotionRequestIdForCandidate,
   type TargetPromotionRequestId
 } from "../../workflow/protocols/target-promotion/events.js"
@@ -37,11 +38,16 @@ export interface TargetPromotionHistoryIndexes {
     TargetPromotionRequestId,
     HashMap.HashMap<number, Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionAttemptIntended" }>>
   >
+  readonly deferrals: HashMap.HashMap<
+    TargetPromotionRequestId,
+    HashMap.HashMap<number, Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionReconciliationDeferred" }>>
+  >
   readonly terminals: HashSet.HashSet<TargetPromotionRequestId>
 }
 /** Creates one explicit per-history causal index; it is never authority or persisted state. */
 export const makeTargetPromotionHistoryIndexes = (): TargetPromotionHistoryIndexes => ({
   attempts: HashMap.empty(),
+  deferrals: HashMap.empty(),
   intents: HashMap.empty(),
   terminals: HashSet.empty()
 })
@@ -157,6 +163,40 @@ const invalidTargetPromotionAttempt = (
   }
 }
 
+type PromotionDeferral = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionReconciliationDeferred" }>
+
+const invalidTargetPromotionDeferral = (
+  event: PromotionDeferral,
+  indexes: TargetPromotionHistoryIndexes
+): TargetPromotionHistoryValidation => {
+  const requestId = event.correlation.requestId
+  const intent = mapGet(indexes.intents, requestId)
+  const attempts = mapGet(indexes.attempts, requestId)
+  const deferrals = mapGet(indexes.deferrals, requestId) ?? HashMap.empty<number, PromotionDeferral>()
+  const ordinal = Number(event.afterAttemptOrdinal)
+  const latestOrdinal = attempts === undefined ? 0 : HashMap.size(attempts)
+  const basisAttempt = attempts === undefined ? undefined : mapGet(attempts, ordinal)
+  const fieldIssue = targetPromotionReconciliationDeferralFieldIssue(event)
+  const valid = [
+    intent !== undefined && targetPromotionCorrelationEquals(intent.correlation, event.correlation),
+    basisAttempt !== undefined && targetPromotionCorrelationEquals(basisAttempt.correlation, event.correlation),
+    !HashSet.has(indexes.terminals, requestId),
+    ordinal === latestOrdinal,
+    !HashMap.has(deferrals, ordinal),
+    fieldIssue === undefined
+  ].every(Boolean)
+  return {
+    detail: valid
+      ? undefined
+      : (fieldIssue ??
+        `target promotion reconciliation deferral has no exact latest unresolved attempt for request ${requestId}`),
+    indexes: {
+      ...indexes,
+      deferrals: HashMap.set(indexes.deferrals, requestId, HashMap.set(deferrals, ordinal, event))
+    }
+  }
+}
+
 type PromotionSuccess = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionObservedSuccess" }>
 type PromotionStale = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionStale" }>
 type PromotionNonConvergence = Extract<WorkflowJournalEvent, { readonly _tag: "TargetPromotionNonConvergence" }>
@@ -257,6 +297,9 @@ export const invalidTargetPromotionHistory = (
     return invalidTargetPromotionIntent(record, event, indexes, integratorObservations)
   }
   if (event._tag === "TargetPromotionAttemptIntended") return invalidTargetPromotionAttempt(event, indexes)
+  if (event._tag === "TargetPromotionReconciliationDeferred") {
+    return invalidTargetPromotionDeferral(event, indexes)
+  }
   if (
     event._tag === "TargetPromotionObservedSuccess" ||
     event._tag === "TargetPromotionStale" ||

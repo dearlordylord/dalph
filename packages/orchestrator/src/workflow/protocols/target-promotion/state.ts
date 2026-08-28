@@ -13,7 +13,8 @@ import {
   TargetPromotionSuccessObservation,
   TargetPromotionTerminalBasis,
   type TargetPromotionJournalEvent,
-  targetPromotionCorrelationEquals
+  targetPromotionCorrelationEquals,
+  targetPromotionReconciliationDeferralFieldIssue
 } from "./events.js"
 
 /** The next bounded action is either the mandatory initial read or a read after an ambiguous write. */
@@ -122,6 +123,37 @@ const isTerminalPromotionOccurrence = (
   ["TargetPromotionObservedSuccess", "TargetPromotionStale", "TargetPromotionNonConvergence"].includes(
     record.event._tag
   )
+
+const reconciliationDeferralCausalIssue = (
+  record: PromotionOccurrence & { readonly event: TargetPromotionReconciliationDeferredEvent },
+  relevant: ReadonlyArray<PromotionOccurrence>
+): string | undefined => {
+  const prior = relevant.filter(({ position }) => position < record.position)
+  const priorIntent = correlationFromIntent(prior)
+  const priorAttempt = latest(attemptRecords(prior))
+  const priorTerminal = prior.find(isTerminalPromotionOccurrence)
+  const duplicate = reconciliationDeferralRecords(prior).some(
+    ({ event }) => event.afterAttemptOrdinal === record.event.afterAttemptOrdinal
+  )
+  if (priorIntent === undefined) return "target promotion reconciliation deferral has no prior exact promotion intent"
+  if (priorTerminal !== undefined) return "target promotion reconciliation deferral follows a terminal promotion result"
+  if (priorAttempt === undefined || priorAttempt.event.attemptOrdinal !== record.event.afterAttemptOrdinal) {
+    return "target promotion reconciliation deferral has no exact latest unresolved attempt"
+  }
+  if (duplicate) return "target promotion reconciliation deferral duplicates the same promotion attempt"
+  return targetPromotionReconciliationDeferralFieldIssue(record.event)
+}
+
+/** Finds a durable deferral claim that cannot follow the exact promotion prefix. */
+export const targetPromotionReconciliationDeferralIssueFor = (
+  records: ReadonlyArray<JournalOccurrence>,
+  request: TargetPromotionCorrelation
+): string | undefined => {
+  const relevant = relevantPromotionOccurrences(records, request)
+  return reconciliationDeferralRecords(relevant)
+    .map((record) => reconciliationDeferralCausalIssue(record, relevant))
+    .find((issue) => issue !== undefined)
+}
 
 const stateFromTerminal = (event: TerminalPromotionEvent): TargetPromotionState =>
   Match.valueTags(event, {

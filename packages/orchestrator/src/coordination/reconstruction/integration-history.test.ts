@@ -37,6 +37,9 @@ import {
 } from "../../workflow/protocols/integration-quarantine/events.js"
 import {
   TargetPromotionIntendedEvent,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionReconciliationDeferredEvent,
+  TargetPromotionReconciliationDeferral,
   targetPromotionCorrelationFor
 } from "../../workflow/protocols/target-promotion/events.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
@@ -606,10 +609,24 @@ describe("retained integration history", () => {
       correlation: targetPromotionCorrelationFor(foreignQualifiedCandidate),
       version: workflowJournalEventVersion
     })
+    const validPromotionDeferral = TargetPromotionReconciliationDeferredEvent.make({
+      afterAttemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+      correlation: fixture.promotionCorrelation,
+      deferral: TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
+        observedHeadSha: fixture.qualifiedCandidate.run.session.expectedTargetHead
+      }),
+      version: workflowJournalEventVersion
+    })
+    const foreignPromotionDeferral = TargetPromotionReconciliationDeferredEvent.make({
+      ...validPromotionDeferral,
+      correlation: targetPromotionCorrelationFor(foreignQualifiedCandidate)
+    })
 
     expect([
       invalidWorkflowRunBinding(validPromotion, runId),
       invalidWorkflowRunBinding(foreignPromotion, runId),
+      invalidWorkflowRunBinding(validPromotionDeferral, runId),
+      invalidWorkflowRunBinding(foreignPromotionDeferral, runId),
       invalidWorkflowRunBinding(validSuccessor, runId),
       invalidWorkflowRunBinding(foreignSuccessor, runId),
       invalidWorkflowRunBinding(validDirection, runId),
@@ -621,6 +638,8 @@ describe("retained integration history", () => {
       invalidWorkflowRunBinding(integrationStarted, runId),
       invalidWorkflowRunBinding(foreignStarted, runId)
     ]).toEqual([
+      undefined,
+      `target promotion binds run ${foreignRun}`,
       undefined,
       `target promotion binds run ${foreignRun}`,
       undefined,
