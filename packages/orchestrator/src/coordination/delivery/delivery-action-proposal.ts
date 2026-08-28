@@ -21,7 +21,6 @@ import type { RunnableFrontierTransition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import type { TransitionForRoute } from "./delivery-transition-policy.js"
-import type { ExecutorProgressGraphReadRequirement } from "../executor-progress-graph-read.js"
 
 /** Stable structural identity of one exact proposed action; it is not a journal OperationId. */
 export const DeliveryProposalId = Schema.NonEmptyString.pipe(Schema.brand("DeliveryProposalId"))
@@ -215,13 +214,6 @@ export type FreshOperationOnlyRoute =
       readonly purpose: "EstablishCurrentGraph"
       readonly target: TrackerTarget
     }
-  | {
-      readonly _tag: "TrackerGraphReadRoute"
-      readonly pendingReports: ExecutorProgressGraphReadRequirement["pendingReports"]
-      readonly purpose: "CheckExecutorProgress"
-      readonly unresolvedReadOperationId: OperationId | null
-      readonly target: TrackerTarget
-    }
 
 export interface FreshAttemptPlanningRoute {
   readonly _tag: "FreshWorkflowRoute"
@@ -351,22 +343,12 @@ export interface DeliveryProposalsInput {
   readonly transitions: ReadonlyArray<RunnableFrontierTransition>
 }
 
-export type TrackerGraphReadProposalInput =
-  | {
-      readonly acceptedAt: JournalPosition | null
-      readonly purpose: "EstablishCurrentGraph"
-      readonly runId: RunId
-      readonly target: TrackerTarget
-      /** A graph-read intent already recorded for this process-local requirement. */
-      readonly waitsForLiveOperationId?: OperationId | null
-    }
-  | {
-      readonly acceptedAt: JournalPosition | null
-      readonly purpose: "CheckExecutorProgress"
-      readonly requirement: ExecutorProgressGraphReadRequirement
-      readonly runId: RunId
-      readonly target: TrackerTarget
-    }
+export interface TrackerGraphReadProposalInput {
+  readonly acceptedAt: JournalPosition | null
+  readonly purpose: "EstablishCurrentGraph"
+  readonly runId: RunId
+  readonly target: TrackerTarget
+}
 
 const canonical = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonical)
@@ -380,26 +362,12 @@ const canonical = (value: unknown): unknown => {
   return value
 }
 
-export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal["route"]): DeliveryProposalId => {
-  // Establishment and progress-check reads are the same one-at-a-time graph
-  // boundary.  Keep their process-local identity coalesced while preserving
-  // the purpose on the executable route for diagnostics and policy.
-  const identityRoute = route._tag === "TrackerGraphReadRoute" ? { _tag: route._tag, target: route.target } : route
-  return DeliveryProposalId.make(`delivery:${JSON.stringify(canonical({ route: identityRoute, runId }))}`)
-}
+export const deliveryProposalIdOf = (runId: RunId, route: DeliveryActionProposal["route"]): DeliveryProposalId =>
+  DeliveryProposalId.make(`delivery:${JSON.stringify(canonical({ route, runId }))}`)
 
 /** Describes one fresh complete-graph read without allocating or recording its OperationId. */
 export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput): TrackerGraphActionProposal => {
-  const route: FreshOperationRoute =
-    input.purpose === "EstablishCurrentGraph"
-      ? { _tag: "TrackerGraphReadRoute", purpose: input.purpose, target: input.target }
-      : {
-          _tag: "TrackerGraphReadRoute",
-          pendingReports: input.requirement.pendingReports,
-          purpose: input.purpose,
-          unresolvedReadOperationId: input.requirement.unresolvedReadOperationId,
-          target: input.target
-        }
+  const route: FreshOperationRoute = { _tag: "TrackerGraphReadRoute", purpose: input.purpose, target: input.target }
   return {
     _tag: "DeliveryActionProposal",
     actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } },
@@ -412,9 +380,6 @@ export const trackerGraphReadProposalOf = (input: TrackerGraphReadProposalInput)
     order: { _tag: "TrackerGraphOrder", acceptedAt: input.acceptedAt },
     owner: "TrackerGraph",
     route,
-    waitsForLiveOperationId:
-      input.purpose === "CheckExecutorProgress"
-        ? input.requirement.unresolvedReadOperationId
-        : (input.waitsForLiveOperationId ?? null)
+    waitsForLiveOperationId: null
   }
 }

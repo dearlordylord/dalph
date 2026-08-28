@@ -344,9 +344,10 @@ captured moment or enqueue redundant graph renders.
 The exact selector retains every captured observation. **Previous delivery
 landmark** and **Next delivery landmark** skip repeated publications to the
 stable eligible-frontier waves, full-capacity overlaps, one-holder releases,
-coordinator restarts, and terminal publication. The staggered cassette reaches
-A, B+C, restart, B+C+X, C, D+X, X, E+F, F, H+I, I, G, and the empty frontier
-without scanning more than 24 landmarks. The complete
+coordinator restarts, and terminal publication. The staggered cassette's
+eligible frontier reaches A, B+C, restart-retained B+C with B+C+X eligible,
+D+X, E+F, H+I, G, and the empty frontier. Its held positions release through
+B+C, C, X, D, E+F, F, H+I, I, and G without scanning more than 24 landmarks. The complete
 per-task matrix is a secondary **All task delivery facts** disclosure; the
 graph and selected-task summary remain primary.
 
@@ -717,8 +718,8 @@ the edit itself; the cassette's next complete tracker-read return is the first
 fact Dalph can observe and present. The Journal still
 contains the exact unfinished B and C executor-work responsibilities and no
 terminal or safe-suspension report for either attempt. No Git, integration, or
-cleanup boundary participates in this slice because none of these executor
-results is accepted for integration.
+cleanup boundary participates in Alice's outside edit; those boundaries appear
+later only after an executor reports an accepted result.
 
 The next Run establishment reads the retained Journal, reconstructs the same B
 and C planned attempts, and recreates two anonymous process-local task-work
@@ -728,19 +729,28 @@ complete tracker read observes X and the changed G prerequisites. X becomes
 graph-eligible, but B and C occupy both positions, so no X executor work begins
 and no X attempt is planned yet.
 
-The executor then reports B Terminal while C remains Running. B's report leaves
-one position unheld but does not itself permit another frontier task to start or
-prove B complete; the graph keeps B
-open and the Lab separately shows C as the remaining holder. C then reports
-Terminal in a later production publication. Only after no current executable
-responsibility remains does an ordinary complete tracker read report B and C
-`CompletedSuccessfully`. That observation exposes D and the already-observed X,
-and those two tasks begin together. No terminal executor report is used as a
-substitute for this tracker observation.
+The executor then reports B Terminal with an accepted result while C remains
+Running. B's report releases one task-work position and creates an integration
+obligation, but it neither proves B complete nor rereads B's instructions to
+authorize work that has already finished executing. The graph keeps B open and
+the Lab separately shows C as the remaining holder. C reports its accepted
+Terminal result in a later production publication. After both reports release
+capacity, Dalph rereads the current graph and claims, acquires X's claim, reads
+X's exact current specification, and records X's first attempt plan. It does
+not reread B or C's specifications as executor authorization.
 
-D and X report Terminal in separate production publications, so the Lab first
-shows both positions held, then X as the remaining holder, then neither held.
-The later complete tracker read proves both successful and exposes E and F.
+X's worktree becomes ready after B's Integrator candidate is observed. X's
+executor starts only after B's successful promotion compare-and-set, while B's
+completion finality is still unfinished.
+X then reports its own accepted result. C crosses integration and completion
+finality next. Only a later complete tracker read proves B and C successful and
+exposes D. D begins and reports its accepted result after X has already released
+its task-work position. X's earlier accepted result settles through integration
+before D's because it entered that queue first. The held-position chronology is
+therefore B+C, C, X, D, E+F, F, H+I, I, and G; no Terminal executor report is
+used as a substitute for tracker success or delivery settlement.
+
+The later complete tracker read after X and D settle proves both successful and exposes E and F.
 Those tasks begin together; E reports Terminal first while F remains visibly
 held, then F reports Terminal. The later successful tracker observation exposes
 H and I, which likewise begin together and release their positions in separate
@@ -888,13 +898,14 @@ task whose exact facts are correlated below.
   `IntegrationFinalitySettled` order, plus a non-empty production settlement
   and tracker-reflection frame. It also proves the cassette does not fabricate
   whole-Run termination.
-- `consumes a staggered graph while reconstructed positions delay restart-added X`
+- `consumes a staggered graph while restart-added X waits for recovered capacity`
   runs `authored:deliveryInvariantStory` through the public authored runner and
   checks the exact prerequisite edges, B/C reconstructed positions, X's later
-  tracker observation, and the staggered B+C → C → D+X → X → E+F → F → H+I → I
-  → G position chronology. It requires a later successful tracker observation
-  before each deeper admission and real executor responsibility plus terminal
-  evidence for every task.
+  tracker observation, exact specification-before-plan boundary, capacity
+  release before X's worktree, and the staggered B+C → C → X → D → E+F → F →
+  H+I → I → G position chronology. It requires a later successful tracker
+  observation before each deeper dependency wave and real executor
+  responsibility plus terminal evidence for every task.
 - `preserves the double-diamond middle positions across coordinator restart`
   checks B and C hold exact task-work positions before process loss, the first
   later-activation publications retain the same Run and attempt correlations,

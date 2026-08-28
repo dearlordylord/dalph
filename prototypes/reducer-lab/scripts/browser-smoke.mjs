@@ -824,7 +824,7 @@ try {
   )
   assert.ok(restartNarrowTruth.restartWidth <= restartNarrowTruth.workbenchWidth)
   await page.setViewportSize({ width: 1440, height: 900 })
-  const heldSequence = ["B+C", "C", "D+X", "X", "E+F", "F", "H+I", "I", "G"]
+  const heldSequence = ["B+C", "C", "X", "D", "E+F", "F", "H+I", "I", "G"]
   let previousHeld = -1
   for (const held of heldSequence) {
     previousHeld = linkedFrameTruth.findIndex(({ held: value }, index) => index > previousHeld && value === held)

@@ -165,7 +165,7 @@ events merely to test the removed cassette infrastructure.
 
 ### Scenario-to-test mapping
 
-- `consumes a staggered graph while reconstructed positions delay restart-added X`
+- `consumes a staggered graph while restart-added X waits for recovered capacity`
 - `preserves the double-diamond middle positions across coordinator restart`
 - generated `runs maintained authored cassette <catalog-key> through the composed production coordinator`
 - `keeps maintained authored and recorded catalogs and public exports free of legacy integration tags`

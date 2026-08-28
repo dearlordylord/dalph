@@ -219,7 +219,16 @@ the same key. Every demonstrated manifest row names the exact registered
 acceptance test that checks its evidence; a catalog key by itself is not proof.
 `keeps every delivery-story beat linked to maintained evidence or an explicit
 implementation gap` checks both directions, exact catalog keys, exact test
-declarations, and the byte-for-byte manifest block. `executes DS01 through DS13
+declarations, and the byte-for-byte manifest block.
+
+The supplemental `authored:deliveryInvariantStory` chronology retains its
+restart-focused checks. `consumes a staggered graph while restart-added X waits
+for recovered capacity` proves the exact topology, eligible waves, recovered
+capacity ordering, held-position sequence, and ten accepted-result settlements.
+`preserves the double-diamond middle positions across coordinator restart`
+proves B and C retain the same Run and Attempt identities while X waits.
+
+`executes DS01 through DS13
 in one maintained chronology` runs the capacity, suspension, retention, restart,
 and admission prefix through `runAuthoredScenarioCassette`; `executes DS-14
 through DS-17 from rejected exact-head offer through Operator-authorized

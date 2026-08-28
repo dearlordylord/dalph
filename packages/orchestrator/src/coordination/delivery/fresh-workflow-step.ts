@@ -16,7 +16,7 @@ export type FreshWorkflowStep = Data.TaggedEnum<{
   }
   ReadTaskWorkSpecification: {
     readonly predecessorOperationId: OperationId
-    readonly purpose: "PreStart" | "ExecutorProgress"
+    readonly purpose: "PreStart"
     readonly task: Task
   }
   RecordTaskAttemptPlan: {

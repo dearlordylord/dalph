@@ -69,9 +69,7 @@ type FreshTaskWorkMode = "AcquireFresh" | "ReuseExisting"
 
 const freshStepTaskWorkModeFor = (freshStep: FreshWorkflowStep): FreshTaskWorkMode | undefined => {
   if (freshStep._tag === "AcquireTaskClaim") return "AcquireFresh"
-  if (freshStep._tag === "ReadTaskWorkSpecification") {
-    return freshStep.purpose === "PreStart" ? "ReuseExisting" : undefined
-  }
+  if (freshStep._tag === "ReadTaskWorkSpecification") return "ReuseExisting"
   return freshReuseTaskWorkStepTags.has(freshStep._tag) ? "ReuseExisting" : undefined
 }
 
