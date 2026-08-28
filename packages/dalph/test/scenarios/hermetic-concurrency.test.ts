@@ -321,10 +321,10 @@ it.effect(
         }
 
         const completionTask: CompletionTaskBoundaryService = {
-          readFocusedTaskCompletion: (taskId, focusedTarget, operationId) =>
+          readFocusedTaskCompletion: (readRequest) =>
             Effect.gen(function* () {
-              const task = taskKeys.find((candidate) => taskId === taskIdOf(candidate))
-              if (task === undefined) return yield* Effect.die(`unknown focused task ${taskId}`)
+              const task = taskKeys.find((candidate) => readRequest.taskId === taskIdOf(candidate))
+              if (task === undefined) return yield* Effect.die(`unknown focused task ${readRequest.taskId}`)
               const currentClaim = yield* Ref.get(claims).pipe(
                 Effect.map((current) => current.get(task)),
                 Effect.flatMap((claim) =>
@@ -339,12 +339,12 @@ it.effect(
               return {
                 currentClaim,
                 lifecycle: yield* Ref.get(lifecycle).pipe(Effect.map((current) => current.get(task) ?? "Open")),
-                operationId,
-                target: focusedTarget,
+                operationId: readRequest.operationId,
+                target: readRequest.target,
                 targetMembership: "Member" as const,
-                taskId,
+                taskId: readRequest.taskId,
                 taskRevision: specification.fingerprint,
-                trackerRevision: TrackerRevision.make(`hermetic-focused:${task}:${operationId}`),
+                trackerRevision: TrackerRevision.make(`hermetic-focused:${task}:${readRequest.operationId}`),
                 unfinishedPrerequisiteTaskIds:
                   task === "D"
                     ? [...(yield* Ref.get(lifecycle)).entries()].flatMap(([candidate, state]) =>

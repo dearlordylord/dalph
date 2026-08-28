@@ -1,19 +1,4 @@
-/* eslint-disable functional/immutable-data -- Request accumulation is private adapter scratch and never becomes authority. */
 import { Effect, Layer, Option } from "effect"
-import { TaskLifecycle } from "../task.js"
-import { type TrackerTask } from "../task.js"
-import { type TrackerTarget } from "../target.js"
-import { GithubGraphqlClient, githubGraphqlClientNodeLayer, GithubGraphqlRequest } from "./graphql-client.js"
-import type { GithubCursor, GithubGraphqlResponse, GithubIssueNodeId } from "./graphql-client.js"
-import {
-  BlockedByResponse,
-  type IssueConnection,
-  ReadIssueResponse,
-  ResolveIssueResponse,
-  SubIssuesResponse
-} from "./graph-schema.js"
-import { githubTaskIdFor, trackerRevisionFor } from "./task-identity.js"
-import { githubConnectionPageLimit, githubSnapshotTaskLimit } from "./read-limits.js"
 import { GraphProjectionError, projectTrackerSnapshot } from "../graph.js"
 import {
   type GithubTrackerReadOperation,
@@ -21,6 +6,25 @@ import {
   TrackerAdapterReadFailureReason,
   TrackerGraphReader
 } from "../graph-reader.js"
+import type { TaskLifecycle, TrackerTask } from "../task.js"
+import { type TrackerTarget } from "../target.js"
+import { GithubGraphqlClient, githubGraphqlClientNodeLayer, GithubGraphqlRequest } from "./graphql-client.js"
+import type {
+  GithubCursor,
+  GithubGraphqlResponse,
+  GithubIssueNodeId,
+  GithubRepositoryNodeId
+} from "./graphql-client.js"
+import { BlockedByResponse, ReadIssueResponse, ResolveIssueResponse, SubIssuesResponse } from "./graph-schema.js"
+import {
+  type GithubIssueConnectionPage,
+  type GithubIssueRelation,
+  type GithubTargetClosureNode,
+  type GithubTargetClosureReadStage,
+  readCompleteGithubIssueConnection,
+  requireGithubIssueIdentity,
+  traverseGithubTargetClosure
+} from "./read-primitives.js"
 import {
   adapterError,
   decodeResponse,
@@ -30,49 +34,136 @@ import {
   resourceLimitExceeded,
   type GithubTrackerGraphReadRequest
 } from "./read-boundary.js"
+import { githubTaskIdFor, trackerRevisionFor } from "./task-identity.js"
 import { makeReadTaskWorkSpecification } from "./task-work-specification-reader.js"
+import { type GithubIssueState, type GithubIssueStateReason, githubTaskLifecycleFrom } from "./task-lifecycle.js"
 
 interface IssueProjection {
-  readonly issueNodeId: GithubIssueNodeId
+  readonly id: GithubIssueNodeId
   readonly lifecycle: TaskLifecycle
-  readonly observedParentNodeId: GithubIssueNodeId | null
-  readonly prerequisiteNodeIds: ReadonlyArray<GithubIssueNodeId>
+  readonly parentNodeId: GithubIssueNodeId | null
 }
 
-const isOpenLifecycle = (
-  state: "CLOSED" | "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null
-): boolean => state === "OPEN" && (stateReason === null || stateReason === "REOPENED")
-
-const isCompletedLifecycle = (
-  state: "CLOSED" | "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null
-): boolean => state === "CLOSED" && stateReason === "COMPLETED"
-
-const isTerminalWithoutSuccessLifecycle = (
-  state: "CLOSED" | "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null
-): boolean => state === "CLOSED" && (stateReason === "DUPLICATE" || stateReason === "NOT_PLANNED")
+type ExecuteGraphRead = (
+  request: GithubTrackerGraphReadRequest
+) => Effect.Effect<GithubGraphqlResponse, TrackerAdapterReadError>
 
 const lifecycleFrom = (
-  state: "CLOSED" | "OPEN",
-  stateReason: "COMPLETED" | "DUPLICATE" | "NOT_PLANNED" | "REOPENED" | null
+  state: GithubIssueState,
+  stateReason: GithubIssueStateReason
 ): Effect.Effect<TaskLifecycle, TrackerAdapterReadError> => {
-  if (isOpenLifecycle(state, stateReason)) {
-    return Effect.succeed(TaskLifecycle.cases.Open.make({}))
-  }
-  if (isCompletedLifecycle(state, stateReason)) {
-    return Effect.succeed(TaskLifecycle.cases.CompletedSuccessfully.make({}))
-  }
-  if (isTerminalWithoutSuccessLifecycle(state, stateReason)) {
-    return Effect.succeed(TaskLifecycle.cases.TerminalWithoutSuccess.make({}))
-  }
-  return Effect.fail(
-    incomplete(
-      "GithubTrackerGraphReader.readIssue",
-      `unsupported GitHub issue lifecycle ${state}/${stateReason ?? "null"}`
+  const lifecycle = githubTaskLifecycleFrom(state, stateReason)
+  return lifecycle === undefined
+    ? Effect.fail(
+        incomplete(
+          "GithubTrackerGraphReader.readIssue",
+          `unsupported GitHub issue lifecycle ${state}/${stateReason ?? "null"}`
+        )
+      )
+    : Effect.succeed(lifecycle)
+}
+
+const operationForRelation = (relation: GithubIssueRelation): GithubTrackerReadOperation =>
+  relation === "blockedBy" ? "GithubTrackerGraphReader.readBlockedBy" : "GithubTrackerGraphReader.readSubIssues"
+
+const operationForClosureStage = (stage: GithubTargetClosureReadStage): GithubTrackerReadOperation =>
+  stage === "issue" ? "GithubTrackerGraphReader.readIssue" : operationForRelation(stage)
+
+const requireConnectionPage = (
+  operation: GithubTrackerReadOperation,
+  issueNodeId: GithubIssueNodeId,
+  page: GithubIssueConnectionPage | null
+): Effect.Effect<GithubIssueConnectionPage, TrackerAdapterReadError> =>
+  page === null
+    ? Effect.fail(incomplete(operation, `GitHub issue ${issueNodeId} is inaccessible`))
+    : Effect.succeed(page)
+
+const readConnectionPage = Effect.fn("GithubTrackerGraphReader.readConnectionPage")(function* (
+  execute: ExecuteGraphRead,
+  issueNodeId: GithubIssueNodeId,
+  relation: GithubIssueRelation,
+  cursor: GithubCursor | null
+) {
+  const operation = operationForRelation(relation)
+  if (relation === "blockedBy") {
+    const response = yield* execute(GithubGraphqlRequest.cases.ReadBlockedBy.make({ cursor, issueNodeId }))
+    const { data } = yield* decodeResponse(BlockedByResponse, operation, response)
+    return yield* requireConnectionPage(
+      operation,
+      issueNodeId,
+      data.node === null ? null : { connection: data.node.blockedBy, issueNodeId: data.node.id }
     )
+  }
+  const response = yield* execute(GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor, issueNodeId }))
+  const { data } = yield* decodeResponse(SubIssuesResponse, operation, response)
+  return yield* requireConnectionPage(
+    operation,
+    issueNodeId,
+    data.node === null ? null : { connection: data.node.subIssues, issueNodeId: data.node.id }
   )
+})
+
+const readConnection = (
+  execute: ExecuteGraphRead,
+  issueNodeId: GithubIssueNodeId,
+  relation: GithubIssueRelation
+): Effect.Effect<ReadonlyArray<GithubIssueNodeId>, TrackerAdapterReadError> => {
+  const operation = operationForRelation(relation)
+  return readCompleteGithubIssueConnection({
+    invalid: (_stage, detail) => Effect.fail(incomplete(operation, detail)),
+    issueNodeId,
+    readPage: (cursor) => readConnectionPage(execute, issueNodeId, relation, cursor),
+    relation,
+    resourceLimit: (_stage, detail) => Effect.fail(resourceLimitExceeded(operation, detail))
+  })
+}
+
+const readIssueProjection = Effect.fn("GithubTrackerGraphReader.readIssueProjection")(function* (
+  execute: ExecuteGraphRead,
+  repositoryNodeId: GithubRepositoryNodeId,
+  issueNodeId: GithubIssueNodeId
+) {
+  const operation: GithubTrackerReadOperation = "GithubTrackerGraphReader.readIssue"
+  const response = yield* execute(GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId }))
+  const decoded = yield* decodeResponse(ReadIssueResponse, operation, response)
+  const node = decoded.data.node
+  const identity = yield* requireGithubIssueIdentity(
+    issueNodeId,
+    repositoryNodeId,
+    "root",
+    node === null
+      ? null
+      : {
+          id: node.id,
+          parentNodeId: node.parent?.id ?? null,
+          repositoryNodeId: node.repository.id,
+          state: node.state,
+          stateReason: node.stateReason
+        },
+    (detail) => Effect.fail(incomplete(operation, detail))
+  )
+  const lifecycle = yield* lifecycleFrom(identity.state, identity.stateReason)
+  return { id: identity.id, lifecycle, parentNodeId: identity.parentNodeId } satisfies IssueProjection
+})
+
+const normalizedTasks = (
+  nodes: ReadonlyMap<GithubIssueNodeId, GithubTargetClosureNode<IssueProjection>>,
+  hierarchyParents: ReadonlyMap<GithubIssueNodeId, GithubIssueNodeId | null>,
+  repositoryNodeId: GithubRepositoryNodeId
+): ReadonlyArray<TrackerTask> => {
+  const taskIds = new Map(
+    [...nodes.values()].map(({ issue }) => [issue.id, githubTaskIdFor(repositoryNodeId, issue.id)])
+  )
+  return [...nodes.values()].map(({ issue, prerequisiteNodeIds }) => {
+    const id = Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(issue.id)))
+    const parentNodeId = hierarchyParents.get(issue.id) ?? null
+    const parentTaskId =
+      parentNodeId === null ? null : Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(parentNodeId)))
+    const prerequisiteIds = prerequisiteNodeIds.map((prerequisiteNodeId) =>
+      Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(prerequisiteNodeId)))
+    )
+    return { id, lifecycle: issue.lifecycle, parentTaskId, prerequisiteIds }
+  })
 }
 
 export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, never, GithubGraphqlClient> = Layer.effect(
@@ -81,7 +172,7 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
     const client = yield* GithubGraphqlClient
     const execute = Effect.fn("GithubTrackerGraphReader.execute")(function* (request: GithubTrackerGraphReadRequest) {
       const operation = operationForRequest(request)
-      const response = yield* client
+      return yield* client
         .execute(request)
         .pipe(
           Effect.mapError((error) =>
@@ -94,7 +185,6 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
             )
           )
         )
-      return response
     })
 
     const resolveTarget = Effect.fn("GithubTrackerGraphReader.resolveTarget")(function* (target: TrackerTarget) {
@@ -110,289 +200,28 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
       return { repositoryNodeId: resolved.data.repository.id, rootIssueNodeId: resolved.data.repository.issue.id }
     })
 
-    /**
-     * Produces an all-or-nothing bounded observation, not a GitHub
-     * point-in-time transaction. See docs/ARCHITECTURE.md.
-     */
+    /** Produces an all-or-nothing bounded observation, not a GitHub point-in-time transaction. */
     const read = Effect.fn("GithubTrackerGraphReader.read")(function* (target: TrackerTarget) {
-      const { repositoryNodeId: rootRepositoryNodeId, rootIssueNodeId: rootNodeId } = yield* resolveTarget(target)
-      const pending: Array<{ readonly expandChildren: boolean; readonly issueNodeId: GithubIssueNodeId }> = [
-        { expandChildren: true, issueNodeId: rootNodeId }
-      ]
-      const hierarchyParents = new Map<GithubIssueNodeId, GithubIssueNodeId | null>([[rootNodeId, null]])
-      const projections = new Map<GithubIssueNodeId, IssueProjection>()
-      const expandedChildren = new Set<GithubIssueNodeId>()
-      const discoveredNodeIds = new Set<GithubIssueNodeId>([rootNodeId])
-
-      const registerDiscovered = Effect.fn("GithubTrackerGraphReader.registerDiscovered")(function* (
-        operation: GithubTrackerReadOperation,
-        nodeIds: ReadonlyArray<GithubIssueNodeId>
-      ) {
-        const undiscoveredCount = nodeIds.filter((nodeId) => !discoveredNodeIds.has(nodeId)).length
-        if (discoveredNodeIds.size + undiscoveredCount > githubSnapshotTaskLimit) {
-          return yield* resourceLimitExceeded(
-            operation,
-            `GitHub tracker target closure exceeds ${githubSnapshotTaskLimit} tasks`
-          )
-        }
-        for (const nodeId of nodeIds) discoveredNodeIds.add(nodeId)
+      const resolved = yield* resolveTarget(target)
+      const traversal = yield* traverseGithubTargetClosure({
+        closureDescription: "tracker target closure",
+        invalid: (stage, detail) => Effect.fail(incomplete(operationForClosureStage(stage), detail)),
+        readConnection: (issueNodeId, relation) => readConnection(execute, issueNodeId, relation),
+        readIssue: (issueNodeId) => readIssueProjection(execute, resolved.repositoryNodeId, issueNodeId),
+        resourceLimit: (stage, detail) => Effect.fail(resourceLimitExceeded(operationForRelation(stage), detail)),
+        rootIssueNodeId: resolved.rootIssueNodeId
       })
-
-      const decodeSubIssuesConnection = Effect.fn("GithubTrackerGraphReader.decodeSubIssuesConnection")(function* (
-        operation: GithubTrackerReadOperation,
-        response: GithubGraphqlResponse,
-        issueNodeId: GithubIssueNodeId
-      ) {
-        const { data } = yield* decodeResponse(SubIssuesResponse, operation, response)
-        return yield* requireConnectionNode(
-          operation,
-          issueNodeId,
-          data.node === null ? null : { connection: data.node.subIssues, id: data.node.id }
-        )
-      })
-
-      const decodeBlockedByConnection = Effect.fn("GithubTrackerGraphReader.decodeBlockedByConnection")(function* (
-        operation: GithubTrackerReadOperation,
-        response: GithubGraphqlResponse,
-        issueNodeId: GithubIssueNodeId
-      ) {
-        const { data } = yield* decodeResponse(BlockedByResponse, operation, response)
-        return yield* requireConnectionNode(
-          operation,
-          issueNodeId,
-          data.node === null ? null : { connection: data.node.blockedBy, id: data.node.id }
-        )
-      })
-
-      const requireConnectionNode = Effect.fn("GithubTrackerGraphReader.requireConnectionNode")(function* (
-        operation: GithubTrackerReadOperation,
-        issueNodeId: GithubIssueNodeId,
-        node: { readonly connection: IssueConnection; readonly id: GithubIssueNodeId } | null
-      ) {
-        if (node === null) {
-          return yield* incomplete(operation, `GitHub issue ${issueNodeId} is inaccessible`)
-        }
-        return node
-      })
-
-      const connectionProtocolFor = (relation: "blockedBy" | "subIssues", issueNodeId: GithubIssueNodeId) => {
-        if (relation === "subIssues") {
-          const operation: GithubTrackerReadOperation = "GithubTrackerGraphReader.readSubIssues"
-          return {
-            decode: decodeSubIssuesConnection,
-            operation,
-            request: (cursor: GithubCursor | null): GithubTrackerGraphReadRequest =>
-              GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor, issueNodeId })
-          }
-        }
-        const operation: GithubTrackerReadOperation = "GithubTrackerGraphReader.readBlockedBy"
-        return {
-          decode: decodeBlockedByConnection,
-          operation,
-          request: (cursor: GithubCursor | null): GithubTrackerGraphReadRequest =>
-            GithubGraphqlRequest.cases.ReadBlockedBy.make({ cursor, issueNodeId })
-        }
-      }
-
-      const appendUniqueConnectionNodes = Effect.fn("GithubTrackerGraphReader.appendUniqueConnectionNodes")(function* (
-        connection: IssueConnection,
-        relation: "blockedBy" | "subIssues",
-        operation: GithubTrackerReadOperation,
-        seenNodeIds: Set<GithubIssueNodeId>,
-        nodeIds: Array<GithubIssueNodeId>
-      ) {
-        for (const { id } of connection.nodes) {
-          if (seenNodeIds.has(id)) {
-            return yield* incomplete(operation, `GitHub returned duplicate ${relation} endpoint ${id}`)
-          }
-          seenNodeIds.add(id)
-          nodeIds.push(id)
-        }
-      })
-
-      const validateNextConnectionPage = Effect.fn("GithubTrackerGraphReader.validateNextConnectionPage")(function* (
-        connection: IssueConnection,
-        relation: "blockedBy" | "subIssues",
-        operation: GithubTrackerReadOperation,
-        seenCursors: Set<GithubCursor>
-      ) {
-        if (!connection.pageInfo.hasNextPage) return
-        const endCursor = connection.pageInfo.endCursor
-        if (endCursor === null) {
-          return yield* incomplete(operation, `GitHub returned an incomplete ${relation} page`)
-        }
-        if (seenCursors.has(endCursor)) {
-          return yield* incomplete(operation, `GitHub repeated a ${relation} pagination cursor without making progress`)
-        }
-        seenCursors.add(endCursor)
-      })
-
-      const readConnection = Effect.fn("GithubTrackerGraphReader.readConnection")(function* (
-        issueNodeId: GithubIssueNodeId,
-        relation: "blockedBy" | "subIssues"
-      ) {
-        const nodeIds: Array<GithubIssueNodeId> = []
-        const seenCursors = new Set<GithubCursor>()
-        const seenNodeIds = new Set<GithubIssueNodeId>()
-        let cursor: GithubCursor | null = null
-        let hasNextPage = true
-        let pageCount = 0
-        const protocol = connectionProtocolFor(relation, issueNodeId)
-        while (hasNextPage) {
-          if (pageCount >= githubConnectionPageLimit) {
-            return yield* resourceLimitExceeded(
-              protocol.operation,
-              `GitHub ${relation} connection exceeds ${githubConnectionPageLimit} pages`
-            )
-          }
-          pageCount++
-          const response: GithubGraphqlResponse = yield* execute(protocol.request(cursor))
-          const relationNode = yield* protocol.decode(protocol.operation, response, issueNodeId)
-          if (relationNode.id !== issueNodeId) {
-            return yield* incomplete(
-              protocol.operation,
-              `GitHub returned issue ${relationNode.id} while reading ${issueNodeId}`
-            )
-          }
-          const connection: IssueConnection = relationNode.connection
-          yield* appendUniqueConnectionNodes(connection, relation, protocol.operation, seenNodeIds, nodeIds)
-          hasNextPage = connection.pageInfo.hasNextPage
-          yield* validateNextConnectionPage(connection, relation, protocol.operation, seenCursors)
-          cursor = connection.pageInfo.endCursor
-        }
-        return nodeIds
-      })
-
-      const readIssueProjection = Effect.fn("GithubTrackerGraphReader.readIssueProjection")(function* (
-        issueNodeId: GithubIssueNodeId
-      ) {
-        const issueResponse = yield* execute(GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId }))
-        const decoded = yield* decodeResponse(ReadIssueResponse, "GithubTrackerGraphReader.readIssue", issueResponse)
-        const node = decoded.data.node
-        if (node === null) {
-          return yield* incomplete("GithubTrackerGraphReader.readIssue", `GitHub issue ${issueNodeId} is inaccessible`)
-        }
-        if (node.id !== issueNodeId) {
-          return yield* incomplete(
-            "GithubTrackerGraphReader.readIssue",
-            `GitHub returned issue ${node.id} while reading ${issueNodeId}`
-          )
-        }
-        // V1 target closure policy accepts only issues from the resolved root
-        // repository; a foreign relationship is not schedulable.
-        if (node.repository.id !== rootRepositoryNodeId) {
-          return yield* incomplete(
-            "GithubTrackerGraphReader.readIssue",
-            `GitHub issue ${issueNodeId} is outside the root repository`
-          )
-        }
-        const expectedParent = hierarchyParents.get(issueNodeId)
-        const parentContradictsHierarchy = (): boolean =>
-          expectedParent !== undefined && expectedParent !== null && node.parent?.id !== expectedParent
-        if (parentContradictsHierarchy()) {
-          return yield* incomplete(
-            "GithubTrackerGraphReader.readIssue",
-            `GitHub issue ${issueNodeId} has a contradictory parent`
-          )
-        }
-        const lifecycle = yield* lifecycleFrom(node.state, node.stateReason)
-        const prerequisiteNodeIds = yield* readConnection(issueNodeId, "blockedBy")
-        yield* registerDiscovered("GithubTrackerGraphReader.readBlockedBy", prerequisiteNodeIds)
-        projections.set(issueNodeId, {
-          issueNodeId,
-          lifecycle,
-          observedParentNodeId: node.parent?.id ?? null,
-          prerequisiteNodeIds
-        })
-        // Prerequisites enter the target closure, but their grouping
-        // descendants do not unless reached from the selected root hierarchy.
-        pending.push(
-          ...prerequisiteNodeIds.map((prerequisiteNodeId) => ({
-            expandChildren: false,
-            issueNodeId: prerequisiteNodeId
-          }))
-        )
-      })
-
-      const validateChildParent = Effect.fn("GithubTrackerGraphReader.validateChildParent")(function* (
-        childNodeId: GithubIssueNodeId,
-        issueNodeId: GithubIssueNodeId
-      ) {
-        const observedChild = projections.get(childNodeId)
-        if (observedChild !== undefined && observedChild.observedParentNodeId !== issueNodeId) {
-          return yield* incomplete(
-            "GithubTrackerGraphReader.readSubIssues",
-            `GitHub issue ${childNodeId} has a contradictory parent`
-          )
-        }
-        const knownParent = hierarchyParents.get(childNodeId)
-        if (knownParent !== undefined && knownParent !== issueNodeId) {
-          return yield* incomplete(
-            "GithubTrackerGraphReader.readSubIssues",
-            `GitHub issue ${childNodeId} appears under multiple parents`
-          )
-        }
-      })
-
-      const expandIssueChildren = Effect.fn("GithubTrackerGraphReader.expandIssueChildren")(function* (
-        expandChildren: boolean,
-        issueNodeId: GithubIssueNodeId
-      ) {
-        if (!expandChildren || expandedChildren.has(issueNodeId)) return
-        expandedChildren.add(issueNodeId)
-        const childNodeIds = yield* readConnection(issueNodeId, "subIssues")
-        yield* registerDiscovered("GithubTrackerGraphReader.readSubIssues", childNodeIds)
-        for (const childNodeId of childNodeIds) {
-          yield* validateChildParent(childNodeId, issueNodeId)
-          hierarchyParents.set(childNodeId, issueNodeId)
-          pending.push({ expandChildren: true, issueNodeId: childNodeId })
-        }
-      })
-
-      const normalizedTasks = (): ReadonlyArray<TrackerTask> => {
-        const taskIds = new Map(
-          [...projections.values()].map((projection) => [
-            projection.issueNodeId,
-            githubTaskIdFor(rootRepositoryNodeId, projection.issueNodeId)
-          ])
-        )
-        return [...projections.values()].map((projection) => {
-          const id = Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(projection.issueNodeId)))
-          const parentNodeId = hierarchyParents.get(projection.issueNodeId) ?? null
-          const parentTaskId =
-            parentNodeId === null ? null : Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(parentNodeId)))
-          const prerequisiteIds = projection.prerequisiteNodeIds.map((prerequisiteNodeId) =>
-            Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(prerequisiteNodeId)))
-          )
-          return { id, lifecycle: projection.lifecycle, parentTaskId, prerequisiteIds }
-        })
-      }
-
-      while (pending.length > 0) {
-        const next = Option.getOrThrow(Option.fromUndefinedOr(pending.shift()))
-        const { expandChildren, issueNodeId } = next
-
-        if (!projections.has(issueNodeId)) {
-          yield* readIssueProjection(issueNodeId)
-        }
-        yield* expandIssueChildren(expandChildren, issueNodeId)
-      }
-
-      const tasks = normalizedTasks()
-
+      const tasks = normalizedTasks(traversal.nodes, traversal.hierarchyParents, resolved.repositoryNodeId)
       const graph = projectTrackerSnapshot({
         revision: trackerRevisionFor(tasks),
-        rootTaskId: githubTaskIdFor(rootRepositoryNodeId, rootNodeId),
+        rootTaskId: githubTaskIdFor(resolved.repositoryNodeId, resolved.rootIssueNodeId),
         tasks
       })
-      if (graph._tag === "Invalid") {
-        return yield* new GraphProjectionError({ issues: graph.issues })
-      }
+      if (graph._tag === "Invalid") return yield* new GraphProjectionError({ issues: graph.issues })
       return graph.snapshot
     })
 
     const readTaskWorkSpecification = makeReadTaskWorkSpecification(execute, resolveTarget)
-
     return TrackerGraphReader.of({ read, readTaskWorkSpecification })
   })
 )

@@ -19,6 +19,17 @@ export const FocusedTaskCompletionFacts = Schema.Struct({
   taskId: TaskId,
   taskRevision: TaskRevision,
   trackerRevision: TrackerRevision,
-  unfinishedPrerequisiteTaskIds: Schema.Array(TaskId)
-})
+  unfinishedPrerequisiteTaskIds: Schema.Array(TaskId).check(Schema.isUnique())
+}).check(
+  Schema.makeFilter((facts) => {
+    const claimTaskId =
+      facts.currentClaim._tag === "CompletionTaskClaim"
+        ? facts.currentClaim.plannedAttempt.taskId
+        : facts.currentClaim.taskId
+    if (claimTaskId !== facts.taskId) return "focused completion claim must belong to the exact task"
+    return facts.unfinishedPrerequisiteTaskIds.includes(facts.taskId)
+      ? "focused completion task cannot be its own unfinished prerequisite"
+      : undefined
+  })
+)
 export type FocusedTaskCompletionFacts = typeof FocusedTaskCompletionFacts.Type

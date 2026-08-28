@@ -7,7 +7,8 @@ import {
   CompletionTaskBoundary,
   type CompletionTaskRequest,
   type CompletionTaskRequestLookup,
-  type FocusedTaskCompletionFacts
+  type FocusedTaskCompletionFacts,
+  FocusedTaskCompletionReadRequest
 } from "../../src/workflow/protocols/integration-finality/events.js"
 
 interface CompletionBoundaryContractInput<E> {
@@ -30,7 +31,14 @@ export const completionBoundaryContract = <E>({
     Effect.gen(function* () {
       const boundary = yield* CompletionTaskBoundary
       const initialOperationId = OperationId.make(`${name}:completion-contract:initial`)
-      const initial = yield* boundary.readFocusedTaskCompletion(request.taskId, target, initialOperationId)
+      const initial = yield* boundary.readFocusedTaskCompletion(
+        FocusedTaskCompletionReadRequest.make({
+          expectedClaim: request.claim,
+          operationId: initialOperationId,
+          target,
+          taskId: request.taskId
+        })
+      )
       expect(initial).toEqual({ ...expectedOpenFacts, operationId: initialOperationId })
 
       const acknowledgement = yield* boundary.completeTask(request)
@@ -40,7 +48,14 @@ export const completionBoundaryContract = <E>({
       expect(lookup).toMatchObject({ _tag: "Applied", request })
 
       const confirmationOperationId = OperationId.make(`${name}:completion-contract:confirmation`)
-      const confirmed = yield* boundary.readFocusedTaskCompletion(request.taskId, target, confirmationOperationId)
+      const confirmed = yield* boundary.readFocusedTaskCompletion(
+        FocusedTaskCompletionReadRequest.make({
+          expectedClaim: request.claim,
+          operationId: confirmationOperationId,
+          target,
+          taskId: request.taskId
+        })
+      )
       expect(confirmed).toEqual({
         ...expectedOpenFacts,
         lifecycle: "CompletedSuccessfully",

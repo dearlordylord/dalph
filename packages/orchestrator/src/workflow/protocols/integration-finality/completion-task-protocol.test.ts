@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AcceptedResult, AcceptedResultEvidenceManifest, GitCommitSha, TaskRevision } from "@dalph/contracts"
+import { AcceptedResult, AcceptedResultEvidenceManifest, GitCommitSha, TaskId, TaskRevision } from "@dalph/contracts"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -24,6 +24,8 @@ import {
 import { memoryEvidenceStoreLayer, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
 import {
   CompletionTaskAcknowledgement,
+  CompletionClaimFingerprint,
+  type CompletionClaimObservation,
   CompletionTaskAuthorizationReadOrdinal,
   CompletionTaskCandidateAncestryObservedEvent,
   CompletionTaskConfirmationReadOrdinal,
@@ -36,6 +38,7 @@ import {
   CompletionTaskRequestLookup,
   CompletionTaskRequestOrdinal,
   CompletionTaskFocusedReadPurpose,
+  ForeignCompletionClaim,
   FocusedTaskCompletionReadFailure,
   completionClaimReplacementOperationIdFor,
   completionTaskRequestFor
@@ -44,6 +47,7 @@ import { completionTaskCandidateAncestryReadOperationIdFor } from "./completion-
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
 import {
   CompletionTaskAuthorization,
+  CompletionTaskAuthorizationConflict,
   CompletionTaskAttemptAuthorization,
   CompletionTaskDidNotConverge,
   CompletionTaskPreconditionConflict,
@@ -64,6 +68,7 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 
 const encode = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
+const unfinishedPrerequisiteTaskId = TaskId.make("integration-finality-unfinished-prerequisite")
 
 const completionEvidenceRequest = (
   acceptedCommit = fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.commit
@@ -164,6 +169,27 @@ const authorization = CompletionTaskAuthorization.make({
   target: fixture.target
 })
 
+const nonExactCurrentClaimExamples: ReadonlyArray<{
+  readonly claim: CompletionClaimObservation
+  readonly expectedReason: "CompletionClaimForeign" | "CompletionClaimMissing"
+  readonly label: string
+}> = [
+  { claim: fixture.activeClaim, expectedReason: "CompletionClaimForeign", label: "active claim" },
+  {
+    claim: ForeignCompletionClaim.make({
+      fingerprint: CompletionClaimFingerprint.make("f".repeat(64)),
+      taskId: fixture.taskId
+    }),
+    expectedReason: "CompletionClaimForeign",
+    label: "foreign completion claim"
+  },
+  {
+    claim: { _tag: "UnclaimedTask", taskId: fixture.taskId },
+    expectedReason: "CompletionClaimMissing",
+    label: "unclaimed task"
+  }
+]
+
 it.effect("rereads accepted-result and Integrator-returned evidence before task completion", () =>
   Effect.gen(function* () {
     const request = yield* completionEvidenceRequest()
@@ -194,7 +220,7 @@ it.effect("malformed, missing, and foreign accepted-result evidence stop before 
           Effect.as(CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId }))
         ),
       readCompletionRequest: () => Effect.die("invalid evidence must stop before request lookup"),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Effect.succeed({ ...authorization.focusedFacts, currentClaim: valid.claim, operationId })
     }
     const git = TargetPromotionGit.of({
@@ -307,7 +333,7 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const focusedUnavailable: CompletionTaskBoundaryService = {
       ...unusedBoundary,
-      readFocusedTaskCompletion: (taskId) =>
+      readFocusedTaskCompletion: ({ taskId }) =>
         Effect.fail(new FocusedTaskCompletionReadFailure({ detail: "focused read unavailable", taskId }))
     }
     expect(
@@ -363,7 +389,7 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
     const ancestryChronology = yield* Ref.make<ReadonlyArray<string>>([])
     const exactFocusedBoundary: CompletionTaskBoundaryService = {
       ...unusedBoundary,
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Effect.succeed({ ...authorization.focusedFacts, currentClaim: request.claim, operationId })
     }
     expect(
@@ -442,7 +468,7 @@ it.effect("reuses unresolved focused-read intents after restart", () =>
       const boundary: CompletionTaskBoundaryService = {
         completeTask: () => Effect.die("focused read replay never completes the task"),
         readCompletionRequest: () => Effect.die("focused read replay never looks up Q"),
-        readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+        readFocusedTaskCompletion: ({ operationId }) =>
           Effect.succeed({ ...authorization.focusedFacts, currentClaim: request.claim, operationId })
       }
       expect(yield* readCompletionFocusedFacts(boundary, request, fixture.target, authorizationPurpose)).toMatchObject({
@@ -455,6 +481,7 @@ it.effect("reuses unresolved focused-read intents after restart", () =>
 const protocolHarness = (
   outcomes: ReadonlyArray<"Applied" | "DefinitelyRejected" | "Throttled" | "UnknownNotApplied">,
   options: {
+    readonly focusedClaim?: CompletionClaimObservation
     readonly focusedLifecycle?: "CompletedSuccessfully" | "Open" | "TerminalWithoutSuccess"
     readonly lookup?: "Applied" | "NotApplied" | "Unreadable"
     readonly reactivationFocusedLifecycle?: "CompletedSuccessfully" | "Open" | "TerminalWithoutSuccess"
@@ -467,6 +494,7 @@ const protocolHarness = (
     const completionOperationIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
     const lookupCalls = yield* Ref.make(0)
     const focusedLifecycle = yield* Ref.make(options.focusedLifecycle ?? "Open")
+    const focusedClaim = yield* Ref.make(options.focusedClaim ?? authorization.focusedFacts.currentClaim)
     const remaining = yield* Ref.make([...outcomes])
     const boundary: CompletionTaskBoundaryService = {
       completeTask: (request) =>
@@ -505,10 +533,15 @@ const protocolHarness = (
               ? CompletionTaskRequestLookup.cases.Applied.make({ request })
               : CompletionTaskRequestLookup.cases.NotApplied.make({ request })
         }),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Effect.gen(function* () {
           yield* Ref.update(chronology, (current) => [...current, "Tracker.readFocusedTaskCompletion"])
-          return { ...authorization.focusedFacts, lifecycle: yield* Ref.get(focusedLifecycle), operationId }
+          return {
+            ...authorization.focusedFacts,
+            currentClaim: yield* Ref.get(focusedClaim),
+            lifecycle: yield* Ref.get(focusedLifecycle),
+            operationId
+          }
         })
     }
     const request = completionTaskRequestFor(fixture.claim)
@@ -627,7 +660,7 @@ it.effect("reports a task-local terminal-without-success confirmation as a confl
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("confirmation never repeats completion"),
       readCompletionRequest: () => Effect.die("confirmation never looks up Q"),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Effect.succeed({ ...authorization.focusedFacts, lifecycle: "TerminalWithoutSuccess", operationId })
     }
     expect(
@@ -702,7 +735,7 @@ it.effect("rejects stale authorization before the tracker completion boundary", 
     }
     const stale = CompletionTaskAuthorization.make({
       ...authorization,
-      focusedFacts: { ...authorization.focusedFacts, unfinishedPrerequisiteTaskIds: [fixture.taskId] }
+      focusedFacts: { ...authorization.focusedFacts, unfinishedPrerequisiteTaskIds: [unfinishedPrerequisiteTaskId] }
     })
     const failure = yield* runCompletionTaskProtocol(boundary, request, fixture.target, () =>
       Effect.succeed(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: stale }))
@@ -725,7 +758,7 @@ it.effect("records current tracker facts and Git ancestry before completing exac
         ),
       readCompletionRequest: (received) =>
         Effect.succeed(CompletionTaskRequestLookup.cases.NotApplied.make({ request: received })),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Ref.update(chronology, (current) => [...current, "Tracker.readFocusedTaskCompletion"]).pipe(
           Effect.as({ ...authorization.focusedFacts, currentClaim: request.claim, operationId })
         )
@@ -773,7 +806,7 @@ it.effect("restart records a newer current authorization cycle before the call i
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("authorization cycle test never crosses the completion boundary"),
       readCompletionRequest: () => Effect.die("authorization cycle test never reconciles Q"),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Ref.update(focusedCalls, (count) => count + 1).pipe(
           Effect.andThen(Ref.get(trackerRevision)),
           Effect.map((revision) => ({
@@ -830,7 +863,7 @@ it.effect("restart repeats both current authorization reads after only the focus
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("partial authorization test never crosses the completion boundary"),
       readCompletionRequest: () => Effect.die("partial authorization test never reconciles Q"),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Ref.update(focusedCalls, (count) => count + 1).pipe(
           Effect.as({ ...authorization.focusedFacts, currentClaim: request.claim, operationId })
         )
@@ -884,7 +917,7 @@ it.effect("restart replays one exact focused or Git authorization outcome withou
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("authorization replay never completes the task"),
       readCompletionRequest: () => Effect.die("authorization replay never looks up Q"),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Ref.update(focusedCalls, (count) => count + 1).pipe(
           Effect.as({ ...authorization.focusedFacts, currentClaim: request.claim, operationId })
         )
@@ -953,7 +986,7 @@ it.effect("rejects current authorization when Git no longer contains the promote
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("stale candidate authorization never completes the task"),
       readCompletionRequest: () => Effect.die("stale candidate authorization never looks up Q"),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Effect.succeed({ ...authorization.focusedFacts, currentClaim: request.claim, operationId })
     }
     const git = TargetPromotionGit.of({
@@ -988,7 +1021,7 @@ it.effect("waits when Git cannot read current candidate ancestry", () =>
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("unavailable Git never completes the task"),
       readCompletionRequest: () => Effect.die("unavailable Git never looks up Q"),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Effect.succeed({ ...authorization.focusedFacts, currentClaim: request.claim, operationId })
     }
     const git = TargetPromotionGit.of({
@@ -1067,6 +1100,28 @@ it.effect("checks A after losing the completion response and records fresh succe
   })
 )
 
+it.effect("does not turn completed lifecycle into success without the exact current completion claim", () =>
+  Effect.gen(function* () {
+    for (const { claim, expectedReason, label } of nonExactCurrentClaimExamples) {
+      const result = yield* protocolHarness(["UnknownNotApplied"], {
+        focusedClaim: claim,
+        focusedLifecycle: "CompletedSuccessfully"
+      })
+
+      expect(result.outcome._tag, label).toBe("Failure")
+      if (result.outcome._tag === "Failure") {
+        expect(result.outcome.failure, label).toMatchObject({ reason: expectedReason })
+      }
+      expect(result.calls, label).toBe(1)
+      expect(result.lookupCalls, label).toBe(0)
+      expect(
+        result.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended"),
+        label
+      ).toHaveLength(1)
+    }
+  })
+)
+
 it.effect("does not retry ambiguous completion merely because A currently appears open", () =>
   Effect.gen(function* () {
     const result = yield* protocolHarness(["UnknownNotApplied"], { lookup: "Unreadable" })
@@ -1092,8 +1147,7 @@ it.effect("normalizes an unavailable exact-request lookup into an unreadable amb
         Effect.fail(new CompletionTaskRequestFailure({ detail: "response lost", outcome: "Unknown", request })),
       readCompletionRequest: () =>
         Effect.fail(new CompletionTaskRequestLookupFailure({ detail: "provider lookup unavailable", request })),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
-        Effect.succeed({ ...authorization.focusedFacts, operationId })
+      readFocusedTaskCompletion: ({ operationId }) => Effect.succeed({ ...authorization.focusedFacts, operationId })
     }
 
     expect(
@@ -1130,8 +1184,7 @@ it.effect("does not retry from NotApplied evidence about another completion requ
         ),
       readCompletionRequest: () =>
         Effect.succeed(CompletionTaskRequestLookup.cases.NotApplied.make({ request: foreignRequest })),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
-        Effect.succeed({ ...authorization.focusedFacts, operationId })
+      readFocusedTaskCompletion: ({ operationId }) => Effect.succeed({ ...authorization.focusedFacts, operationId })
     }
 
     expect(
@@ -1176,7 +1229,7 @@ it.effect("restart resumes lookup after a durable open confirmation without rere
         Ref.update(lookupCalls, (count) => count + 1).pipe(
           Effect.as(CompletionTaskRequestLookup.cases.NotApplied.make({ request: received }))
         ),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Ref.update(focusedCalls, (count) => count + 1).pipe(Effect.as({ ...authorization.focusedFacts, operationId }))
     }
     const crashingJournal = Layer.succeed(
@@ -1233,7 +1286,7 @@ it.effect("restart confirms success after a durable rejection or lost response c
             })
           ),
         readCompletionRequest: () => Effect.die("focused success must stop before exact-request lookup"),
-        readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+        readFocusedTaskCompletion: ({ operationId }) =>
           Effect.succeed({ ...authorization.focusedFacts, lifecycle: "CompletedSuccessfully", operationId })
       }
       const run = runCompletionTaskProtocol(boundary, request, fixture.target, () =>
@@ -1276,7 +1329,7 @@ it.effect("restart advances only after a durable NotApplied lookup", () =>
           )
         ),
       readCompletionRequest: () => Effect.succeed(CompletionTaskRequestLookup.cases.NotApplied.make({ request })),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Effect.succeed({ ...authorization.focusedFacts, lifecycle: "Open", operationId })
     }
     const run = runCompletionTaskProtocol(boundary, request, fixture.target, () =>
@@ -1353,7 +1406,7 @@ it.effect("restart honors the unresolved call intent before sending the next com
         Ref.update(chronology, (current) => [...current, "Tracker.readCompletionRequest"]).pipe(
           Effect.as(CompletionTaskRequestLookup.cases.NotApplied.make({ request: received }))
         ),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Effect.gen(function* () {
           yield* Ref.update(chronology, (current) => [...current, "Tracker.readFocusedTaskCompletion"])
           const outcome = yield* Ref.modify(
@@ -1433,11 +1486,11 @@ it.effect("accepts a tracker client's successful completion after Q without anot
         ),
       readCompletionRequest: (received) =>
         Effect.succeed(CompletionTaskRequestLookup.cases.NotApplied.make({ request: received })),
-      readFocusedTaskCompletion: (_taskId, _target, operationId) =>
+      readFocusedTaskCompletion: ({ operationId }) =>
         Ref.update(chronology, (current) => [...current, "Tracker.readFocusedTaskCompletion"]).pipe(
           Effect.as({
             ...authorization.focusedFacts,
-            currentClaim: { _tag: "UnclaimedTask" as const, taskId: fixture.taskId },
+            currentClaim: request.claim,
             lifecycle: "CompletedSuccessfully" as const,
             operationId
           })
@@ -1474,6 +1527,65 @@ it.effect("accepts a tracker client's successful completion after Q without anot
         return issue === undefined ? [] : [issue]
       })
     ).toEqual([])
+  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
+)
+
+it.effect("restart authorization rejects completed lifecycle without the exact current completion claim", () =>
+  Effect.gen(function* () {
+    const request = completionTaskRequestFor(fixture.claim)
+    for (const { claim, expectedReason, label } of nonExactCurrentClaimExamples) {
+      const replacementOperationId = completionClaimReplacementOperationIdFor(fixture.claim)
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: CompletionClaimReplacedEvent.make({
+            claim: fixture.claim,
+            operationId: replacementOperationId,
+            version: workflowJournalEventVersion
+          }),
+          key: completionClaimReplacedRecordKey(replacementOperationId),
+          position: JournalPosition.make(1),
+          runId: fixture.runId
+        },
+        {
+          event: CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion }),
+          key: completionTaskIntentRecordKey(request),
+          position: JournalPosition.make(2),
+          runId: fixture.runId
+        }
+      ])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const boundary: CompletionTaskBoundaryService = {
+        completeTask: () => Effect.die(`${label} must not authorize another completion call`),
+        readCompletionRequest: () => Effect.die(`${label} must not authorize exact-request lookup`),
+        readFocusedTaskCompletion: ({ operationId }) =>
+          Effect.succeed({
+            ...authorization.focusedFacts,
+            currentClaim: claim,
+            lifecycle: "CompletedSuccessfully",
+            operationId
+          })
+      }
+      const conflict = yield* authorizeCompletionTaskAttempt(
+        boundary,
+        request,
+        fixture.target,
+        CompletionTaskRequestOrdinal.make(1)
+      ).pipe(
+        Effect.provideService(
+          TargetPromotionGit,
+          TargetPromotionGit.of({
+            compareAndSet: () => Effect.die(`${label} authorization never mutates Git`),
+            read: () => Effect.die(`${label} must fail before reading Git ancestry`)
+          })
+        ),
+        Effect.provide(journalLayer(records, chronology)),
+        Effect.flip
+      )
+
+      expect(conflict, label).toBeInstanceOf(CompletionTaskAuthorizationConflict)
+      expect(conflict, label).toMatchObject({ reason: expectedReason })
+      expect(yield* Ref.get(chronology), label).not.toContain("CompletionTaskAttemptIntended")
+    }
   }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
 )
 
@@ -1553,7 +1665,7 @@ it("keeps missing, foreign, changed-revision, and unsuccessful-terminal completi
     {
       authorization: CompletionTaskAuthorization.make({
         ...authorization,
-        focusedFacts: { ...authorization.focusedFacts, unfinishedPrerequisiteTaskIds: [fixture.taskId] }
+        focusedFacts: { ...authorization.focusedFacts, unfinishedPrerequisiteTaskIds: [unfinishedPrerequisiteTaskId] }
       }),
       expected: { detail: "task has unfinished prerequisites", reason: "PrerequisitesIncomplete" }
     }

@@ -235,6 +235,7 @@ export {
   githubCompletionClaimFingerprintFor,
   GithubCompletionClaimFingerprintFailure
 } from "./authorities/task-tracker/github/completion-claim.js"
+export { githubCompletionTaskBoundaryLayer } from "./authorities/task-tracker/github/completion-task.js"
 export * from "./workflow-journal/event-codec.js"
 export * from "./workflow-journal/identity.js"
 export { describeJournalEvent } from "./workflow/registry/event-descriptor.js"
@@ -654,6 +655,7 @@ export {
   CompletionTaskAuthorizationReadOrdinal,
   CompletionTaskConfirmationReadOrdinal,
   CompletionTaskFocusedReadPurpose,
+  FocusedTaskCompletionReadRequest,
   CompletionTaskResponseLostEvent,
   FocusedCompletedTaskObservation,
   FocusedTaskCompletionFacts,
@@ -689,6 +691,7 @@ export {
   completionClaimRequestLimit,
   completionTaskClaimEquals,
   completionTaskRequestFor,
+  focusedTaskCompletionReadRequestFor,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService
 } from "./workflow/protocols/integration-finality/events.js"

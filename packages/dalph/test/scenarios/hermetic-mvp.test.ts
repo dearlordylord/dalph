@@ -197,7 +197,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       }
 
       const completionTask: CompletionTaskBoundaryService = {
-        readFocusedTaskCompletion: (_taskId, focusedTarget, operationId) =>
+        readFocusedTaskCompletion: (readRequest) =>
           Effect.gen(function* () {
             const currentClaim = yield* Ref.get(trackerClaim)
             if (currentClaim._tag !== "CompletionTaskClaim") {
@@ -206,12 +206,12 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
             return {
               currentClaim,
               lifecycle: yield* Ref.get(lifecycle),
-              operationId,
-              target: focusedTarget,
+              operationId: readRequest.operationId,
+              target: readRequest.target,
               targetMembership: "Member" as const,
               taskId,
               taskRevision: specification.fingerprint,
-              trackerRevision: TrackerRevision.make(`hermetic-focused:${operationId}`),
+              trackerRevision: TrackerRevision.make(`hermetic-focused:${readRequest.operationId}`),
               unfinishedPrerequisiteTaskIds: []
             }
           }),

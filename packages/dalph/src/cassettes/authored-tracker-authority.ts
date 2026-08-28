@@ -299,25 +299,31 @@ export const controlledTrackerAuthorityLayer = (
           })
       })
       const completionTaskBoundary = CompletionTaskBoundary.of({
-        readFocusedTaskCompletion: (taskId, target, operationId) =>
+        readFocusedTaskCompletion: (readRequest) =>
           Effect.gen(function* () {
             const returned = yield* cursor.consumeCompletionTaskFocusedReadReturned.pipe(Effect.orDie)
-            if (returned.taskId !== taskId) {
-              return yield* Effect.die(`authored focused completion read returned ${returned.taskId} for ${taskId}`)
+            if (returned.taskId !== readRequest.taskId) {
+              return yield* Effect.die(
+                `authored focused completion read returned ${returned.taskId} for ${readRequest.taskId}`
+              )
             }
-            const currentClaim = yield* currentCompletionObservation(taskId).pipe(Effect.orDie)
+            const currentClaim = yield* currentCompletionObservation(readRequest.taskId).pipe(Effect.orDie)
             if (currentClaim._tag !== "CompletionTaskClaim") {
-              return yield* Effect.die(`authored focused completion read found ${currentClaim._tag} for ${taskId}`)
+              return yield* Effect.die(
+                `authored focused completion read found ${currentClaim._tag} for ${readRequest.taskId}`
+              )
             }
             return {
               currentClaim,
               lifecycle: returned.lifecycle,
-              operationId,
-              target,
+              operationId: readRequest.operationId,
+              target: readRequest.target,
               targetMembership: "Member",
-              taskId,
+              taskId: readRequest.taskId,
               taskRevision: currentClaim.plannedAttempt.taskRevision,
-              trackerRevision: TrackerRevision.make(`authored-completion:${taskId}:${operationId}`),
+              trackerRevision: TrackerRevision.make(
+                `authored-completion:${readRequest.taskId}:${readRequest.operationId}`
+              ),
               unfinishedPrerequisiteTaskIds: returned.unfinishedPrerequisiteTaskIds
             }
           }),

@@ -441,14 +441,14 @@ const appendFocusedSuccess = Effect.fn("IntegrationFinalityProtocolCassette.appe
   yield* journal.service.append(prepared.runId, describeJournalEvent(intent).expectedKey, intent)
   const trackerRevision = TrackerRevision.make(`integration-finality-protocol-focused:${request.operationId}`)
   const completionBoundary: CompletionTaskBoundaryService = {
-    readFocusedTaskCompletion: (taskId, target, operationId) =>
+    readFocusedTaskCompletion: (readRequest) =>
       Effect.succeed({
         currentClaim: prepared.claim,
         lifecycle: "CompletedSuccessfully",
-        operationId,
-        target,
+        operationId: readRequest.operationId,
+        target: readRequest.target,
         targetMembership: "Member",
-        taskId,
+        taskId: readRequest.taskId,
         taskRevision: prepared.plannedAttempt.taskRevision,
         trackerRevision,
         unfinishedPrerequisiteTaskIds: []
