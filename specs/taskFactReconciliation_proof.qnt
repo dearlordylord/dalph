@@ -1045,3 +1045,173 @@ module taskFactClaimProof {
     selectIndependentTask,
   }
 }
+
+// Exhaustive projection of the active-work authority-refresh distinction. It
+// keeps only the facts needed to prove that a tracker/timer refresh of Running
+// work cannot accidentally become either continuation authorization or an
+// ordinary unreadable-claim suspension request.
+module taskFactActiveRefreshProof {
+  type ReadPurpose = OrdinaryRead | ActiveRefreshRead
+  type Decision = ContinueWork | AwaitNextRefresh | RequestSafeSuspension | UnreadableWait
+  type Constraint = NoConstraint | UnreadableClaimConstraint
+  type ExecutorEvidence = ExactRunning | ExactSafelySuspended
+  type ExecutorAction = NoExecutorAction | SuspendExecutor
+  type Event =
+    | Initialized
+    | ActiveRefreshOffered
+    | ActiveRefreshHealthyObserved
+    | ActiveRefreshUnreadableObserved
+    | OrdinaryUnreadableObserved
+    | SafelySuspended
+    | IndependentTaskSelected
+
+  type State = {
+    purpose: ReadPurpose,
+    decision: Decision,
+    constraint: Constraint,
+    evidence: ExecutorEvidence,
+    executorAction: ExecutorAction,
+    positionHeld: bool,
+    implementationResponsibilityRetained: bool,
+    independentTaskEligible: bool,
+    independentTaskSelected: bool,
+    lastEvent: Event,
+  }
+
+  var state: State
+
+  val activeRefreshUnreadableAuthorizesNoExecutorAction: bool =
+    state.lastEvent != ActiveRefreshUnreadableObserved or and {
+      state.purpose == ActiveRefreshRead,
+      state.decision == AwaitNextRefresh,
+      state.constraint == NoConstraint,
+      state.evidence == ExactRunning,
+      state.executorAction == NoExecutorAction,
+      state.positionHeld,
+      state.implementationResponsibilityRetained,
+    }
+
+  val healthyActiveRefreshAuthorizesNoExecutorAction: bool =
+    state.lastEvent != ActiveRefreshHealthyObserved or and {
+      state.purpose == ActiveRefreshRead,
+      state.decision == AwaitNextRefresh,
+      state.executorAction == NoExecutorAction,
+      state.positionHeld,
+    }
+
+  val ordinaryUnreadableStillRequestsSafeSuspension: bool =
+    state.lastEvent != OrdinaryUnreadableObserved or and {
+      state.purpose == OrdinaryRead,
+      state.decision == RequestSafeSuspension,
+      state.constraint == UnreadableClaimConstraint,
+      state.executorAction == SuspendExecutor,
+      state.positionHeld,
+    }
+
+  val positionReleasesOnlyOnExactSafeEvidence: bool =
+    not(state.positionHeld) implies state.evidence == ExactSafelySuspended
+
+  val independentTaskRemainsEligible: bool = state.independentTaskEligible
+
+  val activeRefreshProofTypeOk: bool =
+    not(state.independentTaskSelected) or state.independentTaskEligible
+
+  val activeRefreshOfferedReached: bool = state.lastEvent == ActiveRefreshOffered
+  val activeRefreshHealthyReached: bool = state.lastEvent == ActiveRefreshHealthyObserved
+  val activeRefreshUnreadableReached: bool = state.lastEvent == ActiveRefreshUnreadableObserved
+  val ordinaryUnreadableReached: bool = state.lastEvent == OrdinaryUnreadableObserved
+  val safelySuspendedReached: bool = state.lastEvent == SafelySuspended
+  val independentTaskSelectedReached: bool = state.lastEvent == IndependentTaskSelected
+
+  action init: bool = all {
+    state' = {
+      purpose: OrdinaryRead,
+      decision: ContinueWork,
+      constraint: NoConstraint,
+      evidence: ExactSafelySuspended,
+      executorAction: NoExecutorAction,
+      positionHeld: false,
+      implementationResponsibilityRetained: true,
+      independentTaskEligible: true,
+      independentTaskSelected: false,
+      lastEvent: Initialized,
+    }
+  }
+
+  action offerActiveRefresh: bool = all {
+    state.decision == ContinueWork or state.decision == AwaitNextRefresh,
+    state.constraint == NoConstraint,
+    state' = {
+      ...state,
+      purpose: ActiveRefreshRead,
+      decision: ContinueWork,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      lastEvent: ActiveRefreshOffered,
+    },
+  }
+
+  action observeHealthyActiveRefresh: bool = all {
+    state.lastEvent == ActiveRefreshOffered,
+    state' = {
+      ...state,
+      decision: AwaitNextRefresh,
+      executorAction: NoExecutorAction,
+      lastEvent: ActiveRefreshHealthyObserved,
+    },
+  }
+
+  action observeUnreadableActiveRefresh: bool = all {
+    state.lastEvent == ActiveRefreshOffered,
+    state' = {
+      ...state,
+      decision: AwaitNextRefresh,
+      executorAction: NoExecutorAction,
+      lastEvent: ActiveRefreshUnreadableObserved,
+    },
+  }
+
+  action observeUnreadableOrdinaryRead: bool = all {
+    state.purpose == OrdinaryRead,
+    state.decision == ContinueWork,
+    state' = {
+      ...state,
+      decision: RequestSafeSuspension,
+      constraint: UnreadableClaimConstraint,
+      evidence: ExactRunning,
+      executorAction: SuspendExecutor,
+      positionHeld: true,
+      lastEvent: OrdinaryUnreadableObserved,
+    },
+  }
+
+  action reportSafelySuspended: bool = all {
+    state.decision == RequestSafeSuspension,
+    state.executorAction == SuspendExecutor,
+    state' = {
+      ...state,
+      decision: UnreadableWait,
+      evidence: ExactSafelySuspended,
+      executorAction: NoExecutorAction,
+      positionHeld: false,
+      lastEvent: SafelySuspended,
+    },
+  }
+
+  action selectIndependentTask: bool = all {
+    state.independentTaskEligible,
+    not(state.independentTaskSelected),
+    state.decision == AwaitNextRefresh or state.decision == UnreadableWait,
+    state' = { ...state, independentTaskSelected: true, lastEvent: IndependentTaskSelected },
+  }
+
+  action step: bool = any {
+    offerActiveRefresh,
+    observeHealthyActiveRefresh,
+    observeUnreadableActiveRefresh,
+    observeUnreadableOrdinaryRead,
+    reportSafelySuspended,
+    selectIndependentTask,
+  }
+}

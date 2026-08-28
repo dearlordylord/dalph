@@ -3,6 +3,15 @@
 module taskFactReconciliationNegativeTest {
   import taskFactReconciliation.* from "./taskFactReconciliation"
 
+  action conflateActiveRefreshUnreadableWithOrdinarySuspension: bool = all {
+    state.lastAction == ActiveRefreshUnreadableObservedAction,
+    state' = {
+      ...state,
+      constraint: UnreadableClaimConstraint,
+      factDecision: RequestSafeSuspension,
+    },
+  }
+
   action conflateRunBindingWithPersistedContentError: bool = all {
     state.lastAction == RunMismatchRejectedAction,
     state' = { ...state, lastControlResult: PersistedRequestContentContradiction },
@@ -595,6 +604,15 @@ module taskFactReconciliationNegativeTest {
       .then(observeUnreadableClaim)
       .then(releaseUnreadableClaim)
       .expect(not(absentForeignUnreadableClaimsAreNeverMutated))
+  }
+
+  run activeRefreshUnreadableCannotRequestOrdinarySuspensionTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefresh)
+      .then(observeUnreadableClaimDuringActiveRefresh)
+      .then(conflateActiveRefreshUnreadableWithOrdinarySuspension)
+      .expect(not(activeRefreshUnreadableAuthorizesNoExecutorAction))
   }
 
   run absentClaimCannotBeReleasedTest = {

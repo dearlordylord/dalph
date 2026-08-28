@@ -76,9 +76,11 @@ import {
 } from "../../workflow/protocols/run-cancellation/events.js"
 import { runCancellationAppliedRecordKey } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
+  readonly opportunity: RunActivationOpportunity
 }
 
 export type JournaledRuntimeLayer = Layer.Layer<
@@ -322,7 +324,8 @@ export const journaledRunBootstrapLayer = (
         runId: RunId,
         target: Parameters<JournaledRunBootstrapService["activate"]>[0],
         initial: ValidWorkflowJournalHistory,
-        program: Effect.Effect<RunFinalityProof, E, R>
+        program: Effect.Effect<RunFinalityProof, E, R>,
+        opportunity: RunActivationOpportunity
       ) =>
         Effect.scoped(
           Effect.uninterruptibleMask((restore) =>
@@ -335,7 +338,7 @@ export const journaledRunBootstrapLayer = (
                     onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
                   })
               })
-              const downstream = runtimeLayer({ runId }).pipe(
+              const downstream = runtimeLayer({ runId, opportunity }).pipe(
                 Layer.provide(Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)),
                 Layer.provideMerge(processRuntimeLayer),
                 Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
@@ -453,7 +456,13 @@ export const journaledRunBootstrapLayer = (
         })
       })
 
-      const activate: JournaledRunBootstrapService["activate"] = (target, initialControlPolicySource, runId, program) =>
+      const activate: JournaledRunBootstrapService["activate"] = (
+        target,
+        initialControlPolicySource,
+        runId,
+        program,
+        opportunity = RunActivationOpportunity.OrdinaryRunEntry()
+      ) =>
         activation.withPermit(
           Effect.acquireUseRelease(
             admission.acquireForwardOwner("RunActivation"),
@@ -495,7 +504,7 @@ export const journaledRunBootstrapLayer = (
                 }
                 yield* lifecycle.readRunForRecovery(runId, target)
                 const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-                return yield* finish(runId, target, yield* runWithJournal(runId, target, initial, program))
+                return yield* finish(runId, target, yield* runWithJournal(runId, target, initial, program, opportunity))
               }),
             (activationOwner) => activationOwner.release
           )

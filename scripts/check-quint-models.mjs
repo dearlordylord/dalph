@@ -613,6 +613,30 @@ const taskFactProofs = [
       "laterReadAfterAmbiguityReached",
       "unrelatedTaskSelectedReached"
     ]
+  },
+  {
+    main: "taskFactActiveRefreshProof",
+    testMain: "taskFactActiveRefreshProofTest",
+    negativeTestMain: "taskFactActiveRefreshProofNegativeTest",
+    title: "task-fact active-work refresh proof",
+    maxSteps: "8",
+    seed: "6504",
+    invariants: [
+      "activeRefreshUnreadableAuthorizesNoExecutorAction",
+      "healthyActiveRefreshAuthorizesNoExecutorAction",
+      "ordinaryUnreadableStillRequestsSafeSuspension",
+      "positionReleasesOnlyOnExactSafeEvidence",
+      "independentTaskRemainsEligible",
+      "activeRefreshProofTypeOk"
+    ],
+    witnesses: [
+      "activeRefreshOfferedReached",
+      "activeRefreshHealthyReached",
+      "activeRefreshUnreadableReached",
+      "ordinaryUnreadableReached",
+      "safelySuspendedReached",
+      "independentTaskSelectedReached"
+    ]
   }
 ]
 

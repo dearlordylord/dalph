@@ -277,3 +277,31 @@ module taskFactClaimProofTest {
       })
   }
 }
+
+module taskFactActiveRefreshProofTest {
+  import taskFactActiveRefreshProof.* from "./taskFactReconciliation_proof"
+
+  run activeRefreshUnreadableWaitsWithoutExecutorActionTest = {
+    init
+      .then(offerActiveRefresh)
+      .then(observeUnreadableActiveRefresh)
+      .expect(activeRefreshUnreadableAuthorizesNoExecutorAction)
+      .then(selectIndependentTask)
+      .expect(state.independentTaskSelected and independentTaskRemainsEligible)
+  }
+
+  run healthyActiveRefreshWaitsWithoutExecutorActionTest = {
+    init
+      .then(offerActiveRefresh)
+      .then(observeHealthyActiveRefresh)
+      .expect(healthyActiveRefreshAuthorizesNoExecutorAction)
+  }
+
+  run ordinaryUnreadableReadUsesExactSuspensionRouteTest = {
+    init
+      .then(observeUnreadableOrdinaryRead)
+      .expect(ordinaryUnreadableStillRequestsSafeSuspension)
+      .then(reportSafelySuspended)
+      .expect(not(state.positionHeld) and positionReleasesOnlyOnExactSafeEvidence)
+  }
+}

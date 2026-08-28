@@ -82,6 +82,7 @@ import {
 import { FixtureReadError } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { makeRunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import { RunActivationOpportunity } from "../../../orchestrator/src/coordination/run/run-activation-opportunity.js"
 import { deriveFreshWorkflowDecisions } from "../../../orchestrator/src/coordination/run/fresh-workflow.js"
 import { latestReconstructedTaskGraph } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
@@ -275,6 +276,7 @@ const RequestIdProjection = Schema.Struct({ nonce: ITFBigInt, runId: ITFBigInt }
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
     appliedChoiceCount: ITFBigInt,
+    authorityReadPurpose: Variant,
     authorizedFingerprint: Variant,
     claimObservation: Variant,
     claimReleaseAuthorizedByExactRead: Schema.Boolean,
@@ -397,6 +399,10 @@ const continuationProposal = {
 const taskFactReconciliationDriver = defineDriver(
   {
     abandonImplementation: {},
+    establishRunningAttemptForActiveRefresh: {},
+    offerActiveWorkAuthorityRefresh: {},
+    observeHealthyActiveWorkRefresh: {},
+    observeUnreadableClaimDuringActiveRefresh: {},
     admitSuccessorThroughOrdinaryCapacity: {},
     admitSameAttemptP: {},
     applyContinueF2: {},
@@ -472,6 +478,7 @@ const taskFactReconciliationDriver = defineDriver(
   () => {
     let records: ReadonlyArray<JournalRecord> = []
     let activeRecovery: Effect.Success<ReturnType<typeof makeRunRecoveryProjection>> | undefined
+    let authorityReadPurpose: "ActiveWorkRefreshRead" | "OrdinaryContinuationRead" = "OrdinaryContinuationRead"
     let currentSpecification = plannedSpecification
     let currentClaim: "Exact" | "Absent" | "Foreign" | "Unreadable" = "Exact"
     let currentOldWorktree: "Ready" | "NotReady" | "Unreadable" = "Ready"
@@ -764,19 +771,41 @@ const taskFactReconciliationDriver = defineDriver(
         )
       )
     const recovery = () =>
-      activeRecovery === undefined
-        ? provideJournal(makeRunRecoveryProjection(runId, integrationTarget)).pipe(
-            Effect.tap((created) =>
-              Effect.sync(() => {
-                activeRecovery = created
-              })
+      Effect.suspend(() =>
+        activeRecovery === undefined
+          ? provideJournal(makeRunRecoveryProjection(runId, integrationTarget)).pipe(
+              Effect.tap((created) =>
+                Effect.sync(() => {
+                  activeRecovery = created
+                })
+              )
             )
-          )
-        : Effect.succeed(activeRecovery)
+          : Effect.succeed(activeRecovery)
+      )
     const projection = () => Effect.flatMap(recovery(), ({ readDeliveryProjection }) => readDeliveryProjection)
+    const activateActiveRefresh = () =>
+      provideJournal(
+        makeRunRecoveryProjection(
+          runId,
+          integrationTarget,
+          undefined,
+          undefined,
+          false,
+          false,
+          RunActivationOpportunity.ActiveWorkAuthorityRefresh({ source: "TrackerNotification" })
+        )
+      ).pipe(
+        Effect.tap((created) =>
+          Effect.sync(() => {
+            activeRecovery = created
+            authorityReadPurpose = "ActiveWorkRefreshRead"
+          })
+        )
+      )
     const reactivate = () =>
       Effect.sync(() => {
         activeRecovery = undefined
+        authorityReadPurpose = "OrdinaryContinuationRead"
       }).pipe(Effect.andThen(projection()))
     const fullProjection = () =>
       provideJournal(makeRunRecoveryProjection(runId, integrationTarget)).pipe(
@@ -1244,6 +1273,7 @@ const taskFactReconciliationDriver = defineDriver(
         Effect.gen(function* () {
           records = []
           activeRecovery = undefined
+          authorityReadPurpose = "OrdinaryContinuationRead"
           currentSpecification = plannedSpecification
           currentClaim = "Exact"
           currentOldWorktree = "Ready"
@@ -1387,6 +1417,67 @@ const taskFactReconciliationDriver = defineDriver(
             )
           )
         }).pipe(Effect.orDie),
+      establishRunningAttemptForActiveRefresh: () =>
+        reservePosition().pipe(
+          Effect.andThen(provideJournal(continuePlannedAttemptExecutorWork(plannedAttempt))),
+          Effect.orDie,
+          Effect.asVoid
+        ),
+      offerActiveWorkAuthorityRefresh: () =>
+        Effect.gen(function* () {
+          const commandCount = records.filter(
+            ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
+          ).length
+          yield* activateActiveRefresh()
+          const currentCommandCount = records.filter(
+            ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
+          ).length
+          if (currentCommandCount !== commandCount) {
+            return yield* Effect.die("offering an active refresh issued an executor command")
+          }
+        }).pipe(Effect.orDie),
+      observeUnreadableClaimDuringActiveRefresh: () =>
+        Effect.sync(() => {
+          currentClaim = "Unreadable"
+        }).pipe(
+          Effect.andThen(readThrough("ObservePlannedAttemptContinuationGraph")),
+          Effect.andThen(readThrough("ObservePlannedAttemptContinuationSpecification")),
+          Effect.andThen(readThrough("ObservePlannedAttemptContinuationClaim")),
+          Effect.andThen(projection()),
+          Effect.flatMap((current) =>
+            current.frontier.transitions.some(
+              ({ _tag }) =>
+                _tag === "ContinuePlannedAttemptExecutorWork" ||
+                _tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+                _tag === "SuspendPlannedAttemptExecutorWork"
+            )
+              ? Effect.die("unreadable active refresh authorized an executor command")
+              : Effect.void
+          ),
+          Effect.orDie
+        ),
+      observeHealthyActiveWorkRefresh: () =>
+        Effect.sync(() => {
+          currentClaim = "Exact"
+        }).pipe(
+          Effect.andThen(readThrough("ObservePlannedAttemptContinuationGraph")),
+          Effect.andThen(readThrough("ObservePlannedAttemptContinuationSpecification")),
+          Effect.andThen(readThrough("ObservePlannedAttemptContinuationClaim")),
+          Effect.andThen(readThrough("ObservePlannedAttemptContinuationWorktree")),
+          Effect.andThen(readThrough("ObservePlannedAttemptContinuationTargetLineage")),
+          Effect.andThen(projection()),
+          Effect.flatMap((current) =>
+            current.frontier.transitions.some(
+              ({ _tag }) =>
+                _tag === "ContinuePlannedAttemptExecutorWork" ||
+                _tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+                _tag === "SuspendPlannedAttemptExecutorWork"
+            )
+              ? Effect.die("healthy active refresh authorized an executor command")
+              : Effect.void
+          ),
+          Effect.orDie
+        ),
       observeF2Change: () =>
         Effect.sync(() => {
           currentSpecification = specificationF2
@@ -2400,6 +2491,7 @@ const taskFactReconciliationDriver = defineDriver(
           ).length
           return {
             appliedChoiceCount: BigInt(records.filter(({ event }) => event._tag === "AttemptChoiceApplied").length),
+            authorityReadPurpose,
             authorizedFingerprint:
               choice?.choice === "ContinueExistingAttempt" || choice?.choice === "RestartTaskImplementation"
                 ? fingerprintTag(choice.subject.observedTaskRevision)
@@ -2564,6 +2656,7 @@ const taskFactStateCheck = stateCheck(
     Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
       Effect.map(({ state }) => ({
         ...state,
+        authorityReadPurpose: tag(state.authorityReadPurpose),
         authorizedFingerprint: tag(state.authorizedFingerprint),
         claimObservation: tag(state.claimObservation),
         claimResult: tag(state.claimResult),
@@ -2593,6 +2686,23 @@ const taskFactStateCheck = stateCheck(
   (spec, implementation) =>
     JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
     JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
+)
+
+quintIt(
+  it.effect,
+  "refreshes Running authority without authorizing another executor command",
+  {
+    backend: "typescript",
+    driverFactory: taskFactReconciliationDriver,
+    maxSamples: 40,
+    maxSteps: 4,
+    nTraces: 40,
+    seed: "281",
+    spec: "specs/taskFactReconciliation.qnt",
+    step: "activeRefreshMbtStep",
+    stateCheck: taskFactStateCheck
+  },
+  180_000
 )
 
 quintIt(

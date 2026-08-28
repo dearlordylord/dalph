@@ -89,6 +89,26 @@ module taskFactReconciliationTest {
       })
   }
 
+  run activeRefreshUnreadableDoesNotSuspendOrContinueTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefresh)
+      .then(observeUnreadableClaimDuringActiveRefresh)
+      .expect(and {
+        activeRefreshUnreadableAuthorizesNoExecutorAction,
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.constraint == NoConstraint,
+        state.executorEvidence == ExactRunning,
+        state.positionHeld,
+        state.implementationResponsibilityRetained,
+      })
+      .then(selectIndependentTaskB)
+      .expect(and {
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.independentTaskSelected,
+      })
+  }
+
   run continueReadsEveryFreshAuthorityAndResumesOnlyPTest = {
     init
       .then(observeF2Change)

@@ -276,3 +276,50 @@ module taskFactClaimProofNegativeTest {
       .expect(not(unrelatedTaskRemainsEligible))
   }
 }
+
+module taskFactActiveRefreshProofNegativeTest {
+  import taskFactActiveRefreshProof.* from "./taskFactReconciliation_proof"
+
+  action conflateActiveUnreadableWithOrdinarySuspension: bool = all {
+    state.lastEvent == ActiveRefreshUnreadableObserved,
+    state' = {
+      ...state,
+      decision: RequestSafeSuspension,
+      constraint: UnreadableClaimConstraint,
+      executorAction: SuspendExecutor,
+    },
+  }
+
+  action authorizeContinueAfterHealthyRefresh: bool = all {
+    state.lastEvent == ActiveRefreshHealthyObserved,
+    state' = { ...state, decision: ContinueWork },
+  }
+
+  action releasePositionWhileStillRunning: bool = all {
+    state.evidence == ExactRunning,
+    state' = { ...state, positionHeld: false },
+  }
+
+  run activeUnreadableSuspensionConflationIsDetectedTest = {
+    init
+      .then(offerActiveRefresh)
+      .then(observeUnreadableActiveRefresh)
+      .then(conflateActiveUnreadableWithOrdinarySuspension)
+      .expect(not(activeRefreshUnreadableAuthorizesNoExecutorAction))
+  }
+
+  run healthyRefreshContinuationAuthorizationIsDetectedTest = {
+    init
+      .then(offerActiveRefresh)
+      .then(observeHealthyActiveRefresh)
+      .then(authorizeContinueAfterHealthyRefresh)
+      .expect(not(healthyActiveRefreshAuthorizesNoExecutorAction))
+  }
+
+  run runningPositionReleaseIsDetectedTest = {
+    init
+      .then(offerActiveRefresh)
+      .then(releasePositionWhileStillRunning)
+      .expect(not(positionReleasesOnlyOnExactSafeEvidence))
+  }
+}

@@ -4,6 +4,7 @@ import {
   AllocatedWorkflowRunId,
   JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
+  type RunActivationOpportunityValue,
   type TrackerGraphReader,
   attemptChoiceControlLayer,
   controlDirectionApplicationLayer,
@@ -109,7 +110,8 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
   runId: RunId,
   options: ProductionRunReactivationOptions
 ) => {
-  const activation = runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId))
+  const activation = (opportunity: RunActivationOpportunityValue) =>
+    runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId), opportunity)
   const readControl = Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
     return yield* bootstrap.readRunReactivationControl(target, runId)
@@ -219,7 +221,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
       const applicationExit = yield* ApplicationExitShell
-      const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
+      const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
           Layer.succeed(WorkflowInterpreter, interpreter)
@@ -237,7 +239,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           integrationFinality,
           completionTask,
           cleanupBoundaryLayer,
-          acceptedResultEvidenceStore
+          acceptedResultEvidenceStore,
+          true,
+          opportunity
         ).pipe(
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),

@@ -51,6 +51,7 @@ import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
 import type { AppliedRunCancellation } from "../../workflow/protocols/run-cancellation/events.js"
+import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
@@ -131,7 +132,8 @@ export interface JournaledRunBootstrapService {
     target: TrackerTarget,
     initialControlPolicySource: Effect.Effect<InitialControlPolicy, EInitial, RInitial>,
     runId: AllocatedWorkflowRunId,
-    program: Effect.Effect<RunFinalityProof, E, R>
+    program: Effect.Effect<RunFinalityProof, E, R>,
+    opportunity?: RunActivationOpportunity
   ) => Effect.Effect<
     RunFinalityDecision,
     E | EInitial | ApplicationExiting | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
@@ -330,7 +332,8 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
   runId: AllocatedWorkflowRunId,
   executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
-  activateCleanup = true
+  activateCleanup = true,
+  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
@@ -338,7 +341,8 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
       target,
       initialControlPolicySource,
       runId,
-      runJournaledDelivery(runId, target, executorFactory, activateCleanup)
+      runJournaledDelivery(runId, target, executorFactory, activateCleanup),
+      opportunity
     )
   })
 
@@ -346,11 +350,14 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
 export const runWorkflow = <EInitial, RInitial>(
   target: TrackerTarget,
   initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
-  runId: AllocatedWorkflowRunId
+  runId: AllocatedWorkflowRunId,
+  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ) =>
   runWorkflowWithControlledDeliveryActionExecutor(
     target,
     initialControlPolicySource,
     runId,
-    liveDeliveryActionExecutorFactory
+    liveDeliveryActionExecutorFactory,
+    true,
+    opportunity
   )

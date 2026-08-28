@@ -91,6 +91,7 @@ import {
   recordedTaskAttemptPlanFor,
   recordedTaskAttemptPlans
 } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
+import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 import {
   makeTaskClaimReleaseOperation,
@@ -2401,7 +2402,8 @@ export const continuationDecisionFor = (
   records: ReadonlyArray<JournalRecord>,
   currentGraphObservation: CurrentGraphObservation | undefined,
   activationBaselinePosition: Option.Option<JournalPosition>,
-  integrationTarget: Option.Option<IntegrationTarget>
+  integrationTarget: Option.Option<IntegrationTarget>,
+  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ): ContinuationDecision => {
   const unsettledPlannedAttempt = unsettledExecutorCommandFor(transition, records)
   if (unsettledPlannedAttempt !== undefined) {
@@ -2421,7 +2423,9 @@ export const continuationDecisionFor = (
    * into a fresh tracker-instruction read that pretends to authorize work
    * which the Running report proves is already executing.
    */
-  if (currentExecutorEvidence?.report._tag === "Running") return { transition }
+  if (currentExecutorEvidence?.report._tag === "Running" && opportunity._tag === "OrdinaryRunEntry") {
+    return { transition }
+  }
   /* v8 ignore next -- @preserve A recovered executor-work responsibility always has its journaled task plan. */
   const planOperationId = plannedAttemptPlanOperationId(records, plannedAttempt)
   if (currentGraphObservation === undefined) {
@@ -2435,7 +2439,7 @@ export const continuationDecisionFor = (
       record.position > currentGraphObservation.position
   )
   if (currentSpecificationRecord !== undefined) {
-    return decisionAfterCurrentSpecification(
+    const decision = decisionAfterCurrentSpecification(
       transition,
       planOperationId,
       records,
@@ -2443,6 +2447,12 @@ export const continuationDecisionFor = (
       currentSpecificationRecord,
       integrationTarget
     )
+    return opportunity._tag === "ActiveWorkAuthorityRefresh" &&
+      currentExecutorEvidence?.report._tag === "Running" &&
+      (decision.transition?._tag === "ContinuePlannedAttemptExecutorWork" ||
+        decision.transition?._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts")
+      ? {}
+      : decision
   }
   return decisionWithoutCurrentSpecification(plannedAttempt, planOperationId, currentGraphObservation)
 }
@@ -2465,6 +2475,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   targetPromotionConfigured: boolean,
   integrationFinalityConfigured: boolean,
   completionTaskConfigured: boolean,
+  opportunity: RunActivationOpportunity,
   currentIntegrationResources?: IntegrationTargetResourceSnapshot
 ) {
   /**
@@ -2543,7 +2554,8 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
         runState.workflowHistory.records,
         undefined,
         activationBaselinePosition,
-        integrationTarget
+        integrationTarget,
+        opportunity
       )
     }
     return pendingAttemptIds.has(transition.plannedAttempt.attemptId)
@@ -2553,7 +2565,8 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           runState.workflowHistory.records,
           currentGraphObservationForAttempt(transition.plannedAttempt),
           freshnessBaselineForAttempt(transition.plannedAttempt),
-          integrationTarget
+          integrationTarget,
+          opportunity
         )
   })
   /**
@@ -2824,6 +2837,36 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   }
 })
 
+export const frontierForActivationOpportunity = (
+  frontier: RunnableFrontier,
+  records: ReadonlyArray<JournalRecord>,
+  baseline: Option.Option<JournalPosition>,
+  opportunity: RunActivationOpportunity
+): RunnableFrontier =>
+  opportunity._tag === "OrdinaryRunEntry"
+    ? frontier
+    : {
+        ...frontier,
+        transitions: frontier.transitions.filter((transition) => {
+          if (transition._tag !== "SuspendPlannedAttemptExecutorWork") return true
+          if (latestPlannedAttemptExecutorEvidence(records, transition.plannedAttempt)?.report._tag !== "Running") {
+            return true
+          }
+          const currentClaim = records.findLast(
+            ({ event, position }) =>
+              positionIsAfter(position, baseline) &&
+              event._tag === "TaskTrackerFactsObserved" &&
+              (event.observation._tag === "FocusedTaskClaimFacts" ||
+                event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+              event.observation.coverage.taskId === transition.plannedAttempt.taskId
+          )
+          return !(
+            currentClaim?.event._tag === "TaskTrackerFactsObserved" &&
+            currentClaim.event.observation._tag === "FocusedTaskClaimFactsUnreadable"
+          )
+        })
+      }
+
 const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredProjection")(function* (
   runId: RunId,
   integrationResources: IntegrationTargetResourceController,
@@ -2831,17 +2874,29 @@ const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredPr
   activationBaselinePosition: Option.Option<JournalPosition>,
   targetPromotionConfigured: boolean,
   integrationFinalityConfigured: boolean,
-  completionTaskConfigured: boolean
+  completionTaskConfigured: boolean,
+  opportunity: RunActivationOpportunity
 ) {
-  return yield* projectRecoveredRunState(
-    yield* readRecoveredRunState(runId),
+  const runState = yield* readRecoveredRunState(runId)
+  const projection = yield* projectRecoveredRunState(
+    runState,
     integrationResources,
     integrationTarget,
     activationBaselinePosition,
     targetPromotionConfigured,
     integrationFinalityConfigured,
-    completionTaskConfigured
+    completionTaskConfigured,
+    opportunity
   )
+  return {
+    ...projection,
+    frontier: frontierForActivationOpportunity(
+      projection.frontier,
+      runState.workflowHistory.records,
+      activationBaselinePosition,
+      opportunity
+    )
+  }
 })
 
 /** One reconstruction turn; process-local integration state is sampled exactly once. */
@@ -2940,7 +2995,8 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
   integrationResourcesOverride: IntegrationTargetResourceController | undefined,
   targetPromotionConfigured: boolean,
   integrationFinalityConfigured: boolean,
-  completionTaskConfigured: boolean
+  completionTaskConfigured: boolean,
+  opportunity: RunActivationOpportunity
 ) {
   const journal = yield* InRunJournal
   const integrationResources = integrationResourcesOverride ?? (yield* makeIntegrationTargetResourceController())
@@ -2959,16 +3015,24 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
     const resources = yield* integrationResources.snapshot
     const cached = projectionByRunState.get(runState)
     if (cached !== undefined && sameIntegrationResourceSnapshot(cached.resources, resources)) return cached.snapshot
+    const projection = yield* projectRecoveredRunState(
+      runState,
+      integrationResources,
+      integrationTarget,
+      activationBaselinePosition,
+      targetPromotionConfigured,
+      integrationFinalityConfigured,
+      completionTaskConfigured,
+      opportunity,
+      resources
+    )
     const snapshot = recoveryProjectionSnapshot(
-      yield* projectRecoveredRunState(
-        runState,
-        integrationResources,
-        integrationTarget,
+      projection,
+      frontierForActivationOpportunity(
+        projection.frontier,
+        runState.workflowHistory.records,
         activationBaselinePosition,
-        targetPromotionConfigured,
-        integrationFinalityConfigured,
-        completionTaskConfigured,
-        resources
+        opportunity
       )
     )
     // eslint-disable-next-line functional/immutable-data -- Process-local projection memo; journal and resources remain authoritative.
@@ -2983,7 +3047,8 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
         activationBaselinePosition,
         targetPromotionConfigured,
         integrationFinalityConfigured,
-        completionTaskConfigured
+        completionTaskConfigured,
+        opportunity
       ).pipe(Effect.map(recoveryProjectionSnapshot), Effect.provideService(InRunJournal, journal))
     : journal.state.get.pipe(
         Effect.flatMap(({ reconstructed }) =>
@@ -3010,7 +3075,8 @@ export const makeRunRecoveryProjection = (
   integrationResources?: IntegrationTargetResourceController,
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinalityConfigured = false,
-  completionTaskConfigured = false
+  completionTaskConfigured = false,
+  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ) =>
   makeRunRecoveryProjectionEffect(
     runId,
@@ -3018,5 +3084,6 @@ export const makeRunRecoveryProjection = (
     integrationResources,
     targetPromotion !== undefined,
     integrationFinalityConfigured,
-    completionTaskConfigured
+    completionTaskConfigured,
+    opportunity
   )

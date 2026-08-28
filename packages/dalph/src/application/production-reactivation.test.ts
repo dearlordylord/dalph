@@ -17,6 +17,7 @@ import {
   makeCurrentSignal,
   PlannedTaskAttemptPlanner,
   RunFinalityDecision,
+  type RunActivationOpportunityValue,
   RunReactivationHint,
   RunReactivationOwner,
   TaskClaimAcquisitionPlanner,
@@ -221,9 +222,13 @@ it.effect("production composition wires current-first tracker notifications and 
       const registeredDrains = yield* Ref.make<ReadonlyArray<Effect.Effect<void, ApplicationExitDrainFailure>>>([])
       const registeredObservers = yield* Ref.make<AcceptedRunReactivationObservers | undefined>(undefined)
       const bootstrapTrace = yield* Ref.make<ReadonlyArray<"journal-read" | "bootstrap-activate">>([])
+      const opportunities = yield* Ref.make<ReadonlyArray<RunActivationOpportunityValue>>([])
       const bootstrap = JournaledRunBootstrap.of({
-        activate: (_target, _policy, _runId, _program) =>
-          Ref.update(bootstrapTrace, (current) => [...current, "bootstrap-activate" as const]).pipe(
+        activate: (_target, _policy, _runId, _program, opportunity) =>
+          Ref.update(opportunities, (current) =>
+            opportunity === undefined ? current : [...current, opportunity]
+          ).pipe(
+            Effect.andThen(Ref.update(bootstrapTrace, (current) => [...current, "bootstrap-activate" as const])),
             Effect.andThen(Ref.updateAndGet(activations, (current) => current + 1)),
             Effect.tap((count) =>
               count === 1
@@ -305,6 +310,12 @@ it.effect("production composition wires current-first tracker notifications and 
         yield* observers.acceptedFactPublication()
         yield* Deferred.await(fourthActivation)
         expect(yield* Ref.get(activations)).toBe(4)
+        expect(yield* Ref.get(opportunities)).toEqual([
+          { _tag: "OrdinaryRunEntry" },
+          { _tag: "ActiveWorkAuthorityRefresh", source: "TrackerNotification" },
+          { _tag: "ActiveWorkAuthorityRefresh", source: "Timer" },
+          { _tag: "OrdinaryRunEntry" }
+        ])
         const [exitDrain] = yield* Ref.get(registeredDrains)
         if (exitDrain === undefined) return yield* Effect.die("production owner did not register its Exit drain")
         yield* exitDrain

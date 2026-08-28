@@ -19,6 +19,7 @@ import type { RunFinalityDecision as RunFinalityDecisionValue } from "../frontie
 import { ApplicationExitShell } from "../application-exit/application-shell.js"
 import { attachCurrentSignal, type CurrentSignal } from "../delivery/relations.js"
 import type { AcceptedRunControlDirection, AcceptedRunControlObserver, RunReactivationControlState } from "./run.js"
+import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 /** A non-authoritative request to ask the ordinary Run entry for current facts. */
 export type RunReactivationHint = Data.TaggedEnum<{
@@ -41,7 +42,7 @@ export const RunReactivationHint = Data.taggedEnum<RunReactivationHint>()
 export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   /** Exact workflow Run whose Journal-backed control state this owner serves. */
   readonly runId: RunId
-  readonly activate: Effect.Effect<RunFinalityDecisionValue, E, R>
+  readonly activate: (opportunity: RunActivationOpportunity) => Effect.Effect<RunFinalityDecisionValue, E, R>
   readonly readControl: Effect.Effect<RunReactivationControlState, E, R>
   readonly activationInterval: Duration.Input
   /** Finite positive delay after a failed read/activation before a later hint is considered. */
@@ -78,6 +79,11 @@ export class RunReactivationOwner extends Context.Service<RunReactivationOwner, 
 ) {}
 
 type RunReactivationMessage = { readonly _tag: "Hint"; readonly hint: RunReactivationHint }
+
+const activationOpportunityFor = (hint: RunReactivationHint): RunActivationOpportunity =>
+  hint._tag === "TrackerNotification" || hint._tag === "Timer"
+    ? RunActivationOpportunity.ActiveWorkAuthorityRefresh({ source: hint._tag })
+    : RunActivationOpportunity.OrdinaryRunEntry()
 
 const finitePositiveDuration = (input: Duration.Input, name: string) => {
   const duration = Duration.fromInput(input)
@@ -249,7 +255,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         Deferred.await(shutdown).pipe(Effect.as(Option.none()))
       )
 
-      const processHint = Effect.gen(function* () {
+      const processHintAttempt = Effect.fn("RunReactivationOwner.processHint")(function* (hint: RunReactivationHint) {
         if (yield* Ref.get(stopped)) return
         if ((yield* Ref.get(controlState)) === "RunPaused") return
         /* v8 ignore next -- @preserve Initial terminal history stops before queue consumption, and no process-local command can create RunTerminated. */
@@ -258,17 +264,19 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           return
         }
 
-        const decision = yield* options.activate.pipe(
-          Effect.mapError((failure) => ({ _tag: "Activate" as const, failure }))
-        )
+        const decision = yield* options
+          .activate(activationOpportunityFor(hint))
+          .pipe(Effect.mapError((failure) => ({ _tag: "Activate" as const, failure })))
         if (decision._tag === "RunMayTerminate") yield* requestStop()
-      }).pipe(
-        Effect.catchTag("Activate", ({ failure }) =>
-          options.isTerminationFailure(failure)
-            ? options.onFailure(failure).pipe(Effect.andThen(requestStop()))
-            : observeFailure(failure)
+      })
+      const processHint = (hint: RunReactivationHint) =>
+        processHintAttempt(hint).pipe(
+          Effect.catchTag("Activate", ({ failure }) =>
+            options.isTerminationFailure(failure)
+              ? options.onFailure(failure).pipe(Effect.andThen(requestStop()))
+              : observeFailure(failure)
+          )
         )
-      )
 
       yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: requestStop() })
       yield* startupPreparation.cancel
@@ -306,7 +314,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
             Effect.flatMap((message) =>
               Option.match(message, {
                 onNone: () => Effect.void,
-                onSome: () => processHint.pipe(Effect.andThen(loop()))
+                onSome: ({ hint }) => processHint(hint).pipe(Effect.andThen(loop()))
               })
             )
           )

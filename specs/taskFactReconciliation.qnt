@@ -148,8 +148,12 @@ module taskFactReconciliation {
     | MissingClaimConstraint
     | ForeignClaimConstraint
     | UnreadableClaimConstraint
+  // AuthorityReadPurpose distinguishes an ordinary continuation projection
+  // from the tracker/timer opportunity that rereads authority for Running work.
+  type AuthorityReadPurpose = OrdinaryContinuationRead | ActiveWorkRefreshRead
   type FactDecision =
     | ContinueWork
+    | AwaitNextActiveWorkRefresh
     | RequestSafeSuspension
     | MembershipWait
     | LifecycleWait
@@ -247,6 +251,10 @@ module taskFactReconciliation {
     | MissingClaimConstraintObservedAction
     | ForeignClaimConstraintObservedAction
     | UnreadableClaimConstraintObservedAction
+    | ActiveWorkRunningEstablishedAction
+    | ActiveWorkRefreshOfferedAction
+    | ActiveRefreshHealthyObservedAction
+    | ActiveRefreshUnreadableObservedAction
     | TaskFactsSafelySuspendedAction
     | MissingClaimDirectionAppliedAction
     | ForeignClaimDirectionAppliedAction
@@ -318,6 +326,7 @@ module taskFactReconciliation {
     integrationSelected: bool,
     independentTaskEligible: bool,
     independentTaskSelected: bool,
+    authorityReadPurpose: AuthorityReadPurpose,
     constraint: Constraint,
     factDecision: FactDecision,
     exactClaimHeld: bool,
@@ -666,6 +675,34 @@ module taskFactReconciliation {
       state.claimState != UnreadableClaim
         or and { not(state.reacquisitionDirectionApplied), not(state.replacementIntentRecorded) }
 
+  // An unreadable tracker response during a refresh of Running work is not
+  // evidence that the task must be suspended and is never continuation
+  // authorization. The same position and implementation responsibility stay
+  // held until a later tracker/timer opportunity can obtain exact facts.
+  val activeRefreshUnreadableAuthorizesNoExecutorAction: bool =
+    state.lastAction != ActiveRefreshUnreadableObservedAction or and {
+      state.authorityReadPurpose == ActiveWorkRefreshRead,
+      state.factDecision == AwaitNextActiveWorkRefresh,
+      state.constraint == NoConstraint,
+      state.executorEvidence == ExactRunning,
+      state.positionHeld,
+      state.implementationResponsibilityRetained,
+      not(state.cleanupSelected),
+      not(state.integrationSelected),
+    }
+
+  // The ordinary activation path remains fail-closed: an unreadable claim
+  // while deciding whether work may continue requests the existing exact safe
+  // suspension route.
+  val ordinaryUnreadableStillRequestsSafeSuspension: bool =
+    state.lastAction != UnreadableClaimConstraintObservedAction or and {
+      state.authorityReadPurpose == OrdinaryContinuationRead,
+      state.factDecision == RequestSafeSuspension,
+      state.constraint == UnreadableClaimConstraint,
+      state.executorEvidence == ExactRunning,
+      state.positionHeld,
+    }
+
   // The action guard and this requirement deliberately spell the authorization
   // separately. A weakened choice, task, claim, worktree, lineage, target, or
   // quiescence guard must make this invariant fail.
@@ -928,6 +965,10 @@ module taskFactReconciliation {
     state.lastAction == ForeignClaimConstraintObservedAction
   val unreadableClaimConstraintObservedReached: bool =
     state.lastAction == UnreadableClaimConstraintObservedAction
+  val activeWorkRefreshOfferedReached: bool =
+    state.lastAction == ActiveWorkRefreshOfferedAction
+  val activeRefreshUnreadableReached: bool =
+    state.lastAction == ActiveRefreshUnreadableObservedAction
   val taskFactsSafelySuspendedReached: bool = state.lastAction == TaskFactsSafelySuspendedAction
   val missingClaimDirectionAppliedReached: bool = state.lastAction == MissingClaimDirectionAppliedAction
   val foreignClaimDirectionAppliedReached: bool = state.lastAction == ForeignClaimDirectionAppliedAction
@@ -1035,6 +1076,7 @@ module taskFactReconciliation {
       integrationSelected: false,
       independentTaskEligible: true,
       independentTaskSelected: false,
+      authorityReadPurpose: OrdinaryContinuationRead,
       constraint: NoConstraint,
       factDecision: ContinueWork,
       exactClaimHeld: true,
@@ -2284,7 +2326,11 @@ module taskFactReconciliation {
       or state.f2WinningChoice == RestartChoice
       or state.constraint == MissingClaimConstraint
       or state.constraint == ForeignClaimConstraint
-      or state.constraint == UnreadableClaimConstraint,
+      or state.constraint == UnreadableClaimConstraint
+      or and {
+        state.authorityReadPurpose == ActiveWorkRefreshRead,
+        state.factDecision == AwaitNextActiveWorkRefresh,
+      },
     state' = { ...state, independentTaskSelected: true, lastAction: IndependentTaskSelectedAction },
   }
 
@@ -2405,6 +2451,7 @@ module taskFactReconciliation {
     state.f2WinningChoice == NoChoice,
     state.factDecision == ContinueWork,
     state.constraint == NoConstraint,
+    state.authorityReadPurpose == OrdinaryContinuationRead,
     state' = {
       ...state,
       constraint: UnreadableClaimConstraint,
@@ -2414,6 +2461,71 @@ module taskFactReconciliation {
       positionHeld: true,
       claimState: UnreadableClaim,
       lastAction: UnreadableClaimConstraintObservedAction,
+    },
+  }
+
+  // Scenario setup establishes the already-Running attempt before the
+  // TrackerNotification or Timer trigger. The setup command is not caused by
+  // the later refresh opportunity.
+  action establishRunningAttemptForActiveRefresh: bool = all {
+    state.phase == PreIntegration,
+    state.f2WinningChoice == NoChoice,
+    state.factDecision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.executorEvidence == ExactSafelySuspended,
+    state' = {
+      ...state,
+      executorEvidence: ExactRunning,
+      quiescenceUnbroken: false,
+      positionHeld: true,
+      lastAction: ActiveWorkRunningEstablishedAction,
+    },
+  }
+
+  // TrackerNotification and configured Timer are represented by this offered
+  // opportunity. It refreshes work already proven Running and does not
+  // authorize another executor command.
+  action offerActiveWorkAuthorityRefresh: bool = all {
+    state.phase == PreIntegration,
+    state.f2WinningChoice == NoChoice,
+    state.factDecision == ContinueWork or state.factDecision == AwaitNextActiveWorkRefresh,
+    state.constraint == NoConstraint,
+    state.executorEvidence == ExactRunning,
+    state' = {
+      ...state,
+      authorityReadPurpose: ActiveWorkRefreshRead,
+      factDecision: ContinueWork,
+      executorEvidence: ExactRunning,
+      quiescenceUnbroken: false,
+      positionHeld: true,
+      lastAction: ActiveWorkRefreshOfferedAction,
+    },
+  }
+
+  action observeHealthyActiveWorkRefresh: bool = all {
+    state.lastAction == ActiveWorkRefreshOfferedAction,
+    state.authorityReadPurpose == ActiveWorkRefreshRead,
+    state.factDecision == ContinueWork,
+    state.constraint == NoConstraint,
+    state' = {
+      ...state,
+      factDecision: AwaitNextActiveWorkRefresh,
+      claimState: ExactClaim,
+      exactClaimHeld: true,
+      lastAction: ActiveRefreshHealthyObservedAction,
+    },
+  }
+
+  action observeUnreadableClaimDuringActiveRefresh: bool = all {
+    state.lastAction == ActiveWorkRefreshOfferedAction,
+    state.authorityReadPurpose == ActiveWorkRefreshRead,
+    state.factDecision == ContinueWork,
+    state.constraint == NoConstraint,
+    state' = {
+      ...state,
+      factDecision: AwaitNextActiveWorkRefresh,
+      claimState: UnreadableClaim,
+      lastAction: ActiveRefreshUnreadableObservedAction,
     },
   }
 
@@ -2608,6 +2720,10 @@ module taskFactReconciliation {
     observeMissingClaimConstraint,
     observeForeignClaimConstraint,
     observeUnreadableClaimConstraint,
+    establishRunningAttemptForActiveRefresh,
+    offerActiveWorkAuthorityRefresh,
+    observeHealthyActiveWorkRefresh,
+    observeUnreadableClaimDuringActiveRefresh,
     reportSafelySuspended,
     applyMissingClaimReacquisitionDirection,
     applyForeignClaimReacquisitionDirection,
@@ -2617,6 +2733,17 @@ module taskFactReconciliation {
     observeFreshLifecycleReopen,
     releaseExternalSuccessExactClaim,
     requestOwnedClaimMutation,
+  }
+
+  // Focused production-backed MBT slice for the active-work refresh chronology.
+  action activeRefreshMbtStep: bool = any {
+    all { state.lastAction == InitializedAction, establishRunningAttemptForActiveRefresh },
+    all { state.lastAction == ActiveWorkRunningEstablishedAction, offerActiveWorkAuthorityRefresh },
+    all {
+      state.lastAction == ActiveWorkRefreshOfferedAction,
+      any { observeHealthyActiveWorkRefresh, observeUnreadableClaimDuringActiveRefresh },
+    },
+    all { state.lastAction == ActiveRefreshUnreadableObservedAction, selectIndependentTaskB },
   }
 
   // Executable conformance intentionally exercises the #65 boundary slice.

@@ -610,6 +610,8 @@ export {
   type RunReactivationOwnerOptions,
   type RunReactivationOwnerService
 } from "./coordination/run/run-reactivation-owner.js"
+export { RunActivationOpportunity } from "./coordination/run/run-activation-opportunity.js"
+export type { RunActivationOpportunity as RunActivationOpportunityValue } from "./coordination/run/run-activation-opportunity.js"
 export {
   PauseNotApplied,
   PauseObservationRunMismatch,
