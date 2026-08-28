@@ -509,14 +509,15 @@ const transitionsBeforeStartedIntegrationAdmission = (
     promotionAttemptNeedsReconciliationRead(promotion) &&
     integratorState._tag === "GitQualifiedPrepared"
   ) {
-    return held
-      ? [
-          RunnableFrontierTransition.RunTargetPromotion({
-            candidate: integratorRunQualifiedCandidateFromState(integratorState),
-            responsibility
-          })
-        ]
-      : [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+    if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+    if (!trackerFactsAreCurrentFor(responsibility) || !claimIsExactFor(responsibility) || waiting) {
+      return [
+        RunnableFrontierTransition.ReconcileTargetPromotionAttempt({
+          candidate: integratorRunQualifiedCandidateFromState(integratorState),
+          responsibility
+        })
+      ]
+    }
   }
   if (!trackerFactsAreCurrentFor(responsibility)) return releaseStartedIntegrationTargetFor(responsibility, held)
   if (!claimIsExactFor(responsibility)) return []

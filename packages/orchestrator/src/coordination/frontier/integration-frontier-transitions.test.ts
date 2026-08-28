@@ -747,18 +747,28 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
   ]
   const runState = { ...scenario.runState, appliedThrough: JournalPosition.make(11), workflowHistory: { records } }
 
+  const runtimeFacts = {
+    activeResponsibilityPositions: new Set<JournalPosition>(),
+    heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+    integrationTarget: Option.some(target),
+    targetLineageByAttemptId: new Map([[attemptId, lineage(preparedCandidateCommit)]]),
+    targetLineageRefreshRequiredAttemptIds: new Set([attemptId]),
+    targetPromotionConfigured: true
+  }
+  expect(
+    deriveStartedIntegrationFrontier(
+      runState,
+      { ...runtimeFacts, currentTrackerTaskIds: new Set(), taskClaimAuthorityByAttemptId: new Map() },
+      [responsibility]
+    ).transitions()
+  ).toEqual([RunnableFrontierTransition.ReconcileTargetPromotionAttempt({ candidate, responsibility })])
   expect(
     deriveStartedIntegrationFrontier(
       runState,
       {
-        activeResponsibilityPositions: new Set(),
-        currentTrackerTaskIds: new Set(),
-        heldResponsibilityPositions: new Set([responsibility.queuedAt]),
-        integrationTarget: Option.some(target),
-        targetLineageByAttemptId: new Map([[attemptId, lineage(preparedCandidateCommit)]]),
-        targetLineageRefreshRequiredAttemptIds: new Set([attemptId]),
-        targetPromotionConfigured: true,
-        taskClaimAuthorityByAttemptId: new Map()
+        ...runtimeFacts,
+        currentTrackerTaskIds: new Set([taskId]),
+        taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
       },
       [responsibility]
     ).transitions()

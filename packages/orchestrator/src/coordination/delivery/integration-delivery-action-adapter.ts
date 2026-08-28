@@ -8,7 +8,10 @@ import {
 import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
 import { EvidenceStore } from "../../workflow/protocols/evidence-store.js"
 import { targetPromotionCorrelationFor, TargetPromotionGit } from "../../workflow/protocols/target-promotion/events.js"
-import { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
+import {
+  reconcileTargetPromotionAttempt,
+  runTargetPromotion
+} from "../../workflow/protocols/target-promotion/protocol.js"
 import {
   coordinatorOwnedTargetPromotionGit,
   TargetPromotionRuntime
@@ -73,6 +76,10 @@ type IntegrationTransition = Exclude<
   }
 >
 type RunTargetPromotion = Extract<IntegrationTransition, { readonly _tag: "RunTargetPromotion" }>
+type ReconcileTargetPromotionAttempt = Extract<
+  IntegrationTransition,
+  { readonly _tag: "ReconcileTargetPromotionAttempt" }
+>
 type ReplacePromotedTaskClaim = Extract<IntegrationTransition, { readonly _tag: "ReplacePromotedTaskClaim" }>
 type ObservePromotedCandidateAncestryAfterBlockerClear = Extract<
   IntegrationTransition,
@@ -354,6 +361,45 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   return deliveryActionCompleted(action.proposal.id)
 })
 
+const executeTargetPromotionReconciliation = Effect.fn("DeliveryAction.reconcileTargetPromotionAttempt")(function* (
+  action: IdentityFreeAction,
+  transition: ReconcileTargetPromotionAttempt,
+  lease: DeliveryActionExecutionLease
+) {
+  const context = yield* Effect.context<never>()
+  const runtime = Context.getOption(context, TargetPromotionRuntime)
+  if (Option.isNone(runtime)) return yield* new TargetPromotionRuntimeUnavailable()
+  const ownership = Context.getOption(context, CoordinatorOwnership)
+  if (Option.isNone(ownership)) return yield* new TargetPromotionRuntimeUnavailable()
+  const journal = yield* InRunJournal
+  const correlation = targetPromotionCorrelationFor(transition.candidate)
+  const result = yield* lease.integrationTargets
+    .withPermit(
+      transition.responsibility,
+      reconcileTargetPromotionAttempt(transition.candidate).pipe(
+        Effect.provideService(
+          TargetPromotionGit,
+          coordinatorOwnedTargetPromotionGit(runtime.value.git, ownership.value)
+        )
+      )
+    )
+    .pipe(
+      Effect.ensuring(
+        journal.read(transition.responsibility.plannedAttempt.runId).pipe(
+          Effect.flatMap((records) =>
+            pendingPromotionStaleIntegrationQuarantineFor(records, correlation) === undefined
+              ? lease.integrationTargets.release(transition.responsibility)
+              : Effect.void
+          ),
+          Effect.ignore
+        )
+      )
+    )
+  return result._tag === "PromotionPending"
+    ? deliveryActionDeferred(action.proposal.id, "TargetPromotionRetryAuthorityRequired")
+    : deliveryActionCompleted(action.proposal.id)
+})
+
 const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterIntegrator")(function* (
   action: IdentityFreeAction,
   transition: OuterIntegratorTransition,
@@ -387,6 +433,9 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
   target: TrackerTarget
 ) {
   if (transition._tag === "RunTargetPromotion") return yield* executeTargetPromotion(action, transition, lease)
+  if (transition._tag === "ReconcileTargetPromotionAttempt") {
+    return yield* executeTargetPromotionReconciliation(action, transition, lease)
+  }
   if (transition._tag === "ObservePromotedCandidateAncestryAfterBlockerClear") {
     return yield* observePromotedCandidateAncestryAfterBlockerClear(action, transition)
   }

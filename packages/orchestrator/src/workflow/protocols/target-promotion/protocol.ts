@@ -270,9 +270,39 @@ const runInitialRead = Effect.fn("TargetPromotion.runInitialRead")(function* (co
   )
 })
 
+const continueAfterExpectedHeadRead = Effect.fn("TargetPromotion.continueAfterExpectedHeadRead")(function* (
+  correlation: TargetPromotionCorrelation,
+  previousAttemptOrdinal: TargetPromotionAttemptOrdinal,
+  observedHeadSha: GitCommitSha,
+  authority: "ReadOnly" | "RetryAuthorized"
+) {
+  if (previousAttemptOrdinal === targetPromotionAttemptLimit) {
+    return yield* appendNonConvergence(
+      correlation,
+      previousAttemptOrdinal,
+      TargetPromotionNonConvergenceObservation.cases.ExpectedHeadStillObserved.make({ observedHeadSha })
+    )
+  }
+  if (authority === "ReadOnly") {
+    return TargetPromotionState.cases.PromotionPending.make({
+      correlation,
+      retry: TargetPromotionPendingRetry.cases.NeedReconciliationRead.make({
+        afterAttemptOrdinal: previousAttemptOrdinal
+      })
+    })
+  }
+  const nextAttemptOrdinal = ordinalFor(previousAttemptOrdinal + 1)
+  return yield* performAttempt(
+    correlation,
+    nextAttemptOrdinal,
+    TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({ observedHeadSha, previousAttemptOrdinal })
+  )
+})
+
 const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")(function* (
   correlation: TargetPromotionCorrelation,
-  previousAttemptOrdinal: TargetPromotionAttemptOrdinal
+  previousAttemptOrdinal: TargetPromotionAttemptOrdinal,
+  authority: "ReadOnly" | "RetryAuthorized"
 ) {
   const git = yield* TargetPromotionGit
   const request = targetPromotionGitRequestFor(correlation)
@@ -308,25 +338,37 @@ const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")
       })
     )
   }
-  if (previousAttemptOrdinal === targetPromotionAttemptLimit) {
-    return yield* appendNonConvergence(
-      correlation,
-      previousAttemptOrdinal,
-      TargetPromotionNonConvergenceObservation.cases.ExpectedHeadStillObserved.make({
-        observedHeadSha: observation.currentHeadSha
-      })
-    )
-  }
-
-  const nextAttemptOrdinal = ordinalFor(previousAttemptOrdinal + 1)
-  return yield* performAttempt(
+  return yield* continueAfterExpectedHeadRead(
     correlation,
-    nextAttemptOrdinal,
-    TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({
-      observedHeadSha: observation.currentHeadSha,
-      previousAttemptOrdinal
-    })
+    previousAttemptOrdinal,
+    observation.currentHeadSha,
+    authority
   )
+})
+
+/** Reads Git to settle one ambiguous prior attempt but can never issue a new compare-and-set. */
+export const reconcileTargetPromotionAttempt = Effect.fn("TargetPromotion.reconcileAttempt")(function* (
+  candidate: IntegratorRunQualifiedCandidate
+) {
+  const correlation = targetPromotionCorrelationFor(candidate)
+  const journal = yield* InRunJournal
+  const records = yield* journal.read(targetPromotionRunIdOf(correlation))
+  const foreignCorrelation = targetPromotionCorrelationConflictFor(records, correlation)
+  if (foreignCorrelation !== undefined) {
+    return yield* new TargetPromotionCorrelationContradiction({
+      detail: "journal contains a different exact promotion correlation for this request id",
+      requestId: correlation.requestId
+    })
+  }
+  const state = deriveTargetPromotionState(records, correlation)
+  if (state !== undefined && state._tag !== "PromotionPending") return state
+  if (state?.retry._tag !== "NeedReconciliationRead") {
+    return yield* new TargetPromotionResultContradiction({
+      candidateCommit: candidate.candidateCommit,
+      detail: "read-only reconciliation requires one exact unmatched compare-and-set intent"
+    })
+  }
+  return yield* runReconciliationRead(correlation, state.retry.afterAttemptOrdinal, "ReadOnly")
 })
 
 const runPending = Effect.fn("TargetPromotion.runPending")(function* (
@@ -335,7 +377,7 @@ const runPending = Effect.fn("TargetPromotion.runPending")(function* (
 ) {
   return state.retry._tag === "NeedInitialReconciliationRead"
     ? yield* runInitialRead(correlation)
-    : yield* runReconciliationRead(correlation, state.retry.afterAttemptOrdinal)
+    : yield* runReconciliationRead(correlation, state.retry.afterAttemptOrdinal, "RetryAuthorized")
 })
 
 /** Performs at most one compare-and-set and one reconciliation read for one Integrator-qualified candidate. */

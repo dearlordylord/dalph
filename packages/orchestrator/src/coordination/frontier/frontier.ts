@@ -231,6 +231,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly candidate: IntegratorRunQualifiedCandidate
     readonly responsibility: StartedIntegrationResponsibility
   }
+  /** Reconciles one ambiguous prior promotion attempt without authority to issue another compare-and-set. */
+  ReconcileTargetPromotionAttempt: {
+    readonly candidate: IntegratorRunQualifiedCandidate
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   ReplacePromotedTaskClaim: {
     readonly request: CompletionClaimReplacementRequest
     readonly responsibility: StartedIntegrationResponsibility
@@ -319,6 +324,7 @@ const transitionTrackerGraphRequirements = {
   FixIntegratorSuccessorSession: "CurrentTrackerGraphRequired",
   RunIntegrator: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",
+  ReconcileTargetPromotionAttempt: "AcceptedHistorySufficient",
   ReplacePromotedTaskClaim: "CurrentTrackerGraphRequired",
   ObservePromotedCandidateAncestryAfterBlockerClear: "CurrentTrackerGraphRequired",
   CompletePromotedTask: "CurrentTrackerGraphRequired",

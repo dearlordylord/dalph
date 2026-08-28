@@ -8,6 +8,8 @@ export const integrationExitBoundaryFamilyFor = (
   transition: Pick<IdentityFreeWorkflowTransition, "_tag">
 ): IntegrationExitBoundaryFamily | null => {
   if (transition._tag === "RunIntegrator") return "IntegratorPreparation"
-  if (transition._tag === "RunTargetPromotion") return "TargetPromotion"
+  if (transition._tag === "RunTargetPromotion" || transition._tag === "ReconcileTargetPromotionAttempt") {
+    return "TargetPromotion"
+  }
   return null
 }

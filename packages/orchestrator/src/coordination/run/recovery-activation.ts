@@ -1825,6 +1825,7 @@ const transitionTagsAllowedWhilePaused = new Set<RunnableFrontierTransition["_ta
 ])
 const transitionTagsAllowedToFinishHeldIntegration = new Set<RunnableFrontierTransition["_tag"]>([
   "RunTargetPromotion",
+  "ReconcileTargetPromotionAttempt",
   "ObservePromotedCandidateAncestryAfterBlockerClear",
   "ReplacePromotedTaskClaim",
   "CompletePromotedTask",
@@ -1845,12 +1846,13 @@ export const recordBeforePause = (
 
 type PausedIntegrationReconciliation = Extract<
   RunnableFrontierTransition,
-  { readonly _tag: "AcquireStartedIntegrationTarget" | "RunTargetPromotion" }
+  { readonly _tag: "AcquireStartedIntegrationTarget" | "RunTargetPromotion" | "ReconcileTargetPromotionAttempt" }
 >
 
 const pausedIntegrationReconciliationTags: ReadonlySet<RunnableFrontierTransition["_tag"]> = new Set([
   "AcquireStartedIntegrationTarget",
-  "RunTargetPromotion"
+  "RunTargetPromotion",
+  "ReconcileTargetPromotionAttempt"
 ])
 
 const isPausedIntegrationReconciliation = (
@@ -1866,6 +1868,14 @@ const startedIntegrationIntentMayReconcileBeforePause = (
   if (pausePosition === undefined || !isPausedIntegrationReconciliation(transition)) return false
   return Match.valueTags(transition, {
     RunTargetPromotion: (transition) =>
+      recordBeforePause(
+        records,
+        pausePosition,
+        ({ event }) =>
+          event._tag === "TargetPromotionIntended" &&
+          event.correlation.requestId === targetPromotionRequestIdForCandidate(transition.candidate)
+      ),
+    ReconcileTargetPromotionAttempt: (transition) =>
       recordBeforePause(
         records,
         pausePosition,

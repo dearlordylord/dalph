@@ -9,7 +9,8 @@ import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js
 describe("application Exit integration boundary classification", () => {
   it.each([
     ["RunIntegrator", "IntegratorPreparation"],
-    ["RunTargetPromotion", "TargetPromotion"]
+    ["RunTargetPromotion", "TargetPromotion"],
+    ["ReconcileTargetPromotionAttempt", "TargetPromotion"]
   ] as const)("classifies %s as the admitted %s atomic section", (tag, family) => {
     expect(integrationExitBoundaryFamilyFor({ _tag: tag })).toBe(family)
   })
