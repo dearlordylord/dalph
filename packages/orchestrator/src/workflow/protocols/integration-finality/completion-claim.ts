@@ -38,6 +38,35 @@ export const completionTaskClaimEquals = (left: CompletionTaskClaim, right: Comp
     targetPromotionCorrelationEquals(left.promotionCorrelation, right.promotionCorrelation)
   ].every(Boolean)
 
+/** SHA-256 identity of one canonical encoded completion claim, never a reconstructed claim by itself. */
+export const CompletionClaimFingerprint = Schema.String.check(
+  Schema.makeFilter((value) =>
+    /^[0-9a-f]{64}$/.test(value) ? undefined : "completion claim fingerprint must be SHA-256 hex"
+  )
+).pipe(Schema.brand("CompletionClaimFingerprint"))
+export type CompletionClaimFingerprint = typeof CompletionClaimFingerprint.Type
+
+/** A provider record exists for this task but identifies another exact completion claim. */
+export const ForeignCompletionClaim = Schema.TaggedStruct("ForeignCompletionClaim", {
+  fingerprint: CompletionClaimFingerprint,
+  taskId: TaskId
+})
+export type ForeignCompletionClaim = typeof ForeignCompletionClaim.Type
+
+/** The exact provider-neutral read request carries the task and claim whose evidence must be checked. */
+export const CompletionClaimReadRequest = Schema.Struct({ expectedClaim: CompletionTaskClaim, taskId: TaskId }).check(
+  Schema.makeFilter((request) =>
+    request.taskId === request.expectedClaim.plannedAttempt.taskId
+      ? undefined
+      : "completion claim read must bind the expected claim's exact task"
+  )
+)
+export type CompletionClaimReadRequest = typeof CompletionClaimReadRequest.Type
+
+/** Derives the one exact read request used before create, after ambiguity, and during cleanup. */
+export const completionClaimReadRequestFor = (expectedClaim: CompletionTaskClaim): CompletionClaimReadRequest =>
+  CompletionClaimReadRequest.make({ expectedClaim, taskId: expectedClaim.plannedAttempt.taskId })
+
 /** The exact provider-neutral replacement request, including the operation identity. */
 export const CompletionClaimReplacementRequest = Schema.Struct({ claim: CompletionTaskClaim, operationId: OperationId })
 export type CompletionClaimReplacementRequest = typeof CompletionClaimReplacementRequest.Type
@@ -80,8 +109,13 @@ export const CompletionClaimDeletionRequest = Schema.Struct({
 )
 export type CompletionClaimDeletionRequest = typeof CompletionClaimDeletionRequest.Type
 
-/** A current task claim can be active, completion-bound, or absent. */
-export const CompletionClaimObservation = Schema.Union([ActiveTaskClaim, CompletionTaskClaim, UnclaimedTask])
+/** Current provider evidence can be active, exact completion, foreign completion, or absent. */
+export const CompletionClaimObservation = Schema.Union([
+  ActiveTaskClaim,
+  CompletionTaskClaim,
+  ForeignCompletionClaim,
+  UnclaimedTask
+])
 export type CompletionClaimObservation = typeof CompletionClaimObservation.Type
 
 const CompletionClaimRequestOutcome = Schema.Literals(["DefinitelyNotApplied", "Unknown"])
@@ -113,7 +147,9 @@ export class CompletionClaimOwnershipConflict extends Schema.TaggedError<Complet
 
 /** Provider-neutral tracker boundary used by replacement and cleanup protocols. */
 export interface CompletionClaimBoundaryService {
-  readonly readTaskClaim: (taskId: TaskId) => Effect.Effect<CompletionClaimObservation, CompletionClaimReadFailure>
+  readonly readTaskClaim: (
+    request: CompletionClaimReadRequest
+  ) => Effect.Effect<CompletionClaimObservation, CompletionClaimReadFailure>
   readonly replaceTaskClaim: (
     request: CompletionClaimReplacementRequest
   ) => Effect.Effect<CompletionTaskClaim, CompletionClaimReplacementFailure>

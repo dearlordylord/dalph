@@ -53,6 +53,12 @@ export const decodeGithubTaskId = Effect.fn("GithubTaskIdentity.decode")(functio
   return GithubTaskIdentity.make({ issueNodeId, repositoryNodeId })
 })
 
+/** Projects the one canonical decoded identity into the coordinate pair consumed by claim adapters. */
+export const githubTaskCoordinatesFor = Effect.fn("GithubTaskIdentity.coordinatesFor")(function* (taskId: TaskId) {
+  const identity = yield* decodeGithubTaskId(taskId)
+  return [identity.repositoryNodeId, identity.issueNodeId] as const
+})
+
 /** Keeps canonical snapshot content directly reversible for revision diagnostics. */
 export const trackerRevisionFor = (tasks: ReadonlyArray<TrackerTask>): TrackerRevision =>
   TrackerRevision.make(

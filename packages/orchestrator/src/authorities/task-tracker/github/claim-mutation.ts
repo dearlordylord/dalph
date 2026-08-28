@@ -6,9 +6,15 @@ import {
   githubGraphqlClientNodeLayer,
   GithubGraphqlRequest,
   GithubLabelName,
-  GithubLabelNodeId,
-  GithubRepositoryNodeId
+  type GithubLabelNodeId
 } from "./graphql-client.js"
+import { githubTaskClaimLabelDigestFor } from "./claim-label-identity.js"
+import {
+  CreateClaimLabelResponse,
+  DeleteClaimLabelResponse,
+  FindClaimLabelResponse,
+  GithubGraphqlErrors
+} from "./claim-label-response.js"
 import { decodeGithubTaskId } from "./task-identity.js"
 import {
   ActiveTaskClaim,
@@ -32,43 +38,14 @@ const GithubClaimDescriptionFields = Schema.Struct({
 const githubClaimDescriptionVersion = "1"
 const githubClaimDescriptionSeparator = "|"
 const githubClaimDescriptionMaximumLength = 100
-const hexadecimalRadix = 16
-const hexadecimalByteLength = 2
-const claimLabelDigestLength = 32
-
-const GithubClaimLabel = Schema.Struct({
-  description: Schema.NonEmptyString,
-  id: GithubLabelNodeId,
-  name: GithubLabelName
-})
-
-const GraphqlErrors = Schema.Struct({
-  errors: Schema.optionalKey(Schema.Array(Schema.Struct({ message: Schema.String })))
-})
-
-const FindClaimLabelResponse = Schema.Struct({
-  data: Schema.Struct({
-    node: Schema.NullOr(Schema.Struct({ id: GithubRepositoryNodeId, label: Schema.NullOr(GithubClaimLabel) }))
-  })
-})
-
-const CreateClaimLabelResponse = Schema.Struct({
-  data: Schema.Struct({ createLabel: Schema.Struct({ label: GithubClaimLabel }) })
-})
-
-const DeleteClaimLabelResponse = Schema.Struct({
-  data: Schema.Struct({ deleteLabel: Schema.Struct({ clientMutationId: Schema.NullOr(Schema.String) }) })
-})
-
 type GithubClaimRecord =
   | { readonly _tag: "Unclaimed"; readonly observation: UnclaimedTask }
   | { readonly _tag: "Active"; readonly labelId: GithubLabelNodeId; readonly observation: ActiveTaskClaim }
 
-const decodeCoordinates = (taskId: TaskId) => {
-  return decodeGithubTaskId(taskId).pipe(
+const decodeCoordinates = (taskId: TaskId) =>
+  decodeGithubTaskId(taskId).pipe(
     Effect.mapError((cause) => new TaskClaimReadFailure({ detail: cause.detail, taskId }))
   )
-}
 
 const descriptionFor = (acquisition: TaskClaimAcquisition): Effect.Effect<string, TaskClaimRequestFailure> => {
   const components = [acquisition.operationId, acquisition.owner, acquisition.token]
@@ -108,11 +85,10 @@ export const githubClaimLabelNameFor = Effect.fn("GithubTrackerMutation.claimLab
   crypto: Crypto.Crypto,
   taskId: TaskId
 ) {
-  const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(taskId))
-    .pipe(Effect.mapError((cause) => new TaskClaimReadFailure({ detail: String(cause), taskId })))
-  const hash = [...digest].map((byte) => byte.toString(hexadecimalRadix).padStart(hexadecimalByteLength, "0")).join("")
-  return GithubLabelName.make(`dalph-claim-${hash.slice(0, claimLabelDigestLength)}`)
+  const digest = yield* githubTaskClaimLabelDigestFor(crypto, taskId).pipe(
+    Effect.mapError((cause) => new TaskClaimReadFailure({ detail: String(cause), taskId }))
+  )
+  return GithubLabelName.make(`dalph-claim-${digest}`)
 })
 
 export const githubTrackerMutationLayer = Layer.effect(
@@ -127,7 +103,7 @@ export const githubTrackerMutationLayer = Layer.effect(
       const response = yield* client
         .execute(GithubGraphqlRequest.cases.FindClaimLabel.make({ labelName, repositoryNodeId }))
         .pipe(Effect.mapError((cause) => new TaskClaimReadFailure({ detail: cause.detail, taskId })))
-      const header = yield* Schema.decodeUnknownEffect(GraphqlErrors)(response.body).pipe(
+      const header = yield* Schema.decodeUnknownEffect(GithubGraphqlErrors)(response.body).pipe(
         Effect.mapError((cause) => new TaskClaimReadFailure({ detail: String(cause), taskId }))
       )
       if (header.errors !== undefined && header.errors.length > 0) {
@@ -194,7 +170,7 @@ export const githubTrackerMutationLayer = Layer.effect(
             (cause) => new TaskClaimRequestFailure({ acquisition, detail: cause.detail, outcome: "Unknown" })
           )
         )
-      const header = yield* Schema.decodeUnknownEffect(GraphqlErrors)(response.body).pipe(
+      const header = yield* Schema.decodeUnknownEffect(GithubGraphqlErrors)(response.body).pipe(
         Effect.mapError(
           (cause) => new TaskClaimRequestFailure({ acquisition, detail: String(cause), outcome: "Unknown" })
         )

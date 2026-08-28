@@ -8,6 +8,7 @@ import {
   type CompletionClaimDeletionRequest,
   CompletionClaimDeletionFailure,
   type CompletionClaimObservation,
+  type CompletionClaimReadRequest,
   type CompletionClaimReplacementRequest,
   CompletionClaimReplacementFailure,
   CompletionTaskAcknowledgement,
@@ -32,9 +33,11 @@ export const controlledCompletionClaimBoundaryLayerFrom = (initial: ReadonlyArra
       const claims = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimObservation>>(
         new Map(initial.map((claim) => [taskIdOf(claim), claim] as const))
       )
-      const readTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.readTaskClaim")(function* (taskId: TaskId) {
-        const current = (yield* Ref.get(claims)).get(taskId)
-        return current ?? UnclaimedTask.make({ taskId })
+      const readTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.readTaskClaim")(function* (
+        request: CompletionClaimReadRequest
+      ) {
+        const current = (yield* Ref.get(claims)).get(request.taskId)
+        return current ?? UnclaimedTask.make({ taskId: request.taskId })
       })
       const replaceTaskClaim = Effect.fn("CompletionClaimBoundary.Controlled.replaceTaskClaim")(function* (
         request: CompletionClaimReplacementRequest

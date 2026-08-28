@@ -222,6 +222,11 @@ export {
   githubTrackerMutationLayer,
   githubTrackerMutationNodeLayer
 } from "./authorities/task-tracker/github/claim-mutation.js"
+export {
+  githubCompletionClaimBoundaryLayer,
+  githubCompletionClaimFingerprintFor,
+  GithubCompletionClaimFingerprintFailure
+} from "./authorities/task-tracker/github/completion-claim.js"
 export * from "./workflow-journal/event-codec.js"
 export * from "./workflow-journal/identity.js"
 export { describeJournalEvent } from "./workflow/registry/event-descriptor.js"
@@ -648,6 +653,7 @@ export {
   completionTaskRequestLimit,
   CompletionTaskRequestLimit,
   CompletionClaimDeletedEvent,
+  CompletionClaimFingerprint,
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletionReadObservedEvent,
   CompletionClaimDeletionReadPurpose,
@@ -656,6 +662,7 @@ export {
   CompletionClaimDeletionIntendedEvent,
   CompletionClaimDeletionRequest,
   CompletionClaimOwnershipConflict,
+  CompletionClaimReadRequest,
   CompletionClaimReadFailure,
   CompletionClaimReplacedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
@@ -664,9 +671,11 @@ export {
   CompletionClaimReplacementRequest,
   CompletionClaimRequestOrdinal,
   CompletionTaskClaim,
+  ForeignCompletionClaim,
   IntegrationFinalitySettledEvent,
   completionClaimDeletionOperationIdFor,
   completionClaimDeletionRequestFor,
+  completionClaimReadRequestFor,
   completionClaimReplacementOperationIdFor,
   completionClaimReplacementRequestFor,
   completionClaimRequestLimit,

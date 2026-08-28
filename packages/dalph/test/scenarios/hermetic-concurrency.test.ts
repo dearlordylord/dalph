@@ -288,13 +288,13 @@ it.effect(
         })
 
         const completionClaim: CompletionClaimBoundaryService = {
-          readTaskClaim: (taskId) =>
+          readTaskClaim: (request) =>
             Ref.get(claims).pipe(
               Effect.flatMap((current) => {
-                const task = taskKeys.find((candidate) => taskId === taskIdOf(candidate))
+                const task = taskKeys.find((candidate) => request.taskId === taskIdOf(candidate))
                 const claim = task === undefined ? undefined : current.get(task)
                 return claim === undefined
-                  ? Effect.die(`hermetic tracker has no completion claim for ${taskId}`)
+                  ? Effect.die(`hermetic tracker has no completion claim for ${request.taskId}`)
                   : Effect.succeed(claim)
               })
             ),

@@ -334,18 +334,18 @@ const scriptedBoundaryFor = Effect.fn("IntegrationFinalityProtocolCassette.scrip
   const readCalls = yield* Ref.make(0)
   const replacementCalls = yield* Ref.make(0)
   const deletionCalls = yield* Ref.make(0)
-  const readTaskClaim: CompletionClaimBoundaryService["readTaskClaim"] = (taskId) =>
+  const readTaskClaim: CompletionClaimBoundaryService["readTaskClaim"] = (request) =>
     Effect.gen(function* () {
       yield* recordBoundaryCall(boundaryCalls, "readTaskClaim")
       yield* Ref.update(readCalls, (count) => count + 1)
       const result = yield* takeBoundaryResult(results)
       if (result._tag === "ReadFailed") {
-        return yield* new CompletionClaimReadFailure({ detail: result.detail, taskId })
+        return yield* new CompletionClaimReadFailure({ detail: result.detail, taskId: request.taskId })
       }
       const expected = expectedReadTag(result)
       /* v8 ignore next -- @preserve Story/boundary schemas keep mutation results out of read positions. */
       if (expected === undefined) return yield* Effect.die(`expected a read result, received ${result._tag}`)
-      const observed = yield* controlled.readTaskClaim(taskId)
+      const observed = yield* controlled.readTaskClaim(request)
       /* v8 ignore next -- @preserve The controlled boundary and declarative initial claim are constructed coherently. */
       if (observed._tag !== expected)
         return yield* Effect.die(`read result ${result._tag} contradicted controlled claim state`)

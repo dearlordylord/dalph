@@ -8,6 +8,7 @@ import {
   CompletionClaimDeletionReadPurpose,
   CompletionClaimCleanupReadOrdinal,
   CompletionClaimDeletionRequest,
+  CompletionClaimReadRequest,
   CompletionClaimRequestOrdinal,
   CompletionClaimReplacementFailure,
   CompletionTaskClaim,
@@ -18,6 +19,7 @@ import {
   CompletionTaskRequest,
   completionSuccessObservationEquals,
   completionClaimDeletionRequestFor,
+  completionClaimReadRequestFor,
   completionClaimReplacementRequestFor,
   completionTaskFocusedReadPurposeEquals,
   PostPromotionBlockerCandidateAncestryObservedEvent,
@@ -118,6 +120,9 @@ it("rejects completion claims and deletion proofs that bind a different task", (
       ...fixture.claim,
       originalClaim: { ...fixture.activeClaim, taskId: foreignTaskId }
     })
+  ).toBe(false)
+  expect(
+    Schema.is(CompletionClaimReadRequest)({ ...completionClaimReadRequestFor(fixture.claim), taskId: foreignTaskId })
   ).toBe(false)
   expect(
     Schema.is(CompletionClaimDeletionRequest)({
@@ -329,7 +334,7 @@ effectIt.effect("recognizes an exact completion claim, deletes it, and makes rep
         const replayed = yield* boundary.replaceTaskClaim(replacement)
         yield* boundary.deleteTaskClaim(deletion)
         yield* boundary.deleteTaskClaim(deletion)
-        const absent = yield* boundary.readTaskClaim(fixture.taskId)
+        const absent = yield* boundary.readTaskClaim(completionClaimReadRequestFor(fixture.claim))
         return { absent, replaced, replayed }
       })
     )

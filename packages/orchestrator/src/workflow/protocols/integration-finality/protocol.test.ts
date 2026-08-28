@@ -280,9 +280,11 @@ const makeBoundary = (input: {
     )
     const replacements = [...(input.replacement ?? [])]
     const deletions = [...(input.deletion ?? [])]
-    const readTaskClaim = (taskId: typeof fixture.taskId) =>
+    const readTaskClaim: CompletionClaimBoundary["Service"]["readTaskClaim"] = (request) =>
       Ref.update(input.readCalls, (count) => count + 1).pipe(
-        Effect.map(() => current.get(String(taskId)) ?? { _tag: "UnclaimedTask" as const, taskId })
+        Effect.map(
+          () => current.get(String(request.taskId)) ?? { _tag: "UnclaimedTask" as const, taskId: request.taskId }
+        )
       )
     const replaceTaskClaim = (request: CompletionClaimReplacementRequest) =>
       Effect.gen(function* () {
