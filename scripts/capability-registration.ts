@@ -283,7 +283,13 @@ const trackerClaimContract = contract("TrackerMutation", [
     },
     marker: "trackerMutationContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/tracker-mutation-contract.ts"
+    source: "packages/orchestrator/test/contracts/tracker-mutation-contract.ts",
+    implementation: implementationBinding(
+      "githubTrackerMutationLayer",
+      "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.ts",
+      "githubTrackerMutationLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -310,7 +316,13 @@ const completionContract = contract("CompletionBoundary", [
     },
     marker: "completionBoundaryContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/completion-boundary-contract.ts"
+    source: "packages/orchestrator/test/contracts/completion-boundary-contract.ts",
+    implementation: implementationBinding(
+      "githubCompletionTaskBoundaryLayer",
+      "packages/orchestrator/src/authorities/task-tracker/github/completion-task.ts",
+      "githubCompletionTaskBoundaryLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -322,7 +334,13 @@ const completionClaimContract = contract("CompletionClaimBoundary", [
     },
     marker: "completionClaimBoundaryContract",
     role: "controlled",
-    source: "packages/orchestrator/test/contracts/completion-claim-boundary-contract.ts"
+    source: "packages/orchestrator/test/contracts/completion-claim-boundary-contract.ts",
+    implementation: implementationBinding(
+      "controlledCompletionClaimBoundaryLayerFrom",
+      "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.ts",
+      "controlledCompletionClaimBoundaryLayerFrom",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   },
   {
     invocation: {
@@ -331,7 +349,13 @@ const completionClaimContract = contract("CompletionClaimBoundary", [
     },
     marker: "completionClaimBoundaryContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/completion-claim-boundary-contract.ts"
+    source: "packages/orchestrator/test/contracts/completion-claim-boundary-contract.ts",
+    implementation: implementationBinding(
+      "githubCompletionClaimBoundaryLayer",
+      "packages/orchestrator/src/authorities/task-tracker/github/completion-claim.ts",
+      "githubCompletionClaimBoundaryLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 

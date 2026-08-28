@@ -16,7 +16,6 @@ import {
   GithubIssueNodeId,
   GithubLabelNodeId,
   GithubRepositoryNodeId,
-  githubTrackerMutationLayer,
   OperationId,
   TaskClaimAcquisition,
   TaskClaimConflict,
@@ -29,6 +28,7 @@ import {
   TaskTrackerThrottleRetryAfterSeconds,
   TrackerMutation
 } from "../../../index.js"
+import { githubTrackerMutationLayer } from "./claim-mutation.js"
 import {
   trackerMutationContract,
   trackerMutationContractFixture
@@ -108,9 +108,12 @@ const githubClaimFixtureLayer = Layer.effectContext(
   })
 )
 
-const layer = githubTrackerMutationLayer.pipe(Layer.provide(githubClaimFixtureLayer), Layer.provide(NodeCrypto.layer))
+trackerMutationContract({
+  ...trackerMutationContractFixture(taskId, "github"),
+  layer: githubTrackerMutationLayer.pipe(Layer.provide(githubClaimFixtureLayer), Layer.provide(NodeCrypto.layer))
+})
 
-trackerMutationContract({ ...trackerMutationContractFixture(taskId, "github"), layer })
+const layer = githubTrackerMutationLayer.pipe(Layer.provide(githubClaimFixtureLayer), Layer.provide(NodeCrypto.layer))
 
 const adapterLayer = (
   execute: (

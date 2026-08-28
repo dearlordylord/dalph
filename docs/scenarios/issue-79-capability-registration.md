@@ -61,8 +61,10 @@ The gate first checks the fixed accepted family set, then checks duplicate
 families and duplicate identities within a family, controlled/production
 contract execution evidence, typed N/A details, source markers, composition
 uses, and unregistered exported Layers. It reads no provider and performs no
-runtime composition. Test-only GitHub claim and node target-promotion
-qualification does not count as a production consumer; those sides record the
+runtime composition. The GitHub active-claim contract now exercises the real
+`githubTrackerMutationLayer` and counts as its production implementation edge.
+Node target-promotion qualification remains test-only and does not count as a
+repository-owned production consumer, so that side retains its
 application-supplied N/A reason.
 
 For a deleted family, duplicate, stale marker, one-sided contract, comment or

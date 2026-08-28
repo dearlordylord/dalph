@@ -4,7 +4,7 @@ import { expect, it } from "@effect/vitest"
 import { Context, Crypto, Effect, Layer, Option, Ref } from "effect"
 import { expectTypeOf } from "vitest"
 import { GitCommand } from "../../git/command.js"
-import { ActiveTaskClaim, TrackerMutation } from "../claim-mutation.js"
+import { ActiveTaskClaim, TaskClaimAcquisition, TrackerMutation } from "../claim-mutation.js"
 import { TrackerGraphReader, TestTrackerGraphReader } from "../graph-reader.js"
 import { TaskWorkCapacityControl } from "../../../control/task-work-capacity.js"
 import { TraceReader } from "../../../presentation/trace-reader.js"
@@ -23,6 +23,7 @@ import { IntegratorRunQualifiedCandidate } from "../../../workflow/protocols/int
 import { targetPromotionCorrelationFor } from "../../../workflow/protocols/target-promotion/events.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../../workflow/identity.js"
+import { runTaskClaimAcquisitionProtocol } from "../../../workflow/protocols/task-claim-acquisition/protocol.js"
 import { ClaimOwner, ClaimToken } from "../claim.js"
 import { githubTrackerMutationLayer } from "./claim-mutation.js"
 import { githubCompletionClaimBoundaryLayer } from "./completion-claim.js"
@@ -34,6 +35,8 @@ import {
   type GithubGraphqlRequest,
   GithubGraphqlRequestError,
   GithubIssueNodeId,
+  type GithubLabelName,
+  GithubLabelNodeId,
   GithubRepositoryNodeId
 } from "./graphql-client.js"
 import { githubGraphqlTestClient } from "./graphql-client.test-fixture.js"
@@ -202,4 +205,63 @@ it.effect(
       expect(Context.getOption(context, CompletionTaskBoundary)).toSatisfy(Option.isSome)
       expectForbiddenCapabilitiesAbsent(context)
     })
+)
+
+it.effect("uses the mandatory final read after the third ambiguous claim create and never sends a fourth create", () =>
+  Effect.gen(function* () {
+    const requests = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest["_tag"]>>([])
+    const created = yield* Ref.make<null | {
+      readonly description: string
+      readonly id: GithubLabelNodeId
+      readonly name: GithubLabelName
+    }>(null)
+    const createCount = yield* Ref.make(0)
+    const client = githubGraphqlTestClient(
+      Effect.fn("GithubDeliveryAuthorityTest.ThirdAmbiguousCreate.execute")(function* (request: GithubGraphqlRequest) {
+        yield* Ref.update(requests, (current) => [...current, request._tag])
+        if (request._tag === "FindClaimLabel") {
+          return { body: { data: { node: { id: repositoryNodeId, label: yield* Ref.get(created) } } } }
+        }
+        if (request._tag === "CreateClaimLabel") {
+          const ordinal = yield* Ref.updateAndGet(createCount, (count) => count + 1)
+          if (ordinal === 3) {
+            yield* Ref.set(created, {
+              description: request.description,
+              id: GithubLabelNodeId.make("delivery-authority-third-create-label"),
+              name: request.labelName
+            })
+          }
+          return yield* new GithubGraphqlRequestError({
+            detail: `ambiguous controlled create ${ordinal}`,
+            operation: request._tag
+          })
+        }
+        return yield* Effect.die(`unexpected final-read protocol request ${request._tag}`)
+      })
+    )
+    const context = yield* Layer.build(
+      withDependencies(githubDeliveryAuthorityLayer, Layer.succeed(GithubGraphqlClient, client))
+    )
+    const mutation = Context.get(context, TrackerMutation)
+    const acquisition = TaskClaimAcquisition.make({
+      operationId: OperationId.make("third-create"),
+      owner: ClaimOwner.make("third-owner"),
+      taskId,
+      token: ClaimToken.make("third-token")
+    })
+
+    const result = yield* runTaskClaimAcquisitionProtocol(mutation, acquisition).pipe(Effect.result)
+    expect(yield* Ref.get(requests)).toEqual([
+      "FindClaimLabel",
+      "CreateClaimLabel",
+      "FindClaimLabel",
+      "CreateClaimLabel",
+      "FindClaimLabel",
+      "CreateClaimLabel",
+      "FindClaimLabel"
+    ])
+    expect(yield* Ref.get(createCount)).toBe(3)
+    expect(result._tag).toBe("Success")
+    if (result._tag === "Success") expect(result.success).toEqual(ActiveTaskClaim.make({ ...acquisition }))
+  })
 )

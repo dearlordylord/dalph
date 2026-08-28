@@ -545,8 +545,14 @@ const contractImplementationIssues = (
   indexed: CapabilitySourceProgram
 ): ReadonlyArray<string> => {
   const binding = execution.implementation
-  if (binding === undefined) return []
   const implementation = capability[execution.role]
+  if (binding === undefined) {
+    return implementation._tag === "Implementation"
+      ? [
+          `${capability.family} ${execution.role} contract implementation binding is missing: ${implementation.identity}`
+        ]
+      : []
+  }
   if (implementation._tag === "NotApplicable") return []
   const issue = `${capability.family} ${execution.role} contract implementation binding is stale: ${binding.identity}`
   if (
