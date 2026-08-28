@@ -6,11 +6,28 @@ import { Config, Context, Crypto, Effect, Layer, Redacted, Ref, Schema, Semaphor
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
-import { makeTaskWorkSpecification, type TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification, PlannedTaskAttempt, type TaskId } from "@dalph/contracts"
 import { makeTrackerGraphObservationOperation } from "../../../workflow/registry/operation.js"
 import { OperationId } from "../../../workflow/identity.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../../../workflow/protocols/task-tracker-read/protocol.js"
 import { runTaskClaimAcquisitionProtocol } from "../../../workflow/protocols/task-claim-acquisition/protocol.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
+import {
+  CompletionClaimBoundary,
+  CompletionClaimMarkerAbsent,
+  CompletionTaskBoundary,
+  CompletionTaskClaim,
+  FocusedCompletedTaskObservation,
+  completionClaimDeletionRequestFor,
+  completionClaimReadRequestFor,
+  completionClaimReplacementRequestFor,
+  completionOriginalTaskClaimReleaseFor,
+  completionTaskRequestFor,
+  focusedTaskCompletionReadRequestFor
+} from "../../../workflow/protocols/integration-finality/events.js"
+import { integrationFinalityFixture } from "../../../workflow/protocols/integration-finality/fixtures.js"
+import { IntegratorRunQualifiedCandidate } from "../../../workflow/protocols/integrator/events.js"
+import { targetPromotionCorrelationFor } from "../../../workflow/protocols/target-promotion/events.js"
 import {
   ClaimOwner,
   ClaimToken,
@@ -21,7 +38,8 @@ import {
   TaskTrackerThrottleRetryAfterSeconds,
   TaskTrackerThrottleTimingEvidence,
   TrackerGraphReader,
-  TrackerMutation
+  TrackerMutation,
+  UnclaimedTask
 } from "../../../index.js"
 import {
   GithubGraphqlClient,
@@ -37,6 +55,7 @@ import {
 } from "./graphql-client.js"
 import { githubTrackerGraphReaderLayer } from "./graph-reader.js"
 import { githubTrackerMutationLayer } from "./claim-mutation.js"
+import { githubDeliveryAuthorityLayer } from "./delivery-authority.js"
 import { githubTaskIdFor } from "./task-identity.js"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
 import { githubGraphqlTestClient } from "./graphql-client.test-fixture.js"
@@ -526,6 +545,60 @@ const makeFixture = Effect.fn("GithubQualification.makeFixture")(function* (
   }
 })
 
+const deliveryQualificationRepository = GithubQualificationRepository.make({
+  owner: GithubRepositoryOwner.make("dearlordylord"),
+  repository: GithubRepositoryName.make("dalph-disposable-qualification")
+})
+
+const makeDeliveryAuthorityFixture = Effect.fn("GithubQualification.makeDeliveryAuthorityFixture")(function* (
+  api: GithubQualificationApi,
+  repositoryNodeId: GithubRepositoryNodeId,
+  resourcesRef: Ref.Ref<GithubFixtureResources>
+): Effect.fn.Return<
+  GithubFixtureResources & {
+    readonly body: string
+    readonly issue: GithubFixtureIssueLocator
+    readonly taskId: TaskId
+    readonly title: string
+  },
+  GithubFixtureBoundaryFailure,
+  Crypto.Crypto
+> {
+  const crypto = yield* Crypto.Crypto
+  const suffix = yield* crypto.randomUUIDv4.pipe(
+    Effect.mapError(
+      () =>
+        new GithubFixtureBoundaryFailure({
+          detail: "delivery fixture suffix generation failed",
+          operation: "createDeliveryAuthorityFixture"
+        })
+    )
+  )
+  const empty = GithubFixtureResources.make({
+    issues: [],
+    labels: [],
+    repository: GithubFixtureRepositoryLocator.make({
+      nodeId: repositoryNodeId,
+      owner: deliveryQualificationRepository.owner,
+      repository: deliveryQualificationRepository.repository
+    })
+  })
+  yield* Ref.set(resourcesRef, empty)
+  const title = `dalph-issue-285-${suffix.slice(0, 12)}`
+  const body = "Disposable single-issue fixture for Dalph GitHub delivery-authority qualification."
+  const created = yield* api.createIssue(repositoryNodeId, title, body, `issue-285-create-${suffix}`)
+  const resources = appendIssue(empty, deliveryQualificationRepository, created)
+  yield* Ref.set(resourcesRef, resources)
+  const issue = resources.issues[0]
+  if (issue === undefined) {
+    return yield* new GithubFixtureBoundaryFailure({
+      detail: "delivery fixture issue locator was not retained",
+      operation: "createDeliveryAuthorityFixture"
+    })
+  }
+  return { ...resources, body, issue, taskId: githubTaskIdFor(repositoryNodeId, issue.nodeId), title }
+})
+
 const cleanFixture = Effect.fn("GithubQualification.cleanFixture")(function* (
   api: GithubQualificationApi,
   resources: GithubFixtureResources
@@ -533,7 +606,7 @@ const cleanFixture = Effect.fn("GithubQualification.cleanFixture")(function* (
   let remaining = resources
   for (const label of resources.labels) {
     const result = yield* api
-      .deleteLabelByName(resources.repository.nodeId, label, `issue-71-delete-label-${label}`)
+      .deleteLabelByName(resources.repository.nodeId, label, `qualification-delete-label-${label}`)
       .pipe(Effect.result)
     if (result._tag === "Failure") {
       return yield* new GithubFixtureCleanupFailure({ detail: result.failure.detail, remaining })
@@ -542,7 +615,7 @@ const cleanFixture = Effect.fn("GithubQualification.cleanFixture")(function* (
   }
   for (const issue of [...resources.issues].reverse()) {
     const result = yield* api
-      .deleteIssue(issue.nodeId, `issue-71-delete-issue-${issue.target.issueNumber}`)
+      .deleteIssue(issue.nodeId, `qualification-delete-issue-${issue.target.issueNumber}`)
       .pipe(Effect.result)
     if (result._tag === "Failure") {
       return yield* new GithubFixtureCleanupFailure({ detail: result.failure.detail, remaining })
@@ -558,6 +631,24 @@ const readConfiguredQualification = Effect.fn("GithubQualification.readConfigura
   const token = yield* Config.redacted("GITHUB_TOKEN")
   return { blockerTotal, repository, token }
 })
+
+const readConfiguredDeliveryQualification = Effect.fn("GithubQualification.readDeliveryAuthorityConfiguration")(
+  function* () {
+    const repository = yield* Config.string("DALPH_GITHUB_QUALIFICATION_REPOSITORY").pipe(
+      Effect.flatMap(parseRepository)
+    )
+    if (
+      repository.owner !== deliveryQualificationRepository.owner ||
+      repository.repository !== deliveryQualificationRepository.repository
+    ) {
+      return yield* new GithubQualificationConfigurationFailure({
+        detail: "issue #285 qualification requires dearlordylord/dalph-disposable-qualification"
+      })
+    }
+    const token = yield* Config.redacted("GITHUB_TOKEN")
+    return { repository, token }
+  }
+)
 
 const claimLabelNameFor = Effect.fn("GithubQualification.claimLabelNameFor")(function* (
   taskId: TaskId
@@ -579,6 +670,25 @@ const qualificationGate = Effect.runSync(Semaphore.make(1))
 const serializedQualification = <A, E, R>(effect: Effect.Effect<A, E, R>) => qualificationGate.withPermit(effect)
 
 type GithubGraphqlRequestTag = GithubGraphqlRequest["_tag"]
+
+const observedDeliveryAuthorityClient = (
+  underlying: GithubGraphqlClient["Service"],
+  requestLog: Ref.Ref<ReadonlyArray<GithubGraphqlRequestTag>>,
+  resources: Ref.Ref<GithubFixtureResources>
+): GithubGraphqlClient["Service"] =>
+  githubGraphqlTestClient(
+    Effect.fn("GithubQualification.DeliveryAuthority.execute")(function* (request: GithubGraphqlRequest) {
+      yield* Ref.update(requestLog, (requests) => [...requests, request._tag])
+      if (request._tag === "CreateClaimLabel") {
+        yield* Ref.update(resources, (current) =>
+          current.labels.includes(request.labelName)
+            ? current
+            : { ...current, labels: [...current.labels, request.labelName] }
+        )
+      }
+      return yield* underlying.execute(request)
+    })
+  )
 
 const responseLossGithubGraphqlClient = (
   underlying: GithubGraphqlClient["Service"],
@@ -769,6 +879,296 @@ it.effect("stops the production GitHub claim composition after one controlled th
     )
     expect(yield* Ref.get(requests)).toEqual(["FindClaimLabel", "CreateClaimLabel"])
   })
+)
+
+it.effect.skipIf(!qualificationEnabled)(
+  "qualifies one composed GitHub delivery authority journey with one disposable issue",
+  () =>
+    serializedQualification(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const configuration = yield* readConfiguredDeliveryQualification()
+          const api = yield* makeGithubQualificationApi(configuration.token)
+          const repositoryNodeId = yield* api.repositoryNodeId(configuration.repository)
+          const resourcesRef = yield* Ref.make<GithubFixtureResources>(
+            GithubFixtureResources.make({
+              issues: [],
+              labels: [],
+              repository: GithubFixtureRepositoryLocator.make({
+                nodeId: repositoryNodeId,
+                owner: configuration.repository.owner,
+                repository: configuration.repository.repository
+              })
+            })
+          )
+          const fixtureResult = yield* Effect.exit(makeDeliveryAuthorityFixture(api, repositoryNodeId, resourcesRef))
+          const setupResources = yield* Ref.get(resourcesRef)
+          if (fixtureResult._tag === "Failure") {
+            const cleanupResult = yield* cleanFixture(api, setupResources).pipe(Effect.exit)
+            if (cleanupResult._tag === "Failure") return yield* Effect.failCause(cleanupResult.cause)
+            return yield* Effect.failCause(fixtureResult.cause)
+          }
+
+          const fixture = fixtureResult.value
+          expect(fixture.issues).toEqual([fixture.issue])
+          const requestLog = yield* Ref.make<ReadonlyArray<GithubGraphqlRequestTag>>([])
+          const boundaryChronology = yield* Ref.make<ReadonlyArray<string>>([])
+          const underlyingClient = Context.get(
+            yield* Layer.build(
+              githubGraphqlClientLayer({ token: configuration.token }).pipe(Layer.provide(NodeHttpClient.layerUndici))
+            ),
+            GithubGraphqlClient
+          )
+          const observedClientLayer = Layer.succeed(
+            GithubGraphqlClient,
+            observedDeliveryAuthorityClient(underlyingClient, requestLog, resourcesRef)
+          )
+          const deliveryContext = yield* Layer.build(
+            githubDeliveryAuthorityLayer.pipe(Layer.provide(observedClientLayer), Layer.provide(NodeCrypto.layer))
+          )
+          const reader = Context.get(deliveryContext, TrackerGraphReader)
+          const mutation = Context.get(deliveryContext, TrackerMutation)
+          const completionClaims = Context.get(deliveryContext, CompletionClaimBoundary)
+          const taskCompletion = Context.get(deliveryContext, CompletionTaskBoundary)
+
+          const recordCall = Effect.fn("GithubQualification.recordDeliveryBoundaryCall")(function* <A, E, R>(
+            name: string,
+            effect: Effect.Effect<A, E, R>
+          ): Effect.fn.Return<A, E, R> {
+            yield* Ref.update(boundaryChronology, (calls) => [...calls, name])
+            return yield* effect
+          })
+
+          const qualificationResult = yield* Effect.exit(
+            Effect.gen(function* () {
+              const specification = yield* recordCall(
+                "TrackerGraphReader.readTaskWorkSpecification",
+                reader.readTaskWorkSpecification(fixture.issue.target, fixture.taskId)
+              )
+              expect(specification).toEqual(
+                makeTaskWorkSpecification({ body: fixture.body, taskId: fixture.taskId, title: fixture.title })
+              )
+
+              const acquisition = TaskClaimAcquisition.make({
+                operationId: OperationId.make("issue-285-acquire-active-claim"),
+                owner: ClaimOwner.make("dalph:issue-285"),
+                taskId: fixture.taskId,
+                token: ClaimToken.make("issue-285-active-token")
+              })
+              const observedMutation = TrackerMutation.of({
+                acquireTaskClaim: (request) =>
+                  recordCall("TrackerMutation.acquireTaskClaim", mutation.acquireTaskClaim(request)),
+                readTaskClaim: (taskId) => recordCall("TrackerMutation.readTaskClaim", mutation.readTaskClaim(taskId)),
+                releaseTaskClaim: (request) =>
+                  recordCall("TrackerMutation.releaseTaskClaim", mutation.releaseTaskClaim(request))
+              })
+              const beforeAcquisition = (yield* Ref.get(requestLog)).length
+              const activeClaim = yield* runTaskClaimAcquisitionProtocol(observedMutation, acquisition)
+              expect((yield* Ref.get(requestLog)).slice(beforeAcquisition)).toEqual([
+                "FindClaimLabel",
+                "CreateClaimLabel",
+                "FindClaimLabel"
+              ])
+
+              const plannedAttempt = PlannedTaskAttempt.make({
+                ...integrationFinalityFixture.plannedAttempt,
+                taskId: fixture.taskId,
+                taskRevision: specification.fingerprint
+              })
+              const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+                ...integrationFinalityFixture.qualifiedCandidate,
+                run: {
+                  ...integrationFinalityFixture.qualifiedCandidate.run,
+                  session: { ...integrationFinalityFixture.qualifiedCandidate.run.session, plannedAttempt }
+                }
+              })
+              const claim = CompletionTaskClaim.make({
+                originalClaim: activeClaim,
+                plannedAttempt,
+                promotionCorrelation: targetPromotionCorrelationFor(qualifiedCandidate)
+              })
+              const claimRead = completionClaimReadRequestFor(claim)
+
+              expect(
+                yield* recordCall("CompletionClaimBoundary.readTaskClaim", completionClaims.readTaskClaim(claimRead))
+              ).toEqual(activeClaim)
+              expect(
+                yield* recordCall(
+                  "CompletionClaimBoundary.replaceTaskClaim",
+                  completionClaims.replaceTaskClaim(completionClaimReplacementRequestFor(claim))
+                )
+              ).toEqual(claim)
+              expect(
+                yield* recordCall("CompletionClaimBoundary.readTaskClaim", completionClaims.readTaskClaim(claimRead))
+              ).toEqual(claim)
+
+              const completionRequest = completionTaskRequestFor(claim)
+              const openRead = focusedTaskCompletionReadRequestFor(
+                completionRequest,
+                fixture.issue.target,
+                OperationId.make("issue-285-focused-open")
+              )
+              expect(
+                yield* recordCall(
+                  "CompletionTaskBoundary.readFocusedTaskCompletion",
+                  taskCompletion.readFocusedTaskCompletion(openRead)
+                )
+              ).toMatchObject({
+                currentClaim: claim,
+                lifecycle: "Open",
+                operationId: openRead.operationId,
+                target: fixture.issue.target,
+                targetMembership: "Member",
+                taskId: fixture.taskId,
+                taskRevision: specification.fingerprint,
+                unfinishedPrerequisiteTaskIds: []
+              })
+
+              expect(
+                yield* recordCall("CompletionTaskBoundary.completeTask", taskCompletion.completeTask(completionRequest))
+              ).toEqual({ operationId: completionRequest.operationId, taskId: fixture.taskId })
+
+              const confirmationRead = focusedTaskCompletionReadRequestFor(
+                completionRequest,
+                fixture.issue.target,
+                OperationId.make("issue-285-focused-confirmation")
+              )
+              const confirmed = yield* recordCall(
+                "CompletionTaskBoundary.readFocusedTaskCompletion",
+                taskCompletion.readFocusedTaskCompletion(confirmationRead)
+              )
+              expect(confirmed).toMatchObject({
+                currentClaim: claim,
+                lifecycle: "CompletedSuccessfully",
+                operationId: confirmationRead.operationId,
+                target: fixture.issue.target,
+                targetMembership: "Member",
+                taskId: fixture.taskId,
+                taskRevision: specification.fingerprint,
+                unfinishedPrerequisiteTaskIds: []
+              })
+              const successObservation = FocusedCompletedTaskObservation.make({
+                claim,
+                lifecycle: "CompletedSuccessfully",
+                observedAt: JournalPosition.make(1),
+                operationId: confirmed.operationId,
+                taskId: fixture.taskId,
+                taskRevision: specification.fingerprint,
+                target: fixture.issue.target,
+                trackerRevision: confirmed.trackerRevision
+              })
+
+              expect(
+                yield* recordCall("CompletionClaimBoundary.readTaskClaim", completionClaims.readTaskClaim(claimRead))
+              ).toEqual(claim)
+              yield* recordCall(
+                "CompletionClaimBoundary.releaseOriginalTaskClaim",
+                completionClaims.releaseOriginalTaskClaim(completionOriginalTaskClaimReleaseFor(claim))
+              )
+              expect(
+                yield* recordCall(
+                  "CompletionClaimBoundary.readCompletionClaimMarker",
+                  completionClaims.readCompletionClaimMarker(claimRead)
+                )
+              ).toEqual(claim)
+              expect(
+                yield* recordCall(
+                  "CompletionClaimBoundary.readOriginalTaskClaim",
+                  completionClaims.readOriginalTaskClaim(fixture.taskId)
+                )
+              ).toEqual(UnclaimedTask.make({ taskId: fixture.taskId }))
+              yield* recordCall(
+                "CompletionClaimBoundary.deleteTaskClaim",
+                completionClaims.deleteTaskClaim(completionClaimDeletionRequestFor(claim, successObservation))
+              )
+              expect(
+                yield* recordCall(
+                  "CompletionClaimBoundary.readCompletionClaimMarker",
+                  completionClaims.readCompletionClaimMarker(claimRead)
+                )
+              ).toEqual(CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId }))
+              expect(
+                yield* recordCall(
+                  "CompletionClaimBoundary.readOriginalTaskClaim",
+                  completionClaims.readOriginalTaskClaim(fixture.taskId)
+                )
+              ).toEqual(UnclaimedTask.make({ taskId: fixture.taskId }))
+
+              expect(yield* Ref.get(boundaryChronology)).toEqual([
+                "TrackerGraphReader.readTaskWorkSpecification",
+                "TrackerMutation.readTaskClaim",
+                "TrackerMutation.acquireTaskClaim",
+                "TrackerMutation.readTaskClaim",
+                "CompletionClaimBoundary.readTaskClaim",
+                "CompletionClaimBoundary.replaceTaskClaim",
+                "CompletionClaimBoundary.readTaskClaim",
+                "CompletionTaskBoundary.readFocusedTaskCompletion",
+                "CompletionTaskBoundary.completeTask",
+                "CompletionTaskBoundary.readFocusedTaskCompletion",
+                "CompletionClaimBoundary.readTaskClaim",
+                "CompletionClaimBoundary.releaseOriginalTaskClaim",
+                "CompletionClaimBoundary.readCompletionClaimMarker",
+                "CompletionClaimBoundary.readOriginalTaskClaim",
+                "CompletionClaimBoundary.deleteTaskClaim",
+                "CompletionClaimBoundary.readCompletionClaimMarker",
+                "CompletionClaimBoundary.readOriginalTaskClaim"
+              ])
+
+              const providerRequests = yield* Ref.get(requestLog)
+              expect(providerRequests).toEqual([
+                "ResolveIssue",
+                "ReadTaskWorkSpecification",
+                "FindClaimLabel",
+                "CreateClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "CreateClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "ResolveIssue",
+                "ReadIssue",
+                "ReadTaskWorkSpecification",
+                "ReadBlockedBy",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "CloseIssue",
+                "ResolveIssue",
+                "ReadIssue",
+                "ReadTaskWorkSpecification",
+                "ReadBlockedBy",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "DeleteClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel",
+                "DeleteClaimLabel",
+                "FindClaimLabel",
+                "FindClaimLabel"
+              ])
+              expect(
+                providerRequests.filter((request) =>
+                  ["CreateClaimLabel", "CloseIssue", "DeleteClaimLabel"].includes(request)
+                )
+              ).toEqual(["CreateClaimLabel", "CreateClaimLabel", "CloseIssue", "DeleteClaimLabel", "DeleteClaimLabel"])
+            })
+          )
+
+          const currentResources = yield* Ref.get(resourcesRef)
+          expect(currentResources.issues).toEqual([fixture.issue])
+          expect(currentResources.labels).toHaveLength(2)
+          const cleanupResult = yield* cleanFixture(api, currentResources).pipe(Effect.exit)
+          if (cleanupResult._tag === "Failure") return yield* Effect.failCause(cleanupResult.cause)
+          if (qualificationResult._tag === "Failure") return yield* Effect.failCause(qualificationResult.cause)
+          return qualificationResult.value
+        })
+      ).pipe(Effect.provide(NodeHttpClient.layerUndici), Effect.provide(NodeCrypto.layer))
+    ),
+  { timeout: qualificationTimeoutMilliseconds }
 )
 
 it.effect.skipIf(!qualificationEnabled)(

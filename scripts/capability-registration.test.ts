@@ -30,9 +30,15 @@ describe("capability registration gate", () => {
     }
   })
 
-  it("records typed N/A evidence instead of fabricating repository providers", () => {
+  it("registers the four real tracker authorities and keeps unrelated unavailable providers typed N/A", () => {
+    const graph = capabilityRegistrationInventory.capabilities.find(
+      ({ family }) => family === "task-tracker-graph-read"
+    )
     const completion = capabilityRegistrationInventory.capabilities.find(
       ({ family }) => family === "task-tracker-completion"
+    )
+    const completionClaim = capabilityRegistrationInventory.capabilities.find(
+      ({ family }) => family === "task-tracker-completion-claim"
     )
     const claim = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "task-tracker-claim")
     const integrator = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "outer-integrator")
@@ -40,12 +46,20 @@ describe("capability registration gate", () => {
       ({ family }) => family === "git-target-promotion"
     )
 
-    expect(completion?.production).toEqual(
-      expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
-    )
-    expect(claim?.production).toEqual(
-      expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
-    )
+    expect([
+      graph?.production._tag,
+      claim?.production._tag,
+      completionClaim?.production._tag,
+      completion?.production._tag
+    ]).toEqual(["Implementation", "Implementation", "Implementation", "Implementation"])
+    expect(
+      capabilityRegistrationInventory.requiredFamilies.filter((family) => family.startsWith("task-tracker-"))
+    ).toEqual([
+      "task-tracker-graph-read",
+      "task-tracker-claim",
+      "task-tracker-completion-claim",
+      "task-tracker-completion"
+    ])
     expect(integrator?.production).toEqual(
       expect.objectContaining({ _tag: "NotApplicable", reason: "no-repository-provider" })
     )

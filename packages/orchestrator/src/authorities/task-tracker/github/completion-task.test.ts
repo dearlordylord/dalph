@@ -5,6 +5,7 @@ import { Crypto, Effect, Layer, Ref } from "effect"
 import { ActiveTaskClaim } from "../claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../claim.js"
 import { TaskTrackerMutationThrottled } from "../mutation-throttling.js"
+import { completionBoundaryContract } from "../../../../test/contracts/completion-boundary-contract.js"
 import { OperationId } from "../../../workflow/identity.js"
 import { IntegratorRunQualifiedCandidate } from "../../../workflow/protocols/integrator/events.js"
 import { targetPromotionCorrelationFor } from "../../../workflow/protocols/target-promotion/events.js"
@@ -280,6 +281,23 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
     const layer = githubCompletionTaskBoundaryLayer.pipe(Layer.provide(clientLayer), Layer.provide(claimLayer))
     return { calls, layer }
   }).pipe(Effect.provide(NodeCrypto.layer))
+
+completionBoundaryContract({
+  expectedOpenFacts: {
+    currentClaim: claim,
+    lifecycle: "Open",
+    target,
+    targetMembership: "Member",
+    taskId,
+    taskRevision: specification.fingerprint,
+    unfinishedPrerequisiteTaskIds: []
+  },
+  expectedRequestLookup: "Unreadable",
+  layer: Layer.unwrap(makeHarness().pipe(Effect.map(({ layer }) => layer))),
+  name: "GitHub",
+  request: completionRequest,
+  target
+})
 
 const focusedRequest = (suffix: string) =>
   FocusedTaskCompletionReadRequest.make({

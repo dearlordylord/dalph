@@ -7,6 +7,7 @@ import { ActiveTaskClaim, UnclaimedTask } from "../../../authorities/task-tracke
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../identity.js"
 import { completionBoundaryContract } from "../../../../test/contracts/completion-boundary-contract.js"
+import { completionClaimBoundaryContract } from "../../../../test/contracts/completion-claim-boundary-contract.js"
 import {
   controlledCompletionClaimBoundaryLayerFrom,
   controlledCompletionTaskBoundaryLayerFrom
@@ -40,11 +41,28 @@ const focusedReadRequest = (taskId: TaskId, target: typeof fixture.target, opera
   FocusedTaskCompletionReadRequest.make({ expectedClaim: fixture.claim, operationId, target, taskId })
 
 completionBoundaryContract({
-  expectedOpenFacts: openFacts,
+  expectedOpenFacts: {
+    currentClaim: openFacts.currentClaim,
+    lifecycle: openFacts.lifecycle,
+    target: openFacts.target,
+    targetMembership: openFacts.targetMembership,
+    taskId: openFacts.taskId,
+    taskRevision: openFacts.taskRevision,
+    unfinishedPrerequisiteTaskIds: openFacts.unfinishedPrerequisiteTaskIds
+  },
+  expectedRequestLookup: "Applied",
+  expectedTrackerRevision: openFacts.trackerRevision,
   layer: controlledCompletionTaskBoundaryLayerFrom([openFacts]),
   name: "controlled",
   request: fixture.completionRequest,
   target: fixture.target
+})
+
+completionClaimBoundaryContract({
+  claim: fixture.claim,
+  layer: controlledCompletionClaimBoundaryLayerFrom([fixture.activeClaim]),
+  name: "controlled",
+  successObservation: fixture.successObservation
 })
 
 const rejectAndReadCurrentFacts = (currentFacts: FocusedTaskCompletionFacts) =>

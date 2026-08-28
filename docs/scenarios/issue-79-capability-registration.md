@@ -49,11 +49,12 @@ Before the action, the inventory contains one entry for each accepted family,
 including the three separate disposition authorities for planned worktrees,
 planned branches, and quarantined Integrator predecessor candidates. The
 controlled and production implementations that exist in this repository are
-named by source identity. Completion and the outer Integrator have controlled
-evidence but record typed production N/A reasons because their production
-boundaries are supplied by the application host and no repository-owned
-provider exists. The three cleanup families share the production cleanup
-boundary implementation while remaining separate authority records.
+named by source identity. The GitHub tracker composition registers graph read,
+active claim, completion claim, and task completion as four exact families.
+The outer Integrator still has controlled evidence and a typed production N/A
+reason because no repository-owned provider exists. The three cleanup families
+share the production cleanup boundary implementation while remaining separate
+authority records.
 
 The maintainer edits the inventory or composition and runs the focused gate.
 The gate first checks the fixed accepted family set, then checks duplicate

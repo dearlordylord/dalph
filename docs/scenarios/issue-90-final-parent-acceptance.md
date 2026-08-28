@@ -22,7 +22,7 @@ frontier rather than defects hidden by this audit.
 The stale issue phrase “every workflow operation” is replaced by two existing,
 closed denominators:
 
-1. `scripts/capability-registration.ts` owns the 15 production-capability
+1. `scripts/capability-registration.ts` owns the 16 production-capability
    families. Its gate requires every family, exact controlled and production
    contract execution or a source-backed typed N/A reason, implementation
    identity, and production-composition consumption. It also rejects an
@@ -39,8 +39,9 @@ behavior. This audit consumes both and creates no third operation taxonomy.
 
 ## Evidence reviewed
 
-- #79 mechanically registers the 15 capability families and makes the gate part
-  of `check:all`.
+- #79 mechanically registers the capability families and makes the gate part
+  of `check:all`; #285 later split GitHub completion-claim and task-completion
+  authority into distinct registrations, extending the denominator to 16.
 - #80–#85 provide the schema-versioned production TraceReader, shared exact
   cursor, recovery/integration/operator facets, truthful actor and observation
   gaps, and bounded 105-task/120-occurrence navigation.
@@ -86,7 +87,7 @@ non-browser Lab checks pass.
 
 - `runs every registered controlled and production implementation through its
   named contract family` plus the capability-registration negative cases prove
-  the closed 15-family composition denominator.
+  the closed 16-family composition denominator.
 - `keeps the recovery-prefix manifest closed and tied to current evidence`
   proves the 17-family recovery denominator, exact P0–P6 applicability reasons,
   and live evidence references.

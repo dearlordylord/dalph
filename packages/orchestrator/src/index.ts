@@ -236,6 +236,7 @@ export {
   GithubCompletionClaimFingerprintFailure
 } from "./authorities/task-tracker/github/completion-claim.js"
 export { githubCompletionTaskBoundaryLayer } from "./authorities/task-tracker/github/completion-task.js"
+export { githubDeliveryAuthorityLayer } from "./authorities/task-tracker/github/delivery-authority.js"
 export * from "./workflow-journal/event-codec.js"
 export * from "./workflow-journal/identity.js"
 export { describeJournalEvent } from "./workflow/registry/event-descriptor.js"

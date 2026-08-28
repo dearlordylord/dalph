@@ -549,6 +549,10 @@ trackerGraphReaderContract({
       target
     }
   ],
+  focused: {
+    expected: makeTaskWorkSpecification({ body: "Exact current body", taskId: root, title: "Exact current title" }),
+    taskId: root
+  },
   name: "GitHub tracker reader"
 })
 

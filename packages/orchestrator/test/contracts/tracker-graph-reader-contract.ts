@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest"
 import { Effect, type Layer } from "effect"
+import { type TaskId, type TaskWorkSpecification } from "@dalph/contracts"
 import { type TrackerTarget } from "../../src/authorities/task-tracker/target.js"
 import { type TrackerTask } from "../../src/authorities/task-tracker/task.js"
 import { TrackerGraphReader } from "../../src/authorities/task-tracker/graph-reader.js"
@@ -17,6 +18,7 @@ interface ContractScenario {
     readonly name: string
     readonly target: TrackerTarget
   }>
+  readonly focused: { readonly expected: TaskWorkSpecification; readonly taskId: TaskId }
   readonly name: string
 }
 
@@ -32,6 +34,15 @@ export const trackerGraphReaderContract = (scenario: ContractScenario): void => 
           expect(taskId).not.toContain(fragment)
         }
       }
+    }).pipe(Effect.provide(scenario.complete.layer))
+  )
+
+  it.effect(`${scenario.name} returns one exact focused task-work specification`, () =>
+    Effect.gen(function* () {
+      const reader = yield* TrackerGraphReader
+      expect(yield* reader.readTaskWorkSpecification(scenario.complete.target, scenario.focused.taskId)).toEqual(
+        scenario.focused.expected
+      )
     }).pipe(Effect.provide(scenario.complete.layer))
   )
 

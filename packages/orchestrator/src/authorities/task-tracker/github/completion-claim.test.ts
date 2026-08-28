@@ -3,6 +3,7 @@ import { PlannedTaskAttempt, TaskId } from "@dalph/contracts"
 import { expect, it } from "@effect/vitest"
 import { Crypto, Effect, Layer, PlatformError, Ref, Schema } from "effect"
 import { ActiveTaskClaim, isExactTaskClaim } from "../claim-mutation.js"
+import { completionClaimBoundaryContract } from "../../../../test/contracts/completion-claim-boundary-contract.js"
 import { ClaimOwner, ClaimToken } from "../claim.js"
 import { TaskTrackerMutationThrottled } from "../mutation-throttling.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -220,6 +221,18 @@ const makeHarness = Effect.fn("GithubCompletionClaimTest.makeHarness")(function*
   const clientLayer = Layer.succeed(GithubGraphqlClient, GithubGraphqlClient.of({ execute }))
   const layer = githubCompletionClaimBoundaryLayer.pipe(Layer.provide(clientLayer), Layer.provide(NodeCrypto.layer))
   return { calls, labels, layer }
+})
+
+completionClaimBoundaryContract({
+  claim: prepared.claim,
+  layer: Layer.unwrap(
+    makeHarness().pipe(
+      Effect.provide(NodeCrypto.layer),
+      Effect.map(({ layer }) => layer)
+    )
+  ),
+  name: "GitHub",
+  successObservation: preparedSuccessObservation
 })
 
 const journalForPromotion = Effect.fn("GithubCompletionClaimTest.journalForPromotion")(function* () {

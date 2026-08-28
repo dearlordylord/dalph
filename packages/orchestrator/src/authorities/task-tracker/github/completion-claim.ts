@@ -341,6 +341,8 @@ const githubCompletionClaimBoundaryWithTrackerLayer = Layer.effect(
 )
 
 /** Production completion-claim Layer backed by one shared configured GitHub client and Crypto service. */
-export const githubCompletionClaimBoundaryLayer = githubCompletionClaimBoundaryWithTrackerLayer.pipe(
-  Layer.provide(githubTrackerMutationLayer)
-)
+export const githubCompletionClaimBoundaryLayer: Layer.Layer<
+  CompletionClaimBoundary,
+  never,
+  GithubGraphqlClient | Crypto.Crypto
+> = githubCompletionClaimBoundaryWithTrackerLayer.pipe(Layer.provide(githubTrackerMutationLayer))

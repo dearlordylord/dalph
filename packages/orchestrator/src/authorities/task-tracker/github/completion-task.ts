@@ -30,7 +30,11 @@ const completionFailure = (
 ): CompletionTaskRequestFailure => new CompletionTaskRequestFailure({ detail, outcome, request })
 
 /** GitHub task-completion adapter using one shared client and the separately supplied completion-claim reader. */
-export const githubCompletionTaskBoundaryLayer = Layer.effect(
+export const githubCompletionTaskBoundaryLayer: Layer.Layer<
+  CompletionTaskBoundary,
+  never,
+  GithubGraphqlClient | CompletionClaimBoundary
+> = Layer.effect(
   CompletionTaskBoundary,
   Effect.gen(function* () {
     const client = yield* GithubGraphqlClient
