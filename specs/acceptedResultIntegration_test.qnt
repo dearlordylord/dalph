@@ -507,6 +507,110 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  run authorityFreeExpectedHeadWaitsDurablyForRetryAuthorityTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(reconcilePromotionReadOnly(1))
+      .then(observePromotionExactExpectedHead(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionRetryAuthorityRequired,
+        promotionRetryAuthorityDeferralIsStable,
+      })
+      .then(recoverCoordinator)
+      .then(acceptResult(2))
+      .expect(and {
+        state.results.get(1).phase == PromotionRetryAuthorityRequired,
+        promotionRetryAuthorityDeferralIsStable,
+      })
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(resumePromotionRetryWithAuthority(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionInFlight,
+        state.results.get(1).promotionAttemptCount == 2,
+        promotionCompareAndSetRequiresExactHead,
+      })
+  }
+
+  run authorityFreeUnreadableWaitsDurablyForFreshFactsTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(reconcilePromotionReadOnly(1))
+      .then(observePromotionGitUnreadable(1))
+      .then(recoverCoordinator)
+      .then(acceptResult(2))
+      .expect(and {
+        state.results.get(1).phase == PromotionReadPending,
+        unreadablePromotionStaysPending,
+      })
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePromotion(1))
+      .then(observePromotionExactExpectedHead(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionRetryReady,
+        promotionFreshObservationIsExactExpectedHead,
+      })
+  }
+
+  run authorityFreeChangedHeadStillRecordsStaleTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(reconcilePromotionReadOnly(1))
+      .then(observePromotionOtherHead(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionStale,
+        stalePromotionPreservesCandidateAndNeverOverwrites,
+      })
+  }
+
   run promotionExhaustionPreservesQualifiedCandidateTest = {
     init
       .then(acceptResult(1))

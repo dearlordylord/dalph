@@ -30,6 +30,7 @@ import {
   TargetPromotionSuccessObservation,
   TargetPromotionStaleObservation,
   TargetPromotionNonConvergenceObservation,
+  TargetPromotionReconciliationDeferral,
   TargetPromotionTerminalBasis
 } from "../protocols/target-promotion/events.js"
 import {
@@ -276,6 +277,17 @@ export const TargetPromotionAttemptRequested = Schema.TaggedStruct("TargetPromot
 })
 export type TargetPromotionAttemptRequested = typeof TargetPromotionAttemptRequested.Type
 
+/** One ambiguous promotion attempt is durably idle until exact retry authority returns. */
+export const TargetPromotionReconciliationDeferred = Schema.TaggedStruct("TargetPromotionReconciliationDeferred", {
+  afterAttemptOrdinal: TargetPromotionAttemptOrdinal,
+  correlation: TargetPromotionCorrelation,
+  deferral: TargetPromotionReconciliationDeferral,
+  ...nonAction,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type TargetPromotionReconciliationDeferred = typeof TargetPromotionReconciliationDeferred.Type
+
 /** Git proved the qualified candidate current or in target ancestry. */
 export const TargetPromotionSucceeded = Schema.TaggedStruct("TargetPromotionSucceeded", {
   basis: TargetPromotionTerminalBasis,
@@ -434,6 +446,7 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   TargetPromotionAttemptRequested,
   TargetPromotionNonConvergent,
   TargetPromotionRequested,
+  TargetPromotionReconciliationDeferred,
   TargetPromotionStale,
   TargetPromotionSucceeded,
   TaskAttemptPlanned,

@@ -863,6 +863,7 @@ const proposalActionLabels = {
   RetryCancelledAttemptClaimRelease: "Retry the exact cancelled-attempt claim release",
   RelinquishCancelledAttemptImplementation: "Relinquish the cancelled attempt's implementation responsibility",
   RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",
+  ReconcileTargetPromotionAttempt: "Read Git once to reconcile an ambiguous promotion without retry authority",
   RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
   StartPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
   StartQueuedIntegration: "Start the exact queued integration responsibility",

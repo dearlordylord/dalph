@@ -231,6 +231,10 @@ export type TicketDeliveryStanding =
       readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionPending" }>
     }
   | {
+      readonly _tag: "TargetPromotionReconciliationDeferred"
+      readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionReconciliationDeferred" }>
+    }
+  | {
       readonly _tag: "TargetPromotionSucceeded"
       readonly state: Extract<TargetPromotionState, { readonly _tag: "PromotionSucceeded" }>
     }

@@ -6621,6 +6621,7 @@ it.effect(
         PlannedAttemptReplaced: true,
         TargetPromotionIntended: true,
         TargetPromotionAttemptIntended: true,
+        TargetPromotionReconciliationDeferred: true,
         TargetPromotionObservedSuccess: true,
         TargetPromotionStale: true,
         TargetPromotionNonConvergence: true,

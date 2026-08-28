@@ -395,9 +395,13 @@ const executeTargetPromotionReconciliation = Effect.fn("DeliveryAction.reconcile
         )
       )
     )
-  return result._tag === "PromotionPending"
-    ? deliveryActionDeferred(action.proposal.id, "TargetPromotionRetryAuthorityRequired")
-    : deliveryActionCompleted(action.proposal.id)
+  if (result._tag !== "PromotionReconciliationDeferred") return deliveryActionCompleted(action.proposal.id)
+  return deliveryActionDeferred(
+    action.proposal.id,
+    result.deferral._tag === "TargetReadFailed"
+      ? "TargetPromotionDestinationUnreadable"
+      : "TargetPromotionRetryAuthorityRequired"
+  )
 })
 
 const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterIntegrator")(function* (

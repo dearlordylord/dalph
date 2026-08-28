@@ -431,6 +431,13 @@ const fixedLineageRequiresRelease = (
 const promotionAttemptNeedsReconciliationRead = (promotion: PromotionState): boolean =>
   promotion?._tag === "PromotionPending" && promotion.retry._tag === "NeedReconciliationRead"
 
+/** A durable deferral can resume only through the authority-gated promotion protocol. */
+const promotionReconciliationIsDeferred = (promotion: PromotionState): boolean =>
+  promotion?._tag === "PromotionReconciliationDeferred"
+
+const promotionRecoveryMustPrecedeFreshLineage = (promotion: PromotionState): boolean =>
+  promotionAttemptNeedsReconciliationRead(promotion) || promotionReconciliationIsDeferred(promotion)
+
 const settledIntegrationMustReleaseTarget = (
   waiting: boolean,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
@@ -442,7 +449,7 @@ const settledIntegrationMustReleaseTarget = (
   integratorStateBlocksProgress(integratorState, promotion) ||
   targetPromotionConfigurationIsMissing(integratorState, runtimeFacts) ||
   (fixedLineageRequiresRelease(runtimeFacts, responsibility, integratorState) &&
-    !promotionAttemptNeedsReconciliationRead(promotion))
+    !promotionRecoveryMustPrecedeFreshLineage(promotion))
 
 // eslint-disable-next-line complexity -- Started integration admission is one ordered authority gate over tracker, claim, quarantine, and target ownership.
 const transitionsBeforeStartedIntegrationAdmission = (
@@ -519,6 +526,12 @@ const transitionsBeforeStartedIntegrationAdmission = (
       ]
     }
   }
+  if (promotionReconciliationIsDeferred(promotion)) {
+    if (!trackerFactsAreCurrentFor(responsibility) || !claimIsExactFor(responsibility) || waiting) {
+      return releaseStartedIntegrationTargetFor(responsibility, held)
+    }
+    if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
+  }
   if (!trackerFactsAreCurrentFor(responsibility)) return releaseStartedIntegrationTargetFor(responsibility, held)
   if (!claimIsExactFor(responsibility)) return []
   if (waiting) return releaseStartedIntegrationTargetFor(responsibility, held)
@@ -572,7 +585,7 @@ const qualifiedIntegratorProgressTransitionsFor = (
   promotion: PromotionState
 ): ReadonlyArray<RunnableFrontierTransitionType> =>
   runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true &&
-  !promotionAttemptNeedsReconciliationRead(promotion)
+  !promotionRecoveryMustPrecedeFreshLineage(promotion)
     ? []
     : [
         RunnableFrontierTransition.RunTargetPromotion({

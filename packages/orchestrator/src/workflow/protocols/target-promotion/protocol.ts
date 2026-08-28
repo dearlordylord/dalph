@@ -1,12 +1,12 @@
-/* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; promotion state stays journal-derived. */
-import { Effect, Schema } from "effect"
-import { GitCommitSha } from "@dalph/contracts"
+import { Effect } from "effect"
+import type { GitCommitSha } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import {
   targetPromotionAttemptIntentRecordKey,
   targetPromotionIntentRecordKey,
   targetPromotionNonConvergenceRecordKey,
   targetPromotionObservedSuccessRecordKey,
+  targetPromotionReconciliationDeferredRecordKey,
   targetPromotionStaleRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -16,54 +16,46 @@ import {
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
   type TargetPromotionCorrelation,
-  TargetPromotionRequestId,
   TargetPromotionGit,
+  type TargetPromotionGitReadFailure,
   TargetPromotionIntendedEvent,
   TargetPromotionNonConvergenceEvent,
   TargetPromotionNonConvergenceObservation,
   TargetPromotionObservedSuccessEvent,
+  TargetPromotionReconciliationDeferredEvent,
+  TargetPromotionReconciliationDeferral,
   TargetPromotionStaleEvent,
   TargetPromotionStaleObservation,
   TargetPromotionTerminalBasis,
   TargetPromotionSuccessObservation,
   targetPromotionAttemptLimit,
   targetPromotionCandidateCommitOf,
-  targetPromotionCorrelationEquals,
   targetPromotionCorrelationFor,
   targetPromotionExpectedHeadOf,
   targetPromotionGitRequestFor,
   targetPromotionRunIdOf,
   type TargetPromotionAttemptReason as TargetPromotionAttemptReasonType,
-  type TargetPromotionCompareAndSetResult,
-  type TargetPromotionGitReadObservation,
-  TargetPromotionJournalEvent,
-  type TargetPromotionGitRequest
+  type TargetPromotionJournalEvent
 } from "./events.js"
+import { TargetPromotionCorrelationContradiction, TargetPromotionResultContradiction } from "./errors.js"
+import {
+  readObservationContradiction,
+  successObservationForCompareAndSet,
+  successObservationForRead
+} from "./read-observation.js"
 import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import {
   deriveTargetPromotionState,
   targetPromotionCorrelationConflictFor,
   TargetPromotionPendingRetry,
-  TargetPromotionState,
-  type JournalOccurrence
+  TargetPromotionState
 } from "./state.js"
-import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 export { deriveTargetPromotionState, TargetPromotionPendingRetry, TargetPromotionState } from "./state.js"
 export { targetPromotionCorrelationConflictFor } from "./state.js"
 export type { JournalOccurrence } from "./state.js"
 export { targetPromotionCorrelationFor, targetPromotionRequestIdForCandidate } from "./events.js"
-
-/** A provider returned a successful mutation for a commit other than the requested M. */
-export class TargetPromotionResultContradiction extends Schema.TaggedError<TargetPromotionResultContradiction>()(
-  "TargetPromotionResultContradiction",
-  { candidateCommit: GitCommitSha, detail: Schema.String }
-) {}
-
-/** Fails closed when one request id is reused for a different exact promotion correlation. */
-export class TargetPromotionCorrelationContradiction extends Schema.TaggedError<TargetPromotionCorrelationContradiction>()(
-  "TargetPromotionCorrelationContradiction",
-  { detail: Schema.String, requestId: TargetPromotionRequestId }
-) {}
+export { deriveTargetPromotionStateFor } from "./state-cache.js"
+export { TargetPromotionCorrelationContradiction, TargetPromotionResultContradiction } from "./errors.js"
 
 const ordinalFor = (value: number): TargetPromotionAttemptOrdinal => TargetPromotionAttemptOrdinal.make(value)
 
@@ -75,45 +67,6 @@ const appendPromotionEvent = Effect.fn("TargetPromotion.appendEvent")(function* 
   const journal = yield* InRunJournal
   return yield* journal.append(targetPromotionRunIdOf(correlation), key, event)
 })
-
-const successObservationForCompareAndSet = (
-  result: Extract<TargetPromotionCompareAndSetResult, { readonly _tag: "Applied" }>
-): TargetPromotionSuccessObservation =>
-  TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
-    candidateAncestry: "Current",
-    targetHeadSha: result.newHeadSha
-  })
-
-const successObservationForRead = (
-  observation: TargetPromotionGitReadObservation
-): TargetPromotionSuccessObservation | undefined => {
-  if (observation._tag === "CandidateCurrent") {
-    return TargetPromotionSuccessObservation.cases.ReconciledCandidateCurrent.make({
-      candidateAncestry: "Current",
-      targetHeadSha: observation.currentHeadSha
-    })
-  }
-  if (observation._tag === "CandidateAncestor") {
-    return TargetPromotionSuccessObservation.cases.ReconciledCandidateAncestor.make({
-      candidateAncestry: "Ancestor",
-      targetHeadSha: observation.currentHeadSha
-    })
-  }
-  return undefined
-}
-
-const readObservationContradiction = (
-  request: TargetPromotionGitRequest,
-  observation: TargetPromotionGitReadObservation
-): string | undefined => {
-  if (observation._tag === "CandidateCurrent" && observation.currentHeadSha !== request.candidateCommit)
-    return "Git classified a non-candidate head as the candidate current head"
-  if (observation._tag !== "CandidateCurrent" && observation.currentHeadSha === request.candidateCommit)
-    return "Git classified the exact candidate current head as not current"
-  if (observation._tag === "CandidateAncestor" && observation.currentHeadSha === request.expectedTargetHead)
-    return "Git classified the candidate as an ancestor of its own expected first parent"
-  return undefined
-}
 
 const appendSuccess = Effect.fn("TargetPromotion.appendSuccess")(function* (
   correlation: TargetPromotionCorrelation,
@@ -191,6 +144,24 @@ const pendingAfterAmbiguousAttempt = (
     correlation,
     retry: TargetPromotionPendingRetry.cases.NeedReconciliationRead.make({ afterAttemptOrdinal: attemptOrdinal })
   })
+
+const appendReconciliationDeferral = Effect.fn("TargetPromotion.appendReconciliationDeferral")(function* (
+  correlation: TargetPromotionCorrelation,
+  afterAttemptOrdinal: TargetPromotionAttemptOrdinal,
+  deferral: TargetPromotionReconciliationDeferral
+) {
+  yield* appendPromotionEvent(
+    correlation,
+    targetPromotionReconciliationDeferredRecordKey(correlation.requestId, afterAttemptOrdinal),
+    TargetPromotionReconciliationDeferredEvent.make({
+      afterAttemptOrdinal,
+      correlation,
+      deferral,
+      version: workflowJournalEventVersion
+    })
+  )
+  return TargetPromotionState.cases.PromotionReconciliationDeferred.make({ afterAttemptOrdinal, correlation, deferral })
+})
 
 /** Records intent for one attempt, then performs at most one compare-and-set. */
 const performAttempt = Effect.fn("TargetPromotion.performAttempt")(function* (
@@ -284,12 +255,11 @@ const continueAfterExpectedHeadRead = Effect.fn("TargetPromotion.continueAfterEx
     )
   }
   if (authority === "ReadOnly") {
-    return TargetPromotionState.cases.PromotionPending.make({
+    return yield* appendReconciliationDeferral(
       correlation,
-      retry: TargetPromotionPendingRetry.cases.NeedReconciliationRead.make({
-        afterAttemptOrdinal: previousAttemptOrdinal
-      })
-    })
+      previousAttemptOrdinal,
+      TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({ observedHeadSha })
+    )
   }
   const nextAttemptOrdinal = ordinalFor(previousAttemptOrdinal + 1)
   return yield* performAttempt(
@@ -297,6 +267,28 @@ const continueAfterExpectedHeadRead = Effect.fn("TargetPromotion.continueAfterEx
     nextAttemptOrdinal,
     TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({ observedHeadSha, previousAttemptOrdinal })
   )
+})
+
+const finishFailedReconciliationRead = Effect.fn("TargetPromotion.finishFailedReconciliationRead")(function* (
+  correlation: TargetPromotionCorrelation,
+  previousAttemptOrdinal: TargetPromotionAttemptOrdinal,
+  authority: "ReadOnly" | "RetryAuthorized",
+  failure: TargetPromotionGitReadFailure
+) {
+  if (authority === "ReadOnly" && previousAttemptOrdinal !== targetPromotionAttemptLimit) {
+    return yield* appendReconciliationDeferral(
+      correlation,
+      previousAttemptOrdinal,
+      TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({ detail: failure.detail })
+    )
+  }
+  return previousAttemptOrdinal === targetPromotionAttemptLimit
+    ? yield* appendNonConvergence(
+        correlation,
+        previousAttemptOrdinal,
+        TargetPromotionNonConvergenceObservation.cases.TargetReadFailed.make({ detail: failure.detail })
+      )
+    : yield* failure
 })
 
 const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")(function* (
@@ -307,14 +299,9 @@ const runReconciliationRead = Effect.fn("TargetPromotion.runReconciliationRead")
   const git = yield* TargetPromotionGit
   const request = targetPromotionGitRequestFor(correlation)
   const readResult = yield* git.read(request).pipe(Effect.result)
-  if (readResult._tag === "Failure")
-    return previousAttemptOrdinal === targetPromotionAttemptLimit
-      ? yield* appendNonConvergence(
-          correlation,
-          previousAttemptOrdinal,
-          TargetPromotionNonConvergenceObservation.cases.TargetReadFailed.make({ detail: readResult.failure.detail })
-        )
-      : yield* readResult.failure
+  if (readResult._tag === "Failure") {
+    return yield* finishFailedReconciliationRead(correlation, previousAttemptOrdinal, authority, readResult.failure)
+  }
   const observation = readResult.success
   const readContradiction = readObservationContradiction(request, observation)
   if (readContradiction !== undefined)
@@ -380,6 +367,19 @@ const runPending = Effect.fn("TargetPromotion.runPending")(function* (
     : yield* runReconciliationRead(correlation, state.retry.afterAttemptOrdinal, "RetryAuthorized")
 })
 
+const runDeferred = Effect.fn("TargetPromotion.runDeferred")(function* (
+  state: Extract<TargetPromotionState, { readonly _tag: "PromotionReconciliationDeferred" }>
+) {
+  return state.deferral._tag === "RetryAuthorityRequired"
+    ? yield* continueAfterExpectedHeadRead(
+        state.correlation,
+        state.afterAttemptOrdinal,
+        state.deferral.observedHeadSha,
+        "RetryAuthorized"
+      )
+    : yield* runReconciliationRead(state.correlation, state.afterAttemptOrdinal, "RetryAuthorized")
+})
+
 /** Performs at most one compare-and-set and one reconciliation read for one Integrator-qualified candidate. */
 export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (
   candidate: IntegratorRunQualifiedCandidate
@@ -395,7 +395,7 @@ export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (
     })
   }
   const state = deriveTargetPromotionState(records, request)
-  if (state !== undefined && state._tag !== "PromotionPending") {
+  if (state !== undefined && state._tag !== "PromotionPending" && state._tag !== "PromotionReconciliationDeferred") {
     return state
   }
   if (state === undefined) {
@@ -412,33 +412,7 @@ export const runTargetPromotion = Effect.fn("TargetPromotion.run")(function* (
       })
     )
   }
-  return yield* runPending(request, state)
+  return state._tag === "PromotionReconciliationDeferred"
+    ? yield* runDeferred(state)
+    : yield* runPending(request, state)
 })
-
-/** Reconstructs state for one exact Integrator-qualified candidate. */
-type PromotionStateCacheEntry = readonly [TargetPromotionCorrelation, TargetPromotionState | undefined]
-
-const promotionStateByPrefix = new WeakMap<ReadonlyArray<JournalOccurrence>, Array<PromotionStateCacheEntry>>()
-
-export const deriveTargetPromotionStateFor = (
-  records: ReadonlyArray<JournalOccurrence>,
-  candidate: IntegratorRunQualifiedCandidate
-): TargetPromotionState | undefined => {
-  const request = targetPromotionCorrelationFor(candidate)
-  const cachedByRequest = promotionStateByPrefix.get(records)
-  const cached = cachedByRequest?.find(([cachedRequest]) => targetPromotionCorrelationEquals(cachedRequest, request))
-  if (cached !== undefined) return cached[1]
-  const predecessor = journalPrefixPredecessorOf(records)
-  if (predecessor !== undefined && !Schema.is(TargetPromotionJournalEvent)(predecessor.appended.event)) {
-    const state = deriveTargetPromotionStateFor(predecessor.prior, candidate)
-    const cache = cachedByRequest ?? []
-    cache.push([request, state])
-    promotionStateByPrefix.set(records, cache)
-    return state
-  }
-  const state = deriveTargetPromotionState(records, request)
-  const cache = cachedByRequest ?? []
-  cache.push([request, state])
-  promotionStateByPrefix.set(records, cache)
-  return state
-}

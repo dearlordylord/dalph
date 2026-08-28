@@ -6,16 +6,22 @@ import { expect } from "vitest"
 import {
   InRunJournal,
   CoordinatorOwnership,
+  OperationId,
+  TaskTrackerReadIntentRecordedEvent,
   acquireStartedIntegrationTarget,
   deriveIntegrationAdmission,
   projectWorkflowOccurrences,
   reduceWorkflowJournalHistory,
   TargetPromotionGitReadObservation,
+  TargetPromotionGitReadFailure,
   TargetPromotionRuntime,
+  intentRecordKey,
+  makeTrackerGraphObservationOperation,
   targetPromotionCorrelationEquals,
   type IntegrationTargetResourceController,
   type JournalRecord,
-  makeIntegrationTargetResourceController
+  makeIntegrationTargetResourceController,
+  workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import {
   expectedRecoveryPrefix,
@@ -44,6 +50,7 @@ import type { TargetPromotionRuntimeInput } from "../../../orchestrator/src/work
 const lanes: ReadonlyArray<RecoveryStoreLane> = ["memory", "sqlite"]
 const restartPrefixCutLabels = ["AttemptIntended", "Stale", "Quarantined"] as const
 type RestartPrefixCutLabel = (typeof restartPrefixCutLabels)[number]
+type ReconciliationBoundaryMode = "CandidateAbsent" | "ExpectedHead" | "Unreadable"
 
 // One authored execution supplies immutable source records to every store replay.
 const cachedRun = Effect.runSync(
@@ -129,7 +136,6 @@ const disabledTargetPromotionRuntime: TargetPromotionRuntimeInput = {
 interface ProductionRestartProjection {
   readonly afterAcquire: RunRecoveryProjectionSnapshot
   readonly afterRecovery: RunRecoveryProjectionSnapshot | undefined
-  readonly authorityAbsentBoundaryCalls: ReadonlyArray<string>
   readonly beforeAcquire: RunRecoveryProjectionSnapshot
   readonly boundaryCalls: ReadonlyArray<string>
   readonly records: ReadonlyArray<JournalRecord>
@@ -180,7 +186,8 @@ const executionLeaseFor = (integrationTargets: IntegrationTargetResourceControll
 
 const productionRestartProjection = (
   prefix: RecoveryPrefix<RestartPrefixCutLabel>,
-  lane: RecoveryStoreLane
+  lane: RecoveryStoreLane,
+  reconciliationMode: ReconciliationBoundaryMode = "CandidateAbsent"
 ): Effect.Effect<ProductionRestartProjection, unknown> =>
   withRecoveryPrefixStore(prefix, lane, (storage) =>
     Effect.gen(function* () {
@@ -212,7 +219,6 @@ const productionRestartProjection = (
       }
       const afterAcquire = yield* recovery.readDeliveryProjection
       const boundaryCalls: Array<string> = []
-      let authorityAbsentBoundaryCalls: ReadonlyArray<string> = []
       let afterRecovery: RunRecoveryProjectionSnapshot | undefined
       if (prefix.cut === "AttemptIntended") {
         const reconciliation = exactlyOne(
@@ -231,21 +237,32 @@ const productionRestartProjection = (
               Effect.sync(() => boundaryCalls.push("compareAndSet")).pipe(
                 Effect.andThen(Effect.die("restart must reconcile before any compare-and-set retry"))
               ),
-            read: () =>
+            read: (request) =>
               Effect.sync(() => {
                 boundaryCalls.push("read")
+                if (reconciliationMode === "Unreadable") {
+                  return new TargetPromotionGitReadFailure({
+                    candidateCommit: request.candidateCommit,
+                    detail: "controlled destination read unavailable",
+                    target: request.integrationTarget
+                  })
+                }
                 return TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
                   currentHeadSha:
-                    boundaryCalls.length === 1
+                    reconciliationMode === "ExpectedHead"
                       ? reconciliation.candidate.run.session.expectedTargetHead
                       : reconciledTargetHead
                 })
-              })
+              }).pipe(
+                Effect.flatMap((result) =>
+                  result instanceof TargetPromotionGitReadFailure ? Effect.fail(result) : Effect.succeed(result)
+                )
+              )
           }
         })
         const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
         const lease = executionLeaseFor(resources)
-        const noProof = yield* executeIntegrationAction(
+        const reconciliationResult = yield* executeIntegrationAction(
           identityFreeActionFor(began.runId, yield* storage.read(began.runId), reconciliation),
           reconciliation,
           lease,
@@ -255,57 +272,59 @@ const productionRestartProjection = (
           Effect.provideService(TargetPromotionRuntime, runtime),
           Effect.provideService(InRunJournal, journal)
         )
-        expect(noProof).toMatchObject({ _tag: "ActionDeferred", reason: "TargetPromotionRetryAuthorityRequired" })
-        authorityAbsentBoundaryCalls = [...boundaryCalls]
-        expect(yield* storage.read(began.runId)).toEqual(prefix.records)
-        const afterNoProof = yield* recovery.readDeliveryProjection
-        const reacquire = exactlyOne(
-          afterNoProof.frontier.transitions.filter(({ _tag }) => _tag === "AcquireStartedIntegrationTarget"),
-          "post-read AcquireStartedIntegrationTarget"
-        )
-        if (reacquire._tag !== "AcquireStartedIntegrationTarget") {
-          return yield* Effect.die("post-read target reacquisition narrowing failed")
+        if (reconciliationMode === "CandidateAbsent") {
+          expect(reconciliationResult._tag).toBe("ActionCompleted")
+          const afterStale = yield* recovery.readDeliveryProjection
+          const quarantine = exactlyOne(
+            afterStale.frontier.transitions.filter(({ _tag }) => _tag === "RecordPromotionStaleIntegrationQuarantine"),
+            "recovered promotion-stale quarantine"
+          )
+          if (quarantine._tag !== "RecordPromotionStaleIntegrationQuarantine") {
+            return yield* Effect.die("recovered quarantine transition narrowing failed")
+          }
+          yield* executeIntegrationAction(
+            identityFreeActionFor(began.runId, yield* storage.read(began.runId), quarantine),
+            quarantine,
+            lease,
+            began.event.target
+          ).pipe(Effect.provideService(InRunJournal, journal))
+        } else {
+          expect(reconciliationResult).toMatchObject({
+            _tag: "ActionDeferred",
+            reason:
+              reconciliationMode === "Unreadable"
+                ? "TargetPromotionDestinationUnreadable"
+                : "TargetPromotionRetryAuthorityRequired"
+          })
+          const unrelatedOperationId = OperationId.make(
+            `restart-reconciliation-stability:${reconciliationMode}:${lane}`
+          )
+          const unrelatedOperation = makeTrackerGraphObservationOperation(unrelatedOperationId, began.event.target)
+          yield* storage.append(
+            began.runId,
+            intentRecordKey(unrelatedOperationId),
+            TaskTrackerReadIntentRecordedEvent.make({
+              operation: unrelatedOperation,
+              version: workflowJournalEventVersion
+            })
+          )
         }
-        yield* acquireStartedIntegrationTarget(resources, reacquire)
-        const retryReconciliation = exactlyOne(
-          (yield* recovery.readDeliveryProjection).frontier.transitions.filter(
-            ({ _tag }) => _tag === "ReconcileTargetPromotionAttempt"
-          ),
-          "retried ReconcileTargetPromotionAttempt"
-        )
-        if (retryReconciliation._tag !== "ReconcileTargetPromotionAttempt") {
-          return yield* Effect.die("retried promotion reconciliation narrowing failed")
+        if (reconciliationMode === "CandidateAbsent") {
+          afterRecovery = yield* recovery.readDeliveryProjection
+        } else {
+          const restartedResources = yield* makeIntegrationTargetResourceController()
+          const restartedRecovery = yield* makeRunRecoveryProjection(
+            began.runId,
+            session.event.correlation.integrationTarget,
+            restartedResources,
+            disabledTargetPromotionRuntime
+          ).pipe(Effect.provideService(InRunJournal, journal))
+          afterRecovery = yield* restartedRecovery.readDeliveryProjection
         }
-        yield* executeIntegrationAction(
-          identityFreeActionFor(began.runId, yield* storage.read(began.runId), retryReconciliation),
-          retryReconciliation,
-          lease,
-          began.event.target
-        ).pipe(
-          Effect.provideService(CoordinatorOwnership, ownership),
-          Effect.provideService(TargetPromotionRuntime, runtime),
-          Effect.provideService(InRunJournal, journal)
-        )
-        const afterStale = yield* recovery.readDeliveryProjection
-        const quarantine = exactlyOne(
-          afterStale.frontier.transitions.filter(({ _tag }) => _tag === "RecordPromotionStaleIntegrationQuarantine"),
-          "recovered promotion-stale quarantine"
-        )
-        if (quarantine._tag !== "RecordPromotionStaleIntegrationQuarantine") {
-          return yield* Effect.die("recovered quarantine transition narrowing failed")
-        }
-        yield* executeIntegrationAction(
-          identityFreeActionFor(began.runId, yield* storage.read(began.runId), quarantine),
-          quarantine,
-          lease,
-          began.event.target
-        ).pipe(Effect.provideService(InRunJournal, journal))
-        afterRecovery = yield* recovery.readDeliveryProjection
       }
       return {
         afterAcquire,
         afterRecovery,
-        authorityAbsentBoundaryCalls,
         beforeAcquire,
         boundaryCalls,
         records: yield* storage.read(began.runId),
@@ -396,8 +415,7 @@ it.effect(
                   expect(reconciliations[0].candidate).toEqual(attemptEvent.correlation.qualifiedCandidate)
                   expect(reconciliations[0].responsibility.plannedAttempt).toEqual(plannedAttempt)
                 }
-                expect(production.authorityAbsentBoundaryCalls).toEqual(["read"])
-                expect(production.boundaryCalls).toEqual(["read", "read"])
+                expect(production.boundaryCalls).toEqual(["read"])
                 expect(
                   production.records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
                 ).toEqual(prefix.records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended"))
@@ -457,9 +475,57 @@ it.effect(
           { concurrency: "unbounded" }
         )
       }
+
+      const attemptPrefix = exactlyOne(
+        matrix.prefixes.filter(({ cut }) => cut === "AttemptIntended"),
+        "attempt-intended recovery prefix"
+      )
+      yield* Effect.forEach(
+        ["ExpectedHead", "Unreadable"] as const,
+        (mode) =>
+          Effect.forEach(
+            lanes,
+            (lane) =>
+              Effect.gen(function* () {
+                const production = yield* productionRestartProjection(attemptPrefix, lane, mode)
+                expect(
+                  recoveryPrefixMismatch(
+                    attemptPrefix.cut,
+                    lane,
+                    yield* expectedRecoveryPrefix(attemptPrefix),
+                    production.replay
+                  )
+                ).toBeUndefined()
+                expect(production.boundaryCalls).toEqual(["read"])
+                const deferred = exactlyOne(
+                  production.records.filter(({ event }) => event._tag === "TargetPromotionReconciliationDeferred"),
+                  mode + " / " + lane + " durable reconciliation deferral"
+                )
+                if (deferred.event._tag !== "TargetPromotionReconciliationDeferred") {
+                  return yield* Effect.die("reconciliation deferral narrowing failed")
+                }
+                expect(deferred.event).toMatchObject({
+                  afterAttemptOrdinal: attemptEvent.attemptOrdinal,
+                  correlation: attemptEvent.correlation,
+                  deferral: { _tag: mode === "Unreadable" ? "TargetReadFailed" : "RetryAuthorityRequired" }
+                })
+                const stable = production.afterRecovery ?? expect.fail(mode + " recovery projection missing")
+                expect(
+                  exactAttemptTransitions(stable, plannedAttempt.attemptId).filter(({ _tag }) =>
+                    ["AcquireStartedIntegrationTarget", "ReconcileTargetPromotionAttempt"].includes(_tag)
+                  )
+                ).toEqual([])
+                assertNoSuccessorTransition(stable)
+                expect(production.records.at(-1)?.event._tag).toBe("TaskTrackerReadIntentRecorded")
+              }),
+            { concurrency: "unbounded" }
+          ),
+        { concurrency: 1 }
+      )
     }),
-  // Three retained cuts each decode, reduce, project, and exercise memory and
-  // SQLite in parallel from one cached source run. The body measured 20.7s
-  // under shared-runner contention; 60s preserves substantial store/CI margin.
-  60_000
+  // One cached source run feeds three retained cuts plus two fail-closed
+  // outcomes through memory and SQLite. The final body measured 9.63s isolated
+  // and 24.14s in the affected aggregate; 120s doubles the observed 60.112s
+  // shared-runner contention ceiling for this one store-heavy test.
+  120_000
 )

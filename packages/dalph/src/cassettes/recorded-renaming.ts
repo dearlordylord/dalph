@@ -1559,6 +1559,14 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           reason: preserveCassetteValue(entry.reason)
         }),
+      TargetPromotionReconciliationDeferred: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "TargetPromotionReconciliationDeferred",
+          afterAttemptOrdinal: preserveCassetteValue(entry.afterAttemptOrdinal),
+          correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
+          deferral: preserveCassetteValue(entry.deferral),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
       TargetPromotionObservedSuccess: (entry) =>
         completeFields<typeof entry>({
           _tag: "TargetPromotionObservedSuccess",

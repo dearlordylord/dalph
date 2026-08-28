@@ -36,6 +36,7 @@ module acceptedResultIntegration {
     | PromotionInFlight
     | PromotionResponseLost
     | PromotionReconciliation
+    | PromotionRetryAuthorityRequired
     | PromotionRetryReady
     | PromotionReadPending
     | PromotionSucceeded
@@ -235,6 +236,7 @@ module acceptedResultIntegration {
       PromotionInFlight,
       PromotionResponseLost,
       PromotionReconciliation,
+      PromotionRetryAuthorityRequired,
       PromotionRetryReady,
       PromotionReadPending,
       PromotionSucceeded,
@@ -279,6 +281,7 @@ module acceptedResultIntegration {
       PromotionInFlight,
       PromotionResponseLost,
       PromotionReconciliation,
+      PromotionRetryAuthorityRequired,
       PromotionRetryReady,
       PromotionReadPending,
       PromotionSucceeded,
@@ -457,6 +460,8 @@ module acceptedResultIntegration {
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionResponseLost)
   val promotionReconciliationReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionReconciliation)
+  val promotionRetryAuthorityRequiredReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PromotionRetryAuthorityRequired)
   val promotionRetryReadyReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == PromotionRetryReady)
   val promotionReadPendingReached: bool =
@@ -480,6 +485,7 @@ module acceptedResultIntegration {
         PromotionInFlight,
         PromotionResponseLost,
         PromotionReconciliation,
+        PromotionRetryAuthorityRequired,
         PromotionRetryReady,
         PromotionReadPending,
         PromotionSucceeded,
@@ -1165,8 +1171,25 @@ module acceptedResultIntegration {
         result.promotionIntentRecorded,
         result.promotionGitObservation == PromotionUnreadableHead,
         not(result.promotionResultRecorded),
+        not(result.promotionCompareAndSetRequested),
         not(result.promotionCandidateAncestryProven),
         result.submittedCandidate != 0,
+        not(result.targetHeld),
+      }
+    })
+
+  val promotionRetryAuthorityDeferralIsStable: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.phase != PromotionRetryAuthorityRequired or and {
+        result.promotionIntentRecorded,
+        result.promotionAttemptCount > 0,
+        result.promotionFreshExactHeadObservation,
+        result.promotionGitObservation == PromotionExactExpectedHead,
+        result.promotionObservedTargetHead == result.expectedTargetHead,
+        result.promotionExpectedHeadVerified,
+        not(result.promotionResultRecorded),
+        not(result.promotionCompareAndSetRequested),
         not(result.targetHeld),
       }
     })
@@ -2344,6 +2367,57 @@ module acceptedResultIntegration {
     }
   }
 
+  // A retained unmatched attempt authorizes one read-only Git reconciliation
+  // before tracker membership and the exact claim are fresh. This action can
+  // never enter a numbered compare-and-set phase.
+  action reconcilePromotionReadOnly(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PromotionResponseLost,
+      not(result.targetHeld),
+      result.promotionIntentRecorded,
+      result.promotionResponseAmbiguous,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionReconciliation,
+          targetHeld: true,
+          promotionFreshExactHeadObservation: false,
+          promotionTargetFactsCurrent: false,
+          promotionGitObservation: NoPromotionGitObservation,
+          promotionObservedTargetHead: 0,
+        }),
+        targetReacquisitionRequired: false,
+      },
+    }
+  }
+
+  // A durable expected-H deferral resumes only after fresh tracker membership,
+  // exact claim authority, and target facts are all current.
+  action resumePromotionRetryWithAuthority(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PromotionRetryAuthorityRequired,
+      not(result.targetHeld),
+      state.trackerFactsCurrent,
+      state.targetFactsCurrent,
+      state.targetHeadProof == result.expectedTargetHead,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PromotionRetryReady,
+          targetHeld: true,
+          promotionTargetFactsCurrent: true,
+        }),
+        targetReacquisitionRequired: false,
+      },
+    }
+  }
+
   action observePromotionCandidateCurrent(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -2415,7 +2489,7 @@ module acceptedResultIntegration {
               promotionResultRecorded: false,
               promotionResponseAmbiguous: false,
             }
-          } else {
+          } else if (state.trackerFactsCurrent and state.targetFactsCurrent) {
             {
               ...result,
               phase: PromotionRetryReady,
@@ -2428,6 +2502,21 @@ module acceptedResultIntegration {
               promotionObservedTargetHead: result.expectedTargetHead,
               promotionResultRecorded: false,
               promotionResponseAmbiguous: false,
+            }
+          } else {
+            {
+              ...result,
+              phase: PromotionRetryAuthorityRequired,
+              targetHeld: false,
+              promotionFreshExactHeadReads: result.promotionFreshExactHeadReads + 1,
+              promotionFreshExactHeadObservation: true,
+              promotionTargetFactsCurrent: false,
+              promotionExpectedHeadVerified: true,
+              promotionGitObservation: PromotionExactExpectedHead,
+              promotionObservedTargetHead: result.expectedTargetHead,
+              promotionResultRecorded: false,
+              promotionResponseAmbiguous: false,
+              promotionCompareAndSetRequested: false,
             }
           }
         ),
@@ -2478,7 +2567,9 @@ module acceptedResultIntegration {
           promotionObservedTargetHead: 0,
           promotionCandidateAncestryProven: false,
           promotionResultRecorded: false,
+          promotionCompareAndSetRequested: false,
         }),
+        targetReacquisitionRequired: true,
       },
     }
   }
@@ -2548,7 +2639,7 @@ module acceptedResultIntegration {
             )
               PromotionResponseLost
             else if (result.phase == PromotionReadPending)
-              if (result.promotionAttemptCount == 0) PromotionIntent else PromotionResponseLost
+              PromotionReadPending
             else
               result.phase,
           integratorResponseAmbiguous:
@@ -2556,13 +2647,27 @@ module acceptedResultIntegration {
           promotionTargetFactsCurrent:
             if (promotionProtocolPhase(result.phase)) false else result.promotionTargetFactsCurrent,
           promotionFreshExactHeadObservation:
-            if (promotionProtocolPhase(result.phase)) false else result.promotionFreshExactHeadObservation,
+            if (
+              promotionProtocolPhase(result.phase)
+                and result.phase != PromotionRetryAuthorityRequired
+                and result.phase != PromotionReadPending
+            ) false else result.promotionFreshExactHeadObservation,
           promotionGitObservation:
-            if (promotionProtocolPhase(result.phase) and not(promotionTerminalPhase(result.phase)))
+            if (
+              promotionProtocolPhase(result.phase)
+                and not(promotionTerminalPhase(result.phase))
+                and result.phase != PromotionRetryAuthorityRequired
+                and result.phase != PromotionReadPending
+            )
               NoPromotionGitObservation
             else result.promotionGitObservation,
           promotionObservedTargetHead:
-            if (promotionProtocolPhase(result.phase) and not(promotionTerminalPhase(result.phase)))
+            if (
+              promotionProtocolPhase(result.phase)
+                and not(promotionTerminalPhase(result.phase))
+                and result.phase != PromotionRetryAuthorityRequired
+                and result.phase != PromotionReadPending
+            )
               0
             else result.promotionObservedTargetHead,
           // A conclusive NotPrepared or invalid-candidate observation has
@@ -2715,6 +2820,8 @@ module acceptedResultIntegration {
   action sendPromotionAttemptOne: bool = sendPromotionAttempt(1)
   action losePromotionAttemptResponseOne: bool = losePromotionResponse(1)
   action reconcilePromotionOne: bool = reconcilePromotion(1)
+  action reconcilePromotionReadOnlyOne: bool = reconcilePromotionReadOnly(1)
+  action resumePromotionRetryWithAuthorityOne: bool = resumePromotionRetryWithAuthority(1)
   action observePromotionCandidateCurrentOne: bool = observePromotionCandidateCurrent(1)
   action observePromotionCandidateAncestorOne: bool = observePromotionCandidateAncestor(1)
   action observePromotionExactExpectedHeadOne: bool = observePromotionExactExpectedHead(1)
@@ -2778,6 +2885,8 @@ module acceptedResultIntegration {
     sendPromotionAttemptOne,
     losePromotionAttemptResponseOne,
     reconcilePromotionOne,
+    reconcilePromotionReadOnlyOne,
+    resumePromotionRetryWithAuthorityOne,
     observePromotionCandidateCurrentOne,
     observePromotionCandidateAncestorOne,
     observePromotionExactExpectedHeadOne,

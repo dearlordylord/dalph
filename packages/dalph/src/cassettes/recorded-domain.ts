@@ -60,6 +60,7 @@ import {
   TargetPromotionSuccessObservation,
   TargetPromotionStaleObservation,
   TargetPromotionNonConvergenceObservation,
+  TargetPromotionReconciliationDeferral,
   TargetPromotionAttemptLimit,
   TargetPromotionTerminalBasis,
   CompletionTaskClaim,
@@ -395,6 +396,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     correlation: TargetPromotionCorrelation,
     reason: TargetPromotionAttemptReason,
     ...initiatedByCoordinator
+  },
+  TargetPromotionReconciliationDeferred: {
+    afterAttemptOrdinal: TargetPromotionAttemptOrdinal,
+    correlation: TargetPromotionCorrelation,
+    deferral: TargetPromotionReconciliationDeferral,
+    ...nonActionOccurrence
   },
   TargetPromotionObservedSuccess: {
     basis: TargetPromotionTerminalBasis,

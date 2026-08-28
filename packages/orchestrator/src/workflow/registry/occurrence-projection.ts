@@ -89,6 +89,7 @@ const {
   StoppedAttemptClaimPreserved,
   TargetPromotionAttemptRequested,
   TargetPromotionNonConvergent,
+  TargetPromotionReconciliationDeferred,
   TargetPromotionRequested,
   TargetPromotionStale,
   TargetPromotionSucceeded,
@@ -770,6 +771,7 @@ const nonProjectedJournalEventKinds = {
   IntegratorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true,
   TargetPromotionAttemptIntended: true,
+  TargetPromotionReconciliationDeferred: true,
   TargetPromotionIntended: true,
   TargetPromotionNonConvergence: true,
   TargetPromotionObservedSuccess: true,
@@ -874,6 +876,7 @@ const historicalJournalEventKinds = {
   PostPromotionBlockerCandidateAncestryReadIntended: true,
   StoppedAttemptClaimNoReleaseObserved: true,
   TargetPromotionAttemptIntended: true,
+  TargetPromotionReconciliationDeferred: true,
   TargetPromotionIntended: true,
   TargetPromotionNonConvergence: true,
   TargetPromotionObservedSuccess: true,
@@ -1202,6 +1205,7 @@ const historicalIntegratorEventKinds = {
 
 const historicalPromotionEventKinds = {
   TargetPromotionAttemptIntended: true,
+  TargetPromotionReconciliationDeferred: true,
   TargetPromotionIntended: true,
   TargetPromotionNonConvergence: true,
   TargetPromotionObservedSuccess: true,
@@ -1685,6 +1689,10 @@ type HistoricalPromotionAttemptEvent = Extract<
   HistoricalPromotionEvent,
   { readonly _tag: "TargetPromotionAttemptIntended" }
 >
+type HistoricalPromotionReconciliationDeferredEvent = Extract<
+  HistoricalPromotionEvent,
+  { readonly _tag: "TargetPromotionReconciliationDeferred" }
+>
 type HistoricalPromotionSuccessEvent = Extract<
   HistoricalPromotionEvent,
   { readonly _tag: "TargetPromotionObservedSuccess" }
@@ -1772,6 +1780,36 @@ const promotionAttemptIsRecorded = (
   requestId: string,
   attemptOrdinal: number
 ): boolean => context.promotionAttemptIntents.has(promotionAttemptKey(requestId, attemptOrdinal))
+
+const projectHistoricalPromotionReconciliationDeferred = (
+  record: JournalRecord,
+  event: HistoricalPromotionReconciliationDeferredEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const intent = context.promotionIntents.get(event.correlation.requestId)
+  if (intent === undefined || !targetPromotionCorrelationEquals(intent.correlation, event.correlation)) {
+    return historicalFailure(
+      record,
+      "promotion reconciliation deferral " + event.correlation.requestId + " has no exact promotion intent"
+    )
+  }
+  if (!promotionAttemptIsRecorded(context, event.correlation.requestId, event.afterAttemptOrdinal)) {
+    return historicalFailure(
+      record,
+      "promotion reconciliation deferral " + event.correlation.requestId + " has no exact attempt intent"
+    )
+  }
+  return Effect.succeed(
+    TargetPromotionReconciliationDeferred.make({
+      afterAttemptOrdinal: event.afterAttemptOrdinal,
+      correlation: event.correlation,
+      deferral: event.deferral,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
 
 const promotionTerminalIntentIsValid = (
   context: HistoricalProjectionContext,
@@ -1881,6 +1919,9 @@ const projectHistoricalPromotion = (
 ): HistoricalProjectionResult => {
   if (event._tag === "TargetPromotionIntended") return projectHistoricalPromotionRequested(record, event, context)
   if (event._tag === "TargetPromotionAttemptIntended") return projectHistoricalPromotionAttempt(record, event, context)
+  if (event._tag === "TargetPromotionReconciliationDeferred") {
+    return projectHistoricalPromotionReconciliationDeferred(record, event, context)
+  }
   if (event._tag === "TargetPromotionObservedSuccess") return projectHistoricalPromotionSuccess(record, event, context)
   if (event._tag === "TargetPromotionStale") return projectHistoricalPromotionStale(record, event, context)
   return projectHistoricalPromotionNonConvergence(record, event, context)

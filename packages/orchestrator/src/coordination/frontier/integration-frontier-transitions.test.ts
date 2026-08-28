@@ -84,6 +84,8 @@ import {
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
   TargetPromotionIntendedEvent,
+  TargetPromotionReconciliationDeferredEvent,
+  TargetPromotionReconciliationDeferral,
   targetPromotionCorrelationFor
 } from "../../workflow/protocols/target-promotion/events.js"
 import { deriveIntegrationFrontier } from "./integration-frontier.js"
@@ -765,6 +767,58 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
   expect(
     deriveStartedIntegrationFrontier(
       runState,
+      {
+        ...runtimeFacts,
+        currentTrackerTaskIds: new Set([taskId]),
+        taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+      },
+      [responsibility]
+    ).transitions()
+  ).toEqual([RunnableFrontierTransition.RunTargetPromotion({ candidate, responsibility })])
+
+  const deferredRunState = {
+    ...runState,
+    appliedThrough: JournalPosition.make(12),
+    workflowHistory: {
+      records: [
+        ...records,
+        record(
+          12,
+          TargetPromotionReconciliationDeferredEvent.make({
+            afterAttemptOrdinal: attemptOrdinal,
+            correlation,
+            deferral: TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
+              observedHeadSha: fixedHead
+            }),
+            version: workflowJournalEventVersion
+          }),
+          "target-promotion-reconciliation-deferred"
+        )
+      ]
+    }
+  }
+  const releasedRuntimeFacts = { ...runtimeFacts, heldResponsibilityPositions: new Set<JournalPosition>() }
+  expect(
+    deriveStartedIntegrationFrontier(
+      deferredRunState,
+      { ...releasedRuntimeFacts, currentTrackerTaskIds: new Set(), taskClaimAuthorityByAttemptId: new Map() },
+      [responsibility]
+    ).transitions()
+  ).toEqual([])
+  expect(
+    deriveStartedIntegrationFrontier(
+      deferredRunState,
+      {
+        ...releasedRuntimeFacts,
+        currentTrackerTaskIds: new Set([taskId]),
+        taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+      },
+      [responsibility]
+    ).transitions()
+  ).toEqual([RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })])
+  expect(
+    deriveStartedIntegrationFrontier(
+      deferredRunState,
       {
         ...runtimeFacts,
         currentTrackerTaskIds: new Set([taskId]),

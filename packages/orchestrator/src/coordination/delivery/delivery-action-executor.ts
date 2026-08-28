@@ -178,6 +178,7 @@ export type DeliveryActionResult =
         | "CompletionTaskUnavailable"
         | "ContinuationAuthorizationStale"
         | "FocusedTaskCompletionSuccessRequired"
+        | "TargetPromotionDestinationUnreadable"
         | "TargetPromotionRetryAuthorityRequired"
         | AcceptedResultEvidenceConflict
         | AcceptedResultEvidenceUnavailable

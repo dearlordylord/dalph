@@ -7,6 +7,8 @@ import {
   type TargetPromotionIntendedEvent,
   TargetPromotionNonConvergenceObservation,
   TargetPromotionCorrelation,
+  TargetPromotionReconciliationDeferral,
+  type TargetPromotionReconciliationDeferredEvent,
   TargetPromotionStaleObservation,
   TargetPromotionSuccessObservation,
   TargetPromotionTerminalBasis,
@@ -24,6 +26,11 @@ export type TargetPromotionPendingRetry = typeof TargetPromotionPendingRetry.Typ
 /** Durable state reconstructed from exact promotion occurrences. */
 export const TargetPromotionState = Schema.TaggedUnion({
   PromotionPending: { correlation: TargetPromotionCorrelation, retry: TargetPromotionPendingRetry },
+  PromotionReconciliationDeferred: {
+    afterAttemptOrdinal: TargetPromotionAttemptOrdinal,
+    correlation: TargetPromotionCorrelation,
+    deferral: TargetPromotionReconciliationDeferral
+  },
   PromotionSucceeded: {
     basis: TargetPromotionTerminalBasis,
     correlation: TargetPromotionCorrelation,
@@ -88,6 +95,14 @@ const attemptRecords = (
       record.event._tag === "TargetPromotionAttemptIntended"
   )
 
+const reconciliationDeferralRecords = (
+  records: ReadonlyArray<PromotionOccurrence>
+): ReadonlyArray<PromotionOccurrence & { readonly event: TargetPromotionReconciliationDeferredEvent }> =>
+  records.filter(
+    (record): record is PromotionOccurrence & { readonly event: TargetPromotionReconciliationDeferredEvent } =>
+      record.event._tag === "TargetPromotionReconciliationDeferred"
+  )
+
 const correlationFromIntent = (records: ReadonlyArray<PromotionOccurrence>): TargetPromotionCorrelation | undefined => {
   const intent = records.findLast(
     (record): record is PromotionOccurrence & { readonly event: TargetPromotionIntendedEvent } =>
@@ -123,6 +138,26 @@ const stateFromTerminal = (event: TerminalPromotionEvent): TargetPromotionState 
       })
   })
 
+const deferredStateFor = (
+  relevant: ReadonlyArray<PromotionOccurrence>,
+  lastAttempt: ReturnType<typeof attemptRecords>[number] | undefined
+): TargetPromotionState | undefined => {
+  const lastDeferral = latest(reconciliationDeferralRecords(relevant))
+  if (
+    lastAttempt === undefined ||
+    lastDeferral === undefined ||
+    lastDeferral.position <= lastAttempt.position ||
+    lastDeferral.event.afterAttemptOrdinal !== lastAttempt.event.attemptOrdinal
+  ) {
+    return undefined
+  }
+  return TargetPromotionState.cases.PromotionReconciliationDeferred.make({
+    afterAttemptOrdinal: lastDeferral.event.afterAttemptOrdinal,
+    correlation: lastDeferral.event.correlation,
+    deferral: lastDeferral.event.deferral
+  })
+}
+
 /** Reconstructs promotion state without treating a journal row as Git authority. */
 export const deriveTargetPromotionState = (
   records: ReadonlyArray<JournalOccurrence>,
@@ -135,6 +170,8 @@ export const deriveTargetPromotionState = (
   const intentCorrelation = correlationFromIntent(relevant)
   if (intentCorrelation === undefined) return undefined
   const lastAttempt = latest(attemptRecords(relevant))
+  const deferred = deferredStateFor(relevant, lastAttempt)
+  if (deferred !== undefined) return deferred
   return lastAttempt === undefined
     ? TargetPromotionState.cases.PromotionPending.make({
         correlation: intentCorrelation,

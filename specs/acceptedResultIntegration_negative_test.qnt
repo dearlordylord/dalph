@@ -121,6 +121,32 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  action reacquireDeferredPromotionWithoutAuthority: bool = {
+    val result = state.results.get(1)
+    all {
+      Set(PromotionRetryAuthorityRequired, PromotionReadPending).contains(result.phase),
+      not(state.trackerFactsCurrent),
+      not(result.targetHeld),
+      state' = {
+        ...state,
+        results: state.results.put(1, { ...result, targetHeld: true }),
+      },
+    }
+  }
+
+  action retryDeferredPromotionWithoutAuthority: bool = {
+    val result = state.results.get(1)
+    all {
+      Set(PromotionRetryAuthorityRequired, PromotionReadPending).contains(result.phase),
+      not(state.trackerFactsCurrent),
+      not(result.promotionCompareAndSetRequested),
+      state' = {
+        ...state,
+        results: state.results.put(1, { ...result, promotionCompareAndSetRequested: true }),
+      },
+    }
+  }
+
   // Forbidden mutation: releasing one independent target must not erase the
   // fresh head proof still owned by another held target responsibility.
   action eraseIndependentHeldTargetProof: bool = {
@@ -1115,5 +1141,101 @@ module acceptedResultIntegrationNegativeTest {
       .then(observePromotionExactExpectedHead(1))
       .then(mintFourthPromotionAttempt)
       .expect(not(promotionAttemptsAreBounded))
+  }
+
+  run deferredPromotionCannotReacquireWithoutAuthorityTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(reconcilePromotionReadOnly(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(reacquireDeferredPromotionWithoutAuthority)
+      .expect(not(promotionRetryAuthorityDeferralIsStable))
+  }
+
+  run deferredPromotionCannotRetryWithoutAuthorityTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(reconcilePromotionReadOnly(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(retryDeferredPromotionWithoutAuthority)
+      .expect(not(promotionRetryAuthorityDeferralIsStable))
+  }
+
+  run unreadablePromotionCannotReacquireWithoutAuthorityTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(reconcilePromotionReadOnly(1))
+      .then(observePromotionGitUnreadable(1))
+      .then(reacquireDeferredPromotionWithoutAuthority)
+      .expect(not(unreadablePromotionStaysPending))
+  }
+
+  run unreadablePromotionCannotRetryWithoutAuthorityTest = {
+    init
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPromotionPremise(1))
+      .then(recordPromotionIntent(1))
+      .then(observePromotionExactExpectedHead(1))
+      .then(recordPromotionAttemptIntent(1))
+      .then(sendPromotionAttempt(1))
+      .then(losePromotionResponse(1))
+      .then(recoverCoordinator)
+      .then(reconcilePromotionReadOnly(1))
+      .then(observePromotionGitUnreadable(1))
+      .then(retryDeferredPromotionWithoutAuthority)
+      .expect(not(unreadablePromotionStaysPending))
   }
 }

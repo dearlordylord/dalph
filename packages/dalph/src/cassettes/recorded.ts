@@ -21,6 +21,7 @@ import {
   TargetPromotionObservedSuccessEvent,
   TargetPromotionStaleEvent,
   TargetPromotionNonConvergenceEvent,
+  TargetPromotionReconciliationDeferredEvent,
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimReplacementAttemptIntendedEvent,
   CompletionClaimReplacedEvent,
@@ -220,6 +221,7 @@ type RecordedTargetPromotionEntry = Extract<RecordedCassetteEntry, { readonly _t
 const isTargetPromotionEvent = (event: WorkflowJournalEvent): event is TargetPromotionEvent =>
   event._tag === "TargetPromotionIntended" ||
   event._tag === "TargetPromotionAttemptIntended" ||
+  event._tag === "TargetPromotionReconciliationDeferred" ||
   event._tag === "TargetPromotionObservedSuccess" ||
   event._tag === "TargetPromotionStale" ||
   event._tag === "TargetPromotionNonConvergence"
@@ -227,6 +229,7 @@ const isTargetPromotionEvent = (event: WorkflowJournalEvent): event is TargetPro
 const isRecordedTargetPromotionEntry = (entry: RecordedCassetteEntry): entry is RecordedTargetPromotionEntry =>
   entry._tag === "TargetPromotionIntended" ||
   entry._tag === "TargetPromotionAttemptIntended" ||
+  entry._tag === "TargetPromotionReconciliationDeferred" ||
   entry._tag === "TargetPromotionObservedSuccess" ||
   entry._tag === "TargetPromotionStale" ||
   entry._tag === "TargetPromotionNonConvergence"
@@ -247,6 +250,13 @@ const recordTargetPromotionEntry = (event: TargetPromotionEvent): RecordedTarget
         initiatedBy: coordinator(),
         occurrenceClassification: "InitiatedAction",
         reason: value.reason
+      }),
+      TargetPromotionReconciliationDeferred: (value): RecordedTargetPromotionEntry => ({
+        _tag: value._tag,
+        afterAttemptOrdinal: value.afterAttemptOrdinal,
+        correlation: value.correlation,
+        deferral: value.deferral,
+        occurrenceClassification: "NonActionOccurrence"
       }),
       TargetPromotionObservedSuccess: (value): RecordedTargetPromotionEntry => ({
         _tag: value._tag,
@@ -1231,6 +1241,13 @@ const eventForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): Work
         reason: value.reason,
         version: workflowJournalEventVersion
       }),
+    TargetPromotionReconciliationDeferred: (value) =>
+      TargetPromotionReconciliationDeferredEvent.make({
+        afterAttemptOrdinal: value.afterAttemptOrdinal,
+        correlation: value.correlation,
+        deferral: value.deferral,
+        version: workflowJournalEventVersion
+      }),
     TargetPromotionObservedSuccess: (value) =>
       TargetPromotionObservedSuccessEvent.make({
         basis: value.basis,
@@ -1622,6 +1639,8 @@ const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): stri
       `Dalph coordinator fixed exact promotion ${value.correlation.qualifiedCandidate.run.session.expectedTargetHead} -> ${value.correlation.qualifiedCandidate.candidateCommit}.`,
     TargetPromotionAttemptIntended: (value) =>
       `Dalph coordinator sent exact compare-and-set attempt ${value.attemptOrdinal} for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
+    TargetPromotionReconciliationDeferred: (value) =>
+      `Dalph deferred promotion attempt ${value.afterAttemptOrdinal} after ${value.deferral._tag}.`,
     TargetPromotionObservedSuccess: (value) =>
       `Git established candidate ${value.correlation.qualifiedCandidate.candidateCommit} by ${value.observation._tag}.`,
     TargetPromotionStale: (value) =>

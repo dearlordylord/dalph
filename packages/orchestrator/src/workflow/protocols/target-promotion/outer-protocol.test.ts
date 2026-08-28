@@ -43,6 +43,7 @@ import {
 import {
   deriveTargetPromotionState,
   deriveTargetPromotionStateFor,
+  reconcileTargetPromotionAttempt,
   runTargetPromotion,
   TargetPromotionCorrelationContradiction,
   TargetPromotionResultContradiction
@@ -132,6 +133,11 @@ const runFor = (
   records: Ref.Ref<ReadonlyArray<JournalRecord>>
 ) =>
   runTargetPromotion(candidate).pipe(
+    Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
+  )
+
+const reconcile = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+  reconcileTargetPromotionAttempt(qualifiedCandidate).pipe(
     Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
   )
 
@@ -393,6 +399,108 @@ it.effect("reads before retrying an ambiguous exact-head promotion and never sen
     expect(
       (yield* Ref.get(records)).filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
     ).toHaveLength(2)
+  })
+)
+
+it.effect("durably waits after an authority-free exact-head reconciliation and resumes without another read", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const service: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new TargetPromotionCompareAndSetFailure({
+                candidateCommit,
+                detail: "promotion response was lost",
+                expectedHead,
+                target
+              })
+            )
+          )
+        ),
+      read: () =>
+        Ref.update(calls, (current) => [...current, "read"]).pipe(
+          Effect.as(
+            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+          )
+        )
+    }
+    expect((yield* run(service, records))._tag).toBe("PromotionPending")
+    const deferred = yield* reconcile(service, records)
+    expect(deferred._tag).toBe("PromotionReconciliationDeferred")
+    expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read"])
+    expect(
+      (yield* Ref.get(records)).filter(({ event }) => event._tag === "TargetPromotionReconciliationDeferred")
+    ).toHaveLength(1)
+    expect((yield* reconcile(service, records))._tag).toBe("PromotionReconciliationDeferred")
+    expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read"])
+
+    const authorizedService: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Ref.update(calls, (current) => [...current, "authorized-compare-and-set"]).pipe(
+          Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
+        ),
+      read: service.read
+    }
+    expect((yield* run(authorizedService, records))._tag).toBe("PromotionSucceeded")
+    expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read", "authorized-compare-and-set"])
+  })
+)
+
+it.effect("durably waits after an unreadable reconciliation and rereads before an authorized retry", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const initial: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Effect.fail(
+          new TargetPromotionCompareAndSetFailure({
+            candidateCommit,
+            detail: "promotion response was lost",
+            expectedHead,
+            target
+          })
+        ),
+      read: () =>
+        Effect.succeed(
+          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+        )
+    }
+    expect((yield* run(initial, records))._tag).toBe("PromotionPending")
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const unreadable: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
+          Effect.andThen(Effect.die("read-only reconciliation called compare-and-set"))
+        ),
+      read: () =>
+        Ref.update(calls, (current) => [...current, "read"]).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new TargetPromotionGitReadFailure({ candidateCommit, detail: "destination unavailable", target })
+            )
+          )
+        )
+    }
+    expect((yield* reconcile(unreadable, records))._tag).toBe("PromotionReconciliationDeferred")
+    expect((yield* reconcile(unreadable, records))._tag).toBe("PromotionReconciliationDeferred")
+    expect(yield* Ref.get(calls)).toEqual(["read"])
+
+    const authorized: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
+          Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
+        ),
+      read: () =>
+        Ref.update(calls, (current) => [...current, "authorized-read"]).pipe(
+          Effect.as(
+            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+          )
+        )
+    }
+    expect((yield* run(authorized, records))._tag).toBe("PromotionSucceeded")
+    expect(yield* Ref.get(calls)).toEqual(["read", "authorized-read", "compare-and-set"])
   })
 )
 

@@ -168,6 +168,26 @@ export const TargetPromotionAttemptIntendedEvent = Schema.TaggedStruct("TargetPr
 })
 export type TargetPromotionAttemptIntendedEvent = typeof TargetPromotionAttemptIntendedEvent.Type
 
+/**
+ * Why one read-only reconciliation stopped after its single Git read. This
+ * durable fact suppresses reacquisition until current tracker membership and
+ * the exact claim authorize the existing retry protocol.
+ */
+export const TargetPromotionReconciliationDeferral = Schema.TaggedUnion({
+  RetryAuthorityRequired: { observedHeadSha: GitCommitSha },
+  TargetReadFailed: { detail: Schema.String }
+})
+export type TargetPromotionReconciliationDeferral = typeof TargetPromotionReconciliationDeferral.Type
+
+/** Durable fail-closed outcome of reconciling one exact ambiguous promotion attempt. */
+export const TargetPromotionReconciliationDeferredEvent = Schema.TaggedStruct("TargetPromotionReconciliationDeferred", {
+  afterAttemptOrdinal: TargetPromotionAttemptOrdinal,
+  correlation: TargetPromotionCorrelation,
+  deferral: TargetPromotionReconciliationDeferral,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type TargetPromotionReconciliationDeferredEvent = typeof TargetPromotionReconciliationDeferredEvent.Type
+
 /** Durable proof that M was accepted or discovered in the target's exact ancestry. */
 export const TargetPromotionObservedSuccessEvent = Schema.TaggedStruct("TargetPromotionObservedSuccess", {
   basis: TargetPromotionTerminalBasis,
@@ -200,6 +220,7 @@ export type TargetPromotionNonConvergenceEvent = typeof TargetPromotionNonConver
 export const TargetPromotionJournalEvent = Schema.Union([
   TargetPromotionIntendedEvent,
   TargetPromotionAttemptIntendedEvent,
+  TargetPromotionReconciliationDeferredEvent,
   TargetPromotionObservedSuccessEvent,
   TargetPromotionStaleEvent,
   TargetPromotionNonConvergenceEvent

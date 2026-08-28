@@ -323,6 +323,15 @@ export const targetPromotionAttemptIntentRecordKey = (
   attemptOrdinal: TargetPromotionAttemptOrdinal
 ): JournalRecordKey => JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:attempt:${attemptOrdinal}`)
 
+/** One stable fail-closed reconciliation outcome for an exact ambiguous promotion attempt. */
+export const targetPromotionReconciliationDeferredRecordKey = (
+  requestId: TargetPromotionRequestId,
+  attemptOrdinal: TargetPromotionAttemptOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${targetPromotionRecordKeyPrefix(requestId)}:attempt:${attemptOrdinal}:reconciliation-deferred`
+  )
+
 /** Stable journal key for the one exact promotion proof. */
 export const targetPromotionObservedSuccessRecordKey = (requestId: TargetPromotionRequestId): JournalRecordKey =>
   JournalRecordKey.make(`${targetPromotionRecordKeyPrefix(requestId)}:observed-success`)
