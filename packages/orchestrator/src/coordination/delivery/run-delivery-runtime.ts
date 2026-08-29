@@ -72,6 +72,12 @@ type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> 
   readonly trackerGraph: EstablishedTrackerGraph
 }
 
+/** A caller-local proof that this activation has reached its next quiescent boundary. */
+type ActivationBoundaryQuiescencePredicate<EBoundary = never, RBoundary = never> = (
+  initialAcceptedAt: DeliveryRuntimeEvaluation["acceptedAt"],
+  current: DeliveryRuntimeEvaluation
+) => Effect.Effect<boolean, EBoundary, RBoundary>
+
 /** The exact descriptive state observed after no executable or admitted action remains. */
 export type DeliveryRuntimeQuiescence =
   | {
@@ -104,11 +110,17 @@ export type DeliveryRuntimeQuiescence =
  * boundary. Closing that gap means an MBT driver over this loop, which is the
  * single highest-value model in the study.
  */
-export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
-  relation: DeliveryRuntimeInput<E>
+export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <
+  E,
+  EBoundary = never,
+  RBoundary = never
+>(
+  relation: DeliveryRuntimeInput<E>,
+  activationBoundary?: ActivationBoundaryQuiescencePredicate<EBoundary, RBoundary>
 ): Effect.fn.Return<
   DeliveryRuntimeQuiescence,
   | E
+  | EBoundary
   | ApplicationExiting
   | DeliveryActionExecutionError
   | DeliveryRuntimeProposalOwnershipConflict
@@ -120,6 +132,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
   | OperationIdAllocator
   | PlannedAttemptProtocolController
   | PlannedTaskAttemptPlanner
+  | RBoundary
 > {
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -373,6 +386,36 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       })
 
       for (;;) {
+        const currentBeforeAdmission = Option.getOrThrow(yield* Ref.get(latest))
+        const liveBeforeAdmission = yield* Ref.get(owners)
+        if (activationBoundary !== undefined && liveBeforeAdmission.size === 0) {
+          const reachedBoundary = yield* activationBoundary(first.acceptedAt, currentBeforeAdmission)
+          if (reachedBoundary) {
+            const proposedActions = currentBeforeAdmission.proposedActions
+            if (
+              proposedActions._tag === "DeliveryProposalsAvailable" &&
+              currentBeforeAdmission.quiescence._tag === "TrackerReconfirmationAllowed"
+            ) {
+              const graph = currentBeforeAdmission.current.trackerGraph
+              if (graph._tag !== "GraphEstablished" || currentBeforeAdmission.acceptedAt === null) {
+                return yield* new DeliveryRuntimeReconfirmationStateInvalid({
+                  acceptedAt: currentBeforeAdmission.acceptedAt,
+                  graphState: graph._tag
+                })
+              }
+              const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }
+              const quiescence: DeliveryRuntimeQuiescence = {
+                _tag: "TrackerReconfirmationQuiescence",
+                acceptedAt: currentBeforeAdmission.acceptedAt,
+                current: { ...currentBeforeAdmission.current, trackerGraph: graph },
+                disposition: currentBeforeAdmission.quiescence,
+                proposedActions: empty
+              }
+              yield* publishRuntimeObservation()
+              return quiescence
+            }
+          }
+        }
         while (yield* admissionLoop.admitPass()) yield* Effect.yieldNow
 
         const current = Option.getOrThrow(yield* Ref.get(latest))

@@ -39,9 +39,14 @@ import {
   type InterruptibleWorkflowBoundaryExecution
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
+import { RunActivationOpportunity } from "../coordination/run/run-activation-opportunity.js"
 import { runJournaledTaskClaimRelease } from "../workflow/protocols/task-claim-release/journaled.js"
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
 import { journaledTrackerGraphRead } from "../workflow/protocols/task-tracker-read/protocol.js"
+import {
+  runActiveTargetLineageAuthorityRefreshGitRead,
+  runActiveWorktreeAuthorityRefreshGitRead
+} from "../workflow/protocols/active-work-authority-refresh/journaled.js"
 
 const requireTaskWorkSpecification = <A>(
   knowledge: Option.Option<A>,
@@ -55,7 +60,8 @@ const requireTaskWorkSpecification = <A>(
 /** Adds durable intent and outcomes to the generic pre-executor operations. */
 export const journaledWorkflowInterpreterLayer = <E, R>(
   runId: RunId,
-  interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>
+  interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>,
+  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ) =>
   Layer.effect(
     WorkflowInterpreter,
@@ -167,6 +173,17 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
+        if (opportunity._tag === "ActiveWorkAuthorityRefresh") {
+          return yield* runActiveWorktreeAuthorityRefreshGitRead({
+            boundary: interruptibleBoundary,
+            interpreter,
+            journal,
+            onIntentRecorded,
+            operation,
+            runId,
+            source: opportunity.source
+          })
+        }
         yield* Effect.uninterruptible(
           journal
             .append(
@@ -212,6 +229,17 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
+        if (opportunity._tag === "ActiveWorkAuthorityRefresh") {
+          return yield* runActiveTargetLineageAuthorityRefreshGitRead({
+            boundary: interruptibleBoundary,
+            interpreter,
+            journal,
+            onIntentRecorded,
+            operation,
+            runId,
+            source: opportunity.source
+          })
+        }
         yield* Effect.uninterruptible(
           journal
             .append(

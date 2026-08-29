@@ -609,7 +609,7 @@ module taskFactReconciliationNegativeTest {
   run activeRefreshUnreadableCannotRequestOrdinarySuspensionTest = {
     init
       .then(establishRunningAttemptForActiveRefresh)
-      .then(offerActiveWorkAuthorityRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTrackerNotification)
       .then(observeUnreadableClaimDuringActiveRefresh)
       .then(conflateActiveRefreshUnreadableWithOrdinarySuspension)
       .expect(not(activeRefreshUnreadableAuthorizesNoExecutorAction))

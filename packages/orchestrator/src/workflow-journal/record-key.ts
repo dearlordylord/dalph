@@ -37,6 +37,7 @@ import type {
   CleanupMutationOrdinal,
   CleanupObservationOrdinal
 } from "../workflow/protocols/disposition-cleanup/disposition.js"
+import type { ActiveWorkAuthorityRefreshOrdinal } from "../workflow/protocols/active-work-authority-refresh/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -209,6 +210,13 @@ export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
 /** Stable key for one Restart-scoped authority-read failure occurrence. */
 export const attemptRestartAuthorityReadFailedRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:restart-authority-read-failed`)
+
+/** Stable key for one numbered active-work authority-refresh Git read failure. */
+export const activeWorkAuthorityRefreshGitReadFailedRecordKey = (
+  operationId: OperationId,
+  ordinal: ActiveWorkAuthorityRefreshOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`operation:${operationId}:active-work-authority-refresh-git-read-failed:${ordinal}`)
 
 export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:plan`)

@@ -86,7 +86,8 @@ import {
   makeTaskWorktreeReconciliationOperation,
   makeTaskWorktreeObservationOperation,
   makeTrackerGraphObservationOperation,
-  TaskClaimReleaseAuthority
+  TaskClaimReleaseAuthority,
+  WorkflowOperation
 } from "./operation.js"
 import { AttemptWorktreeLost } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interpreter.js"
@@ -104,7 +105,8 @@ import {
   projectWorkflowOccurrences,
   WorkflowActor,
   type WorkflowOccurrence,
-  WorkflowOccurrenceProjection
+  WorkflowOccurrenceProjection,
+  workflowOccurrenceProjectionVersion
 } from "./occurrence-projection.js"
 import { Effect, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
@@ -134,6 +136,13 @@ import {
   PlannedAttemptReplacedEvent,
   PlannedAttemptReplacementWitness
 } from "../protocols/attempt-choice/replacement-events.js"
+import {
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshGitReadFailedEvent,
+  ActiveWorkAuthorityRefreshGitReadPurpose,
+  ActiveWorkAuthorityRefreshOrdinal,
+  makeActiveWorkAuthorityRefreshGitReadOperation
+} from "../protocols/active-work-authority-refresh/events.js"
 import {
   TaskClaimReacquisitionDirectedEvent,
   TaskClaimReacquisitionRequestId
@@ -899,6 +908,121 @@ it.effect("rejects each Git outcome without its distinct earlier same-run read i
   })
 )
 
+it.effect("projects active-refresh Git failures as non-action trace occurrences", () =>
+  Effect.gen(function* () {
+    const gitRead = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("active-refresh-occurrence-read"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const authority = ActiveWorkAuthorityRefreshAuthority.make({
+      attemptId: plannedAttempt.attemptId,
+      runId,
+      source: "TrackerNotification"
+    })
+    const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
+    const activeIntent = WorkflowOperation.cases.ReadTaskWorktree.make({
+      ...gitRead,
+      purpose: ActiveWorkAuthorityRefreshGitReadPurpose.make({ authority, ordinal })
+    })
+    const activeRead = makeActiveWorkAuthorityRefreshGitReadOperation(gitRead, authority, ordinal)
+    const failure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
+      authority,
+      failure: new GitWorktreeReadFailure({
+        detail: "Git is temporarily unreadable",
+        worktree: plannedAttempt.worktree
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operation: activeRead,
+      ordinal,
+      version: workflowJournalEventVersion
+    })
+    const projection = yield* projectWorkflowOccurrences([
+      record(
+        1,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: activeIntent,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(2, failure)
+    ])
+
+    expect(projection.occurrences).toHaveLength(2)
+    const occurrence = projection.occurrences[1]
+    if (occurrence === undefined) return yield* Effect.die("active-refresh occurrence is missing")
+    expect(occurrence).toMatchObject({
+      _tag: "ActiveWorkAuthorityRefreshGitReadFailed",
+      authority,
+      failure: failure.failure,
+      operation: activeRead,
+      ordinal,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: JournalPosition.make(2),
+      runId
+    })
+    expect(describeWorkflowOccurrence(occurrence)).toEqual({
+      actorLabel: "no actor is proven",
+      presentation: { classification: "NonActionOccurrence" },
+      text: "active-work authority refresh Git read failed; no actor is proven"
+    })
+    const malformed = yield* decodeWorkflowOccurrence({
+      ...occurrence,
+      failure: new GitWorktreeReadFailure({
+        detail: "the decoded occurrence names another worktree",
+        worktree: WorktreeLocator.make("/worktrees/another-active-refresh-worktree")
+      })
+    }).pipe(Effect.flip)
+    expect(malformed._tag).toBe("SchemaError")
+  })
+)
+
+it.effect("rejects an active-refresh failure whose persisted intent is positioned afterward", () =>
+  Effect.gen(function* () {
+    const gitRead = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("active-refresh-late-intent-read"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const authority = ActiveWorkAuthorityRefreshAuthority.make({
+      attemptId: plannedAttempt.attemptId,
+      runId,
+      source: "Timer"
+    })
+    const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
+    const activeIntent = WorkflowOperation.cases.ReadTaskWorktree.make({
+      ...gitRead,
+      purpose: ActiveWorkAuthorityRefreshGitReadPurpose.make({ authority, ordinal })
+    })
+    const failure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
+      authority,
+      failure: new GitWorktreeReadFailure({
+        detail: "Git is temporarily unreadable",
+        worktree: plannedAttempt.worktree
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operation: makeActiveWorkAuthorityRefreshGitReadOperation(gitRead, authority, ordinal),
+      ordinal,
+      version: workflowJournalEventVersion
+    })
+    const invalid = yield* projectWorkflowOccurrences([
+      record(
+        2,
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: activeIntent,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(1, failure)
+    ]).pipe(Effect.flip)
+    expect(invalid._tag).toBe("SchemaError")
+  })
+)
+
 it.effect("requires exact claim and worktree payloads at historical outcome boundaries", () =>
   Effect.gen(function* () {
     const acquisition = {
@@ -1588,6 +1712,16 @@ it.effect("schema round-trip tests preserve classification and typed relationshi
       throw new Error("expected round-tripped tracker observation")
     }
     expect(Option.isSome(originatingActionForTrackerObservation(decoded, observation))).toBe(true)
+  })
+)
+
+it.effect("rejects the pre-change occurrence projection version", () =>
+  Effect.gen(function* () {
+    const issue = yield* Schema.decodeUnknownEffect(WorkflowOccurrenceProjection)({
+      occurrences: [],
+      version: workflowOccurrenceProjectionVersion - 1
+    }).pipe(Effect.flip)
+    expect(issue._tag).toBe("SchemaError")
   })
 )
 
@@ -2581,6 +2715,7 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     AttemptImplementationAbandoned: true,
     AttemptRestartAuthorityReadFailed: true,
     AttemptStoppageIntended: true,
+    ActiveWorkAuthorityRefreshGitReadFailed: true,
     BranchCleanupOccurred: true,
     CancelledAttemptClaimNoReleaseObserved: true,
     CancelledAttemptImplementationResponsibilityRelinquished: true,
@@ -2626,6 +2761,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(49)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(50)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

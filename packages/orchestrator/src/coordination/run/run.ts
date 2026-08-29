@@ -272,7 +272,8 @@ const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
 >(
   target: TrackerTarget,
   relationsEffect: Effect.Effect<Relations, ERelations, RRelations>,
-  executorOf: (relations: Relations) => Effect.Effect<DeliveryActionExecutorService, EExecutor, RExecutor>
+  executorOf: (relations: Relations) => Effect.Effect<DeliveryActionExecutorService, EExecutor, RExecutor>,
+  opportunity: RunActivationOpportunity
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -282,7 +283,7 @@ const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
         const consequences = yield* delivery
         const relation = yield* deliveryRuntimeFrom(consequences)
 
-        return yield* runStabilizedDelivery(target, relation).pipe(
+        return yield* runStabilizedDelivery(target, relation, opportunity).pipe(
           Effect.provideService(DeliveryActionExecutor, executor)
         )
       }).pipe(Effect.provide(relations))
@@ -306,7 +307,8 @@ const runJournaledDelivery = <E, R>(
   runId: RunId,
   target: TrackerTarget,
   executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
-  activateCleanup: boolean
+  activateCleanup: boolean,
+  opportunity: RunActivationOpportunity
 ) => {
   if (activateCleanup) {
     return Effect.gen(function* () {
@@ -316,13 +318,19 @@ const runJournaledDelivery = <E, R>(
       // same loop.
       const cleanup = yield* DispositionCleanupActivation
       yield* cleanup.run
-      return yield* runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
-        executorFactory(runId, target)
+      return yield* runDeliveryComposition(
+        target,
+        makeJournaledDeliveryRelations(runId, target),
+        () => executorFactory(runId, target),
+        opportunity
       )
     })
   }
-  return runDeliveryComposition(target, makeJournaledDeliveryRelations(runId, target), () =>
-    executorFactory(runId, target)
+  return runDeliveryComposition(
+    target,
+    makeJournaledDeliveryRelations(runId, target),
+    () => executorFactory(runId, target),
+    opportunity
   )
 }
 
@@ -341,7 +349,7 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
       target,
       initialControlPolicySource,
       runId,
-      runJournaledDelivery(runId, target, executorFactory, activateCleanup),
+      runJournaledDelivery(runId, target, executorFactory, activateCleanup, opportunity),
       opportunity
     )
   })

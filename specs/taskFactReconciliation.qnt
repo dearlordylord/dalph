@@ -151,6 +151,10 @@ module taskFactReconciliation {
   // AuthorityReadPurpose distinguishes an ordinary continuation projection
   // from the tracker/timer opportunity that rereads authority for Running work.
   type AuthorityReadPurpose = OrdinaryContinuationRead | ActiveWorkRefreshRead
+  // Only these two process-local triggers may mint an active refresh. Ordinary
+  // AcceptedFactPublication and OperatorWake entries keep NoRefreshSource and
+  // therefore remain ordinary continuation projections.
+  type RefreshSource = NoRefreshSource | TrackerNotification | Timer
   type FactDecision =
     | ContinueWork
     | AwaitNextActiveWorkRefresh
@@ -252,9 +256,11 @@ module taskFactReconciliation {
     | ForeignClaimConstraintObservedAction
     | UnreadableClaimConstraintObservedAction
     | ActiveWorkRunningEstablishedAction
-    | ActiveWorkRefreshOfferedAction
+    | ActiveRefreshTrackerNotificationOfferedAction
+    | ActiveRefreshTimerOfferedAction
     | ActiveRefreshHealthyObservedAction
     | ActiveRefreshUnreadableObservedAction
+    | ActiveRefreshGitFailuresObservedAction
     | TaskFactsSafelySuspendedAction
     | MissingClaimDirectionAppliedAction
     | ForeignClaimDirectionAppliedAction
@@ -327,6 +333,7 @@ module taskFactReconciliation {
     independentTaskEligible: bool,
     independentTaskSelected: bool,
     authorityReadPurpose: AuthorityReadPurpose,
+    refreshSource: RefreshSource,
     constraint: Constraint,
     factDecision: FactDecision,
     exactClaimHeld: bool,
@@ -691,6 +698,67 @@ module taskFactReconciliation {
       not(state.integrationSelected),
     }
 
+  // A healthy active refresh is an observation-only handoff. It preserves
+  // the exact Running responsibility and waits for the next tracker/timer
+  // opportunity instead of authorizing another executor call.
+  val healthyActiveRefreshAuthorizesNoExecutorAction: bool =
+    state.lastAction != ActiveRefreshHealthyObservedAction or and {
+      state.authorityReadPurpose == ActiveWorkRefreshRead,
+      state.factDecision == AwaitNextActiveWorkRefresh,
+      state.constraint == NoConstraint,
+      state.executorEvidence == ExactRunning,
+      state.positionHeld,
+      state.implementationResponsibilityRetained,
+      not(state.cleanupSelected),
+      not(state.integrationSelected),
+    }
+
+  // Worktree and target-lineage read failures during an active refresh are
+  // durable unreadable waits. Replaying either exact operation must not issue
+  // another Git call, and the current Running position remains held.
+  val activeRefreshGitFailuresAuthorizeNoExecutorAction: bool =
+    state.lastAction != ActiveRefreshGitFailuresObservedAction or and {
+      state.authorityReadPurpose == ActiveWorkRefreshRead,
+      state.refreshSource == TrackerNotification or state.refreshSource == Timer,
+      state.factDecision == AwaitNextActiveWorkRefresh,
+      state.constraint == NoConstraint,
+      state.executorEvidence == ExactRunning,
+      state.positionHeld,
+      state.implementationResponsibilityRetained,
+      not(state.cleanupSelected),
+      not(state.integrationSelected),
+    }
+
+  // A refresh source is meaningful only for an active-refresh read. This is
+  // the model-level correspondence for ordinary AcceptedFactPublication and
+  // OperatorWake entries: they retain NoRefreshSource and cannot mint this
+  // active authority path.
+  val ordinaryAuthorityReadHasNoRefreshSource: bool =
+    state.authorityReadPurpose != OrdinaryContinuationRead
+      or state.refreshSource == NoRefreshSource
+
+  val activeRefreshSourceIsTrackerOrTimer: bool =
+    not(
+      state.lastAction == ActiveRefreshTrackerNotificationOfferedAction
+        or state.lastAction == ActiveRefreshTimerOfferedAction
+        or state.lastAction == ActiveRefreshHealthyObservedAction
+        or state.lastAction == ActiveRefreshUnreadableObservedAction
+    ) or state.refreshSource == TrackerNotification or state.refreshSource == Timer
+
+  // The setup action that establishes already Running work is distinct from
+  // the later tracker/timer offer and cannot itself be mistaken for a refresh.
+  val activeWorkRunningEstablishmentRetainsAuthority: bool =
+    state.lastAction != ActiveWorkRunningEstablishedAction or and {
+      state.authorityReadPurpose == OrdinaryContinuationRead,
+      state.factDecision == ContinueWork,
+      state.constraint == NoConstraint,
+      state.executorEvidence == ExactRunning,
+      state.positionHeld,
+      state.implementationResponsibilityRetained,
+      not(state.cleanupSelected),
+      not(state.integrationSelected),
+    }
+
   // The ordinary activation path remains fail-closed: an unreadable claim
   // while deciding whether work may continue requests the existing exact safe
   // suspension route.
@@ -966,9 +1034,20 @@ module taskFactReconciliation {
   val unreadableClaimConstraintObservedReached: bool =
     state.lastAction == UnreadableClaimConstraintObservedAction
   val activeWorkRefreshOfferedReached: bool =
-    state.lastAction == ActiveWorkRefreshOfferedAction
+    state.lastAction == ActiveRefreshTrackerNotificationOfferedAction
+      or state.lastAction == ActiveRefreshTimerOfferedAction
+  val activeRefreshTrackerNotificationOfferedReached: bool =
+    state.lastAction == ActiveRefreshTrackerNotificationOfferedAction
+  val activeRefreshTimerOfferedReached: bool =
+    state.lastAction == ActiveRefreshTimerOfferedAction
+  val activeWorkRunningEstablishedReached: bool =
+    state.lastAction == ActiveWorkRunningEstablishedAction
   val activeRefreshUnreadableReached: bool =
     state.lastAction == ActiveRefreshUnreadableObservedAction
+  val activeRefreshHealthyReached: bool =
+    state.lastAction == ActiveRefreshHealthyObservedAction
+  val activeRefreshGitFailuresReached: bool =
+    state.lastAction == ActiveRefreshGitFailuresObservedAction
   val taskFactsSafelySuspendedReached: bool = state.lastAction == TaskFactsSafelySuspendedAction
   val missingClaimDirectionAppliedReached: bool = state.lastAction == MissingClaimDirectionAppliedAction
   val foreignClaimDirectionAppliedReached: bool = state.lastAction == ForeignClaimDirectionAppliedAction
@@ -1077,6 +1156,7 @@ module taskFactReconciliation {
       independentTaskEligible: true,
       independentTaskSelected: false,
       authorityReadPurpose: OrdinaryContinuationRead,
+      refreshSource: NoRefreshSource,
       constraint: NoConstraint,
       factDecision: ContinueWork,
       exactClaimHeld: true,
@@ -2482,10 +2562,9 @@ module taskFactReconciliation {
     },
   }
 
-  // TrackerNotification and configured Timer are represented by this offered
-  // opportunity. It refreshes work already proven Running and does not
+  // A tracker notification refreshes work already proven Running and does not
   // authorize another executor command.
-  action offerActiveWorkAuthorityRefresh: bool = all {
+  action offerActiveWorkAuthorityRefreshFromTrackerNotification: bool = all {
     state.phase == PreIntegration,
     state.f2WinningChoice == NoChoice,
     state.factDecision == ContinueWork or state.factDecision == AwaitNextActiveWorkRefresh,
@@ -2494,17 +2573,40 @@ module taskFactReconciliation {
     state' = {
       ...state,
       authorityReadPurpose: ActiveWorkRefreshRead,
+      refreshSource: TrackerNotification,
       factDecision: ContinueWork,
       executorEvidence: ExactRunning,
       quiescenceUnbroken: false,
       positionHeld: true,
-      lastAction: ActiveWorkRefreshOfferedAction,
+      lastAction: ActiveRefreshTrackerNotificationOfferedAction,
+    },
+  }
+
+  // A configured timer is a distinct active-refresh source with the same
+  // authority and no-action guarantees as a tracker notification.
+  action offerActiveWorkAuthorityRefreshFromTimer: bool = all {
+    state.phase == PreIntegration,
+    state.f2WinningChoice == NoChoice,
+    state.factDecision == ContinueWork or state.factDecision == AwaitNextActiveWorkRefresh,
+    state.constraint == NoConstraint,
+    state.executorEvidence == ExactRunning,
+    state' = {
+      ...state,
+      authorityReadPurpose: ActiveWorkRefreshRead,
+      refreshSource: Timer,
+      factDecision: ContinueWork,
+      executorEvidence: ExactRunning,
+      quiescenceUnbroken: false,
+      positionHeld: true,
+      lastAction: ActiveRefreshTimerOfferedAction,
     },
   }
 
   action observeHealthyActiveWorkRefresh: bool = all {
-    state.lastAction == ActiveWorkRefreshOfferedAction,
+    state.lastAction == ActiveRefreshTrackerNotificationOfferedAction
+      or state.lastAction == ActiveRefreshTimerOfferedAction,
     state.authorityReadPurpose == ActiveWorkRefreshRead,
+    state.refreshSource == TrackerNotification or state.refreshSource == Timer,
     state.factDecision == ContinueWork,
     state.constraint == NoConstraint,
     state' = {
@@ -2517,8 +2619,10 @@ module taskFactReconciliation {
   }
 
   action observeUnreadableClaimDuringActiveRefresh: bool = all {
-    state.lastAction == ActiveWorkRefreshOfferedAction,
+    state.lastAction == ActiveRefreshTrackerNotificationOfferedAction
+      or state.lastAction == ActiveRefreshTimerOfferedAction,
     state.authorityReadPurpose == ActiveWorkRefreshRead,
+    state.refreshSource == TrackerNotification or state.refreshSource == Timer,
     state.factDecision == ContinueWork,
     state.constraint == NoConstraint,
     state' = {
@@ -2526,6 +2630,26 @@ module taskFactReconciliation {
       factDecision: AwaitNextActiveWorkRefresh,
       claimState: UnreadableClaim,
       lastAction: ActiveRefreshUnreadableObservedAction,
+    },
+  }
+
+  // The executable conformance driver performs both Git authority reads,
+  // replays each exact operation, and then opens a fresh opportunity. The
+  // model records their shared no-command outcome while the driver witnesses
+  // typed events, identity reuse, and the next durable ordinal.
+  action observeActiveRefreshGitFailures: bool = all {
+    state.lastAction == ActiveRefreshTrackerNotificationOfferedAction
+      or state.lastAction == ActiveRefreshTimerOfferedAction,
+    state.authorityReadPurpose == ActiveWorkRefreshRead,
+    state.refreshSource == TrackerNotification or state.refreshSource == Timer,
+    state.factDecision == ContinueWork,
+    state.constraint == NoConstraint,
+    state' = {
+      ...state,
+      factDecision: AwaitNextActiveWorkRefresh,
+      claimState: ExactClaim,
+      exactClaimHeld: true,
+      lastAction: ActiveRefreshGitFailuresObservedAction,
     },
   }
 
@@ -2721,9 +2845,11 @@ module taskFactReconciliation {
     observeForeignClaimConstraint,
     observeUnreadableClaimConstraint,
     establishRunningAttemptForActiveRefresh,
-    offerActiveWorkAuthorityRefresh,
+    offerActiveWorkAuthorityRefreshFromTrackerNotification,
+    offerActiveWorkAuthorityRefreshFromTimer,
     observeHealthyActiveWorkRefresh,
     observeUnreadableClaimDuringActiveRefresh,
+    observeActiveRefreshGitFailures,
     reportSafelySuspended,
     applyMissingClaimReacquisitionDirection,
     applyForeignClaimReacquisitionDirection,
@@ -2738,12 +2864,71 @@ module taskFactReconciliation {
   // Focused production-backed MBT slice for the active-work refresh chronology.
   action activeRefreshMbtStep: bool = any {
     all { state.lastAction == InitializedAction, establishRunningAttemptForActiveRefresh },
-    all { state.lastAction == ActiveWorkRunningEstablishedAction, offerActiveWorkAuthorityRefresh },
     all {
-      state.lastAction == ActiveWorkRefreshOfferedAction,
+      state.lastAction == ActiveWorkRunningEstablishedAction
+        or state.lastAction == ActiveRefreshHealthyObservedAction
+        or state.lastAction == ActiveRefreshUnreadableObservedAction,
+      any { offerActiveWorkAuthorityRefreshFromTrackerNotification, offerActiveWorkAuthorityRefreshFromTimer },
+    },
+    all {
+      state.lastAction == ActiveRefreshTrackerNotificationOfferedAction
+        or state.lastAction == ActiveRefreshTimerOfferedAction,
       any { observeHealthyActiveWorkRefresh, observeUnreadableClaimDuringActiveRefresh },
     },
     all { state.lastAction == ActiveRefreshUnreadableObservedAction, selectIndependentTaskB },
+  }
+
+  // Deterministic source-specific witnesses keep both production owner paths
+  // exercised by MBT; the randomized relation above still permits either
+  // source on later refresh opportunities.
+  action activeRefreshTrackerNotificationMbtStep: bool = any {
+    all { state.lastAction == InitializedAction, establishRunningAttemptForActiveRefresh },
+    all {
+      state.lastAction == ActiveWorkRunningEstablishedAction,
+      offerActiveWorkAuthorityRefreshFromTrackerNotification,
+    },
+    all {
+      state.lastAction == ActiveRefreshTrackerNotificationOfferedAction,
+      any { observeHealthyActiveWorkRefresh, observeUnreadableClaimDuringActiveRefresh },
+    },
+    all { state.lastAction == ActiveRefreshUnreadableObservedAction, selectIndependentTaskB },
+  }
+
+  action activeRefreshTimerMbtStep: bool = any {
+    all { state.lastAction == InitializedAction, establishRunningAttemptForActiveRefresh },
+    all {
+      state.lastAction == ActiveWorkRunningEstablishedAction,
+      offerActiveWorkAuthorityRefreshFromTimer,
+    },
+    all {
+      state.lastAction == ActiveRefreshTimerOfferedAction,
+      any { observeHealthyActiveWorkRefresh, observeUnreadableClaimDuringActiveRefresh },
+    },
+    all { state.lastAction == ActiveRefreshUnreadableObservedAction, selectIndependentTaskB },
+  }
+
+  action activeRefreshGitFailureTrackerNotificationMbtStep: bool = any {
+    all { state.lastAction == InitializedAction, establishRunningAttemptForActiveRefresh },
+    all {
+      state.lastAction == ActiveWorkRunningEstablishedAction,
+      offerActiveWorkAuthorityRefreshFromTrackerNotification,
+    },
+    all {
+      state.lastAction == ActiveRefreshTrackerNotificationOfferedAction,
+      observeActiveRefreshGitFailures,
+    },
+  }
+
+  action activeRefreshGitFailureTimerMbtStep: bool = any {
+    all { state.lastAction == InitializedAction, establishRunningAttemptForActiveRefresh },
+    all {
+      state.lastAction == ActiveWorkRunningEstablishedAction,
+      offerActiveWorkAuthorityRefreshFromTimer,
+    },
+    all {
+      state.lastAction == ActiveRefreshTimerOfferedAction,
+      observeActiveRefreshGitFailures,
+    },
   }
 
   // Executable conformance intentionally exercises the #65 boundary slice.

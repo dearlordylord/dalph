@@ -54,6 +54,7 @@ import {
   type DeliveryRuntimeLiveOwnerSnapshot,
   deliveryProposalOrderTaskId,
   type JournaledTrackerGraphObservation,
+  type RunActivationOpportunityValue,
   freshWorkflowRunId,
   GitTargetLineage,
   GitTargetLineageReadFailure,
@@ -1877,7 +1878,6 @@ const runAuthoredScenarioCassetteWith = (request: {
         taskClaimReacquisitionControlLayer
       )
       const controlPolicyLayer = Layer.merge(baseControlPolicyLayer, operatorControlLayer)
-      const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer)
       const planningLayer = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
         Layer.mergeAll(
           deterministicOperationIdAllocatorLayer(`cassette:${runId}:activation:${activationOrdinal}:operation`),
@@ -1938,7 +1938,11 @@ const runAuthoredScenarioCassetteWith = (request: {
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
       const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
-      const runtimeLayerFor = (activationOrdinal: AuthoredRunActivationOrdinalType) => {
+      const runtimeLayerFor = (
+        activationOrdinal: AuthoredRunActivationOrdinalType,
+        opportunity: RunActivationOpportunityValue
+      ) => {
+        const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer, opportunity)
         const planning = planningLayer(activationOrdinal)
         const executorLayer = controlledExecutorLayer(
           cursor,
@@ -1956,7 +1960,8 @@ const runAuthoredScenarioCassetteWith = (request: {
           completionTaskConfigured ? completionTaskBoundary : undefined,
           preservingDispositionCleanupBoundaryLayer,
           evidenceStore,
-          false
+          false,
+          opportunity
         ).pipe(
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
@@ -1979,10 +1984,10 @@ const runAuthoredScenarioCassetteWith = (request: {
           })
         )
       }
-      const runtimeLayer = (_input: JournaledRuntimeLayerInput) =>
+      const runtimeLayer = ({ opportunity }: JournaledRuntimeLayerInput) =>
         Layer.unwrap(
           Ref.updateAndGet(latestRuntimeActivationOrdinal, (ordinal) => ordinal + 1).pipe(
-            Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal)))
+            Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal), opportunity))
           )
         )
       const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, {

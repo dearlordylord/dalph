@@ -300,9 +300,36 @@ module taskFactActiveRefreshProofNegativeTest {
     state' = { ...state, positionHeld: false },
   }
 
+  action offerBeforeRunningEstablishment: bool = all {
+    state.lastEvent == Initialized,
+    state' = {
+      ...state,
+      purpose: ActiveRefreshRead,
+      decision: ContinueWork,
+      evidence: ExactRunning,
+      refreshSource: TrackerNotification,
+      positionHeld: true,
+      lastEvent: ActiveRefreshOffered,
+    },
+  }
+
+  action offerFromUnknownSource: bool = all {
+    state.lastEvent == ActiveWorkRunningEstablished,
+    state' = {
+      ...state,
+      purpose: ActiveRefreshRead,
+      decision: ContinueWork,
+      evidence: ExactRunning,
+      refreshSource: NoRefreshSource,
+      positionHeld: true,
+      lastEvent: ActiveRefreshOffered,
+    },
+  }
+
   run activeUnreadableSuspensionConflationIsDetectedTest = {
     init
-      .then(offerActiveRefresh)
+      .then(establishRunningAttempt)
+      .then(offerTrackerRefresh)
       .then(observeUnreadableActiveRefresh)
       .then(conflateActiveUnreadableWithOrdinarySuspension)
       .expect(not(activeRefreshUnreadableAuthorizesNoExecutorAction))
@@ -310,7 +337,8 @@ module taskFactActiveRefreshProofNegativeTest {
 
   run healthyRefreshContinuationAuthorizationIsDetectedTest = {
     init
-      .then(offerActiveRefresh)
+      .then(establishRunningAttempt)
+      .then(offerTrackerRefresh)
       .then(observeHealthyActiveRefresh)
       .then(authorizeContinueAfterHealthyRefresh)
       .expect(not(healthyActiveRefreshAuthorizesNoExecutorAction))
@@ -318,8 +346,22 @@ module taskFactActiveRefreshProofNegativeTest {
 
   run runningPositionReleaseIsDetectedTest = {
     init
-      .then(offerActiveRefresh)
+      .then(establishRunningAttempt)
+      .then(offerTrackerRefresh)
       .then(releasePositionWhileStillRunning)
       .expect(not(positionReleasesOnlyOnExactSafeEvidence))
+  }
+
+  run activeOfferBeforeRunningEstablishmentIsDetectedTest = {
+    init
+      .then(offerBeforeRunningEstablishment)
+      .expect(not(activeRefreshOfferRequiresRunningEstablished))
+  }
+
+  run activeOfferFromUnknownSourceIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerFromUnknownSource)
+      .expect(not(activeRefreshSourceIsTrackerOrTimer))
   }
 }

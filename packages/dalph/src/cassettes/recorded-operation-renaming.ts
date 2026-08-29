@@ -1,6 +1,7 @@
 import { Match } from "effect"
 import type { AttemptId, PlannedTaskAttempt, RunId, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import {
+  ActiveWorkAuthorityRefreshGitReadPurpose,
   completionTaskFocusedReadOperationIdFor,
   type ClaimToken,
   type CompletionTaskRequest,
@@ -21,6 +22,19 @@ const renamed = <Identity>(value: Identity, map: ReadonlyMap<Identity, Identity>
 
 const renamePredecessors = (predecessors: ReadonlyArray<OperationId>, maps: RecordedOperationIdentityMaps) =>
   predecessors.map((operationId) => renamed(operationId, maps.operationIds))
+
+const renameActiveWorkAuthorityRefreshGitReadPurpose = (
+  purpose: typeof ActiveWorkAuthorityRefreshGitReadPurpose.Type,
+  maps: RecordedOperationIdentityMaps
+): typeof ActiveWorkAuthorityRefreshGitReadPurpose.Type =>
+  ActiveWorkAuthorityRefreshGitReadPurpose.make({
+    authority: {
+      ...purpose.authority,
+      attemptId: renamed(purpose.authority.attemptId, maps.attemptIds),
+      runId: renamed(purpose.authority.runId, maps.runIds)
+    },
+    ordinal: purpose.ordinal
+  })
 
 export const renamePlannedAttempt = (
   attempt: PlannedTaskAttempt,
@@ -96,13 +110,19 @@ export const renameWorkflowOperation = (
         ...operation,
         operationId: renamed(operation.operationId, maps.operationIds),
         plannedAttempt: renamePlannedAttempt(operation.plannedAttempt, maps),
-        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps),
+        ...(operation.purpose === undefined
+          ? {}
+          : { purpose: renameActiveWorkAuthorityRefreshGitReadPurpose(operation.purpose, maps) })
       }),
       ReadTaskWorktree: (operation) => ({
         ...operation,
         operationId: renamed(operation.operationId, maps.operationIds),
         plannedAttempt: renamePlannedAttempt(operation.plannedAttempt, maps),
-        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
+        predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps),
+        ...(operation.purpose === undefined
+          ? {}
+          : { purpose: renameActiveWorkAuthorityRefreshGitReadPurpose(operation.purpose, maps) })
       }),
       ReconcileTaskWorktree: (operation) => ({
         ...operation,

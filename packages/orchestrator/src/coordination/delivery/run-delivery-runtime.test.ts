@@ -74,6 +74,7 @@ import { makeTestJournaledTrackerGraphObservation } from "../../../test/journale
 import {
   DeliveryRuntimeProposalOwnershipConflict,
   DeliveryRuntimeReconfirmationStateInvalid,
+  runDeliveryRuntimePhase,
   runDeliveryRuntime,
   type DeliveryRuntimeInput
 } from "./run-delivery-runtime.js"
@@ -1879,4 +1880,91 @@ it.effect(
       expect(yield* Ref.get(deferredCalls)).toBe(2)
       expect(yield* Ref.get(unrelatedCalls)).toBe(1)
     }).pipe(Effect.scoped)
+)
+
+it.effect("stops an active refresh at its accepted boundary before admitting the next proposal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const independentTaskId = TaskId.make("runtime-boundary-independent")
+      const graphProjection = projectTrackerSnapshot({
+        revision: "active-refresh-runtime-boundary",
+        tasks: [
+          { id: plannedAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+          { id: independentTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ]
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("active refresh boundary graph must be valid")
+      const acceptedAt = JournalPosition.make(10)
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("active-refresh-runtime-boundary-graph"),
+          recordedAt: acceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const firstProposal = proposal(0, plannedAttempt.taskId)
+      const independentProposal = proposal(1, independentTaskId)
+      const first = {
+        ...withProposals(
+          {
+            ...base,
+            acceptedAt,
+            current: { ...base.current, trackerGraph: graph },
+            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+          },
+          [firstProposal, independentProposal],
+          1
+        ),
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+      }
+      const relation = yield* dynamicEvaluationSignal(first)
+      const boundaryReady = yield* Ref.make(false)
+      const executorCalls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const executor = DeliveryActionExecutor.of({
+        execute: (action) =>
+          Effect.gen(function* () {
+            yield* Ref.update(executorCalls, (calls) => [...calls, action.proposal.id])
+            if (action.proposal.id !== firstProposal.id) {
+              return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+            }
+            yield* Ref.set(boundaryReady, true)
+            yield* relation.publish({
+              ...first,
+              acceptedAt: JournalPosition.make(11),
+              current: { ...first.current, trackerGraph: graph },
+              proposedActions: {
+                _tag: "DeliveryProposalsAvailable",
+                isolatedIssues: [],
+                proposals: [independentProposal]
+              }
+            })
+            return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+          })
+      })
+      const boundaryCalls = yield* Ref.make(0)
+      const boundary = (
+        _initialAcceptedAt: DeliveryRuntimeEvaluation["acceptedAt"],
+        _current: DeliveryRuntimeEvaluation
+      ) => Ref.updateAndGet(boundaryCalls, (count) => count + 1).pipe(Effect.andThen(Ref.get(boundaryReady)))
+
+      const result = yield* runDeliveryRuntimePhase(relation, boundary).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor)
+      )
+
+      if (result._tag !== "TrackerReconfirmationQuiescence") {
+        return yield* Effect.die(`expected tracker reconfirmation, got ${result._tag}`)
+      }
+      expect(result.proposedActions.proposals).toEqual([])
+      expect(result.acceptedAt).toBe(JournalPosition.make(11))
+      expect(yield* Ref.get(executorCalls)).toEqual([firstProposal.id])
+      expect(yield* Ref.get(boundaryCalls)).toBeGreaterThan(1)
+      const latest = yield* relation.get
+      if (latest.proposedActions._tag !== "DeliveryProposalsAvailable") {
+        return yield* Effect.die("the current evaluation must retain its descriptive proposal frontier")
+      }
+      expect(latest.proposedActions.proposals).toEqual([independentProposal])
+    })
+  )
 )

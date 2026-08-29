@@ -378,6 +378,7 @@ export {
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
+export * from "./workflow/protocols/active-work-authority-refresh/events.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
 export * from "./workflow/protocols/evidence-store.js"
@@ -817,6 +818,7 @@ export {
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
+  ActiveWorkAuthorityRefreshGitReadFailed,
   AttemptRestartAuthorityReadFailed,
   decodeWorkflowOccurrence,
   describeWorkflowOccurrence,

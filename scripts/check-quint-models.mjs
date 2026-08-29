@@ -539,8 +539,11 @@ await run("task-fact reconciliation sampled model", [
 // The canonical subject model deliberately keeps #136/#137 task facts and the
 // #65 choice, stoppage, claim-disposition, and independent-task sentinels
 // together. Its production-backed MBT and sampled run stay canonical. ADR 0010
-// permits the following smaller projection of the same accepted #65 chronology
+// permits the following smaller projections of the same accepted chronology
 // to own exhaustive proof without becoming another runtime behavior source.
+// The active-work entry below is the #218/#281 proof slice: it keeps Running
+// establishment distinct from a tracker/timer refresh offer and checks source
+// provenance plus the healthy/unreadable observation obligations.
 const taskFactProofs = [
   {
     main: "taskFactChoiceProof",
@@ -624,6 +627,9 @@ const taskFactProofs = [
     invariants: [
       "activeRefreshUnreadableAuthorizesNoExecutorAction",
       "healthyActiveRefreshAuthorizesNoExecutorAction",
+      "runningEstablishmentRetainsAuthority",
+      "activeRefreshOfferRequiresRunningEstablished",
+      "activeRefreshSourceIsTrackerOrTimer",
       "ordinaryUnreadableStillRequestsSafeSuspension",
       "positionReleasesOnlyOnExactSafeEvidence",
       "independentTaskRemainsEligible",
@@ -631,6 +637,9 @@ const taskFactProofs = [
     ],
     witnesses: [
       "activeRefreshOfferedReached",
+      "activeRefreshRunningEstablishedReached",
+      "activeRefreshTrackerOfferedReached",
+      "activeRefreshTimerOfferedReached",
       "activeRefreshHealthyReached",
       "activeRefreshUnreadableReached",
       "ordinaryUnreadableReached",
@@ -672,9 +681,9 @@ for (const proof of taskFactProofs) {
     "--verbosity",
     "1"
   ])
-  // TLC enumerates the complete finite projection graph with no depth token:
-  // choice 261 generated / 152 distinct / depth 14; Stop 42 / 36 / depth 20;
-  // claim 440 / 279 / depth 16 (Quint 0.32.0, linux-aarch64).
+  // TLC enumerates the complete finite projection graph with no depth token.
+  // Generated-state totals and diameter are tool/version/platform output, not
+  // a proof contract, so this commentary intentionally carries no fixed counts.
   await run(`${proof.title} exhaustive model`, [
     "verify",
     "specs/taskFactReconciliation_proof.qnt",

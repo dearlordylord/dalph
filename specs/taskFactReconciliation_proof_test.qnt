@@ -283,18 +283,29 @@ module taskFactActiveRefreshProofTest {
 
   run activeRefreshUnreadableWaitsWithoutExecutorActionTest = {
     init
-      .then(offerActiveRefresh)
+      .then(establishRunningAttempt)
+      .expect(runningEstablishmentRetainsAuthority)
+      .then(offerTimerRefresh)
       .then(observeUnreadableActiveRefresh)
-      .expect(activeRefreshUnreadableAuthorizesNoExecutorAction)
+      .expect(and {
+        activeRefreshUnreadableAuthorizesNoExecutorAction,
+        activeRefreshOfferRequiresRunningEstablished,
+        activeRefreshSourceIsTrackerOrTimer,
+      })
       .then(selectIndependentTask)
       .expect(state.independentTaskSelected and independentTaskRemainsEligible)
   }
 
   run healthyActiveRefreshWaitsWithoutExecutorActionTest = {
     init
-      .then(offerActiveRefresh)
+      .then(establishRunningAttempt)
+      .then(offerTrackerRefresh)
       .then(observeHealthyActiveRefresh)
-      .expect(healthyActiveRefreshAuthorizesNoExecutorAction)
+      .expect(and {
+        healthyActiveRefreshAuthorizesNoExecutorAction,
+        activeRefreshOfferRequiresRunningEstablished,
+        activeRefreshSourceIsTrackerOrTimer,
+      })
   }
 
   run ordinaryUnreadableReadUsesExactSuspensionRouteTest = {

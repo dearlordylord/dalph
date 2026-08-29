@@ -1,4 +1,4 @@
-import { Effect, Option, Stream } from "effect"
+import { Effect, Option, Ref, Stream } from "effect"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { DeliveryRuntimeInput, DeliveryRuntimeQuiescence } from "../delivery/run-delivery-runtime.js"
 import { runDeliveryRuntimePhase } from "../delivery/run-delivery-runtime.js"
@@ -17,6 +17,8 @@ import { makeTrackerGraphObservationOperation } from "../../workflow/registry/op
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { InRunJournal, type InRunJournalService } from "../../workflow-journal/store.js"
+import { activeRefreshRunningProjectionSettledSuspend } from "./recovery-activation.js"
+import type { RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 type EstablishedTrackerGraph = Extract<
   DeliveryRuntimeQuiescence["current"]["trackerGraph"],
@@ -166,11 +168,36 @@ const distinctOperationIds = <OperationId>(operationIds: ReadonlyArray<Operation
  */
 export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function* <E>(
   target: TrackerTarget,
-  evaluations: DeliveryRuntimeInput<E>
+  evaluations: DeliveryRuntimeInput<E>,
+  opportunity: RunActivationOpportunity = { _tag: "OrdinaryRunEntry" }
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations)
+      const activeRefreshBoundaryReached = yield* Ref.make(false)
+      const activeRefreshBoundary = (
+        initialAcceptedAt: DeliveryRuntimeEvaluation["acceptedAt"],
+        current: DeliveryRuntimeEvaluation
+      ) =>
+        Effect.gen(function* () {
+          if (
+            initialAcceptedAt === null ||
+            current.current.runId === undefined ||
+            current.current.trackerGraph._tag !== "GraphEstablished"
+          )
+            return false
+          const journal = yield* InRunJournal
+          const records = yield* journal.read(current.current.runId)
+          const reached = activeRefreshRunningProjectionSettledSuspend(records, Option.some(initialAcceptedAt))
+          if (reached) yield* Ref.set(activeRefreshBoundaryReached, true)
+          return reached
+        })
+      const firstQuiescence =
+        opportunity._tag === "ActiveWorkAuthorityRefresh"
+          ? yield* runDeliveryRuntimePhase(evaluations, activeRefreshBoundary)
+          : yield* runDeliveryRuntimePhase(evaluations)
+      if (opportunity._tag === "ActiveWorkAuthorityRefresh" && (yield* Ref.get(activeRefreshBoundaryReached))) {
+        return proofOf(target, firstQuiescence)
+      }
       if (shouldReturnInitialProof(firstQuiescence)) {
         return proofOf(target, firstQuiescence)
       }
@@ -181,6 +208,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       /* v8 ignore next -- @preserve shouldReturnInitialProof accepts every first phase without an established graph. */
       if (currentGraph === undefined) return proofOf(target, firstQuiescence)
 
+      const journal = yield* InRunJournal
       const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
       const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
       if (Option.isNone(owner)) return proofOf(target, firstQuiescence)
@@ -189,7 +217,6 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       const operationId = yield* allocator.allocate()
       const currentGraphOperationId = currentGraph.observation.operationId
       const runId = firstQuiescence.current.runId
-      const journal = yield* InRunJournal
       const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
       const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
       const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)

@@ -15,6 +15,7 @@ import {
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
   attemptRestartAuthorityReadFailedRecordKey,
+  activeWorkAuthorityRefreshGitReadFailedRecordKey,
   attemptImplementationAbandonedRecordKey,
   attemptStoppageIntentRecordKey,
   controlDirectionAppliedRecordKey,
@@ -284,6 +285,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
             : "GitReadIntentRecorded"
         ]
       }),
+    ActiveWorkAuthorityRefreshGitReadFailed: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: activeWorkAuthorityRefreshGitReadFailedRecordKey(event.operation.operationId, event.ordinal)
+    }),
     AttemptStoppageIntended: (event) => ({
       _tag: "AttemptChoiceEventDescriptor",
       expectedKey: attemptStoppageIntentRecordKey(event.requestId),

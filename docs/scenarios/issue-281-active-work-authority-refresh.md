@@ -266,6 +266,13 @@ absence; or persist a derived refresh/frontier state.
   attempt` proves exhausted focused-claim unreadability and incomplete graph or
   Git facts make zero executor calls, while a later notification/timer starts a
   new bounded read.
+- `post-Running active worktree and target-lineage Git failures wait without
+  suspending while independent work remains runnable` proves the durable typed
+  Git failure occurrence retains the exact Running responsibility and position,
+  selects neither Continue nor Suspend, and leaves independent B eligible for
+  fresh work. `a later tracker or timer refresh uses a fresh Git operation and
+  ordinal after the prior unreadable wait` proves the next owner opportunity
+  does not reuse the failed operation identity or ordinal.
 - `ordinary accepted-fact and Operator hints retain the Running shortcut`
   proves #218 still accepts those generic hints but neither performs A's
   tracker/Git refresh nor creates continuation authorization.

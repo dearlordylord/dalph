@@ -19,6 +19,8 @@ import {
   journaledWorkflowInterpreterLayer,
   ApplicationExitRequestBoundary,
   CoordinatorOwnership,
+  type JournalStore,
+  type RunLifecycleJournal,
   nodeGitCommandLayer,
   nodeGitIntegratorCandidateLayer,
   nodeGitTargetLineageLayer,
@@ -83,6 +85,12 @@ export interface ProductionRunReactivationOptions {
 
 /** Optional production boundaries that advance one accepted result through delivery and finality. */
 export interface ProductionWorkflowRuntimeBoundaries {
+  /** Optional journal implementation for process-boundary acceptance tests. */
+  readonly journalStoreLayer?: Layer.Layer<
+    JournalStore | RunLifecycleJournal,
+    Layer.Error<typeof productionJournalStoreLayer>,
+    never
+  >
   readonly targetPromotion?: TargetPromotionRuntimeInput
   readonly integrationFinality?: CompletionClaimBoundaryService
   readonly completionTask?: CompletionTaskBoundaryService
@@ -193,7 +201,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     Layer.provide(nodeGitCommandLayer),
     Layer.provide(NodeServices.layer)
   )
-  const journalLayer = productionJournalStoreLayer.pipe(Layer.provide(ownershipLayer))
+  const journalLayer = (runtimeBoundaries.journalStoreLayer ?? productionJournalStoreLayer).pipe(
+    Layer.provide(ownershipLayer)
+  )
   const baseInterpreterLayer = workflowInterpreterLayer.pipe(
     Layer.provide(trackerMutationLayer),
     Layer.provide(gitTargetLineageLayer),
@@ -224,7 +234,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
-          Layer.succeed(WorkflowInterpreter, interpreter)
+          Layer.succeed(WorkflowInterpreter, interpreter),
+          opportunity
         )
         const operatorControlLayer = Layer.mergeAll(
           attemptChoiceControlLayer,

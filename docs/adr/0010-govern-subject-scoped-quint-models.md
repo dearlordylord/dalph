@@ -61,6 +61,19 @@ the same gate and retains
 `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` as its
 production seam; it is not an eighth model or an implementation input.
 
+The same proof projection also owns the narrow active-work authority-refresh
+slice accepted by issues #218 and #281. Its `Running` establishment is a
+separate action from the later `TrackerNotification`/`Timer` offer; source
+provenance is explicit, healthy and unreadable observations retain the exact
+Running position without an executor action, and ordinary unreadable facts
+still select the existing safe-suspension route. The canonical
+`taskFactReconciliation` model and its production-backed MBT remain the source
+of runtime behavior; the projection's positive/negative tests, witnesses, and
+exhaustive check only measure this accepted proof slice. The runtime keeps a
+successful Git read's refresh source process-local and persists only the typed
+failure outcome; its operation/ordinal chronology is covered by the Dalph
+journal tests rather than by an additional proof-state cardinality claim.
+
 `specs/plannedAttemptExecutor_proof.qnt` applies the same exception to the
 canonical executor model's resettable command cycles. Three finite graphs keep
 the exact intent/call/evidence chronology, one-read-per-activation recovery,

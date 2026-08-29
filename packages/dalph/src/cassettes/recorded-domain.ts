@@ -13,6 +13,10 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshGitReadFailure,
+  ActiveWorkAuthorityRefreshGitReadOperation,
+  ActiveWorkAuthorityRefreshOrdinal,
   AttemptChoice,
   AttemptQuiescenceProof,
   AttemptChoiceRequestId,
@@ -292,6 +296,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     operationId: OperationId,
     requestId: AttemptChoiceRequestId,
     subject: AttemptChoiceSubject
+  },
+  /** A running owner refresh can fail to read Git without authorizing an executor action. */
+  ActiveWorkAuthorityRefreshGitReadFailed: {
+    authority: ActiveWorkAuthorityRefreshAuthority,
+    failure: ActiveWorkAuthorityRefreshGitReadFailure,
+    ...nonActionOccurrence,
+    operation: ActiveWorkAuthorityRefreshGitReadOperation,
+    ordinal: ActiveWorkAuthorityRefreshOrdinal
   },
   AttemptStoppageIntended: {
     ...initiatedByCoordinator,
@@ -622,10 +634,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 
 /**
- * Provisional recorded format version. Incrementing it does not promise
- * backward compatibility until the project owner removes this comment.
+ * Provisional recorded format version. Version 12 adds active-refresh Git
+ * failure entries and the typed active-refresh purpose on Git read entries.
+ * Recorded cassettes remain fail-closed at the current version; this change
+ * does not claim a migration path for version 11.
  */
-const currentRecordedCassetteVersion = 11
+const currentRecordedCassetteVersion = 12
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

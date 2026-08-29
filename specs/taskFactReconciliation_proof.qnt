@@ -1054,10 +1054,12 @@ module taskFactActiveRefreshProof {
   type ReadPurpose = OrdinaryRead | ActiveRefreshRead
   type Decision = ContinueWork | AwaitNextRefresh | RequestSafeSuspension | UnreadableWait
   type Constraint = NoConstraint | UnreadableClaimConstraint
+  type RefreshSource = NoRefreshSource | TrackerNotification | Timer
   type ExecutorEvidence = ExactRunning | ExactSafelySuspended
   type ExecutorAction = NoExecutorAction | SuspendExecutor
   type Event =
     | Initialized
+    | ActiveWorkRunningEstablished
     | ActiveRefreshOffered
     | ActiveRefreshHealthyObserved
     | ActiveRefreshUnreadableObserved
@@ -1069,8 +1071,10 @@ module taskFactActiveRefreshProof {
     purpose: ReadPurpose,
     decision: Decision,
     constraint: Constraint,
+    refreshSource: RefreshSource,
     evidence: ExecutorEvidence,
     executorAction: ExecutorAction,
+    runningEstablished: bool,
     positionHeld: bool,
     implementationResponsibilityRetained: bool,
     independentTaskEligible: bool,
@@ -1095,9 +1099,38 @@ module taskFactActiveRefreshProof {
     state.lastEvent != ActiveRefreshHealthyObserved or and {
       state.purpose == ActiveRefreshRead,
       state.decision == AwaitNextRefresh,
+      state.constraint == NoConstraint,
+      state.refreshSource == TrackerNotification or state.refreshSource == Timer,
+      state.executorAction == NoExecutorAction,
+      state.evidence == ExactRunning,
+      state.positionHeld,
+      state.implementationResponsibilityRetained,
+    }
+
+  val runningEstablishmentRetainsAuthority: bool =
+    state.lastEvent != ActiveWorkRunningEstablished or and {
+      state.runningEstablished,
+      state.evidence == ExactRunning,
       state.executorAction == NoExecutorAction,
       state.positionHeld,
+      state.implementationResponsibilityRetained,
+      state.refreshSource == NoRefreshSource,
     }
+
+  val activeRefreshOfferRequiresRunningEstablished: bool =
+    state.lastEvent != ActiveRefreshOffered or and {
+      state.runningEstablished,
+      state.evidence == ExactRunning,
+      state.positionHeld,
+      state.refreshSource == TrackerNotification or state.refreshSource == Timer,
+    }
+
+  val activeRefreshSourceIsTrackerOrTimer: bool =
+    not(
+      state.lastEvent == ActiveRefreshOffered
+        or state.lastEvent == ActiveRefreshHealthyObserved
+        or state.lastEvent == ActiveRefreshUnreadableObserved
+    ) or state.refreshSource == TrackerNotification or state.refreshSource == Timer
 
   val ordinaryUnreadableStillRequestsSafeSuspension: bool =
     state.lastEvent != OrdinaryUnreadableObserved or and {
@@ -1117,6 +1150,11 @@ module taskFactActiveRefreshProof {
     not(state.independentTaskSelected) or state.independentTaskEligible
 
   val activeRefreshOfferedReached: bool = state.lastEvent == ActiveRefreshOffered
+  val activeRefreshRunningEstablishedReached: bool = state.lastEvent == ActiveWorkRunningEstablished
+  val activeRefreshTrackerOfferedReached: bool =
+    state.lastEvent == ActiveRefreshOffered and state.refreshSource == TrackerNotification
+  val activeRefreshTimerOfferedReached: bool =
+    state.lastEvent == ActiveRefreshOffered and state.refreshSource == Timer
   val activeRefreshHealthyReached: bool = state.lastEvent == ActiveRefreshHealthyObserved
   val activeRefreshUnreadableReached: bool = state.lastEvent == ActiveRefreshUnreadableObserved
   val ordinaryUnreadableReached: bool = state.lastEvent == OrdinaryUnreadableObserved
@@ -1128,8 +1166,10 @@ module taskFactActiveRefreshProof {
       purpose: OrdinaryRead,
       decision: ContinueWork,
       constraint: NoConstraint,
+      refreshSource: NoRefreshSource,
       evidence: ExactSafelySuspended,
       executorAction: NoExecutorAction,
+      runningEstablished: false,
       positionHeld: false,
       implementationResponsibilityRetained: true,
       independentTaskEligible: true,
@@ -1138,7 +1178,28 @@ module taskFactActiveRefreshProof {
     }
   }
 
-  action offerActiveRefresh: bool = all {
+  action establishRunningAttempt: bool = all {
+    state.lastEvent == Initialized,
+    state.purpose == OrdinaryRead,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.evidence == ExactSafelySuspended,
+    not(state.runningEstablished),
+    state' = {
+      ...state,
+      evidence: ExactRunning,
+      runningEstablished: true,
+      positionHeld: true,
+      lastEvent: ActiveWorkRunningEstablished,
+    },
+  }
+
+  action offerTrackerRefresh: bool = all {
+    state.lastEvent == ActiveWorkRunningEstablished
+      or state.lastEvent == ActiveRefreshHealthyObserved
+      or state.lastEvent == ActiveRefreshUnreadableObserved,
+    state.runningEstablished,
+    state.evidence == ExactRunning,
     state.decision == ContinueWork or state.decision == AwaitNextRefresh,
     state.constraint == NoConstraint,
     state' = {
@@ -1148,6 +1209,27 @@ module taskFactActiveRefreshProof {
       evidence: ExactRunning,
       executorAction: NoExecutorAction,
       positionHeld: true,
+      refreshSource: TrackerNotification,
+      lastEvent: ActiveRefreshOffered,
+    },
+  }
+
+  action offerTimerRefresh: bool = all {
+    state.lastEvent == ActiveWorkRunningEstablished
+      or state.lastEvent == ActiveRefreshHealthyObserved
+      or state.lastEvent == ActiveRefreshUnreadableObserved,
+    state.runningEstablished,
+    state.evidence == ExactRunning,
+    state.decision == ContinueWork or state.decision == AwaitNextRefresh,
+    state.constraint == NoConstraint,
+    state' = {
+      ...state,
+      purpose: ActiveRefreshRead,
+      decision: ContinueWork,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      refreshSource: Timer,
       lastEvent: ActiveRefreshOffered,
     },
   }
@@ -1182,6 +1264,8 @@ module taskFactActiveRefreshProof {
       evidence: ExactRunning,
       executorAction: SuspendExecutor,
       positionHeld: true,
+      runningEstablished: true,
+      refreshSource: NoRefreshSource,
       lastEvent: OrdinaryUnreadableObserved,
     },
   }
@@ -1207,7 +1291,9 @@ module taskFactActiveRefreshProof {
   }
 
   action step: bool = any {
-    offerActiveRefresh,
+    establishRunningAttempt,
+    offerTrackerRefresh,
+    offerTimerRefresh,
     observeHealthyActiveRefresh,
     observeUnreadableActiveRefresh,
     observeUnreadableOrdinaryRead,

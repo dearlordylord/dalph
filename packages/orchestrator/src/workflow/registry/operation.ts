@@ -14,6 +14,10 @@ import { TaskClaimReacquisitionRequestId } from "../protocols/task-claim-reacqui
 import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 import { CompletionTaskFocusedReadPurpose, CompletionTaskRequest } from "../protocols/integration-finality/events.js"
 import { completionTaskFocusedReadOperationIdFor } from "../protocols/integration-finality/completion-task-operation-identity.js"
+import {
+  ActiveWorkAuthorityRefreshGitReadPurpose,
+  type ActiveWorkAuthorityRefreshGitReadPurpose as ActiveWorkAuthorityRefreshGitReadPurposeType
+} from "../protocols/active-work-authority-refresh/intent.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
 
@@ -161,20 +165,46 @@ const ReconcileTaskWorktreeOperation = Schema.TaggedStruct("ReconcileTaskWorktre
   predecessorOperationIds: CausalPredecessorOperationIds
 }).check(Schema.makeFilter(withoutSelfPredecessor))
 
+const activeRefreshPurposeBindsPlannedAttempt = <
+  A extends {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly purpose?: ActiveWorkAuthorityRefreshGitReadPurposeType
+  }
+>(
+  operation: A
+) =>
+  operation.purpose === undefined ||
+  (operation.purpose.authority.attemptId === operation.plannedAttempt.attemptId &&
+    operation.purpose.authority.runId === operation.plannedAttempt.runId)
+    ? undefined
+    : { issue: "an active-refresh Git intent must bind its exact planned attempt", path: ["purpose"] }
+
 /** Reads Git's current registration for one previously prepared planned-attempt worktree. */
 const ReadTaskWorktreeOperation = Schema.TaggedStruct("ReadTaskWorktree", {
   operationId: OperationId,
   plannedAttempt: PlannedTaskAttempt,
-  predecessorOperationIds: CausalPredecessorOperationIds
-}).check(Schema.makeFilter(withoutSelfPredecessor))
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  /** Present only when the owner minted this read for an active refresh. */
+  purpose: Schema.optionalKey(ActiveWorkAuthorityRefreshGitReadPurpose)
+}).check(
+  Schema.makeFilter(
+    (operation) => withoutSelfPredecessor(operation) ?? activeRefreshPurposeBindsPlannedAttempt(operation)
+  )
+)
 
 /** Reads the exact configured target head and its ancestry relationship to one planned Base SHA. */
 const ReadTargetLineageOperation = Schema.TaggedStruct("ReadTargetLineage", {
   integrationTarget: IntegrationTargetSchema,
   operationId: OperationId,
   plannedAttempt: PlannedTaskAttempt,
-  predecessorOperationIds: CausalPredecessorOperationIds
-}).check(Schema.makeFilter(withoutSelfPredecessor))
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  /** Present only when the owner minted this read for an active refresh. */
+  purpose: Schema.optionalKey(ActiveWorkAuthorityRefreshGitReadPurpose)
+}).check(
+  Schema.makeFilter(
+    (operation) => withoutSelfPredecessor(operation) ?? activeRefreshPurposeBindsPlannedAttempt(operation)
+  )
+)
 
 /**
  * Generic orchestration knows only tracker, claim, plan, and Git operations.

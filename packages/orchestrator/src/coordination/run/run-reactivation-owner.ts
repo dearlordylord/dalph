@@ -19,7 +19,7 @@ import type { RunFinalityDecision as RunFinalityDecisionValue } from "../frontie
 import { ApplicationExitShell } from "../application-exit/application-shell.js"
 import { attachCurrentSignal, type CurrentSignal } from "../delivery/relations.js"
 import type { AcceptedRunControlDirection, AcceptedRunControlObserver, RunReactivationControlState } from "./run.js"
-import { RunActivationOpportunity } from "./run-activation-opportunity.js"
+import { activeWorkAuthorityRefreshForOwner, RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 /** A non-authoritative request to ask the ordinary Run entry for current facts. */
 export type RunReactivationHint = Data.TaggedEnum<{
@@ -82,7 +82,7 @@ type RunReactivationMessage = { readonly _tag: "Hint"; readonly hint: RunReactiv
 
 const activationOpportunityFor = (hint: RunReactivationHint): RunActivationOpportunity =>
   hint._tag === "TrackerNotification" || hint._tag === "Timer"
-    ? RunActivationOpportunity.ActiveWorkAuthorityRefresh({ source: hint._tag })
+    ? activeWorkAuthorityRefreshForOwner(hint._tag)
     : RunActivationOpportunity.OrdinaryRunEntry()
 
 const finitePositiveDuration = (input: Duration.Input, name: string) => {
