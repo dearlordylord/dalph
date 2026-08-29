@@ -1052,8 +1052,8 @@ module taskFactClaimProof {
 // ordinary unreadable-claim suspension request.
 module taskFactActiveRefreshProof {
   type ReadPurpose = OrdinaryRead | ActiveRefreshRead
-  type Decision = ContinueWork | AwaitNextRefresh | RequestSafeSuspension | UnreadableWait
-  type Constraint = NoConstraint | UnreadableClaimConstraint
+  type Decision = ContinueWork | AwaitNextRefresh | RequestSafeSuspension | LifecycleWait | UnreadableWait
+  type Constraint = NoConstraint | LifecycleConstraint | UnreadableClaimConstraint
   type RefreshSource = NoRefreshSource | TrackerNotification | Timer
   type ExecutorEvidence = ExactRunning | ExactSafelySuspended
   type ExecutorAction = NoExecutorAction | SuspendExecutor
@@ -1063,8 +1063,10 @@ module taskFactActiveRefreshProof {
     | ActiveRefreshOffered
     | ActiveRefreshHealthyObserved
     | ActiveRefreshUnreadableObserved
+    | LifecycleClosed
     | OrdinaryUnreadableObserved
     | SafelySuspended
+    | LifecycleReopened
     | IndependentTaskSelected
 
   type State = {
@@ -1114,6 +1116,7 @@ module taskFactActiveRefreshProof {
       state.executorAction == NoExecutorAction,
       state.positionHeld,
       state.implementationResponsibilityRetained,
+      state.purpose == OrdinaryRead,
       state.refreshSource == NoRefreshSource,
     }
 
@@ -1157,8 +1160,10 @@ module taskFactActiveRefreshProof {
     state.lastEvent == ActiveRefreshOffered and state.refreshSource == Timer
   val activeRefreshHealthyReached: bool = state.lastEvent == ActiveRefreshHealthyObserved
   val activeRefreshUnreadableReached: bool = state.lastEvent == ActiveRefreshUnreadableObserved
+  val lifecycleClosedReached: bool = state.lastEvent == LifecycleClosed
   val ordinaryUnreadableReached: bool = state.lastEvent == OrdinaryUnreadableObserved
   val safelySuspendedReached: bool = state.lastEvent == SafelySuspended
+  val lifecycleReopenedReached: bool = state.lastEvent == LifecycleReopened
   val independentTaskSelectedReached: bool = state.lastEvent == IndependentTaskSelected
 
   action init: bool = all {
@@ -1187,10 +1192,32 @@ module taskFactActiveRefreshProof {
     not(state.runningEstablished),
     state' = {
       ...state,
+      purpose: OrdinaryRead,
+      refreshSource: NoRefreshSource,
       evidence: ExactRunning,
       runningEstablished: true,
       positionHeld: true,
       lastEvent: ActiveWorkRunningEstablished,
+    },
+  }
+
+  // The active refresh opportunity can be invalidated by lifecycle closure.
+  // The executor is still Running here, so only the safe-suspension request is
+  // authorized; the active purpose/source remain observable until a fresh
+  // lifecycle re-establishment clears them.
+  action observeLifecycleClosure: bool = all {
+    state.lastEvent == ActiveRefreshOffered,
+    state.purpose == ActiveRefreshRead,
+    state.refreshSource == TrackerNotification or state.refreshSource == Timer,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.evidence == ExactRunning,
+    state' = {
+      ...state,
+      constraint: LifecycleConstraint,
+      decision: RequestSafeSuspension,
+      executorAction: SuspendExecutor,
+      lastEvent: LifecycleClosed,
     },
   }
 
@@ -1275,11 +1302,45 @@ module taskFactActiveRefreshProof {
     state.executorAction == SuspendExecutor,
     state' = {
       ...state,
-      decision: UnreadableWait,
+      decision: if (state.constraint == LifecycleConstraint) LifecycleWait else UnreadableWait,
       evidence: ExactSafelySuspended,
       executorAction: NoExecutorAction,
       positionHeld: false,
       lastEvent: SafelySuspended,
+    },
+  }
+
+  // A reopened lifecycle is a fresh ordinary continuation opportunity. The
+  // active purpose/source are intentionally retained until the establishment
+  // action below proves that the new Running attempt has ordinary provenance.
+  action observeFreshLifecycleReopen: bool = all {
+    state.lastEvent == SafelySuspended,
+    state.constraint == LifecycleConstraint,
+    state.decision == LifecycleWait,
+    state.evidence == ExactSafelySuspended,
+    not(state.positionHeld),
+    state' = {
+      ...state,
+      constraint: NoConstraint,
+      decision: ContinueWork,
+      lastEvent: LifecycleReopened,
+    },
+  }
+
+  action reestablishRunningAttempt: bool = all {
+    state.lastEvent == LifecycleReopened,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.evidence == ExactSafelySuspended,
+    state.runningEstablished,
+    state' = {
+      ...state,
+      purpose: OrdinaryRead,
+      refreshSource: NoRefreshSource,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      lastEvent: ActiveWorkRunningEstablished,
     },
   }
 
@@ -1296,8 +1357,11 @@ module taskFactActiveRefreshProof {
     offerTimerRefresh,
     observeHealthyActiveRefresh,
     observeUnreadableActiveRefresh,
+    observeLifecycleClosure,
     observeUnreadableOrdinaryRead,
     reportSafelySuspended,
+    observeFreshLifecycleReopen,
+    reestablishRunningAttempt,
     selectIndependentTask,
   }
 }

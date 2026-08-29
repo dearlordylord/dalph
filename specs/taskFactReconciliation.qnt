@@ -2909,6 +2909,35 @@ module taskFactReconciliation {
     all { state.lastAction == ActiveRefreshUnreadableObservedAction, selectIndependentTaskB },
   }
 
+  // Production-backed lifecycle slice: an active refresh is closed, the
+  // Running executor is safely suspended, a fresh lifecycle reopens, and the
+  // next establishment must return to ordinary-read/no-source provenance.
+  // This composes the canonical actions without introducing another behavior
+  // rule for the lifecycle.
+  action activeRefreshLifecycleReestablishmentMbtStep: bool = any {
+    all { state.lastAction == InitializedAction, establishRunningAttemptForActiveRefresh },
+    all {
+      state.lastAction == ActiveWorkRunningEstablishedAction,
+      offerActiveWorkAuthorityRefreshFromTimer,
+    },
+    all {
+      state.lastAction == ActiveRefreshTimerOfferedAction,
+      observeLifecycleClosure,
+    },
+    all {
+      state.lastAction == LifecycleClosureObservedAction,
+      reportSafelySuspended,
+    },
+    all {
+      state.lastAction == TaskFactsSafelySuspendedAction,
+      observeFreshLifecycleReopen,
+    },
+    all {
+      state.lastAction == LifecycleReopenedAction,
+      establishRunningAttemptForActiveRefresh,
+    },
+  }
+
   action activeRefreshGitFailureTrackerNotificationMbtStep: bool = any {
     all { state.lastAction == InitializedAction, establishRunningAttemptForActiveRefresh },
     all {

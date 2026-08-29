@@ -412,6 +412,9 @@ const taskFactReconciliationDriver = defineDriver(
     offerActiveWorkAuthorityRefreshFromTimer: {},
     observeHealthyActiveWorkRefresh: {},
     observeUnreadableClaimDuringActiveRefresh: {},
+    observeLifecycleClosure: {},
+    reportSafelySuspended: {},
+    observeFreshLifecycleReopen: {},
     observeActiveRefreshGitFailures: {},
     activeRefreshGitFailureTrackerNotificationMbtStep: {},
     activeRefreshGitFailureTimerMbtStep: {},
@@ -530,6 +533,10 @@ const taskFactReconciliationDriver = defineDriver(
     let restartSuspensionBoundary = false
     let controller: DeliveryRuntimeAdmissionController | undefined
     let suspensionCallCount = 0
+    // The reduced canonical active-refresh projection does not model the
+    // shared Stop command counters. Keep the real lifecycle command in the
+    // journal, but project it out of those unrelated counters for conformance.
+    let activeLifecycleSuspensionCount = 0
     let stopProjectionBaseline = 0
     let stopRecoveryCount = 0
     let releaseCallCount = 0
@@ -842,12 +849,14 @@ const taskFactReconciliationDriver = defineDriver(
           })
         )
       )
-    const reactivate = () =>
+    const reactivate = (resetAuthorityProvenance = true) =>
       Effect.sync(() => {
         activeRecovery = undefined
         activeInterpreterOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
-        authorityReadPurpose = "OrdinaryContinuationRead"
-        refreshSource = "NoRefreshSource"
+        if (resetAuthorityProvenance) {
+          authorityReadPurpose = "OrdinaryContinuationRead"
+          refreshSource = "NoRefreshSource"
+        }
       }).pipe(Effect.andThen(projection()))
     const fullProjection = () =>
       provideJournal(makeRunRecoveryProjection(runId, integrationTarget)).pipe(
@@ -1550,6 +1559,7 @@ const taskFactReconciliationDriver = defineDriver(
           restartSuspensionReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
           restartSuspensionBoundary = false
           suspensionCallCount = 0
+          activeLifecycleSuspensionCount = 0
           stopProjectionBaseline = 0
           stopRecoveryCount = 0
           releaseCallCount = 0
@@ -1668,6 +1678,12 @@ const taskFactReconciliationDriver = defineDriver(
       establishRunningAttemptForActiveRefresh: () =>
         reservePosition().pipe(
           Effect.andThen(provideJournal(continuePlannedAttemptExecutorWork(plannedAttempt))),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              authorityReadPurpose = "OrdinaryContinuationRead"
+              refreshSource = "NoRefreshSource"
+            })
+          ),
           Effect.orDie,
           Effect.asVoid
         ),
@@ -1715,6 +1731,17 @@ const taskFactReconciliationDriver = defineDriver(
           ),
           Effect.orDie
         ),
+      observeLifecycleClosure: () => Effect.void,
+      reportSafelySuspended: () =>
+        Effect.gen(function* () {
+          restartSuspensionBoundary = true
+          restartSuspensionReport = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+          yield* provideJournal(requestPlannedAttemptExecutorSuspension(plannedAttempt))
+          restartSuspensionBoundary = false
+          yield* releasePosition()
+          activeLifecycleSuspensionCount += 1
+        }).pipe(Effect.orDie, Effect.asVoid),
+      observeFreshLifecycleReopen: () => reactivate(false).pipe(Effect.orDie, Effect.asVoid),
       observeActiveRefreshGitFailures: () =>
         refreshSource === "NoRefreshSource"
           ? Effect.die("active Git failure action has no owner source")
@@ -2821,8 +2848,8 @@ const taskFactReconciliationDriver = defineDriver(
               (report?._tag === "SafelySuspended" || report?._tag === "Terminal") && !laterExecutorCommand,
             resumedAttempt: continueStage() === "ContinueResumed" ? "AttemptP" : "NoAttempt",
             sessionHistoryPreserved: artifactsPreserved,
-            stopCommandCallCount: BigInt(suspensionCallCount),
-            stopCommandIntentCount: BigInt(suspendIntents.length),
+            stopCommandCallCount: BigInt(suspensionCallCount - activeLifecycleSuspensionCount),
+            stopCommandIntentCount: BigInt(suspendIntents.length - activeLifecycleSuspensionCount),
             stopCommandSettlementCount: BigInt(exactSuspendProjections.length + restartSuspendResponses.length),
             stopProjectionsThisActivation: BigInt(
               f2Choice?._tag === "AttemptChoiceApplied" && f2Choice.choice === "StopTaskImplementation"
@@ -2939,6 +2966,23 @@ const taskFactStateCheck = stateCheck(
   (spec, implementation) =>
     JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
     JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
+)
+
+quintIt(
+  it.effect,
+  "re-establishes ordinary provenance after active refresh lifecycle suspension",
+  {
+    backend: "typescript",
+    driverFactory: taskFactReconciliationDriver,
+    maxSamples: 1,
+    maxSteps: 6,
+    nTraces: 1,
+    seed: "2815",
+    spec: "specs/taskFactReconciliation.qnt",
+    step: "activeRefreshLifecycleReestablishmentMbtStep",
+    stateCheck: taskFactStateCheck
+  },
+  180_000
 )
 
 quintIt(

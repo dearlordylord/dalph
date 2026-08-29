@@ -642,8 +642,10 @@ const taskFactProofs = [
       "activeRefreshTimerOfferedReached",
       "activeRefreshHealthyReached",
       "activeRefreshUnreadableReached",
+      "lifecycleClosedReached",
       "ordinaryUnreadableReached",
       "safelySuspendedReached",
+      "lifecycleReopenedReached",
       "independentTaskSelectedReached"
     ]
   }

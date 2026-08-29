@@ -308,6 +308,29 @@ module taskFactActiveRefreshProofTest {
       })
   }
 
+  // Scenario: after an active refresh offer, lifecycle closure requests an
+  // exact safe suspension; a fresh reopen then re-establishes Running work as
+  // an ordinary continuation with no refresh source.
+  run lifecycleReopenReestablishmentResetsRefreshProvenanceTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTimerRefresh)
+      .then(observeLifecycleClosure)
+      .expect(lifecycleClosedReached and state.decision == RequestSafeSuspension)
+      .then(reportSafelySuspended)
+      .expect(safelySuspendedReached and not(state.positionHeld))
+      .then(observeFreshLifecycleReopen)
+      .expect(lifecycleReopenedReached and state.decision == ContinueWork)
+      .then(reestablishRunningAttempt)
+      .expect(and {
+        runningEstablishmentRetainsAuthority,
+        state.purpose == OrdinaryRead,
+        state.refreshSource == NoRefreshSource,
+        state.evidence == ExactRunning,
+        state.positionHeld,
+      })
+  }
+
   run ordinaryUnreadableReadUsesExactSuspensionRouteTest = {
     init
       .then(observeUnreadableOrdinaryRead)

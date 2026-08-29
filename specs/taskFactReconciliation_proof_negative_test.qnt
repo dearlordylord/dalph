@@ -300,6 +300,58 @@ module taskFactActiveRefreshProofNegativeTest {
     state' = { ...state, positionHeld: false },
   }
 
+  action reestablishWithStaleActiveRefreshProvenance: bool = all {
+    state.lastEvent == LifecycleReopened,
+    state.evidence == ExactSafelySuspended,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.purpose == ActiveRefreshRead,
+    state.refreshSource == Timer,
+    state' = {
+      ...state,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      lastEvent: ActiveWorkRunningEstablished,
+    },
+  }
+
+  action reestablishWithStaleActiveReadPurpose: bool = all {
+    state.lastEvent == LifecycleReopened,
+    state.evidence == ExactSafelySuspended,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.purpose == ActiveRefreshRead,
+    state.refreshSource == Timer,
+    state' = {
+      ...state,
+      purpose: ActiveRefreshRead,
+      refreshSource: NoRefreshSource,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      lastEvent: ActiveWorkRunningEstablished,
+    },
+  }
+
+  action reestablishWithStaleRefreshSource: bool = all {
+    state.lastEvent == LifecycleReopened,
+    state.evidence == ExactSafelySuspended,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.purpose == ActiveRefreshRead,
+    state.refreshSource == Timer,
+    state' = {
+      ...state,
+      purpose: OrdinaryRead,
+      refreshSource: Timer,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      lastEvent: ActiveWorkRunningEstablished,
+    },
+  }
+
   action offerBeforeRunningEstablishment: bool = all {
     state.lastEvent == Initialized,
     state' = {
@@ -350,6 +402,39 @@ module taskFactActiveRefreshProofNegativeTest {
       .then(offerTrackerRefresh)
       .then(releasePositionWhileStillRunning)
       .expect(not(positionReleasesOnlyOnExactSafeEvidence))
+  }
+
+  run staleRefreshProvenanceOnReestablishmentIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTimerRefresh)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(reestablishWithStaleActiveRefreshProvenance)
+      .expect(not(runningEstablishmentRetainsAuthority))
+  }
+
+  run staleActiveReadPurposeOnReestablishmentIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTimerRefresh)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(reestablishWithStaleActiveReadPurpose)
+      .expect(not(runningEstablishmentRetainsAuthority))
+  }
+
+  run staleRefreshSourceOnReestablishmentIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTimerRefresh)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(reestablishWithStaleRefreshSource)
+      .expect(not(runningEstablishmentRetainsAuthority))
   }
 
   run activeOfferBeforeRunningEstablishmentIsDetectedTest = {
