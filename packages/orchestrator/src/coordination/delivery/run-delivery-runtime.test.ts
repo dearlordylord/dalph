@@ -6,6 +6,7 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -74,6 +75,7 @@ import { makeTestJournaledTrackerGraphObservation } from "../../../test/journale
 import {
   DeliveryRuntimeProposalOwnershipConflict,
   DeliveryRuntimeReconfirmationStateInvalid,
+  DeliveryRuntimePhase,
   runDeliveryRuntimePhase,
   runDeliveryRuntime,
   type DeliveryRuntimeInput
@@ -141,6 +143,12 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/runtime-test/recovered")
 })
 
+const independentPlannedAttempt = PlannedTaskAttempt.make({
+  ...plannedAttempt,
+  attemptId: AttemptId.make("runtime-test-independent-attempt"),
+  taskId: TaskId.make("runtime-independent-task")
+})
+
 const proposal = (ordinal: number, taskId: TaskId): DeliveryActionProposal => ({
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(ordinal + 1),
@@ -184,14 +192,19 @@ const handoffProposal = (): DeliveryActionProposal => ({
 
 const recoveredProposalFor = (
   transition: RunnableFrontierTransition,
-  acceptedOperationIds = new Set<OperationId>()
+  acceptedOperationIds = new Set<OperationId>(),
+  attempt = plannedAttempt
 ) => {
   const proposals = deliveryProposalsOf({
     acceptedOperationIds,
     fresh: [],
     integrationResponsibilities: [],
     responsibilities: [
-      { _tag: "PlannedAttemptExecutorWorkResponsibility" as const, beganAt: JournalPosition.make(1), plannedAttempt }
+      {
+        _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+        beganAt: JournalPosition.make(1),
+        plannedAttempt: attempt
+      }
     ],
     runId,
     transitions: [transition]
@@ -1965,4 +1978,102 @@ it.effect("processes a changed frontier without a caller-supplied runtime bounda
       expect(latest.proposedActions.proposals).toEqual([])
     })
   )
+)
+
+it.effect("holds old-graph admission until G2 after direct safe or terminal settlement", () =>
+  Effect.gen(function* () {
+    const reports = [
+      PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId }
+      }),
+      PlannedAttemptExecutorReport.cases.Terminal.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        result: { _tag: "Completed" }
+      })
+    ] as const
+
+    for (const report of reports) {
+      const base = yield* baseEvaluation
+      const active = recoveredProposalFor(
+        RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+      )
+      const independent = recoveredProposalFor(
+        RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+          acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+          plannedAttempt: independentPlannedAttempt
+        }),
+        new Set(),
+        independentPlannedAttempt
+      )
+      const initial = {
+        ...withProposals(base, [active, independent], 2),
+        taskWork: {
+          capacity: TaskWorkCapacity.make(2),
+          held: [{ taskId: plannedAttempt.taskId, correlation: { attemptId: plannedAttempt.attemptId, runId } }]
+        }
+      }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const executor = DeliveryActionExecutor.of({
+        execute: (action) =>
+          Effect.gen(function* () {
+            yield* Ref.update(executed, (ids) => [...ids, action.proposal.id])
+            expect(action.proposal.id).toBe(active.id)
+            yield* relation.publish({
+              ...initial,
+              proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [independent] }
+            })
+            return {
+              _tag: "ExecutorReportPublished",
+              plannedAttempt,
+              proposalId: active.id,
+              report
+            } satisfies DeliveryActionResult
+          })
+      })
+      const result = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(Effect.provide(identityLayers), Effect.provideService(DeliveryActionExecutor, executor))
+
+      expect(result._tag).toBe("PassiveRuntimeQuiescence")
+      expect(yield* Ref.get(executed)).toEqual([active.id])
+    }
+  })
+)
+
+it.effect("fails closed on a pre-G2 proposal ownership conflict", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
+    const conflicted = proposal(0, TaskId.make("pre-g2-conflict-task"))
+    const relation = yield* dynamicEvaluationSignal({
+      ...withProposals(base, [], 2),
+      activeRefreshBoundary: {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+      },
+      proposedActions: {
+        _tag: "DeliveryProposalOwnershipConflict" as const,
+        conflicts: [{ id: conflicted.id, order: conflicted.order, owners: ["TrackerGraph", "TicketDelivery"] as const }]
+      }
+    })
+
+    const failure = yield* runDeliveryRuntimePhase(
+      relation,
+      DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }])
+    ).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(
+        DeliveryActionExecutor,
+        DeliveryActionExecutor.of({ execute: () => Effect.die("conflict must fail before execution") })
+      ),
+      Effect.flip
+    )
+
+    expect(failure).toBeInstanceOf(DeliveryRuntimeProposalOwnershipConflict)
+    if (failure instanceof DeliveryRuntimeProposalOwnershipConflict) {
+      expect(failure.proposalIds).toEqual([conflicted.id])
+    }
+  })
 )

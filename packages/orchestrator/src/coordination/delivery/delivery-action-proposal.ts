@@ -249,11 +249,13 @@ type FreshOperationIdentity = {
   readonly _tag: "FreshOperationIdRequired"
   readonly source:
     | { readonly _tag: "Allocate" }
+    /** A recovery boundary selected this exact identity before admission. */
+    | { readonly _tag: "Preserve"; readonly operationId: OperationId }
     | { readonly _tag: "ExternalSuccessReleaseClaim"; readonly claimOperationId: OperationId }
     | { readonly _tag: "TaskClaimReacquisitionRequest"; readonly requestId: TaskClaimReacquisitionRequestId }
 }
 
-/** New identity allocation is declared, but projection never allocates either identity. */
+/** A fresh action operation identity is declared before admission; projection never allocates it. */
 export type FreshIdentityDeliveryProposal =
   | (DeliveryProposalBase & {
       readonly actionIdentity: { readonly _tag: "FreshOperationAndAttemptIdsRequired" }

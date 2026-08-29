@@ -363,7 +363,7 @@ const recoveredRouteProposalOf = (
     const route: FreshOperationRoute = { _tag: "RecoveredNewActionRoute", action: newAction }
     return {
       _tag: "ProposalDerived",
-      proposal: { ...proposalBase(context, route), actionIdentity: recoveredIdentityFor(newAction), route }
+      proposal: { ...proposalBase(context, route), actionIdentity: recoveredIdentityFor(newAction, operationId), route }
     }
   }
   if (operationId !== undefined) {

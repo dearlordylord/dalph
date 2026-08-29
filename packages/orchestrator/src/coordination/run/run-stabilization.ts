@@ -197,7 +197,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
     Effect.gen(function* () {
       const firstPhase =
         opportunity._tag === "ActiveWorkAuthorityRefresh"
-          ? DeliveryRuntimePhase.ActiveRefreshPreG2
+          ? DeliveryRuntimePhase.ActiveRefreshPreG2([...opportunity.subjects])
           : DeliveryRuntimePhase.Ordinary
       const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations, firstPhase)
       if (shouldReturnInitialProof(firstQuiescence)) {

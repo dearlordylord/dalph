@@ -16,8 +16,10 @@ import {
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
 import type { DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
-import { makeDeliveryRuntimeAdmissionLoop } from "./delivery-runtime-admission-loop.js"
-import type { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
+import {
+  makeDeliveryRuntimeAdmissionLoop,
+  DeliveryRuntimeProposalOwnershipConflict
+} from "./delivery-runtime-admission-loop.js"
 import {
   attachCurrentSignal,
   type CurrentSignal,
@@ -33,8 +35,14 @@ import type { PlannedAttemptProtocolController } from "../../workflow/protocols/
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
 import { proposalIsPresent } from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
+import {
+  DeliveryRuntimePhase,
+  preG2EvaluationOf,
+  type DeliveryRuntimePhase as DeliveryRuntimePhaseType
+} from "./delivery-runtime-phase.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
+export * from "./delivery-runtime-phase.js"
 
 /** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
 export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedError<DeliveryRuntimeReconfirmationStateInvalid>()(
@@ -64,25 +72,6 @@ type RuntimeEvent<E> =
  * live ownership remains process-local until that exact action settles.
  */
 export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvaluation, E>
-
-/**
- * The active-refresh stabilization has one explicit pre-G2 runtime phase.
- * Before its typed boundary, ordinary admission follows the normal proposal
- * order; after the boundary, no proposal is admitted until stabilization has
- * accepted the required later graph observation. The post-G2 phase reopens
- * independent ordinary work while the active subject remains filtered by the
- * relation.
- */
-export type DeliveryRuntimePhase =
-  | { readonly _tag: "OrdinaryDeliveryRuntimePhase" }
-  | { readonly _tag: "ActiveRefreshPreG2RuntimePhase" }
-  | { readonly _tag: "ActiveRefreshPostG2RuntimePhase" }
-
-export const DeliveryRuntimePhase = {
-  Ordinary: { _tag: "OrdinaryDeliveryRuntimePhase" } satisfies DeliveryRuntimePhase,
-  ActiveRefreshPreG2: { _tag: "ActiveRefreshPreG2RuntimePhase" } satisfies DeliveryRuntimePhase,
-  ActiveRefreshPostG2: { _tag: "ActiveRefreshPostG2RuntimePhase" } satisfies DeliveryRuntimePhase
-} as const
 
 type AvailableProposalFrontier = Extract<DeliveryProposalFrontier, { readonly _tag: "DeliveryProposalsAvailable" }>
 type EmptyProposalFrontier = Omit<AvailableProposalFrontier, "proposals"> & { readonly proposals: readonly [] }
@@ -129,7 +118,7 @@ export type DeliveryRuntimeQuiescence =
  */
 export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
   relation: DeliveryRuntimeInput<E>,
-  phase: DeliveryRuntimePhase = DeliveryRuntimePhase.Ordinary
+  phase: DeliveryRuntimePhaseType = DeliveryRuntimePhase.Ordinary
 ): Effect.fn.Return<
   DeliveryRuntimeQuiescence,
   | E
@@ -164,7 +153,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
       const attachment = yield* attachCurrentSignal(relation)
-      const first = attachment.current
+      const first = preG2EvaluationOf(phase, attachment.current)
       yield* Ref.set(latest, Option.some(first))
       yield* runtimeObservation.publish(first, [])
       const admission = yield* resources.makeAdmissionController(first.taskWork)
@@ -272,21 +261,23 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const applyEvaluation = Effect.fn("DeliveryRuntime.applyEvaluation")(function* (
         evaluation: DeliveryRuntimeEvaluation
       ) {
+        const phaseEvaluation = preG2EvaluationOf(phase, evaluation)
         yield* selectionGate.withPermit(
           Effect.gen(function* () {
-            yield* Ref.set(latest, Option.some(evaluation))
+            yield* Ref.set(latest, Option.some(phaseEvaluation))
             yield* Ref.update(
               deferredAt,
               (current) =>
                 new Map(
                   [...current].filter(
                     ([proposalId, acceptedAt]) =>
-                      acceptedAt === evaluation.acceptedAt && proposalIsPresent(evaluation.proposedActions, proposalId)
+                      acceptedAt === phaseEvaluation.acceptedAt &&
+                      proposalIsPresent(phaseEvaluation.proposedActions, proposalId)
                   )
                 )
             )
-            yield* admission.synchronize(evaluation.taskWork)
-            yield* admissionLoop.pruneSettledOwners(evaluation.proposedActions)
+            yield* admission.synchronize(phaseEvaluation.taskWork)
+            yield* admissionLoop.pruneSettledOwners(phaseEvaluation.proposedActions)
             yield* publishRuntimeObservationInsideGate()
           })
         )
@@ -344,10 +335,11 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         live: ReadonlyMap<DeliveryProposalId, LiveOwner>
       ) {
         const proposedActions = current.proposedActions
-        /* v8 ignore start -- admitPass rejects a conflicting frontier before finality is evaluated. */
-        if (proposedActions._tag === "DeliveryProposalOwnershipConflict")
-          return Option.none<DeliveryRuntimeQuiescence>()
-        /* v8 ignore stop */
+        if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+          return yield* new DeliveryRuntimeProposalOwnershipConflict({
+            proposalIds: proposedActions.conflicts.map(({ id }) => id)
+          })
+        }
         const deferred = yield* Ref.get(deferredAt)
         // An action deferred against these exact accepted facts has released its owner and cannot run again
         // until a later accepted journal position clears that deferral. Its retained proposal must not prevent

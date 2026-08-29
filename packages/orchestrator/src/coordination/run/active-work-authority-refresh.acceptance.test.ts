@@ -39,6 +39,7 @@ import {
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
+import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
@@ -82,6 +83,8 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
+import { materializeDeliveryAction } from "../delivery/delivery-action-materialization.js"
 
 const runId = RunId.make("active-work-refresh-acceptance-run")
 const target = FixtureTarget.make("active-work-refresh-acceptance-target")
@@ -677,6 +680,108 @@ it.effect("shares one active graph read across Running attempts before their own
       )
     ).toEqual([])
   })
+)
+
+it.effect(
+  "reuses an intent-only active graph operation after a crash and allocates a new one on later activation",
+  () =>
+    Effect.gen(function* () {
+      const records = buildTwoRunningPrefix()
+      const opportunity = activeWorkAuthorityRefreshForOwner(
+        "TrackerNotification",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
+      const first = yield* projectionFor(records, opportunity)
+      const graphRead = first.frontier.transitions.find(
+        (
+          transition
+        ): transition is Extract<
+          RunnableFrontierTransition,
+          { readonly _tag: "ObservePlannedAttemptContinuationGraph" }
+        > => transition._tag === "ObservePlannedAttemptContinuationGraph"
+      )
+      if (graphRead === undefined) return yield* Effect.die("expected an active graph read before the crash cut")
+
+      const operationId = graphRead.operation.operationId
+      const [proposal] = deliveryProposalsOf({
+        acceptedOperationIds: new Set(),
+        fresh: [],
+        responsibilities: [
+          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(5), plannedAttempt }
+        ],
+        runId,
+        transitions: [graphRead]
+      }).ticketDelivery
+      expect(proposal?.actionIdentity).toEqual({
+        _tag: "FreshOperationIdRequired",
+        source: { _tag: "Preserve", operationId }
+      })
+      if (proposal === undefined) return yield* Effect.die("expected a delivery proposal for the active graph read")
+      const materialized = yield* materializeDeliveryAction(proposal).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({ allocate: () => Effect.die("active graph materialization must not allocate") })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("active graph materialization must not plan") })
+        )
+      )
+      expect(materialized).toMatchObject({ _tag: "FreshOperationAction", operationId })
+
+      const intentOnly = appendRecord(records, taskTrackerReadIntent(graphRead.operation))
+      const restarted = yield* projectionFor(intentOnly, opportunity)
+      const restartedGraphRead = restarted.frontier.transitions.find(
+        (
+          transition
+        ): transition is Extract<
+          RunnableFrontierTransition,
+          { readonly _tag: "ObservePlannedAttemptContinuationGraph" }
+        > => transition._tag === "ObservePlannedAttemptContinuationGraph"
+      )
+      expect(restartedGraphRead?.operation.operationId).toBe(operationId)
+
+      const graphObservation = taskTrackerFactsObservedEvent(
+        operationId,
+        makeCompleteTaskTrackerFactsObserved(graphRead.operation, snapshotFor("active-work-refresh-crash-replay"))
+      )
+      const completed = appendRecord(intentOnly, graphObservation)
+      const afterObservation = yield* projectionFor(completed, opportunity)
+      expect(
+        afterObservation.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
+      ).toEqual([])
+
+      const laterActivation = appendRecord(
+        appendRecord(
+          completed,
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "StartOrContinue",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+          report: PlannedAttemptExecutorReport.cases.Running.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId }
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const later = yield* projectionFor(laterActivation, opportunity)
+      const laterGraphRead = later.frontier.transitions.find(
+        (
+          transition
+        ): transition is Extract<
+          RunnableFrontierTransition,
+          { readonly _tag: "ObservePlannedAttemptContinuationGraph" }
+        > => transition._tag === "ObservePlannedAttemptContinuationGraph"
+      )
+      expect(laterGraphRead?.operation.operationId).not.toBe(operationId)
+    })
 )
 
 it.effect(

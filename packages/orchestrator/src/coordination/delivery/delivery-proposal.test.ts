@@ -1,4 +1,5 @@
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
+import { it } from "@effect/vitest"
 import {
   AttemptId,
   GitCommitSha,
@@ -14,20 +15,27 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { describe, expect, it } from "vitest"
+import { Effect } from "effect"
+import { describe, expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { makeTargetLineageObservationOperation } from "../../workflow/registry/operation.js"
+import {
+  makeTargetLineageObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { deliveryProposalFrontierOf } from "./relations.js"
+import { materializeDeliveryAction } from "./delivery-action-materialization.js"
 
 const runId = RunId.make("proposal-run")
 const taskId = TaskId.make("A")
@@ -143,6 +151,49 @@ describe("deliveryProposalsOf", () => {
       route: { _tag: "AcceptedWorkflowRoute", transition }
     })
   })
+
+  it.effect("preserves a selected active-refresh graph identity until admission", () =>
+    Effect.gen(function* () {
+      const operationId = OperationId.make("active-refresh:proposal-run:after:17:graph")
+      const operation = makeTrackerGraphObservationOperation(
+        operationId,
+        FixtureTarget.make("proposal-target"),
+        [],
+        [taskId]
+      )
+      const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+        operation,
+        plannedAttempt
+      })
+
+      const [proposal] = deliveryProposalsOf({
+        acceptedOperationIds: new Set(),
+        fresh: [],
+        responsibilities: [
+          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(2), plannedAttempt }
+        ],
+        runId,
+        transitions: [transition]
+      }).ticketDelivery
+
+      expect(proposal?.actionIdentity).toEqual({
+        _tag: "FreshOperationIdRequired",
+        source: { _tag: "Preserve", operationId }
+      })
+      if (proposal === undefined) return
+      const materialized = yield* materializeDeliveryAction(proposal).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("must-not-be-used")) })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("active graph materialization must not plan") })
+        )
+      )
+      expect(materialized).toMatchObject({ _tag: "FreshOperationAction", operationId })
+    })
+  )
 
   it("orders operation reconciliation from the matching accepted responsibility", () => {
     const operationId = OperationId.make("accepted-claim-operation-with-responsibility")
