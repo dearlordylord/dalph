@@ -84,6 +84,7 @@ import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/ta
 import { makeRunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import {
   activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsFor,
   RunActivationOpportunity,
   type RunActivationOpportunity as RunActivationOpportunityType
 } from "../../../orchestrator/src/coordination/run/run-activation-opportunity.js"
@@ -823,13 +824,19 @@ const taskFactReconciliationDriver = defineDriver(
           undefined,
           false,
           false,
-          activeWorkAuthorityRefreshForOwner(source)
+          activeWorkAuthorityRefreshForOwner(
+            source,
+            activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+          )
         )
       ).pipe(
         Effect.tap((created) =>
           Effect.sync(() => {
             activeRecovery = created
-            activeInterpreterOpportunity = activeWorkAuthorityRefreshForOwner(source)
+            activeInterpreterOpportunity = activeWorkAuthorityRefreshForOwner(
+              source,
+              activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+            )
             authorityReadPurpose = "ActiveWorkRefreshRead"
             refreshSource = source
           })
@@ -1175,7 +1182,10 @@ const taskFactReconciliationDriver = defineDriver(
           Effect.sync(() => {
             currentOldWorktree = "Ready"
             replacementTargetHeadReadable = true
-            activeInterpreterOpportunity = activeWorkAuthorityRefreshForOwner(source)
+            activeInterpreterOpportunity = activeWorkAuthorityRefreshForOwner(
+              source,
+              activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+            )
           })
         )
       )

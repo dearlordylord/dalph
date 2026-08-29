@@ -45,6 +45,7 @@ import {
   IntegratorCandidateProviderAuthority,
   type IntegratorCandidateProviderAuthorityService,
   runReactivationOwnerLayer,
+  runWorkflowWithActiveWorkAuthorityRefresh,
   runWorkflow,
   type InitialControlPolicySource,
   type CurrentSignal,
@@ -120,12 +121,20 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
 ) => {
   const activation = (opportunity: RunActivationOpportunityValue) =>
     runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId), opportunity)
+  const activateActiveWorkAuthorityRefresh = (source: "TrackerNotification" | "Timer") =>
+    runWorkflowWithActiveWorkAuthorityRefresh(
+      target,
+      initialControlPolicySource,
+      AllocatedWorkflowRunId.make(runId),
+      source
+    )
   const readControl = Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
     return yield* bootstrap.readRunReactivationControl(target, runId)
   })
   const ownerLayer = runReactivationOwnerLayer({
     activate: activation,
+    activateActiveWorkAuthorityRefresh,
     activationInterval: options.activationInterval ?? defaultProductionRunReactivationInterval,
     failureCooldown: options.failureCooldown ?? defaultProductionRunReactivationCooldown,
     installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>

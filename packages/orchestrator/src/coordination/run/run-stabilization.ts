@@ -1,4 +1,4 @@
-import { Effect, Option, Ref, Stream } from "effect"
+import { Effect, Option, Stream } from "effect"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { DeliveryRuntimeInput, DeliveryRuntimeQuiescence } from "../delivery/run-delivery-runtime.js"
 import { runDeliveryRuntimePhase } from "../delivery/run-delivery-runtime.js"
@@ -17,7 +17,6 @@ import { makeTrackerGraphObservationOperation } from "../../workflow/registry/op
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { InRunJournal, type InRunJournalService } from "../../workflow-journal/store.js"
-import { activeRefreshRunningProjectionSettledSuspend } from "./recovery-activation.js"
 import type { RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 type EstablishedTrackerGraph = Extract<
@@ -103,6 +102,36 @@ const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): 
     : { acceptedAt: inputs.acceptedAt, decision, disposition, evidence }
 }
 
+/**
+ * Uses the accepted G2 graph as the proof boundary for an active refresh that
+ * reconciled a persisted Suspend. The marker suppresses a second generic
+ * runtime phase; it does not suppress this complete tracker read.
+ */
+const proofOfAcceptedActiveRefreshG2 = (
+  target: TrackerTarget,
+  accepted: DeliveryRuntimeEvaluation,
+  firstQuiescence: DeliveryRuntimeQuiescence
+): RunFinalityProof => {
+  if (accepted.acceptedAt === null || accepted.current.trackerGraph._tag !== "GraphEstablished") {
+    return unsettledProof(accepted.acceptedAt)
+  }
+  if (accepted.quiescence._tag === "QuiescencePassive") return unsettledProof(accepted.acceptedAt)
+  if (accepted.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+    return unsettledProof(accepted.acceptedAt)
+  }
+  if (accepted.proposedActions.proposals.length > 0) return unsettledProof(accepted.acceptedAt)
+  return proofOf(target, {
+    _tag: "TrackerReconfirmationQuiescence",
+    acceptedAt: accepted.acceptedAt,
+    current: { ...accepted.current, trackerGraph: accepted.current.trackerGraph },
+    disposition: { _tag: "TrackerReconfirmationAllowed" },
+    proposedActions: { ...accepted.proposedActions, proposals: [] },
+    ...(firstQuiescence.activeRefreshBoundary === undefined
+      ? {}
+      : { activeRefreshBoundary: firstQuiescence.activeRefreshBoundary })
+  })
+}
+
 const acceptsObservation = (
   operationId: ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"],
   evaluation: DeliveryRuntimeEvaluation,
@@ -173,31 +202,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      const activeRefreshBoundaryReached = yield* Ref.make(false)
-      const activeRefreshBoundary = (
-        initialAcceptedAt: DeliveryRuntimeEvaluation["acceptedAt"],
-        current: DeliveryRuntimeEvaluation
-      ) =>
-        Effect.gen(function* () {
-          if (
-            initialAcceptedAt === null ||
-            current.current.runId === undefined ||
-            current.current.trackerGraph._tag !== "GraphEstablished"
-          )
-            return false
-          const journal = yield* InRunJournal
-          const records = yield* journal.read(current.current.runId)
-          const reached = activeRefreshRunningProjectionSettledSuspend(records, Option.some(initialAcceptedAt))
-          if (reached) yield* Ref.set(activeRefreshBoundaryReached, true)
-          return reached
-        })
-      const firstQuiescence =
-        opportunity._tag === "ActiveWorkAuthorityRefresh"
-          ? yield* runDeliveryRuntimePhase(evaluations, activeRefreshBoundary)
-          : yield* runDeliveryRuntimePhase(evaluations)
-      if (opportunity._tag === "ActiveWorkAuthorityRefresh" && (yield* Ref.get(activeRefreshBoundaryReached))) {
-        return proofOf(target, firstQuiescence)
-      }
+      const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations)
       if (shouldReturnInitialProof(firstQuiescence)) {
         return proofOf(target, firstQuiescence)
       }
@@ -229,6 +234,9 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
           acceptedAt: accepted.acceptedAt,
           decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
+      }
+      if (opportunity._tag === "ActiveWorkAuthorityRefresh" && firstQuiescence.activeRefreshBoundary !== undefined) {
+        return proofOfAcceptedActiveRefreshG2(target, accepted, firstQuiescence)
       }
       return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))
     })

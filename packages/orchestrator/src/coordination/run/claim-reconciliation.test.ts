@@ -23,7 +23,10 @@ import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeRunRecoveryProjection } from "./recovery-activation.js"
-import { activeWorkAuthorityRefreshForOwner } from "./run-activation-opportunity.js"
+import {
+  activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsFor
+} from "./run-activation-opportunity.js"
 import { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
@@ -275,7 +278,10 @@ it.effect("records the exact planned worktree as lost and preserves its responsi
       undefined,
       false,
       false,
-      activeWorkAuthorityRefreshForOwner("Timer")
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
     )
     const graphRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
@@ -531,7 +537,10 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       undefined,
       false,
       false,
-      activeWorkAuthorityRefreshForOwner("TrackerNotification")
+      activeWorkAuthorityRefreshForOwner(
+        "TrackerNotification",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
     )
     const graphTransition = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (graphTransition?._tag !== "ObservePlannedAttemptContinuationGraph") {

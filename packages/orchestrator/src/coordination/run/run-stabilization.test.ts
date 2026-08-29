@@ -1,4 +1,5 @@
 import {
+  AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
@@ -47,6 +48,10 @@ import {
 } from "../delivery/relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
+import {
+  activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsFor
+} from "./run-activation-opportunity.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { type ApplicationExitLifecycleService, makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 const runId = RunId.make("run-stabilization")
@@ -334,6 +339,63 @@ it.effect("requests accepted G2 only after G1 becomes quiescent", () =>
         reason: "TrackerTargetUnsettled"
       })
       expect(yield* Ref.get(reads)).toBe(1)
+    })
+  )
+)
+
+it.effect("active refresh performs mandatory G2 once after its typed completion boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const g1 = graph(
+        "active-boundary-G1",
+        1,
+        snapshot("active-boundary-G1", [
+          { id: TaskId.make("A"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ])
+      )
+      const attemptId = AttemptId.make("active-boundary-attempt")
+      const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [{ runId, attemptId }]
+      }
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+        ...withRunFacts(evaluation(base, g1), false),
+        activeRefreshBoundary: boundary
+      })
+      const reads = yield* Ref.make(0)
+      const executions = yield* Ref.make(0)
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+          Ref.update(reads, (count) => count + 1).pipe(
+            Effect.andThen(
+              SubscriptionRef.set(state, {
+                ...withRunFacts(evaluation(base, graph(operation.operationId, 4, g1.observation.snapshot)), false),
+                activeRefreshBoundary: boundary
+              })
+            ),
+            Effect.as(g1.observation.snapshot)
+          )
+      })
+      const proof = yield* runStabilizedDelivery(
+        target,
+        signalOf(state),
+        activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
+      ).pipe(
+        Effect.provide(support),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: () => Ref.update(executions, (count) => count + 1).pipe(Effect.andThen(Effect.die("G2 only")))
+          })
+        ),
+        Effect.provide(interpreter)
+      )
+
+      expect(yield* Ref.get(reads)).toBe(1)
+      expect(yield* Ref.get(executions)).toBe(0)
+      expect(proof.acceptedAt).toBe(JournalPosition.make(4))
     })
   )
 )

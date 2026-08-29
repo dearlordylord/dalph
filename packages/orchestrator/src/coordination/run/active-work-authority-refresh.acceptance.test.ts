@@ -31,7 +31,11 @@ import {
   deriveJournalResponsibilityFacts,
   makeRunRecoveryProjection
 } from "./recovery-activation.js"
-import { activeWorkAuthorityRefreshForOwner, RunActivationOpportunity } from "./run-activation-opportunity.js"
+import {
+  activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsFor,
+  RunActivationOpportunity
+} from "./run-activation-opportunity.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -89,6 +93,7 @@ const independentSpecification = makeTaskWorkSpecification({
   taskId: independentTaskId,
   title: "Independent B"
 })
+
 const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/active-work-refresh.git"),
   ref: IntegrationTargetRef.make("refs/heads/main")
@@ -532,7 +537,13 @@ it.effect(
 it.effect("active refresh retains the exact Running responsibility when tracker or Git authority is unreadable", () =>
   Effect.gen(function* () {
     const records = buildPrefix("UnreadableGraph")
-    const projection = yield* projectionFor(records, activeWorkAuthorityRefreshForOwner("TrackerNotification"))
+    const projection = yield* projectionFor(
+      records,
+      activeWorkAuthorityRefreshForOwner(
+        "TrackerNotification",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
+    )
     const counts: ControlledBoundaryReadCounts = {
       graph: 0,
       specification: 0,
@@ -569,7 +580,13 @@ it.effect(
     Effect.gen(function* () {
       for (const constraint of ["MissingClaim", "ForeignClaim"] as const) {
         const records = buildPrefix(constraint)
-        const projection = yield* projectionFor(records, activeWorkAuthorityRefreshForOwner("TrackerNotification"))
+        const projection = yield* projectionFor(
+          records,
+          activeWorkAuthorityRefreshForOwner(
+            "TrackerNotification",
+            activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+          )
+        )
         const facts = availableEvidenceFor(projection).facts
         const executorFacts = facts.find(({ _tag }) => _tag === "PlannedAttemptExecutorFreshFacts")
         expect(executorFacts).toMatchObject({
@@ -584,7 +601,13 @@ it.effect(
 it.effect("configured timer refreshes a Running attempt and suspends it after its exact worktree is lost", () =>
   Effect.gen(function* () {
     const records = buildPrefix("LostWorktree")
-    const projection = yield* projectionFor(records, activeWorkAuthorityRefreshForOwner("Timer"))
+    const projection = yield* projectionFor(
+      records,
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
+    )
     expect(projection.frontier.transitions).toEqual([
       RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
     ])
@@ -595,7 +618,13 @@ it.effect("configured timer refreshes a Running attempt and suspends it after it
 it.effect("recovers the exact active-work suspension after process loss without releasing its position early", () =>
   Effect.gen(function* () {
     const records = buildPrefix("ForeignClaim")
-    const restart = yield* projectionFor(records, activeWorkAuthorityRefreshForOwner("TrackerNotification"))
+    const restart = yield* projectionFor(
+      records,
+      activeWorkAuthorityRefreshForOwner(
+        "TrackerNotification",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
+    )
     expect(restart.frontier.transitions).toEqual([
       RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
     ])
@@ -623,7 +652,13 @@ it.effect(
     Effect.gen(function* () {
       for (const kind of ["worktree", "lineage"] as const) {
         const records = activeGitFailureRecords(kind)
-        const projection = yield* projectionFor(records, activeWorkAuthorityRefreshForOwner("TrackerNotification"))
+        const projection = yield* projectionFor(
+          records,
+          activeWorkAuthorityRefreshForOwner(
+            "TrackerNotification",
+            activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+          )
+        )
         const executorFacts = availableEvidenceFor(projection).facts.find(
           ({ _tag }) => _tag === "PlannedAttemptExecutorFreshFacts"
         )
@@ -691,7 +726,13 @@ it.effect(
       ])
       expect(activeFailures.map(({ source }) => source)).toEqual(["TrackerNotification", "Timer"])
 
-      const projection = yield* projectionFor(second, activeWorkAuthorityRefreshForOwner("Timer"))
+      const projection = yield* projectionFor(
+        second,
+        activeWorkAuthorityRefreshForOwner(
+          "Timer",
+          activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+        )
+      )
       expect(projection.frontier.transitions).not.toEqual(
         expect.arrayContaining([
           expect.objectContaining({ _tag: "ContinuePlannedAttemptExecutorWork" }),

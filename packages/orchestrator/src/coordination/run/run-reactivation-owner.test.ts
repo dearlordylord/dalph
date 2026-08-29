@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { RunId } from "@dalph/contracts"
+import { AttemptId, RunId } from "@dalph/contracts"
 import {
   ApplicationExitShell,
   type ApplicationExitDrainFailure,
@@ -21,7 +21,11 @@ import {
 import type { AcceptedRunControlObserver } from "./run.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { makeCurrentSignal } from "../delivery/relations.js"
-import type { RunActivationOpportunity } from "./run-activation-opportunity.js"
+import {
+  activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsFor,
+  RunActivationOpportunity
+} from "./run-activation-opportunity.js"
 
 class TestTrackerReadFailure extends Schema.TaggedError<TestTrackerReadFailure>()("TestTrackerReadFailure", {
   detail: Schema.String
@@ -60,12 +64,21 @@ const makeTestExitShell = Effect.gen(function* () {
   return { drains, shell }
 })
 
-const ownerLayer = <E, R>(shell: ApplicationExitShellService, options: RunReactivationOwnerOptions<E, R>) =>
-  runReactivationOwnerLayer(options).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, shell)))
+type TestOwnerOptions<E, R> = Omit<RunReactivationOwnerOptions<E, R>, "activateActiveWorkAuthorityRefresh"> & {
+  readonly activateActiveWorkAuthorityRefresh?: RunReactivationOwnerOptions<E, R>["activateActiveWorkAuthorityRefresh"]
+}
+
+const ownerLayer = <E, R>(shell: ApplicationExitShellService, options: TestOwnerOptions<E, R>) =>
+  runReactivationOwnerLayer({
+    ...options,
+    activateActiveWorkAuthorityRefresh:
+      options.activateActiveWorkAuthorityRefresh ??
+      (() => options.activate(RunActivationOpportunity.OrdinaryRunEntry()))
+  }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, shell)))
 
 const provideOwner = <E, R, A>(
   shell: ApplicationExitShellService,
-  options: RunReactivationOwnerOptions<E, R>,
+  options: TestOwnerOptions<E, R>,
   program: (owner: RunReactivationOwnerService) => Effect.Effect<A>
 ) =>
   Effect.gen(function* () {
@@ -91,6 +104,20 @@ it.effect("maps only tracker notifications and timers to active-work authority r
               Effect.andThen(Queue.offer(activated, undefined)),
               Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
             ),
+          activateActiveWorkAuthorityRefresh: (source) =>
+            Ref.update(opportunities, (current) => [
+              ...current,
+              activeWorkAuthorityRefreshForOwner(
+                source,
+                activeWorkAuthorityRefreshSubjectsFor([
+                  { runId: RunId.make("test-run-opportunities"), attemptId: AttemptId.make("test-attempt-A") },
+                  { runId: RunId.make("test-run-opportunities"), attemptId: AttemptId.make("test-attempt-B") }
+                ])
+              )
+            ]).pipe(
+              Effect.andThen(Queue.offer(activated, undefined)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
           isTerminationFailure: () => false,
           installAcceptedRunReactivationObservers: () => Effect.void,
           onFailure: () => Effect.void
@@ -107,8 +134,22 @@ it.effect("maps only tracker notifications and timers to active-work authority r
             expect(yield* Ref.get(opportunities)).toEqual([
               { _tag: "OrdinaryRunEntry" },
               { _tag: "OrdinaryRunEntry" },
-              { _tag: "ActiveWorkAuthorityRefresh", source: "TrackerNotification" },
-              { _tag: "ActiveWorkAuthorityRefresh", source: "Timer" }
+              {
+                _tag: "ActiveWorkAuthorityRefresh",
+                source: "TrackerNotification",
+                subjects: activeWorkAuthorityRefreshSubjectsFor([
+                  { runId: RunId.make("test-run-opportunities"), attemptId: AttemptId.make("test-attempt-A") },
+                  { runId: RunId.make("test-run-opportunities"), attemptId: AttemptId.make("test-attempt-B") }
+                ])
+              },
+              {
+                _tag: "ActiveWorkAuthorityRefresh",
+                source: "Timer",
+                subjects: activeWorkAuthorityRefreshSubjectsFor([
+                  { runId: RunId.make("test-run-opportunities"), attemptId: AttemptId.make("test-attempt-A") },
+                  { runId: RunId.make("test-run-opportunities"), attemptId: AttemptId.make("test-attempt-B") }
+                ])
+              }
             ])
           })
       )

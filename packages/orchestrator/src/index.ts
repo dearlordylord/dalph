@@ -601,6 +601,7 @@ export {
   type AcceptedRunReactivationObservers,
   JournaledRunReactivationObserverAlreadyRegistered,
   runWorkflowWithControlledDeliveryActionExecutor,
+  runWorkflowWithActiveWorkAuthorityRefresh,
   runWorkflow
 } from "./coordination/run/run.js"
 export {

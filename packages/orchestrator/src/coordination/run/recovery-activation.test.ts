@@ -1,7 +1,11 @@
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Option } from "effect"
 import { expect, it } from "vitest"
-import { activeWorkAuthorityRefreshForOwner, RunActivationOpportunity } from "./run-activation-opportunity.js"
+import {
+  activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsFor,
+  RunActivationOpportunity
+} from "./run-activation-opportunity.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import {
   AttemptId,
@@ -1948,7 +1952,10 @@ it("uses only tracker or timer active refresh to bypass Running and reread curre
     { event: coverageGraphEvent, position: JournalPosition.make(5) },
     Option.none(),
     Option.none(),
-    activeWorkAuthorityRefreshForOwner("TrackerNotification")
+    activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    )
   )
 
   expect(ordinary).toEqual({ transition: coverageContinuationTransition })
@@ -1980,7 +1987,10 @@ it("removes only the exact post-baseline unreadable suspension during an active 
       frontier,
       [running, unreadable],
       baseline,
-      activeWorkAuthorityRefreshForOwner("Timer")
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+      )
     ).transitions
   ).toEqual([])
   expect(
@@ -1996,7 +2006,10 @@ it("removes only the exact post-baseline unreadable suspension during an active 
       frontier,
       [running, { ...unreadable, position: JournalPosition.make(15) }],
       baseline,
-      activeWorkAuthorityRefreshForOwner("Timer")
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+      )
     ).transitions
   ).toEqual([suspend])
   expect(
@@ -2004,7 +2017,10 @@ it("removes only the exact post-baseline unreadable suspension during an active 
       frontier,
       [running, safelySuspended, unreadable],
       baseline,
-      activeWorkAuthorityRefreshForOwner("Timer")
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+      )
     ).transitions
   ).toEqual([suspend])
 })
@@ -2039,7 +2055,10 @@ it("authorizes no executor command after a healthy refresh of Running work", () 
     currentGraph,
     Option.none(),
     Option.none(),
-    activeWorkAuthorityRefreshForOwner("Timer")
+    activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    )
   )
 
   expect(ordinary.transition?._tag).toBe("ContinuePlannedAttemptExecutorWork")
@@ -2106,7 +2125,10 @@ it("correlates ordinary and active-refresh Git intents before requesting lineage
       currentGraphObservation,
       Option.some(JournalPosition.make(5)),
       Option.some(integrationTarget),
-      activeWorkAuthorityRefreshForOwner("Timer")
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+      )
     )
     expect(decision.transition?._tag, label).toBe("ObservePlannedAttemptContinuationTargetLineage")
   }
@@ -2133,7 +2155,10 @@ it("requires each active refresh to reread authorities after its own activation 
     { event: coverageGraphEvent, position: JournalPosition.make(11) },
     Option.some(JournalPosition.make(10)),
     Option.none(),
-    activeWorkAuthorityRefreshForOwner("TrackerNotification")
+    activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    )
   )
   expect(firstRefresh).toEqual({})
 
@@ -2146,7 +2171,10 @@ it("requires each active refresh to reread authorities after its own activation 
     undefined,
     Option.some(JournalPosition.make(15)),
     Option.none(),
-    activeWorkAuthorityRefreshForOwner("Timer")
+    activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    )
   )
   expect(secondRefresh.transition).toMatchObject({
     _tag: "ObservePlannedAttemptContinuationGraph",

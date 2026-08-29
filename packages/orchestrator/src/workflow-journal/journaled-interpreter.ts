@@ -39,7 +39,7 @@ import {
   type InterruptibleWorkflowBoundaryExecution
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
-import { RunActivationOpportunity } from "../coordination/run/run-activation-opportunity.js"
+import * as RunActivation from "../coordination/run/run-activation-opportunity.js"
 import { runJournaledTaskClaimRelease } from "../workflow/protocols/task-claim-release/journaled.js"
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
 import { journaledTrackerGraphRead } from "../workflow/protocols/task-tracker-read/protocol.js"
@@ -61,7 +61,7 @@ const requireTaskWorkSpecification = <A>(
 export const journaledWorkflowInterpreterLayer = <E, R>(
   runId: RunId,
   interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>,
-  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
+  opportunity: RunActivation.RunActivationOpportunity = RunActivation.RunActivationOpportunity.OrdinaryRunEntry()
 ) =>
   Layer.effect(
     WorkflowInterpreter,
@@ -173,7 +173,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        if (opportunity._tag === "ActiveWorkAuthorityRefresh") {
+        if (RunActivation.isActiveWorkAuthorityRefreshForAttempt(opportunity, operation.plannedAttempt)) {
           return yield* runActiveWorktreeAuthorityRefreshGitRead({
             boundary: interruptibleBoundary,
             interpreter,
@@ -229,7 +229,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        if (opportunity._tag === "ActiveWorkAuthorityRefresh") {
+        if (RunActivation.isActiveWorkAuthorityRefreshForAttempt(opportunity, operation.plannedAttempt)) {
           return yield* runActiveTargetLineageAuthorityRefreshGitRead({
             boundary: interruptibleBoundary,
             interpreter,

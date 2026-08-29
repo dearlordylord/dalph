@@ -106,6 +106,17 @@ lineage. The executor owns P's current attempt-level report. The Journal owns
 only the accepted history above. The activation has no durable cached frontier
 or wake fact.
 
+The same Run may contain more than one reconstructed `Running` attempt. The
+notification or timer selects every such exact `RunId` plus `AttemptId` pair
+independently; it never chooses an arbitrary one. A task that is not currently
+`Running` remains on the ordinary recovery path. If B or C is itself `Running`,
+it receives its own exact active refresh with its own tracker, Git, executor,
+and task-work position facts. A's source, observations, constraint, and
+suspension decision never become B's or C's facts. The Quint active-refresh
+model uses A as one representative exact subject for this per-attempt law; the
+runtime applies that law independently to every reconstructed `Running`
+attempt.
+
 ### Outside event and trigger
 
 Another tracker client replaces K, removes K, edits A's title or body from F1
@@ -136,15 +147,22 @@ ordinary Running shortcut prevents them from refreshing A.
    before the read starts coalesce into one opportunity. A notification or
    timer tick arriving while the tracker or Git read is in flight requests at
    most one trailing refresh after the current activation returns. It does not
-   start a second activation or concurrent coordinator path.
+   start a second activation or concurrent coordinator path. At that activation
+   boundary, Dalph enumerates every reconstructed `Running` attempt in R and
+   gives each exact pair its own active-read subject. It does not select one
+   attempt by ordering, task ID, or capacity.
    If the active handoff rejects the opportunity or the activation finishes
    during the handoff, the owner retains that one marker and performs one
    trailing ordinary establishment/activation instead of losing the check.
 2. The activation records and performs its existing complete tracker-graph
    read. It then records and performs only the focused tracker and Git reads
-   selected for A by that complete observation: current title/body, exact
-   claim, exact planned-worktree registration, and target lineage. Every read
-   uses the existing journal-first intent and observation protocols.
+   selected for each exact active subject by that complete observation: current
+   title/body, exact claim, exact planned-worktree registration, and target
+   lineage. Every read uses the existing journal-first intent and observation
+   protocols. A non-running B or C is not converted into an active subject by
+   this source; its ordinary recovery facts remain ordinary. A running B or C
+   gets the same read sequence separately, correlated to B or C's own exact
+   attempt.
 3. If the current facts still prove A open and in the closure with complete
    prerequisites, F1, exact K, exact W, and valid lineage, Dalph records those
    observations and selects no executor command for P. It does not append or
@@ -169,7 +187,9 @@ ordinary Running shortcut prevents them from refreshing A.
    foreign report, process disappearance, an unreadable authority result, or a
    recorded suspension intent does not release the position.
 6. B and C continue through their own ordinary current-fact and capacity
-   decisions. A's refresh or constraint never creates a Run-wide stop.
+   decisions when they are not running. If either one is running, its own
+   active subject is checked independently. A's refresh or constraint never
+   creates a Run-wide stop or changes B/C's source, evidence, or position.
 
 If a tracker graph, focused tracker, or Git read is incomplete, malformed,
 throttled, or otherwise unreadable, Dalph records the typed outcome and
@@ -260,8 +280,11 @@ absence; or persist a derived refresh/frontier state.
 - `active-work refresh localizes every complete task and Git constraint while
   independent work continues` parameterizes changed instructions, lifecycle
   closure/success, membership loss, a newly unfinished blocker, incompatible
-  lineage, and worktree mismatch; each exact observation selects only A's
-  existing suspension route and leaves B/C independent.
+  lineage, and worktree mismatch; each exact observation selects only the
+  affected running attempt's existing suspension route and leaves B/C
+  independent. A second running attempt is checked in the same activation and
+  receives only its own observations and suspension decision; a non-running B/C
+  remains ordinary.
 - `unreadable active-work refresh neither continues nor suspends the Running
   attempt` proves exhausted focused-claim unreadability and incomplete graph or
   Git facts make zero executor calls, while a later notification/timer starts a
@@ -283,11 +306,27 @@ absence; or persist a derived refresh/frontier state.
 - `Pause Exit and termination suppress later active-work refresh` proves Pause
   stops Run-specific refresh until accepted Unpause and current reads, Exit
   admits no later refresh, and termination discards the retained marker.
+- The handoff-race and lifecycle cutoffs remain at the existing owner seam:
+  `coalesces concurrent hints behind one activation`, `keeps one owner per
+  exact Run composition and lets Exit stop after the active boundary`,
+  `stops its timer when activation returns RunMayTerminate`, and `treats
+  terminated history as closure and never schedules a fresh activation` prove
+  the activation-finished one-trailing case, Pause/Exit drain, terminal
+  decision, and termination cutoffs. `production composition wires
+  current-first tracker notifications and fresh checks` proves the same owner
+  is installed by the production Layer. The public production boundary exposes
+  no controllable failed-admission handoff hook; adding one only for a test
+  would create a new runtime seam. The owner one-trailing/Exit tests plus this
+  production-wiring test are therefore the strongest legitimate mapping, with
+  the failed-admission branch remaining an unforced competing outcome.
 - Quint scenario `activeRefreshUnreadableDoesNotSuspendOrContinueTest` proves
   active-refresh unreadability selects no executor action while the existing
   ordinary-unreadable scenario still requests safe suspension. Its negative
   scenario deliberately treats the active refresh as an ordinary continuation
-  and must fail the new source-sensitive property.
+  and must fail the new source-sensitive property. The Quint subject is one
+  representative exact running attempt; runtime subject-selection tests prove
+  the same law is applied independently to every reconstructed `Running`
+  attempt and never to a non-running one.
 
 These named seams are required vertical production tests. Existing focused
 protocol and model tests remain supporting evidence; aggregate gate totals do

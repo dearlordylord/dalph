@@ -113,6 +113,23 @@ import {
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 
+type CapturedProductionOpportunity =
+  | { readonly _tag: "OrdinaryRunEntry" }
+  | {
+      readonly _tag: "ActiveWorkAuthorityRefresh"
+      readonly source: "TrackerNotification" | "Timer"
+      readonly subjects: ReadonlySet<{ readonly runId: RunId; readonly attemptId: AttemptId }>
+    }
+
+const captureProductionOpportunity = (opportunity: RunActivationOpportunityValue): CapturedProductionOpportunity =>
+  opportunity._tag === "OrdinaryRunEntry"
+    ? opportunity
+    : {
+        _tag: "ActiveWorkAuthorityRefresh",
+        source: opportunity.source,
+        subjects: new Set([...opportunity.subjects].map(({ attemptId, runId }) => ({ attemptId, runId })))
+      }
+
 it.effect("rejects a non-positive production reactivation interval at configuration decoding", () =>
   Effect.gen(function* () {
     const failure = yield* Schema.decodeUnknownEffect(ProductionRunReactivationInterval)("0 seconds").pipe(Effect.flip)
@@ -156,6 +173,7 @@ const makeTerminalBootstrap = (
         provider: current.provider + 1,
         tracker: current.tracker + 1
       })).pipe(Effect.andThen(Effect.die("terminal Run must never activate"))),
+    activateActiveWorkAuthorityRefresh: () => Effect.die("terminal Run must never activate"),
     readRunReactivationControl: (_target, requestedRunId) =>
       Ref.update(journalReads, (current) => current + 1).pipe(
         Effect.andThen(journal.read(requestedRunId)),
@@ -304,12 +322,39 @@ it.effect("production composition wires current-first tracker notifications and 
       const registeredDrains = yield* Ref.make<ReadonlyArray<Effect.Effect<void, ApplicationExitDrainFailure>>>([])
       const registeredObservers = yield* Ref.make<AcceptedRunReactivationObservers | undefined>(undefined)
       const bootstrapTrace = yield* Ref.make<ReadonlyArray<"journal-read" | "bootstrap-activate">>([])
-      const opportunities = yield* Ref.make<ReadonlyArray<RunActivationOpportunityValue>>([])
+      const opportunities = yield* Ref.make<ReadonlyArray<CapturedProductionOpportunity>>([])
       const bootstrap = JournaledRunBootstrap.of({
         activate: (_target, _policy, _runId, _program, opportunity) =>
           Ref.update(opportunities, (current) =>
-            opportunity === undefined ? current : [...current, opportunity]
+            opportunity === undefined ? current : [...current, captureProductionOpportunity(opportunity)]
           ).pipe(
+            Effect.andThen(Ref.update(bootstrapTrace, (current) => [...current, "bootstrap-activate" as const])),
+            Effect.andThen(Ref.updateAndGet(activations, (current) => current + 1)),
+            Effect.tap((count) =>
+              count === 1
+                ? Deferred.succeed(firstActivation, undefined)
+                : count === 2
+                  ? Deferred.succeed(secondActivation, undefined)
+                  : count === 3
+                    ? Deferred.succeed(thirdActivation, undefined)
+                    : Deferred.succeed(fourthActivation, undefined)
+            ),
+            Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+          ),
+        activateActiveWorkAuthorityRefresh: (_target, _policy, _runId, _program, source) =>
+          Ref.update(opportunities, (current) => [
+            ...current,
+            {
+              _tag: "ActiveWorkAuthorityRefresh" as const,
+              source,
+              subjects: new Set([
+                {
+                  runId: RunId.make("production-reactivation-run"),
+                  attemptId: AttemptId.make("production-reactivation-attempt")
+                }
+              ])
+            }
+          ]).pipe(
             Effect.andThen(Ref.update(bootstrapTrace, (current) => [...current, "bootstrap-activate" as const])),
             Effect.andThen(Ref.updateAndGet(activations, (current) => current + 1)),
             Effect.tap((count) =>
@@ -394,8 +439,26 @@ it.effect("production composition wires current-first tracker notifications and 
         expect(yield* Ref.get(activations)).toBe(4)
         expect(yield* Ref.get(opportunities)).toEqual([
           { _tag: "OrdinaryRunEntry" },
-          { _tag: "ActiveWorkAuthorityRefresh", source: "TrackerNotification" },
-          { _tag: "ActiveWorkAuthorityRefresh", source: "Timer" },
+          {
+            _tag: "ActiveWorkAuthorityRefresh",
+            source: "TrackerNotification",
+            subjects: new Set([
+              {
+                runId: RunId.make("production-reactivation-run"),
+                attemptId: AttemptId.make("production-reactivation-attempt")
+              }
+            ])
+          },
+          {
+            _tag: "ActiveWorkAuthorityRefresh",
+            source: "Timer",
+            subjects: new Set([
+              {
+                runId: RunId.make("production-reactivation-run"),
+                attemptId: AttemptId.make("production-reactivation-attempt")
+              }
+            ])
+          },
           { _tag: "OrdinaryRunEntry" }
         ])
         const [exitDrain] = yield* Ref.get(registeredDrains)
@@ -411,7 +474,9 @@ it.effect("production composition wires current-first tracker notifications and 
 )
 
 type ProductionRefreshHarnessOptions = {
-  readonly source?: "TrackerNotification" | "Timer" | "AcceptedFactPublication"
+  readonly source?: "TrackerNotification" | "Timer" | "AcceptedFactPublication" | "OperatorWake"
+  readonly report?: "Running" | "SafelySuspended" | "Terminal"
+  readonly coalesce?: boolean
   readonly claim?: "Exact" | "Missing" | "Foreign"
   readonly graph?: "Readable" | "Unreadable"
   readonly git?: "Ready" | "LostWorktree" | "LineageRewrite" | "Unreadable"
@@ -444,6 +509,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
 
       const source = options.source ?? "TrackerNotification"
+      const coalesce = options.coalesce === true && source === "TrackerNotification"
       const claimMode = options.claim ?? "Exact"
       const graphMode = options.graph ?? "Readable"
       const gitMode = options.git ?? "Ready"
@@ -662,6 +728,44 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               version: workflowJournalEventVersion
             })
           )
+          if (options.report !== undefined) {
+            const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, commandOrdinal),
+              PlannedAttemptExecutorCommandIntendedEvent.make({
+                command: options.report === "SafelySuspended" ? "Suspend" : "StartOrContinue",
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                ordinal: commandOrdinal,
+                plannedAttempt: attempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+            const report =
+              options.report === "SafelySuspended"
+                ? PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+                    correlation: plannedAttemptExecutorCorrelation(attempt)
+                  })
+                : options.report === "Terminal"
+                  ? PlannedAttemptExecutorReport.cases.Terminal.make({
+                      correlation: plannedAttemptExecutorCorrelation(attempt),
+                      result: { _tag: "Completed" }
+                    })
+                  : PlannedAttemptExecutorReport.cases.Running.make({
+                      correlation: plannedAttemptExecutorCorrelation(attempt)
+                    })
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorWorkReportedRecordKey(attempt.attemptId, reportOrdinal),
+              PlannedAttemptExecutorWorkReportedEvent.make({
+                ordinal: reportOrdinal,
+                report,
+                version: workflowJournalEventVersion
+              })
+            )
+          }
         }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
       )
       type ProductionExecutorCall = {
@@ -685,9 +789,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const executorEntries = yield* Ref.make<ReadonlyArray<ProductionExecutorCall>>([])
       const suspendedTasks = yield* Ref.make<ReadonlySet<TaskId>>(new Set())
       const activationKinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
+      const activeSources = yield* Ref.make<ReadonlyArray<"TrackerNotification" | "Timer">>([])
+      const activeActivationCount = yield* Ref.make(0)
+      const activeConcurrent = yield* Ref.make(0)
+      const maximumActiveConcurrent = yield* Ref.make(0)
       const latestJournalPosition = yield* Ref.make<JournalRecord["position"] | undefined>(undefined)
       const failpoint = yield* Ref.make<ProductionRefreshFailpoint | undefined>(undefined)
       const failpointConsumed = yield* Ref.make(false)
+      const activeReadStarted = yield* Deferred.make<void>()
+      const releaseActiveRead = yield* Deferred.make<void>()
+      const secondActiveActivation = yield* Deferred.make<void>()
       const expectedActiveSelections = [
         "ReadTrackerGraph",
         "ReadTaskWorkSpecification",
@@ -749,7 +860,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                       ? Effect.fail(
                           new TrackerReadError({ operation: "TrackerGraphReader.parse", detail: "graph unreadable" })
                         )
-                      : Effect.succeed(snapshot)
+                      : Effect.gen(function* () {
+                          if (coalesce && (yield* Ref.get(phase)) === "Active") {
+                            yield* Deferred.succeed(activeReadStarted, undefined)
+                            yield* Deferred.await(releaseActiveRead)
+                          }
+                          return snapshot
+                        })
                   )
                 ),
               readTaskWorkSpecification: (_target, selectedTaskId) =>
@@ -892,12 +1009,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   Effect.andThen(applicationBootstrap.registerAcceptedRunReactivationObservers(observers))
                 ),
               activate: (target, initialControlPolicySource, allocatedRunId, program, opportunity) => {
+                const activationOpportunity: RunActivationOpportunityValue = opportunity ?? { _tag: "OrdinaryRunEntry" }
                 const activationTag =
-                  opportunity?._tag === "ActiveWorkAuthorityRefresh"
+                  activationOpportunity._tag === "ActiveWorkAuthorityRefresh"
                     ? ("ActiveWorkAuthorityRefresh" as const)
                     : ("OrdinaryRunEntry" as const)
                 const recordActivation = Ref.update(activationKinds, (current) => [...current, activationTag])
-                return opportunity?._tag === "OrdinaryRunEntry"
+                return activationOpportunity._tag === "OrdinaryRunEntry"
                   ? recordActivation.pipe(
                       Effect.andThen(
                         Ref.modify(ordinaryActivationCount, (count) => {
@@ -918,17 +1036,62 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                     )
                   : Effect.gen(function* () {
                       yield* recordActivation
+                      yield* Ref.update(activeSources, (sources) => [...sources, activationOpportunity.source])
+                      const activeCount = yield* Ref.updateAndGet(activeActivationCount, (count) => count + 1)
+                      yield* activeCount === 2 ? Deferred.succeed(secondActiveActivation, undefined) : Effect.void
+                      const concurrent = yield* Ref.updateAndGet(activeConcurrent, (count) => count + 1)
+                      yield* Ref.update(maximumActiveConcurrent, (maximum) => Math.max(maximum, concurrent))
                       return yield* applicationBootstrap
-                        .activate(target, initialControlPolicySource, allocatedRunId, program, opportunity)
+                        .activate(target, initialControlPolicySource, allocatedRunId, program, activationOpportunity)
                         .pipe(
                           Effect.tap((decision) =>
                             Ref.set(activeDecision, decision).pipe(
                               Effect.andThen(Deferred.succeed(activeActivation, "Success"))
                             )
                           ),
-                          Effect.tapError(() => Deferred.succeed(activeActivation, "Failure"))
+                          Effect.tapError(() => Deferred.succeed(activeActivation, "Failure")),
+                          Effect.ensuring(Ref.update(activeConcurrent, (count) => count - 1))
                         )
                     })
+              },
+              activateActiveWorkAuthorityRefresh: (
+                target,
+                initialControlPolicySource,
+                allocatedRunId,
+                program,
+                source
+              ) => {
+                const recordActivation = Ref.update(activationKinds, (current) => [
+                  ...current,
+                  "ActiveWorkAuthorityRefresh" as const
+                ])
+                const observedProgram = (opportunity: RunActivationOpportunityValue) =>
+                  Effect.gen(function* () {
+                    yield* recordActivation
+                    yield* Ref.update(activeSources, (sources) => [...sources, source])
+                    const activeCount = yield* Ref.updateAndGet(activeActivationCount, (count) => count + 1)
+                    yield* activeCount === 2 ? Deferred.succeed(secondActiveActivation, undefined) : Effect.void
+                    const concurrent = yield* Ref.updateAndGet(activeConcurrent, (count) => count + 1)
+                    yield* Ref.update(maximumActiveConcurrent, (maximum) => Math.max(maximum, concurrent))
+                    return yield* program(opportunity)
+                  })
+                return applicationBootstrap
+                  .activateActiveWorkAuthorityRefresh(
+                    target,
+                    initialControlPolicySource,
+                    allocatedRunId,
+                    observedProgram,
+                    source
+                  )
+                  .pipe(
+                    Effect.tap((decision) =>
+                      Ref.set(activeDecision, decision).pipe(
+                        Effect.andThen(Deferred.succeed(activeActivation, "Success"))
+                      )
+                    ),
+                    Effect.tapError(() => Deferred.succeed(activeActivation, "Failure")),
+                    Effect.ensuring(Ref.update(activeConcurrent, (count) => count - 1))
+                  )
               }
             })
             const applicationExit = Context.get(applicationContext, ApplicationExitShell)
@@ -979,6 +1142,18 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 if (observers === undefined) return yield* Effect.die("production owner did not register its observers")
                 yield* observers.acceptedFactPublication()
                 yield* Deferred.await(acceptedActivation)
+              } else if (source === "OperatorWake") {
+                yield* owner.hint(RunReactivationHint.OperatorWake())
+                yield* Deferred.await(acceptedActivation)
+              } else if (coalesce) {
+                yield* Ref.set(phase, "Active")
+                yield* owner.hint(RunReactivationHint.TrackerNotification())
+                yield* Deferred.await(activeReadStarted)
+                yield* owner.hint(RunReactivationHint.Timer())
+                yield* owner.hint(RunReactivationHint.TrackerNotification())
+                yield* owner.hint(RunReactivationHint.Timer())
+                yield* Deferred.succeed(releaseActiveRead, undefined)
+                yield* Deferred.await(secondActiveActivation)
               } else {
                 yield* Ref.set(phase, "Active")
                 if (source === "Timer") {
@@ -996,7 +1171,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             )
             return {
               activeActivation:
-                source === "AcceptedFactPublication" ? undefined : yield* Deferred.await(activeActivation),
+                source === "AcceptedFactPublication" || source === "OperatorWake"
+                  ? undefined
+                  : yield* Deferred.await(activeActivation),
               activeDecision: yield* Ref.get(activeDecision)
             }
           }).pipe(
@@ -1012,13 +1189,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const journalRecords = yield* readJournal()
       return {
         activeActivation:
-          source === "AcceptedFactPublication"
+          source === "AcceptedFactPublication" || source === "OperatorWake"
             ? undefined
             : (secondProcess?.activeActivation ?? firstProcess.activeActivation),
         activeDecision: secondProcess?.activeDecision ?? firstProcess.activeDecision,
         activationKinds: yield* Ref.get(activationKinds),
         activeSelectionTrace: yield* Ref.get(activeSelectionTrace),
         activeSelections: yield* Ref.get(activeSelections),
+        activeSources: yield* Ref.get(activeSources),
+        activeActivationCount: yield* Ref.get(activeActivationCount),
+        maximumActiveConcurrent: yield* Ref.get(maximumActiveConcurrent),
         executorCalls: yield* Ref.get(executorCalls),
         executorEntries: yield* Ref.get(executorEntries),
         failpoint: yield* Ref.get(failpoint),
@@ -1106,15 +1286,11 @@ it.effect("production owner refreshes Running work once for a TrackerNotificatio
       "ReadTaskWorkSpecification",
       "ReadTaskClaim",
       "ReadTaskWorktree",
-      "ReadTaskWorktree",
-      "ReadTargetLineage",
       "ReadTargetLineage",
       "ReadTrackerGraph",
       "ReadTaskWorkSpecification",
       "ReadTaskClaim",
       "ReadTaskWorktree",
-      "ReadTaskWorktree",
-      "ReadTargetLineage",
       "ReadTargetLineage"
     ])
     expect(result.trackerCalls).toEqual(["graph", "specification", "claim", "graph", "specification", "claim"])
@@ -1252,6 +1428,48 @@ it.effect("AcceptedFactPublication for a Running report uses ordinary entry with
     expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "OrdinaryRunEntry"])
     expect(result.trackerCalls).toEqual([])
     expect(result.activeSelections).toEqual([])
+    expect(result.executorCalls).toEqual([])
+  })
+)
+
+it.effect("accepted executor report publication never refreshes tracker or Git authority", () =>
+  Effect.gen(function* () {
+    for (const report of ["Running", "SafelySuspended", "Terminal"] as const) {
+      const result = yield* runProductionRefreshHarness({ source: "AcceptedFactPublication", report })
+      expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "OrdinaryRunEntry"])
+      expect(result.trackerCalls).toEqual([])
+      expect(result.activeSelections).toEqual([])
+      expect(result.activeSelectionTrace).toEqual([])
+      expect(result.executorEntries).toEqual([])
+      expect(result.executorCalls).toEqual([])
+    }
+  })
+)
+
+it.effect("Operator Wake remains an ordinary entry without active authority reads", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({ source: "OperatorWake", report: "Running" })
+    expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "OrdinaryRunEntry"])
+    expect(result.trackerCalls).toEqual([])
+    expect(result.activeSelections).toEqual([])
+    expect(result.activeSelectionTrace).toEqual([])
+    expect(result.executorEntries).toEqual([])
+    expect(result.executorCalls).toEqual([])
+  })
+)
+
+it.effect("coalesces concurrent active-work refresh hints through one production owner", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({ coalesce: true })
+    expect(result.activationKinds).toEqual([
+      "OrdinaryRunEntry",
+      "ActiveWorkAuthorityRefresh",
+      "ActiveWorkAuthorityRefresh"
+    ])
+    expect(result.activeActivationCount).toBe(2)
+    expect(result.activeSources).toEqual(["TrackerNotification", "Timer"])
+    expect(result.maximumActiveConcurrent).toBe(1)
+    expect(result.executorEntries).toEqual([])
     expect(result.executorCalls).toEqual([])
   })
 )

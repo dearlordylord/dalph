@@ -51,6 +51,7 @@ import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
 import type { AppliedRunCancellation } from "../../workflow/protocols/run-cancellation/events.js"
+import type { ActiveWorkAuthorityRefreshSource } from "./run-activation-opportunity.js"
 import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 export type JournaledRunProcessServices =
@@ -134,6 +135,23 @@ export interface JournaledRunBootstrapService {
     runId: AllocatedWorkflowRunId,
     program: Effect.Effect<RunFinalityProof, E, R>,
     opportunity?: RunActivationOpportunity
+  ) => Effect.Effect<
+    RunFinalityDecision,
+    E | EInitial | ApplicationExiting | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
+    RInitial | Exclude<R, JournaledRunServices>
+  >
+  /**
+   * Establishes one exact Run, captures every unfinished Running attempt from
+   * the validated history prefix, and then enters one active-work refresh.
+   * The program receives the immutable opportunity after capture so its
+   * journal/runtime layers use the same exact subject set.
+   */
+  readonly activateActiveWorkAuthorityRefresh: <EInitial, RInitial, E, R>(
+    target: TrackerTarget,
+    initialControlPolicySource: Effect.Effect<InitialControlPolicy, EInitial, RInitial>,
+    runId: AllocatedWorkflowRunId,
+    program: (opportunity: RunActivationOpportunity) => Effect.Effect<RunFinalityProof, E, R>,
+    source: ActiveWorkAuthorityRefreshSource
   ) => Effect.Effect<
     RunFinalityDecision,
     E | EInitial | ApplicationExiting | JournaledRunBootstrapError | JournaledRunIdentityMismatch,
@@ -255,12 +273,20 @@ type DeliveryRelationsLayer = Effect.Success<ReturnType<typeof makeReactiveDeliv
 
 const makeJournaledDeliveryRelations = Effect.fn("Delivery.makeJournaledRelations")(function* (
   runId: RunId,
-  target: TrackerTarget
+  target: TrackerTarget,
+  opportunity: RunActivationOpportunity
 ) {
   const journal = yield* Journal
   const recovery = yield* RunRecoveryProjection
   const resources = yield* DeliveryRuntimeResources
-  return yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources.integrationTargets)
+  return yield* makeReactiveDeliveryRelationsLayer(
+    runId,
+    target,
+    journal,
+    recovery,
+    resources.integrationTargets,
+    opportunity
+  )
 })
 
 const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
@@ -320,7 +346,7 @@ const runJournaledDelivery = <E, R>(
       yield* cleanup.run
       return yield* runDeliveryComposition(
         target,
-        makeJournaledDeliveryRelations(runId, target),
+        makeJournaledDeliveryRelations(runId, target, opportunity),
         () => executorFactory(runId, target),
         opportunity
       )
@@ -328,7 +354,7 @@ const runJournaledDelivery = <E, R>(
   }
   return runDeliveryComposition(
     target,
-    makeJournaledDeliveryRelations(runId, target),
+    makeJournaledDeliveryRelations(runId, target, opportunity),
     () => executorFactory(runId, target),
     opportunity
   )
@@ -369,3 +395,21 @@ export const runWorkflow = <EInitial, RInitial>(
     true,
     opportunity
   )
+
+/** Establishes one exact Run and captures its currently Running responsibilities for an active refresh. */
+export const runWorkflowWithActiveWorkAuthorityRefresh = <EInitial, RInitial>(
+  target: TrackerTarget,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId,
+  source: ActiveWorkAuthorityRefreshSource
+) =>
+  Effect.gen(function* () {
+    const bootstrap = yield* JournaledRunBootstrap
+    return yield* bootstrap.activateActiveWorkAuthorityRefresh(
+      target,
+      initialControlPolicySource,
+      runId,
+      (opportunity) => runJournaledDelivery(runId, target, liveDeliveryActionExecutorFactory, true, opportunity),
+      source
+    )
+  })

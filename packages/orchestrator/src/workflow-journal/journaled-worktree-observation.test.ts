@@ -37,7 +37,10 @@ import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { JournalStore } from "./store.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
-import { activeWorkAuthorityRefreshForOwner } from "../coordination/run/run-activation-opportunity.js"
+import {
+  activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsFor
+} from "../coordination/run/run-activation-opportunity.js"
 
 const unused = () => Effect.die("unused")
 const testInterpreter = (
@@ -71,6 +74,9 @@ const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/journaled-target-lineage.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
+
+const activeOpportunity = (source: "TrackerNotification" | "Timer") =>
+  activeWorkAuthorityRefreshForOwner(source, activeWorkAuthorityRefreshSubjectsFor([plannedAttempt]))
 
 /** Supervisor-visible chronology around an interrupted Git wait and a fresh application incarnation. */
 const interruptedGitAuthoredCassette = [
@@ -244,6 +250,78 @@ it.effect("reopens an intent-only Git read with the same operation identity", ()
   }).pipe(Effect.provide(retryingLostWorktreeLayer), Effect.provide(memoryJournalTestLayer))
 )
 
+it.effect("uses active Git protocol only for the attempts captured at activation", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const secondAttempt = PlannedTaskAttempt.make({
+      ...plannedAttempt,
+      attemptId: AttemptId.make("journaled-worktree-observation-second-attempt"),
+      taskId: TaskId.make("journaled-worktree-observation-second-task"),
+      worktree: WorktreeLocator.make("/worktrees/journaled-worktree-observation-second")
+    })
+    const uncapturedLaterAttempt = PlannedTaskAttempt.make({
+      ...plannedAttempt,
+      attemptId: AttemptId.make("journaled-worktree-observation-later-attempt"),
+      taskId: TaskId.make("journaled-worktree-observation-later-task"),
+      worktree: WorktreeLocator.make("/worktrees/journaled-worktree-observation-later")
+    })
+    const operationFor = (attempt: PlannedTaskAttempt, suffix: string) =>
+      makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make(`active-subject-selection-${suffix}`),
+        plannedAttempt: attempt,
+        predecessorOperationIds: []
+      })
+    const base = Layer.succeed(
+      WorkflowInterpreter,
+      testInterpreter((operation) =>
+        Effect.succeed(
+          AuthoritativePlannedAttemptWorktreeObserved.make({
+            observation: PlannedWorktreeReady.make({
+              baseSha: operation.plannedAttempt.baseSha,
+              branch: operation.plannedAttempt.branch,
+              headSha: operation.plannedAttempt.baseSha,
+              worktree: operation.plannedAttempt.worktree
+            })
+          })
+        )
+      )
+    )
+    const opportunity = activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([plannedAttempt, secondAttempt])
+    )
+    const interpreter = yield* WorkflowInterpreter.pipe(
+      Effect.provide(journaledWorkflowInterpreterLayer(runId, base, opportunity))
+    )
+
+    yield* interpreter.readTaskWorktree(operationFor(plannedAttempt, "first"))
+    yield* interpreter.readTaskWorktree(operationFor(secondAttempt, "second"))
+    // This attempt may become Running after the activation baseline, but the
+    // captured subject set cannot grant it active protocol authority.
+    yield* interpreter.readTaskWorktree(operationFor(uncapturedLaterAttempt, "later"))
+
+    const records = yield* journal.read(runId)
+    const activeIntents = records.flatMap(({ event }) =>
+      event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ? [event] : []
+    )
+    const ordinaryIntents = records.flatMap(({ event }) =>
+      event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTaskWorktree" ? [event] : []
+    )
+    expect(activeIntents.map(({ operation }) => operation.plannedAttempt.attemptId)).toEqual([
+      plannedAttempt.attemptId,
+      secondAttempt.attemptId
+    ])
+    expect(ordinaryIntents.map(({ operation }) => operation.plannedAttempt.attemptId)).toEqual([
+      uncapturedLaterAttempt.attemptId
+    ])
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
 it.effect("records the authored Git interruption and ordinary replay cassette", () =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)
@@ -402,11 +480,7 @@ it.effect("records an active-refresh worktree failure after its intent and prese
         )
       )
     )
-    const activeLayer = journaledWorkflowInterpreterLayer(
-      runId,
-      base,
-      activeWorkAuthorityRefreshForOwner("TrackerNotification")
-    )
+    const activeLayer = journaledWorkflowInterpreterLayer(runId, base, activeOpportunity("TrackerNotification"))
     const operation = makeTaskWorktreeObservationOperation({
       operationId: OperationId.make("active-refresh-worktree-failure-read"),
       plannedAttempt,
@@ -473,7 +547,7 @@ it.effect("replays an active intent-only crash with the same durable identity", 
         WorkflowInterpreter,
         testInterpreter(() => Effect.die("the crashed process must not call Git after its intent is acknowledged"))
       ),
-      activeWorkAuthorityRefreshForOwner("TrackerNotification")
+      activeOpportunity("TrackerNotification")
     )
     const firstInterpreter = yield* WorkflowInterpreter.pipe(Effect.provide(firstLayer))
     const crashed = yield* firstInterpreter
@@ -498,7 +572,7 @@ it.effect("replays an active intent-only crash with the same durable identity", 
           )
         )
       ),
-      activeWorkAuthorityRefreshForOwner("Timer")
+      activeOpportunity("Timer")
     )
     const replayedInterpreter = yield* WorkflowInterpreter.pipe(Effect.provide(replayedLayer))
     expect((yield* replayedInterpreter.readTaskWorktree(operation))._tag).toBe(
@@ -551,7 +625,7 @@ it.effect("derives ordinal two after a successful active read in a fresh interpr
           )
         )
       ),
-      activeWorkAuthorityRefreshForOwner("TrackerNotification")
+      activeOpportunity("TrackerNotification")
     )
     const firstInterpreter = yield* WorkflowInterpreter.pipe(Effect.provide(firstLayer))
     yield* firstInterpreter.readTaskWorktree(firstOperation)
@@ -573,7 +647,7 @@ it.effect("derives ordinal two after a successful active read in a fresh interpr
         WorkflowInterpreter,
         testInterpreter(unused, () => Effect.fail(failure))
       ),
-      activeWorkAuthorityRefreshForOwner("Timer")
+      activeOpportunity("Timer")
     )
     const secondInterpreter = yield* WorkflowInterpreter.pipe(Effect.provide(secondLayer))
     expect(yield* secondInterpreter.readTargetLineage(secondOperation).pipe(Effect.flip)).toEqual(failure)
@@ -627,7 +701,7 @@ it.effect("counts a successful worktree read before an active-refresh lineage fa
         () => Ref.update(calls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(failure)))
       )
     )
-    const activeLayer = journaledWorkflowInterpreterLayer(runId, base, activeWorkAuthorityRefreshForOwner("Timer"))
+    const activeLayer = journaledWorkflowInterpreterLayer(runId, base, activeOpportunity("Timer"))
     const worktreeOperation = makeTaskWorktreeObservationOperation({
       operationId: OperationId.make("active-refresh-lineage-worktree-read"),
       plannedAttempt,
@@ -684,11 +758,7 @@ it.effect("assigns a fresh active-refresh ordinal when a later Git read retries 
       WorkflowInterpreter,
       testInterpreter(() => Ref.update(calls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(failure))))
     )
-    const activeLayer = journaledWorkflowInterpreterLayer(
-      runId,
-      base,
-      activeWorkAuthorityRefreshForOwner("TrackerNotification")
-    )
+    const activeLayer = journaledWorkflowInterpreterLayer(runId, base, activeOpportunity("TrackerNotification"))
     const interpreter = yield* WorkflowInterpreter.pipe(Effect.provide(activeLayer))
     const operations = [1, 2].map((ordinal) =>
       makeTaskWorktreeObservationOperation({
@@ -739,7 +809,7 @@ it.effect("derives the next active-refresh ordinal from durable history after a 
             WorkflowInterpreter,
             testInterpreter(() => Effect.fail(failure))
           ),
-          activeWorkAuthorityRefreshForOwner("TrackerNotification")
+          activeOpportunity("TrackerNotification")
         )
       )
     )
@@ -754,7 +824,7 @@ it.effect("derives the next active-refresh ordinal from durable history after a 
             WorkflowInterpreter,
             testInterpreter(() => Effect.fail(failure))
           ),
-          activeWorkAuthorityRefreshForOwner("Timer")
+          activeOpportunity("Timer")
         )
       )
     )

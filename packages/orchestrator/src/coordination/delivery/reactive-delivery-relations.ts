@@ -1,4 +1,4 @@
-import { type RunId, type TaskId } from "@dalph/contracts"
+import { type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { Deferred, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -6,7 +6,11 @@ import { deriveIntegrationAdmission } from "../../workflow/protocols/integration
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
-import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../frontier/frontier.js"
+import {
+  runnableTransitionTaskId,
+  transitionTrackerGraphRequirement,
+  type RunnableFrontierTransition
+} from "../frontier/frontier.js"
 import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
@@ -23,6 +27,12 @@ import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import { DeliveryRelationPublicationObserver } from "./delivery-publication-observer.js"
 import {
+  activeWorkAuthorityRefreshSubjectsContain,
+  RunActivationOpportunity,
+  type RunActivationOpportunity as RunActivationOpportunityValue
+} from "../run/run-activation-opportunity.js"
+import { latestUnsettledPlannedAttemptExecutorCommand } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import {
   currentSignalFromCurrentFirstStream,
   type CurrentSignal,
   DeliveryRelationReconciliationError,
@@ -32,6 +42,12 @@ import {
   type TrackerGraphActionProposal
 } from "./relations.js"
 import type { JournalService } from "./journal.js"
+
+type TransitionWithPlannedAttempt = RunnableFrontierTransition & { readonly plannedAttempt: PlannedTaskAttempt }
+
+const transitionHasPlannedAttempt = (
+  transition: RunnableFrontierTransition
+): transition is TransitionWithPlannedAttempt => Object.hasOwn(transition, "plannedAttempt")
 
 /** Journal history cannot drive delivery until its initial control policy exists. */
 export class DeliveryControlPolicyMissing extends Schema.TaggedError<DeliveryControlPolicyMissing>()(
@@ -93,15 +109,38 @@ const exactDeliveryEvidenceOf = (
   ]
 }
 
+/**
+ * A restarted active refresh must establish the current graph before it can
+ * project a persisted executor command for one captured Running subject.
+ * Ordinary refreshes and active refreshes without an unsettled command keep
+ * the existing recovered-transition ordering.
+ */
+const activeRefreshNeedsCurrentGraph = (
+  journal: JournalProjection,
+  opportunity: RunActivationOpportunityValue
+): boolean => {
+  if (opportunity._tag !== "ActiveWorkAuthorityRefresh" || journal.graph._tag !== "GraphNotEstablished") return false
+  return [...opportunity.subjects].some(({ attemptId, runId }) =>
+    journal.reconstructed.responsibility.entries.some(
+      (entry) =>
+        entry._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+        entry.plannedAttempt.attemptId === attemptId &&
+        entry.plannedAttempt.runId === runId &&
+        latestUnsettledPlannedAttemptExecutorCommand(journal.records, entry.plannedAttempt) !== undefined
+    )
+  )
+}
+
 const trackerGraphProposalsOf = (
   journal: JournalProjection,
   recoveredTransitionCount: number,
   runIsPaused: boolean,
   runId: RunId,
-  target: TrackerTarget
+  target: TrackerTarget,
+  currentGraphRequired: boolean
 ): ReadonlyArray<TrackerGraphActionProposal> => {
   if (runIsPaused) return []
-  if (journal.graph._tag === "GraphNotEstablished" && recoveredTransitionCount === 0) {
+  if (journal.graph._tag === "GraphNotEstablished" && (recoveredTransitionCount === 0 || currentGraphRequired)) {
     return [
       trackerGraphReadProposalOf({ acceptedAt: journal.position, purpose: "EstablishCurrentGraph", runId, target })
     ]
@@ -118,7 +157,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   target: TrackerTarget,
   journal: JournalService,
   recovery: RunRecoveryProjectionSource,
-  integrationTargets: IntegrationTargetResourceController
+  integrationTargets: IntegrationTargetResourceController,
+  opportunity: RunActivationOpportunityValue = RunActivationOpportunity.OrdinaryRunEntry()
 ) {
   const publicationObserver = yield* DeliveryRelationPublicationObserver
   const recoveredAttemptIds = new Set(recovery.reconstructedPlannedAttemptPositions.map(({ attemptId }) => attemptId))
@@ -145,9 +185,23 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const frame =
       journal.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(journal) : undefined
-    const fresh = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
+    const activeRefreshBoundaryReached = projection.activeRefreshBoundary !== undefined
+    const fresh =
+      activeRefreshBoundaryReached || frame === undefined
+        ? []
+        : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
     const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
-    const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds)
+    const currentGraphRequired = activeRefreshNeedsCurrentGraph(journal, opportunity)
+    const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds).filter((transition) => {
+      if (
+        !currentGraphRequired ||
+        opportunity._tag !== "ActiveWorkAuthorityRefresh" ||
+        !transitionHasPlannedAttempt(transition)
+      ) {
+        return true
+      }
+      return !activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, transition.plannedAttempt)
+    })
     const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]
     const records = journal.records
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
@@ -162,7 +216,10 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
     const runIsPaused = journal.reconstructed.pause.run._tag === "RunPaused"
-    const trackerGraphProposals = trackerGraphProposalsOf(journal, recovered.length, runIsPaused, runId, target)
+    const trackerGraphProposals =
+      !activeRefreshBoundaryReached || (currentGraphRequired && journal.graph._tag === "GraphNotEstablished")
+        ? trackerGraphProposalsOf(journal, recovered.length, runIsPaused, runId, target, currentGraphRequired)
+        : []
     return {
       actionInputs: {
         proposalContributions,
@@ -181,7 +238,10 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
               taskId
             }))
           },
-          cancellationApplied: journal.reconstructed.cancellation._tag === "RunCancellationApplied"
+          cancellationApplied: journal.reconstructed.cancellation._tag === "RunCancellationApplied",
+          ...(projection.activeRefreshBoundary === undefined
+            ? {}
+            : { activeRefreshBoundary: projection.activeRefreshBoundary })
         },
         trackerGraphProposals
       },
