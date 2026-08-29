@@ -5,13 +5,12 @@ import { expect } from "vitest"
 import { RunId } from "@dalph/contracts"
 import {
   ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshGitReadPurpose,
   ActiveWorkAuthorityRefreshOrdinal,
-  GitReadIntentRecordedEvent,
   GitTargetLineageReadFailure,
   GitWorktreeReadFailure,
-  WorkflowOperation,
+  type WorkflowOperation,
   JournalPosition,
   OperationId,
   WorkflowActor,
@@ -79,11 +78,7 @@ const activeRefreshFailureRecords = (
         operation._tag === "ReadTargetLineage"
     )
   const planned = plannedAttempt.operation.plannedAttempt
-  const authority = ActiveWorkAuthorityRefreshAuthority.make({
-    attemptId: planned.attemptId,
-    runId: planned.runId,
-    source: "Timer"
-  })
+  const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: planned.attemptId, runId: planned.runId })
   const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
   const genericOperation =
     readKind === "ReadTaskWorktree"
@@ -100,11 +95,6 @@ const activeRefreshFailureRecords = (
             plannedAttempt: planned,
             predecessorOperationIds: []
           })
-  const activePurpose = ActiveWorkAuthorityRefreshGitReadPurpose.make({ authority, ordinal })
-  const activeIntentOperation =
-    genericOperation._tag === "ReadTaskWorktree"
-      ? WorkflowOperation.cases.ReadTaskWorktree.make({ ...genericOperation, purpose: activePurpose })
-      : WorkflowOperation.cases.ReadTargetLineage.make({ ...genericOperation, purpose: activePurpose })
   const operation = makeActiveWorkAuthorityRefreshGitReadOperation(genericOperation, authority, ordinal)
   const failure =
     operation._tag === "ReadTaskWorktree"
@@ -117,10 +107,10 @@ const activeRefreshFailureRecords = (
           plannedBaseSha: operation.plannedAttempt.baseSha,
           target: operation.integrationTarget
         })
-  const intent = GitReadIntentRecordedEvent.make({
+  const intent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
     initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
     occurrenceClassification: "InitiatedAction",
-    operation: activeIntentOperation,
+    operation,
     version: workflowJournalEventVersion
   })
   return insertEvent(
@@ -132,6 +122,7 @@ const activeRefreshFailureRecords = (
       occurrenceClassification: "NonActionOccurrence",
       operation,
       ordinal,
+      source: "Timer",
       version: workflowJournalEventVersion
     })
   )
@@ -156,6 +147,9 @@ it.effect("records active-refresh Git failures as typed non-action cassette outc
       const recorded = yield* projectRecordedCassette(records)
       const sourceFailure = records.find(({ event }) => event._tag === "ActiveWorkAuthorityRefreshGitReadFailed")?.event
       const recordedFailure = recorded.entries.find((entry) => entry._tag === "ActiveWorkAuthorityRefreshGitReadFailed")
+      const recordedIntent = recorded.entries.find(
+        (entry) => entry._tag === "ActiveWorkAuthorityRefreshGitReadInitiated"
+      )
       if (sourceFailure?._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
         return yield* Effect.die("active-refresh cassette fixture did not retain its failure event")
       }
@@ -165,8 +159,15 @@ it.effect("records active-refresh Git failures as typed non-action cassette outc
         failure: sourceFailure.failure,
         occurrenceClassification: "NonActionOccurrence",
         operation: sourceFailure.operation,
-        ordinal: sourceFailure.ordinal
+        ordinal: sourceFailure.ordinal,
+        source: sourceFailure.source
       })
+      expect(recordedIntent).toMatchObject({
+        _tag: "ActiveWorkAuthorityRefreshGitReadInitiated",
+        operation: sourceFailure.operation
+      })
+      expect(recordedIntent).not.toHaveProperty("source")
+      expect(recordedIntent?.operation).not.toHaveProperty("source")
       expect(renderRecordedCassetteLyrics(recorded)).toContain("active-refresh Git read failed")
       expect(
         verifyRecordedCassetteRoundTrip(records, recorded).every(
@@ -175,6 +176,23 @@ it.effect("records active-refresh Git failures as typed non-action cassette outc
         )
       ).toBe(true)
     }
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("records an active-refresh successful intent without process-local source", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(changedAttemptContinuesAuthoredCassette)
+    const records = activeRefreshFailureRecords(run.records, "ReadTaskWorktree")
+      .filter(({ event }) => event._tag !== "ActiveWorkAuthorityRefreshGitReadFailed")
+      .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
+    const recorded = yield* projectRecordedCassette(records)
+    const intent = recorded.entries.find((entry) => entry._tag === "ActiveWorkAuthorityRefreshGitReadInitiated")
+    expect(intent?._tag).toBe("ActiveWorkAuthorityRefreshGitReadInitiated")
+    expect(intent).not.toHaveProperty("source")
+    expect(intent?.operation).not.toHaveProperty("source")
+    const encoded = yield* Schema.encodeUnknownEffect(RecordedCassette)(recorded)
+    expect(JSON.stringify(encoded)).not.toContain("TrackerNotification")
+    expect(JSON.stringify(encoded)).not.toContain("Timer")
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
@@ -199,7 +217,17 @@ it.effect("alpha-renames active-refresh failure identities without changing type
         worktreeLocators: [{ from: failure.operation.plannedAttempt.worktree, to: "/tmp/renamed-active-refresh" }]
       })
       const renamed = yield* renameRecordedCassette(recorded, renaming)
+      const renamedIntent = renamed.entries.find(
+        (entry) =>
+          entry._tag === "ActiveWorkAuthorityRefreshGitReadInitiated" &&
+          entry.operation.operationId === "renamed-active-refresh-operation"
+      )
       const renamedFailure = renamed.entries.find((entry) => entry._tag === "ActiveWorkAuthorityRefreshGitReadFailed")
+      if (renamedIntent?._tag !== "ActiveWorkAuthorityRefreshGitReadInitiated") {
+        return yield* Effect.die("renamed cassette did not retain active-refresh intent")
+      }
+      expect(renamedIntent).not.toHaveProperty("source")
+      expect(renamedIntent.operation).not.toHaveProperty("source")
       if (renamedFailure?._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
         return yield* Effect.die("renamed cassette did not retain active-refresh failure")
       }
@@ -207,6 +235,7 @@ it.effect("alpha-renames active-refresh failure identities without changing type
       expect(renamedFailure.authority.runId).toBe("renamed-active-refresh-run")
       expect(renamedFailure.operation.operationId).toBe("renamed-active-refresh-operation")
       expect(renamedFailure.ordinal).toBe(failure.ordinal)
+      expect(renamedFailure.source).toBe(failure.source)
       expect(renamedFailure.operation._tag).toBe(failure.operation._tag)
       if (failure.operation._tag === "ReadTaskWorktree") {
         if (renamedFailure.operation._tag !== "ReadTaskWorktree") {

@@ -1037,7 +1037,9 @@ const taskFactReconciliationDriver = defineDriver(
       )
     const activeRefreshIntentRecordFor = (operationId: OperationId) =>
       records.findLast(
-        ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation.operationId === operationId
+        ({ event }) =>
+          event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" &&
+          event.operation.operationId === operationId
       )
     const assertActiveRefreshFailure = (
       operationId: OperationId,
@@ -1047,32 +1049,33 @@ const taskFactReconciliationDriver = defineDriver(
     ) => {
       const intent = activeRefreshIntentRecordFor(operationId)
       const failure = activeRefreshFailureRecordFor(operationId)
-      if (intent === undefined || intent.event._tag !== "GitReadIntentRecorded") {
+      if (intent === undefined || intent.event._tag !== "ActiveWorkAuthorityRefreshGitReadIntentRecorded") {
         return expect.fail(`missing active-refresh intent for ${operationId}`)
       }
       if (failure === undefined || failure.event._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
         return expect.fail(`missing active-refresh failure for ${operationId}`)
       }
-      const purpose = intent.event.operation.purpose
+      const operation = intent.event.operation
       if (
-        purpose?._tag !== "ActiveWorkAuthorityRefresh" ||
-        purpose.authority.attemptId !== plannedAttempt.attemptId ||
-        purpose.authority.runId !== runId ||
-        purpose.authority.source !== source ||
-        purpose.ordinal !== expectedOrdinal
+        operation.operationId !== operationId ||
+        operation.authority.attemptId !== plannedAttempt.attemptId ||
+        operation.authority.runId !== runId ||
+        operation.ordinal !== expectedOrdinal
       ) {
-        return expect.fail(`active-refresh intent purpose mismatch for ${operationId}`)
+        return expect.fail(`active-refresh intent operation mismatch for ${operationId}`)
       }
       if (
         failure.event.ordinal !== expectedOrdinal ||
         failure.event.authority.attemptId !== plannedAttempt.attemptId ||
         failure.event.authority.runId !== runId ||
-        failure.event.authority.source !== source ||
+        failure.event.source !== source ||
+        failure.event.operation.operationId !== operationId ||
         failure.event.failure._tag !== expectedFailure ||
         failure.position <= intent.position
       ) {
         return expect.fail(`active-refresh failure mismatch for ${operationId}`)
       }
+      expect(failure.event.operation).toEqual(operation)
     }
     const exerciseActiveRefreshGitFailures = (source: "TrackerNotification" | "Timer") =>
       Effect.gen(function* () {

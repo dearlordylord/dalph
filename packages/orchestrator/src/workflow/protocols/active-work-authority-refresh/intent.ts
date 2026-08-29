@@ -7,17 +7,12 @@ export const ActiveWorkAuthorityRefreshOrdinal = Schema.Int.check(Schema.isGreat
 )
 export type ActiveWorkAuthorityRefreshOrdinal = typeof ActiveWorkAuthorityRefreshOrdinal.Type
 
-/** Identifies the owner source that minted one active-work refresh opportunity. */
-export const ActiveWorkAuthorityRefreshAuthority = Schema.Struct({
-  attemptId: AttemptId,
-  runId: RunId,
-  source: Schema.Literals(["TrackerNotification", "Timer"])
-}).pipe(Schema.brand("ActiveWorkAuthorityRefreshAuthority"))
-export type ActiveWorkAuthorityRefreshAuthority = typeof ActiveWorkAuthorityRefreshAuthority.Type
+/** The process-local event source that asked the owner to reread one Running attempt. */
+export const ActiveWorkAuthorityRefreshSource = Schema.Literals(["TrackerNotification", "Timer"])
+export type ActiveWorkAuthorityRefreshSource = typeof ActiveWorkAuthorityRefreshSource.Type
 
-/** Durable purpose attached to the exact Git intent owned by an active refresh. */
-export const ActiveWorkAuthorityRefreshGitReadPurpose = Schema.TaggedStruct("ActiveWorkAuthorityRefresh", {
-  authority: ActiveWorkAuthorityRefreshAuthority,
-  ordinal: ActiveWorkAuthorityRefreshOrdinal
-})
-export type ActiveWorkAuthorityRefreshGitReadPurpose = typeof ActiveWorkAuthorityRefreshGitReadPurpose.Type
+/** Identifies one exact Running attempt whose Git facts are being reread. */
+export const ActiveWorkAuthorityRefreshAuthority = Schema.Struct({ attemptId: AttemptId, runId: RunId }).pipe(
+  Schema.brand("ActiveWorkAuthorityRefreshAuthority")
+)
+export type ActiveWorkAuthorityRefreshAuthority = typeof ActiveWorkAuthorityRefreshAuthority.Type

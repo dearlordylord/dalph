@@ -53,8 +53,7 @@ import {
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTargetLineageObservationOperation,
-  makeTrackerGraphObservationOperation,
-  WorkflowOperation
+  makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
@@ -64,9 +63,9 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import {
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   ActiveWorkAuthorityRefreshAuthority,
   ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshGitReadPurpose,
   ActiveWorkAuthorityRefreshOrdinal,
   makeActiveWorkAuthorityRefreshGitReadOperation
 } from "../../workflow/protocols/active-work-authority-refresh/events.js"
@@ -335,13 +334,8 @@ const activeGitFailureRecords = (
           plannedAttempt,
           predecessorOperationIds: []
         })
-  const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId, source })
+  const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
   const ordinalValue = ActiveWorkAuthorityRefreshOrdinal.make(ordinal)
-  const activePurpose = ActiveWorkAuthorityRefreshGitReadPurpose.make({ authority, ordinal: ordinalValue })
-  const activeIntentOperation =
-    rawOperation._tag === "ReadTaskWorktree"
-      ? WorkflowOperation.cases.ReadTaskWorktree.make({ ...rawOperation, purpose: activePurpose })
-      : WorkflowOperation.cases.ReadTargetLineage.make({ ...rawOperation, purpose: activePurpose })
   const operation = makeActiveWorkAuthorityRefreshGitReadOperation(rawOperation, authority, ordinalValue)
   const failure =
     kind === "worktree"
@@ -358,10 +352,10 @@ const activeGitFailureRecords = (
     ...priorRecords,
     record(
       position,
-      GitReadIntentRecordedEvent.make({
+      ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
-        operation: activeIntentOperation,
+        operation,
         version: workflowJournalEventVersion
       })
     ),
@@ -373,6 +367,7 @@ const activeGitFailureRecords = (
         occurrenceClassification: "NonActionOccurrence",
         operation,
         ordinal: ordinalValue,
+        source,
         version: workflowJournalEventVersion
       })
     )
@@ -694,7 +689,7 @@ it.effect(
         OperationId.make("active-work-refresh-failed-worktree-1"),
         OperationId.make("active-work-refresh-failed-worktree-2")
       ])
-      expect(activeFailures.map(({ authority }) => authority.source)).toEqual(["TrackerNotification", "Timer"])
+      expect(activeFailures.map(({ source }) => source)).toEqual(["TrackerNotification", "Timer"])
 
       const projection = yield* projectionFor(second, activeWorkAuthorityRefreshForOwner("Timer"))
       expect(projection.frontier.transitions).not.toEqual(

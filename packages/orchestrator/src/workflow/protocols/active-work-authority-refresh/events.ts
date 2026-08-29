@@ -4,12 +4,17 @@ import { GitTargetLineageReadFailure } from "../../../authorities/git/target-lin
 import { GitWorktreeReadFailure } from "../../../authorities/git/worktree.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
-import type { WorkflowOperation } from "../../registry/operation.js"
-import { ActiveWorkAuthorityRefreshAuthority, ActiveWorkAuthorityRefreshOrdinal } from "./intent.js"
+import { WorkflowOperation, type WorkflowOperation as WorkflowOperationType } from "../../registry/operation.js"
+import {
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshOrdinal,
+  ActiveWorkAuthorityRefreshSource
+} from "./intent.js"
+import { WorkflowActor } from "../../registry/actor.js"
 export {
   ActiveWorkAuthorityRefreshAuthority,
   ActiveWorkAuthorityRefreshOrdinal,
-  ActiveWorkAuthorityRefreshGitReadPurpose
+  ActiveWorkAuthorityRefreshSource
 } from "./intent.js"
 
 const CausalPredecessorOperationIds = Schema.Array(OperationId).check(Schema.isUnique())
@@ -23,6 +28,16 @@ const withoutSelfPredecessor = <
     ? { issue: "an operation cannot causally precede itself", path: ["predecessorOperationIds"] }
     : undefined
 
+const activeReadBindsPlannedAttempt = <
+  A extends { readonly authority: ActiveWorkAuthorityRefreshAuthority; readonly plannedAttempt: PlannedTaskAttempt }
+>(
+  operation: A
+) =>
+  operation.authority.attemptId === operation.plannedAttempt.attemptId &&
+  operation.authority.runId === operation.plannedAttempt.runId
+    ? undefined
+    : { issue: "an active-refresh Git intent must bind its exact planned attempt", path: ["authority"] }
+
 /** Exact branded task-worktree read payload owned by one active refresh authority. */
 const ActiveWorktreeReadOperation = Schema.TaggedStruct("ReadTaskWorktree", {
   authority: ActiveWorkAuthorityRefreshAuthority,
@@ -30,7 +45,9 @@ const ActiveWorktreeReadOperation = Schema.TaggedStruct("ReadTaskWorktree", {
   ordinal: ActiveWorkAuthorityRefreshOrdinal,
   plannedAttempt: PlannedTaskAttempt,
   predecessorOperationIds: CausalPredecessorOperationIds
-}).check(Schema.makeFilter(withoutSelfPredecessor))
+}).check(
+  Schema.makeFilter((operation) => withoutSelfPredecessor(operation) ?? activeReadBindsPlannedAttempt(operation))
+)
 
 /** Exact branded target-lineage read payload owned by one active refresh authority. */
 const ActiveTargetLineageReadOperation = Schema.TaggedStruct("ReadTargetLineage", {
@@ -40,7 +57,9 @@ const ActiveTargetLineageReadOperation = Schema.TaggedStruct("ReadTargetLineage"
   ordinal: ActiveWorkAuthorityRefreshOrdinal,
   plannedAttempt: PlannedTaskAttempt,
   predecessorOperationIds: CausalPredecessorOperationIds
-}).check(Schema.makeFilter(withoutSelfPredecessor))
+}).check(
+  Schema.makeFilter((operation) => withoutSelfPredecessor(operation) ?? activeReadBindsPlannedAttempt(operation))
+)
 
 /**
  * One exact active-refresh Git read, branded separately from ordinary Git
@@ -52,41 +71,62 @@ export const ActiveWorkAuthorityRefreshGitReadOperation = Schema.Union([
 ]).pipe(Schema.brand("ActiveWorkAuthorityRefreshGitReadOperation"))
 export type ActiveWorkAuthorityRefreshGitReadOperation = typeof ActiveWorkAuthorityRefreshGitReadOperation.Type
 
-type GitReadOperation = Extract<WorkflowOperation, { readonly _tag: "ReadTaskWorktree" | "ReadTargetLineage" }>
+export type GitReadOperation = Extract<
+  WorkflowOperationType,
+  { readonly _tag: "ReadTaskWorktree" | "ReadTargetLineage" }
+>
+
+/** Converts an active protocol read to its ordinary Git boundary payload. */
+export const ordinaryGitReadOperationFor = (
+  operation: ActiveWorkAuthorityRefreshGitReadOperation
+): GitReadOperation => {
+  if (operation._tag === "ReadTaskWorktree") {
+    const { authority: _authority, ordinal: _ordinal, ...ordinary } = operation
+    return WorkflowOperation.cases.ReadTaskWorktree.make(ordinary)
+  }
+  const { authority: _authority, ordinal: _ordinal, ...ordinary } = operation
+  return WorkflowOperation.cases.ReadTargetLineage.make(ordinary)
+}
 
 /**
  * Compares the branded operation carried by an active-refresh outcome with
- * the ordinary Git intent that was journaled before the provider call.
- * Authority and ordinal are deliberately checked by the outcome validator;
- * this helper compares the exact protocol-level read payload only.
+ * the exact active intent that was journaled before the provider call.
+ * Authority and ordinal are checked here as well as by the outcome validator
+ * so replay cannot silently pair a failure with another active read.
  */
 export const activeWorkAuthorityRefreshGitReadOperationMatchesIntent = (
   active: ActiveWorkAuthorityRefreshGitReadOperation,
-  intent: GitReadOperation
+  intent: ActiveWorkAuthorityRefreshGitReadOperation
 ): boolean => {
-  const purpose = intent.purpose
   if (
-    purpose?._tag !== "ActiveWorkAuthorityRefresh" ||
-    purpose.authority.attemptId !== active.authority.attemptId ||
-    purpose.authority.runId !== active.authority.runId ||
-    purpose.authority.source !== active.authority.source ||
-    purpose.ordinal !== active.ordinal
-  ) {
+    intent.authority.attemptId !== active.authority.attemptId ||
+    intent.authority.runId !== active.authority.runId ||
+    intent.ordinal !== active.ordinal
+  )
     return false
-  }
-  if (active._tag !== intent._tag || active.operationId !== intent.operationId) return false
-  if (!plannedTaskAttemptEquivalence(active.plannedAttempt, intent.plannedAttempt)) return false
-  if (
-    active.predecessorOperationIds.length !== intent.predecessorOperationIds.length ||
-    !active.predecessorOperationIds.every((operationId, index) => operationId === intent.predecessorOperationIds[index])
-  ) {
-    return false
-  }
-  return active._tag === "ReadTargetLineage" && intent._tag === "ReadTargetLineage"
-    ? active.integrationTarget.repository === intent.integrationTarget.repository &&
-        active.integrationTarget.ref === intent.integrationTarget.ref
-    : active._tag === "ReadTaskWorktree" && intent._tag === "ReadTaskWorktree"
+  return sameGitReadOperation(ordinaryGitReadOperationFor(active), ordinaryGitReadOperationFor(intent))
 }
+
+const sameGitReadOperation = (left: GitReadOperation, right: GitReadOperation): boolean => {
+  if (left._tag !== right._tag || left.operationId !== right.operationId) return false
+  if (!plannedTaskAttemptEquivalence(left.plannedAttempt, right.plannedAttempt)) return false
+  if (
+    left.predecessorOperationIds.length !== right.predecessorOperationIds.length ||
+    !left.predecessorOperationIds.every((operationId, index) => operationId === right.predecessorOperationIds[index])
+  ) {
+    return false
+  }
+  return left._tag === "ReadTargetLineage" && right._tag === "ReadTargetLineage"
+    ? left.integrationTarget.repository === right.integrationTarget.repository &&
+        left.integrationTarget.ref === right.integrationTarget.ref
+    : left._tag === "ReadTaskWorktree" && right._tag === "ReadTaskWorktree"
+}
+
+/** Compares an active failure's exact Git subject with its projected boundary read. */
+export const activeWorkAuthorityRefreshGitReadOperationMatchesBoundary = (
+  active: ActiveWorkAuthorityRefreshGitReadOperation,
+  ordinary: GitReadOperation
+): boolean => sameGitReadOperation(ordinaryGitReadOperationFor(active), ordinary)
 
 /** Adds owner authority and ordinal to the exact journal-first Git operation. */
 export const makeActiveWorkAuthorityRefreshGitReadOperation = (
@@ -95,16 +135,27 @@ export const makeActiveWorkAuthorityRefreshGitReadOperation = (
   ordinal: ActiveWorkAuthorityRefreshOrdinal
 ): ActiveWorkAuthorityRefreshGitReadOperation => {
   if (operation._tag === "ReadTaskWorktree") {
-    const { purpose: _purpose, ...baseOperation } = operation
     return ActiveWorkAuthorityRefreshGitReadOperation.make(
-      ActiveWorktreeReadOperation.make({ ...baseOperation, authority, ordinal })
+      ActiveWorktreeReadOperation.make({ ...operation, authority, ordinal })
     )
   }
-  const { purpose: _purpose, ...baseOperation } = operation
   return ActiveWorkAuthorityRefreshGitReadOperation.make(
-    ActiveTargetLineageReadOperation.make({ ...baseOperation, authority, ordinal })
+    ActiveTargetLineageReadOperation.make({ ...operation, authority, ordinal })
   )
 }
+
+/** Dalph durably begins one exact active-refresh Git read before calling Git. */
+export const ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent = Schema.TaggedStruct(
+  "ActiveWorkAuthorityRefreshGitReadIntentRecorded",
+  {
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    operation: ActiveWorkAuthorityRefreshGitReadOperation,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+export type ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent =
+  typeof ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.Type
 
 export const ActiveWorkAuthorityRefreshGitReadFailure = Schema.Union([
   GitWorktreeReadFailure,
@@ -125,6 +176,7 @@ export const ActiveWorkAuthorityRefreshGitReadFailedEvent = Schema.TaggedStruct(
     occurrenceClassification: Schema.Literal("NonActionOccurrence"),
     operation: ActiveWorkAuthorityRefreshGitReadOperation,
     ordinal: ActiveWorkAuthorityRefreshOrdinal,
+    source: ActiveWorkAuthorityRefreshSource,
     version: Schema.Literal(workflowJournalEventVersion)
   }
 ).check(
@@ -132,7 +184,6 @@ export const ActiveWorkAuthorityRefreshGitReadFailedEvent = Schema.TaggedStruct(
     if (
       event.operation.authority.attemptId !== event.authority.attemptId ||
       event.operation.authority.runId !== event.authority.runId ||
-      event.operation.authority.source !== event.authority.source ||
       event.operation.ordinal !== event.ordinal ||
       event.operation.plannedAttempt.attemptId !== event.authority.attemptId ||
       event.operation.plannedAttempt.runId !== event.authority.runId

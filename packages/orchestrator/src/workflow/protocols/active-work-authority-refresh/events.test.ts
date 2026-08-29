@@ -21,7 +21,6 @@ import { OperationId } from "../../identity.js"
 import {
   ActiveWorkAuthorityRefreshAuthority,
   ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshGitReadPurpose,
   ActiveWorkAuthorityRefreshOrdinal,
   makeActiveWorkAuthorityRefreshGitReadOperation
 } from "./events.js"
@@ -46,7 +45,11 @@ import {
 } from "../planned-attempt-executor-work/events.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { TaskAttemptPlannedEvent, GitReadIntentRecordedEvent, WorkflowRunBeganEvent } from "../../registry/event.js"
+import {
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
+  TaskAttemptPlannedEvent,
+  WorkflowRunBeganEvent
+} from "../../registry/event.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 
 const runId = RunId.make("active-refresh-event-run")
@@ -65,14 +68,8 @@ const rawOperation = WorkflowOperation.cases.ReadTaskWorktree.make({
   plannedAttempt,
   predecessorOperationIds: []
 })
-const authority = ActiveWorkAuthorityRefreshAuthority.make({
-  attemptId: plannedAttempt.attemptId,
-  runId,
-  source: "TrackerNotification"
-})
+const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
 const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-const activePurpose = ActiveWorkAuthorityRefreshGitReadPurpose.make({ authority, ordinal })
-const activeIntent = WorkflowOperation.cases.ReadTaskWorktree.make({ ...rawOperation, purpose: activePurpose })
 const operation = makeActiveWorkAuthorityRefreshGitReadOperation(rawOperation, authority, ordinal)
 const failure = new GitWorktreeReadFailure({ detail: "controlled Git read failure", worktree: plannedAttempt.worktree })
 const event = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
@@ -81,13 +78,21 @@ const event = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
   occurrenceClassification: "NonActionOccurrence",
   operation,
   ordinal,
+  source: "TrackerNotification",
+  version: workflowJournalEventVersion
+})
+
+const activeIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+  initiatedBy: { _tag: "DalphCoordinator" },
+  occurrenceClassification: "InitiatedAction",
+  operation,
   version: workflowJournalEventVersion
 })
 
 it("accepts an exact branded active-refresh Git failure and derives its stable key", () => {
   expect(event._tag).toBe("ActiveWorkAuthorityRefreshGitReadFailed")
   expect(describeJournalEvent(event)).toMatchObject({
-    _tag: "GenericEventDescriptor",
+    _tag: "OperationEventDescriptor",
     expectedKey: activeWorkAuthorityRefreshGitReadFailedRecordKey(rawOperation.operationId, ordinal)
   })
 })
@@ -165,17 +170,7 @@ it("accepts the failure only after the exact Running attempt and journal-first G
       position: JournalPosition.make(5),
       runId
     },
-    {
-      event: GitReadIntentRecordedEvent.make({
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        operation: activeIntent,
-        version: workflowJournalEventVersion
-      }),
-      key: intentRecordKey(rawOperation.operationId),
-      position: JournalPosition.make(6),
-      runId
-    },
+    { event: activeIntent, key: intentRecordKey(rawOperation.operationId), position: JournalPosition.make(6), runId },
     {
       event,
       key: activeWorkAuthorityRefreshGitReadFailedRecordKey(rawOperation.operationId, ordinal),
@@ -187,7 +182,7 @@ it("accepts the failure only after the exact Running attempt and journal-first G
   expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
 
   const withoutIntent = records
-    .filter(({ event: candidate }) => candidate._tag !== "GitReadIntentRecorded")
+    .filter(({ event: candidate }) => candidate._tag !== "ActiveWorkAuthorityRefreshGitReadIntentRecorded")
     .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
   const invalidWithoutIntent = reduceWorkflowJournalHistory(runId, withoutIntent)
   expect(invalidWithoutIntent._tag).toBe("InvalidWorkflowJournalHistory")

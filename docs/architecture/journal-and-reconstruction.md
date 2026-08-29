@@ -129,13 +129,16 @@ replaces complete-history validation on the next establishment.
 
 The SQLite journal schema remains generation 2 because this change adds no
 columns or migration rows. Its payload semantics advance independently to
-journal event version 12: active-refresh Git intents now carry their typed
-owner source and ordinal. The event decoder accepts only the current semantic
-version and reports older rows as `JournalEventDecodeIssue`; there is no
-implicit v11-to-v12 migration or compatibility claim. Recorded cassettes use
-the same fail-closed policy and advance to recorded schema version 12. The
-occurrence projection advances to version 11 and likewise rejects an older
-projection rather than silently dropping the active-refresh occurrence.
+journal event version 13: active-refresh Git intent records are now distinct
+from ordinary Git reads and carry the exact active operation, while the
+`TrackerNotification` or `Timer` source remains process-local on successful
+reads and is recorded only on an active-refresh failure. The event decoder
+accepts only the current semantic version and reports older rows as
+`JournalEventDecodeIssue`; there is no implicit v12-to-v13 migration or
+compatibility claim. Recorded cassettes use the same fail-closed policy and
+advance to recorded schema version 13. The occurrence projection advances to
+version 11 and likewise rejects an older projection rather than silently
+dropping the active-refresh occurrence.
 
 See [ADR 0004](../adr/0004-compose-pure-run-reducers.md).
 

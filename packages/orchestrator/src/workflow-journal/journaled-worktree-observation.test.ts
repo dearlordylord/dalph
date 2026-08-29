@@ -423,28 +423,29 @@ it.effect("records an active-refresh worktree failure after its intent and prese
     expect(observed).toEqual(failure)
     expect(yield* Ref.get(chronology)).toEqual(["intent", "call"])
     const gitRecords = (yield* journal.read(runId)).filter(
-      ({ event }) => event._tag === "GitReadIntentRecorded" || event._tag === "ActiveWorkAuthorityRefreshGitReadFailed"
+      ({ event }) =>
+        event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ||
+        event._tag === "ActiveWorkAuthorityRefreshGitReadFailed"
     )
     expect(gitRecords.map(({ event }) => event._tag)).toEqual([
-      "GitReadIntentRecorded",
+      "ActiveWorkAuthorityRefreshGitReadIntentRecorded",
       "ActiveWorkAuthorityRefreshGitReadFailed"
     ])
     const intent = gitRecords[0]?.event
     const recorded = gitRecords[1]?.event
-    if (intent?._tag !== "GitReadIntentRecorded") return yield* Effect.die("missing active-refresh intent")
+    if (intent?._tag !== "ActiveWorkAuthorityRefreshGitReadIntentRecorded") {
+      return yield* Effect.die("missing active-refresh intent")
+    }
     if (recorded?._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") return yield* Effect.die("missing failure event")
-    expect(intent.operation.purpose).toEqual({
-      _tag: "ActiveWorkAuthorityRefresh",
-      authority: recorded.authority,
-      ordinal: recorded.ordinal
-    })
+    expect(intent.operation).toEqual(recorded.operation)
     expect(recorded.operation.operationId).toBe(intent.operation.operationId)
     expect(recorded.operation.plannedAttempt).toEqual(operation.plannedAttempt)
     expect(recorded).toMatchObject({
-      authority: { attemptId: plannedAttempt.attemptId, runId, source: "TrackerNotification" },
+      authority: { attemptId: plannedAttempt.attemptId, runId },
       failure,
       operation: { _tag: "ReadTaskWorktree", operationId: operation.operationId },
-      ordinal: 1
+      ordinal: 1,
+      source: "TrackerNotification"
     })
 
     const replayed = yield* interpreter.readTaskWorktree(operation).pipe(Effect.flip)
@@ -506,16 +507,17 @@ it.effect("replays an active intent-only crash with the same durable identity", 
 
     const records = yield* journal.read(runId)
     const intents = records.flatMap(({ event }) =>
-      event._tag === "GitReadIntentRecorded" && event.operation.operationId === operation.operationId ? [event] : []
+      event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" &&
+      event.operation.operationId === operation.operationId
+        ? [event]
+        : []
     )
     expect(intents).toHaveLength(1)
     const intent = intents[0]
     if (intent === undefined) return yield* Effect.die("active intent was not persisted")
-    expect(intent.operation.purpose).toEqual({
-      _tag: "ActiveWorkAuthorityRefresh",
-      authority: { attemptId: plannedAttempt.attemptId, runId, source: "TrackerNotification" },
-      ordinal: 1
-    })
+    expect(intent.operation).toMatchObject({ authority: { attemptId: plannedAttempt.attemptId, runId }, ordinal: 1 })
+    expect(intent).not.toHaveProperty("source")
+    expect(intent.operation).not.toHaveProperty("source")
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
@@ -578,19 +580,13 @@ it.effect("derives ordinal two after a successful active read in a fresh interpr
 
     const records = yield* journal.read(runId)
     const intents = records.flatMap(({ event }) =>
-      event._tag === "GitReadIntentRecorded" && event.operation.purpose?._tag === "ActiveWorkAuthorityRefresh"
-        ? [event]
-        : []
+      event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ? [event] : []
     )
     expect(intents.map(({ operation }) => operation.operationId)).toEqual([
       firstOperation.operationId,
       secondOperation.operationId
     ])
-    expect(
-      intents.map(({ operation }) =>
-        operation.purpose?._tag === "ActiveWorkAuthorityRefresh" ? operation.purpose.ordinal : undefined
-      )
-    ).toEqual([1, 2])
+    expect(intents.map(({ operation }) => operation.ordinal)).toEqual([1, 2])
     const failureEvent = records.find(({ event }) => event._tag === "ActiveWorkAuthorityRefreshGitReadFailed")?.event
     if (failureEvent?._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
       return yield* Effect.die("missing active-refresh failure after successful intent")
@@ -657,7 +653,7 @@ it.effect("counts a successful worktree read before an active-refresh lineage fa
     if (recorded?._tag !== "ActiveWorkAuthorityRefreshGitReadFailed")
       return yield* Effect.die("missing lineage failure")
     expect(recorded).toMatchObject({
-      authority: { attemptId: plannedAttempt.attemptId, runId, source: "Timer" },
+      authority: { attemptId: plannedAttempt.attemptId, runId },
       failure,
       operation: {
         _tag: "ReadTargetLineage",
@@ -665,7 +661,8 @@ it.effect("counts a successful worktree read before an active-refresh lineage fa
         operationId: lineageOperation.operationId,
         plannedAttempt
       },
-      ordinal: 2
+      ordinal: 2,
+      source: "Timer"
     })
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )

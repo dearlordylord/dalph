@@ -36,7 +36,8 @@ export const recordActiveWorkAuthorityRefreshGitReadFailedEntry = (
   failure: event.failure,
   occurrenceClassification: event.occurrenceClassification,
   operation: event.operation,
-  ordinal: event.ordinal
+  ordinal: event.ordinal,
+  source: event.source
 })
 
 /** Rehydrates the exact active-refresh Git failure event at the journal boundary. */
@@ -49,6 +50,7 @@ export const eventForActiveWorkAuthorityRefreshGitReadFailedEntry = (
     occurrenceClassification: entry.occurrenceClassification,
     operation: entry.operation,
     ordinal: entry.ordinal,
+    source: entry.source,
     version: workflowJournalEventVersion
   })
 

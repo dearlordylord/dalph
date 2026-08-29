@@ -21,7 +21,6 @@ import {
 import {
   AttemptWorktreeLost,
   ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshGitReadPurpose,
   ActiveWorkAuthorityRefreshOrdinal,
   ActiveTaskContinuationRead,
   controlledTrackerMutationLayerFrom,
@@ -107,7 +106,7 @@ import {
   type JournalRecord,
   type TaskTrackerFactsObservation,
   type WorkflowJournalEvent,
-  WorkflowOperation,
+  type WorkflowOperation,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 
@@ -6299,22 +6298,13 @@ it.effect(
       }
       const activeRefreshAuthority = ActiveWorkAuthorityRefreshAuthority.make({
         attemptId: executorResponsibilityEntry.plannedAttempt.attemptId,
-        runId: executorResponsibilityEntry.plannedAttempt.runId,
-        source: "Timer"
+        runId: executorResponsibilityEntry.plannedAttempt.runId
       })
       const activeRefreshOrdinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
       const activeRefreshBaseOperation = makeTaskWorktreeObservationOperation({
         operationId: OperationId.make(`cassette-active-refresh-read:${run.runId}`),
         plannedAttempt: executorResponsibilityEntry.plannedAttempt,
         predecessorOperationIds: []
-      })
-      const activeRefreshPurpose = ActiveWorkAuthorityRefreshGitReadPurpose.make({
-        authority: activeRefreshAuthority,
-        ordinal: activeRefreshOrdinal
-      })
-      const activeRefreshIntentOperation = WorkflowOperation.cases.ReadTaskWorktree.make({
-        ...activeRefreshBaseOperation,
-        purpose: activeRefreshPurpose
       })
       const activeRefreshOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
         activeRefreshBaseOperation,
@@ -6323,10 +6313,10 @@ it.effect(
       )
       const activeRefreshEntries: ReadonlyArray<RecordedCassetteEntry> = [
         {
-          _tag: "GitReadInitiated",
+          _tag: "ActiveWorkAuthorityRefreshGitReadInitiated",
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
-          operation: activeRefreshIntentOperation
+          operation: activeRefreshOperation
         },
         {
           _tag: "ActiveWorkAuthorityRefreshGitReadFailed",
@@ -6337,7 +6327,8 @@ it.effect(
           }),
           occurrenceClassification: "NonActionOccurrence",
           operation: activeRefreshOperation,
-          ordinal: activeRefreshOrdinal
+          ordinal: activeRefreshOrdinal,
+          source: "Timer"
         }
       ]
       const acquiredClaimEntry = projected.entries.find((entry) => entry._tag === "TaskClaimAcquired")
@@ -6691,8 +6682,11 @@ it.effect(
       const renamed = yield* renameRecordedCassette(recorded, renaming)
       const renamedActiveRefresh = yield* renameRecordedCassette(activeRefreshRecorded, renaming)
       const renamedActiveRefreshIntent = renamedActiveRefresh.entries.find(
-        (entry): entry is Extract<RecordedCassetteEntry, { readonly _tag: "GitReadInitiated" }> =>
-          entry._tag === "GitReadInitiated" && entry.operation.operationId === "renamed-active-refresh-operation"
+        (
+          entry
+        ): entry is Extract<RecordedCassetteEntry, { readonly _tag: "ActiveWorkAuthorityRefreshGitReadInitiated" }> =>
+          entry._tag === "ActiveWorkAuthorityRefreshGitReadInitiated" &&
+          entry.operation.operationId === "renamed-active-refresh-operation"
       )
       const renamedActiveRefreshFailure = renamedActiveRefresh.entries.find(
         (
@@ -6709,23 +6703,18 @@ it.effect(
       ) {
         return yield* Effect.die("active-refresh alpha-renaming fixture lost its typed intent or failure")
       }
-      const renamedActiveRefreshPurpose = renamedActiveRefreshIntent.operation.purpose
-      if (renamedActiveRefreshPurpose?._tag !== "ActiveWorkAuthorityRefresh") {
-        return yield* Effect.die("active-refresh alpha-renaming fixture lost its refresh purpose")
-      }
       expect(renamedActiveRefreshIntent.operation.operationId).toBe("renamed-active-refresh-operation")
       expect(renamedActiveRefreshIntent.operation.plannedAttempt.attemptId).toBe("renamed-attempt-A")
       expect(renamedActiveRefreshIntent.operation.plannedAttempt.runId).toBe("renamed-run")
       expect(renamedActiveRefreshIntent.operation.plannedAttempt.branch).toBe("refs/heads/dalph/renamed-attempt-A")
       expect(renamedActiveRefreshIntent.operation.plannedAttempt.worktree).toBe("/dalph/cassettes/renamed-attempt-A")
-      expect(renamedActiveRefreshPurpose.authority.attemptId).toBe("renamed-attempt-A")
-      expect(renamedActiveRefreshPurpose.authority.runId).toBe("renamed-run")
-      expect(renamedActiveRefreshPurpose.authority.source).toBe("Timer")
-      expect(renamedActiveRefreshPurpose.ordinal).toBe(activeRefreshOrdinal)
+      expect(renamedActiveRefreshIntent.operation.authority.attemptId).toBe("renamed-attempt-A")
+      expect(renamedActiveRefreshIntent.operation.authority.runId).toBe("renamed-run")
+      expect(renamedActiveRefreshIntent.operation.ordinal).toBe(activeRefreshOrdinal)
       expect(renamedActiveRefreshFailure.authority.attemptId).toBe("renamed-attempt-A")
       expect(renamedActiveRefreshFailure.authority.runId).toBe("renamed-run")
-      expect(renamedActiveRefreshFailure.authority.source).toBe("Timer")
       expect(renamedActiveRefreshFailure.ordinal).toBe(activeRefreshOrdinal)
+      expect(renamedActiveRefreshFailure.source).toBe("Timer")
       expect(renamedActiveRefreshFailure.operation.operationId).toBe("renamed-active-refresh-operation")
       expect(renamedActiveRefreshFailure.operation.plannedAttempt.branch).toBe("refs/heads/dalph/renamed-attempt-A")
       expect(renamedActiveRefreshFailure.operation.plannedAttempt.worktree).toBe("/dalph/cassettes/renamed-attempt-A")
@@ -6776,6 +6765,7 @@ it.effect(
         ...renaming.worktreeLocators
       ]
       const entryVariants = {
+        ActiveWorkAuthorityRefreshGitReadInitiated: true,
         ActiveWorkAuthorityRefreshGitReadFailed: true,
         AttemptChoiceApplied: true,
         AttemptImplementationAbandoned: true,

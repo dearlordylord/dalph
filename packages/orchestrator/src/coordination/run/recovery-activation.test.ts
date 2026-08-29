@@ -107,6 +107,12 @@ import {
   CancelledAttemptImplementationResponsibilityRelinquishedEvent,
   RunCancellationAppliedEvent
 } from "../../workflow/protocols/run-cancellation/events.js"
+import {
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshOrdinal,
+  makeActiveWorkAuthorityRefreshGitReadOperation
+} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import type { PlannedAttemptWorktreeObservation } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
   GitReadIntentRecordedEvent,
@@ -2038,6 +2044,72 @@ it("authorizes no executor command after a healthy refresh of Running work", () 
 
   expect(ordinary.transition?._tag).toBe("ContinuePlannedAttemptExecutorWork")
   expect(refresh).toEqual({})
+})
+
+it("correlates ordinary and active-refresh Git intents before requesting lineage", () => {
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/recovery-activation-continuation.git")
+  })
+  const ready = PlannedWorktreeReady.make({
+    baseSha: coverageAttempt.baseSha,
+    branch: coverageAttempt.branch,
+    headSha: coverageAttempt.baseSha,
+    worktree: coverageAttempt.worktree
+  })
+  const worktreeOperation = makeTaskWorktreeObservationOperation({
+    operationId: OperationId.make("recovery-activation-continuation-worktree"),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: [coverageClaimOperation.operationId]
+  })
+  const recordsFor = (intent: JournalRecord["event"]): ReadonlyArray<JournalRecord> => [
+    ...coveragePlanRecords(),
+    executorReport(5, { _tag: "Running", correlation: plannedAttemptExecutorCorrelation(coverageAttempt) }),
+    coverageRecord(6, coverageGraphEvent),
+    coverageRecord(7, coverageSpecificationEvent),
+    coverageRecord(8, coverageClaimEvent),
+    coverageRecord(9, intent),
+    coverageRecord(
+      10,
+      PlannedAttemptWorktreeObservedEvent.make({
+        observation: ready,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: worktreeOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+  const ordinaryIntent = GitReadIntentRecordedEvent.make({
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    operation: worktreeOperation,
+    version: workflowJournalEventVersion
+  })
+  const activeIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    operation: makeActiveWorkAuthorityRefreshGitReadOperation(
+      worktreeOperation,
+      ActiveWorkAuthorityRefreshAuthority.make({ attemptId: coverageAttempt.attemptId, runId: coverageRunId }),
+      ActiveWorkAuthorityRefreshOrdinal.make(1)
+    ),
+    version: workflowJournalEventVersion
+  })
+  const currentGraphObservation = { event: coverageGraphEvent, position: JournalPosition.make(6) }
+  for (const [label, intent] of [
+    ["ordinary", ordinaryIntent],
+    ["active refresh", activeIntent]
+  ] as const) {
+    const decision = continuationDecisionFor(
+      coverageContinuationTransition,
+      recordsFor(intent),
+      currentGraphObservation,
+      Option.some(JournalPosition.make(5)),
+      Option.some(integrationTarget),
+      activeWorkAuthorityRefreshForOwner("Timer")
+    )
+    expect(decision.transition?._tag, label).toBe("ObservePlannedAttemptContinuationTargetLineage")
+  }
 })
 
 it("requires each active refresh to reread authorities after its own activation baseline", () => {

@@ -66,7 +66,10 @@ import {
   ActiveWorkAuthorityRefreshGitReadFailure,
   ActiveWorkAuthorityRefreshGitReadOperation,
   ActiveWorkAuthorityRefreshOrdinal,
-  activeWorkAuthorityRefreshGitReadOperationMatchesIntent
+  ActiveWorkAuthorityRefreshSource,
+  activeWorkAuthorityRefreshGitReadOperationMatchesBoundary,
+  activeWorkAuthorityRefreshGitReadOperationMatchesIntent,
+  ordinaryGitReadOperationFor
 } from "../protocols/active-work-authority-refresh/events.js"
 export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integration-occurrence.js"
 export { WorkflowActor } from "./actor.js"
@@ -205,14 +208,14 @@ export const ActiveWorkAuthorityRefreshGitReadFailed = Schema.TaggedStruct("Acti
   operation: ActiveWorkAuthorityRefreshGitReadOperation,
   ordinal: ActiveWorkAuthorityRefreshOrdinal,
   recordedAt: JournalPosition,
-  runId: RunId
+  runId: RunId,
+  source: ActiveWorkAuthorityRefreshSource
 }).check(
   Schema.makeFilter((occurrence) => {
     if (
       occurrence.runId !== occurrence.authority.runId ||
       occurrence.operation.authority.attemptId !== occurrence.authority.attemptId ||
       occurrence.operation.authority.runId !== occurrence.authority.runId ||
-      occurrence.operation.authority.source !== occurrence.authority.source ||
       occurrence.operation.ordinal !== occurrence.ordinal ||
       occurrence.operation.plannedAttempt.attemptId !== occurrence.authority.attemptId ||
       occurrence.operation.plannedAttempt.runId !== occurrence.authority.runId
@@ -694,7 +697,7 @@ const invalidActiveRefreshFailureRelationship = (
   return action !== undefined &&
     action !== ambiguousRelationship &&
     action.recordedAt < occurrence.recordedAt &&
-    activeWorkAuthorityRefreshGitReadOperationMatchesIntent(occurrence.operation, action.operation)
+    activeWorkAuthorityRefreshGitReadOperationMatchesBoundary(occurrence.operation, action.operation)
     ? undefined
     : {
         issue: `active-refresh Git failure must have one exact earlier initiating read action ${occurrence.operation.operationId}`,
@@ -818,6 +821,7 @@ type ProjectedJournalEvent = Extract<
       | "IntegrationResponsibilityBegan"
       | "IntegrationStarted"
       | "GitReadIntentRecorded"
+      | "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
       | "PlannedAttemptWorktreeObserved"
       | "TargetLineageObserved"
       | "ActiveWorkAuthorityRefreshGitReadFailed"
@@ -2134,7 +2138,12 @@ const controlDispositionOccurrenceFor = (record: JournalRecord): WorkflowOccurre
   return controlCancellationOccurrenceFor(record)
 }
 type TrackerReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerReadIntentRecorded" }>
-type GitReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "GitReadIntentRecorded" }>
+type OrdinaryGitReadIntentJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "GitReadIntentRecorded" }>
+type ActiveGitReadIntentJournalEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "ActiveWorkAuthorityRefreshGitReadIntentRecorded" }
+>
+type GitReadIntentJournalEvent = OrdinaryGitReadIntentJournalEvent | ActiveGitReadIntentJournalEvent
 type GitObservationJournalEvent = Extract<
   WorkflowJournalEvent,
   { readonly _tag: "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
@@ -2189,10 +2198,14 @@ const projectGitReadIntent = (
   gitReadIntents: Map<string, GitReadIntentJournalEvent>
 ): GitReadInitiated => {
   gitReadIntents.set(relationshipKey(record.runId, event.operation.operationId), event)
+  const operation =
+    event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
+      ? ordinaryGitReadOperationFor(event.operation)
+      : event.operation
   return GitReadInitiated.make({
     initiatedBy: event.initiatedBy,
     occurrenceClassification: event.occurrenceClassification,
-    operation: event.operation,
+    operation,
     recordedAt: record.position,
     runId: record.runId
   })
@@ -2256,7 +2269,7 @@ const projectActiveWorkAuthorityRefreshGitReadFailure = (
 ): Effect.Effect<ActiveWorkAuthorityRefreshGitReadFailed, GitOutcomeWithoutReadIntent> => {
   const intent = gitReadIntents.get(relationshipKey(record.runId, event.operation.operationId))
   if (
-    intent === undefined ||
+    intent?._tag !== "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ||
     !activeWorkAuthorityRefreshGitReadOperationMatchesIntent(event.operation, intent.operation)
   ) {
     return Effect.fail(
@@ -2275,7 +2288,8 @@ const projectActiveWorkAuthorityRefreshGitReadFailure = (
       operation: event.operation,
       ordinal: event.ordinal,
       recordedAt: record.position,
-      runId: record.runId
+      runId: record.runId,
+      source: event.source
     })
   )
 }
@@ -2416,6 +2430,9 @@ const projectJournalRecord = (
     return Effect.succeed(projectTrackerReadIntent(record, event, context.trackerReadIntents))
   }
   if (event._tag === "GitReadIntentRecorded") {
+    return Effect.succeed(projectGitReadIntent(record, event, context.gitReadIntents))
+  }
+  if (event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded") {
     return Effect.succeed(projectGitReadIntent(record, event, context.gitReadIntents))
   }
   if (event._tag === "ActiveWorkAuthorityRefreshGitReadFailed") {

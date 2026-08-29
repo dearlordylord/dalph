@@ -17,6 +17,7 @@ import {
   ActiveWorkAuthorityRefreshGitReadFailure,
   ActiveWorkAuthorityRefreshGitReadOperation,
   ActiveWorkAuthorityRefreshOrdinal,
+  ActiveWorkAuthorityRefreshSource,
   AttemptChoice,
   AttemptQuiescenceProof,
   AttemptChoiceRequestId,
@@ -297,13 +298,19 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     requestId: AttemptChoiceRequestId,
     subject: AttemptChoiceSubject
   },
+  /** A running owner records this exact Git read before crossing the Git boundary. */
+  ActiveWorkAuthorityRefreshGitReadInitiated: {
+    ...initiatedByCoordinator,
+    operation: ActiveWorkAuthorityRefreshGitReadOperation
+  },
   /** A running owner refresh can fail to read Git without authorizing an executor action. */
   ActiveWorkAuthorityRefreshGitReadFailed: {
     authority: ActiveWorkAuthorityRefreshAuthority,
     failure: ActiveWorkAuthorityRefreshGitReadFailure,
     ...nonActionOccurrence,
     operation: ActiveWorkAuthorityRefreshGitReadOperation,
-    ordinal: ActiveWorkAuthorityRefreshOrdinal
+    ordinal: ActiveWorkAuthorityRefreshOrdinal,
+    source: ActiveWorkAuthorityRefreshSource
   },
   AttemptStoppageIntended: {
     ...initiatedByCoordinator,
@@ -634,12 +641,13 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 
 /**
- * Provisional recorded format version. Version 12 adds active-refresh Git
- * failure entries and the typed active-refresh purpose on Git read entries.
+ * Provisional recorded format version. Version 13 separates active-refresh
+ * Git intent entries from ordinary Git reads and records process-local source
+ * only on active-refresh failures.
  * Recorded cassettes remain fail-closed at the current version; this change
  * does not claim a migration path for version 11.
  */
-const currentRecordedCassetteVersion = 12
+const currentRecordedCassetteVersion = 13
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

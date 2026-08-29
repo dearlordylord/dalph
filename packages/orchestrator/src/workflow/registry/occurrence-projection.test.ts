@@ -86,8 +86,7 @@ import {
   makeTaskWorktreeReconciliationOperation,
   makeTaskWorktreeObservationOperation,
   makeTrackerGraphObservationOperation,
-  TaskClaimReleaseAuthority,
-  WorkflowOperation
+  TaskClaimReleaseAuthority
 } from "./operation.js"
 import { AttemptWorktreeLost } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interpreter.js"
@@ -138,8 +137,8 @@ import {
 } from "../protocols/attempt-choice/replacement-events.js"
 import {
   ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshGitReadPurpose,
   ActiveWorkAuthorityRefreshOrdinal,
   makeActiveWorkAuthorityRefreshGitReadOperation
 } from "../protocols/active-work-authority-refresh/events.js"
@@ -915,17 +914,15 @@ it.effect("projects active-refresh Git failures as non-action trace occurrences"
       plannedAttempt,
       predecessorOperationIds: []
     })
-    const authority = ActiveWorkAuthorityRefreshAuthority.make({
-      attemptId: plannedAttempt.attemptId,
-      runId,
-      source: "TrackerNotification"
-    })
+    const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
     const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-    const activeIntent = WorkflowOperation.cases.ReadTaskWorktree.make({
-      ...gitRead,
-      purpose: ActiveWorkAuthorityRefreshGitReadPurpose.make({ authority, ordinal })
-    })
     const activeRead = makeActiveWorkAuthorityRefreshGitReadOperation(gitRead, authority, ordinal)
+    const activeIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: activeRead,
+      version: workflowJournalEventVersion
+    })
     const failure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
       authority,
       failure: new GitWorktreeReadFailure({
@@ -935,20 +932,10 @@ it.effect("projects active-refresh Git failures as non-action trace occurrences"
       occurrenceClassification: "NonActionOccurrence",
       operation: activeRead,
       ordinal,
+      source: "TrackerNotification",
       version: workflowJournalEventVersion
     })
-    const projection = yield* projectWorkflowOccurrences([
-      record(
-        1,
-        GitReadIntentRecordedEvent.make({
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          operation: activeIntent,
-          version: workflowJournalEventVersion
-        })
-      ),
-      record(2, failure)
-    ])
+    const projection = yield* projectWorkflowOccurrences([record(1, activeIntent), record(2, failure)])
 
     expect(projection.occurrences).toHaveLength(2)
     const occurrence = projection.occurrences[1]
@@ -986,15 +973,14 @@ it.effect("rejects an active-refresh failure whose persisted intent is positione
       plannedAttempt,
       predecessorOperationIds: []
     })
-    const authority = ActiveWorkAuthorityRefreshAuthority.make({
-      attemptId: plannedAttempt.attemptId,
-      runId,
-      source: "Timer"
-    })
+    const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
     const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-    const activeIntent = WorkflowOperation.cases.ReadTaskWorktree.make({
-      ...gitRead,
-      purpose: ActiveWorkAuthorityRefreshGitReadPurpose.make({ authority, ordinal })
+    const activeRead = makeActiveWorkAuthorityRefreshGitReadOperation(gitRead, authority, ordinal)
+    const activeIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: activeRead,
+      version: workflowJournalEventVersion
     })
     const failure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
       authority,
@@ -1003,22 +989,12 @@ it.effect("rejects an active-refresh failure whose persisted intent is positione
         worktree: plannedAttempt.worktree
       }),
       occurrenceClassification: "NonActionOccurrence",
-      operation: makeActiveWorkAuthorityRefreshGitReadOperation(gitRead, authority, ordinal),
+      operation: activeRead,
       ordinal,
+      source: "Timer",
       version: workflowJournalEventVersion
     })
-    const invalid = yield* projectWorkflowOccurrences([
-      record(
-        2,
-        GitReadIntentRecordedEvent.make({
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          operation: activeIntent,
-          version: workflowJournalEventVersion
-        })
-      ),
-      record(1, failure)
-    ]).pipe(Effect.flip)
+    const invalid = yield* projectWorkflowOccurrences([record(2, activeIntent), record(1, failure)]).pipe(Effect.flip)
     expect(invalid._tag).toBe("SchemaError")
   })
 )

@@ -117,6 +117,14 @@ type FocusedTaskClaim = Extract<
   Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
   { readonly _tag: "FocusedTaskClaimFacts" }
 >["observation"]
+type ContinuationGitReadIntentEvent = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "GitReadIntentRecorded" | "ActiveWorkAuthorityRefreshGitReadIntentRecorded" }
+>
+
+/** Both ordinary and active-refresh Git intents authorize one observed read. */
+const isContinuationGitReadIntentEvent = (event: JournalRecord["event"]): event is ContinuationGitReadIntentEvent =>
+  event._tag === "GitReadIntentRecorded" || event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
 
 const dispositionForFocusedClaim = (
   focusedClaim: FocusedTaskClaim,
@@ -1554,7 +1562,7 @@ export const deriveJournalResponsibilityFacts = (
           )
     const worktreeReadOperationIds = new Set(
       records.flatMap(({ event }) =>
-        event._tag === "GitReadIntentRecorded" &&
+        isContinuationGitReadIntentEvent(event) &&
         event.operation._tag === "ReadTaskWorktree" &&
         event.operation.plannedAttempt.attemptId === responsibility.plannedAttempt.attemptId &&
         event.operation.plannedAttempt.runId === responsibility.plannedAttempt.runId
@@ -1570,7 +1578,7 @@ export const deriveJournalResponsibilityFacts = (
     )
     const targetLineageReadOperationIds = new Set(
       records.flatMap(({ event }) =>
-        event._tag === "GitReadIntentRecorded" &&
+        isContinuationGitReadIntentEvent(event) &&
         event.operation._tag === "ReadTargetLineage" &&
         event.operation.plannedAttempt.attemptId === responsibility.plannedAttempt.attemptId &&
         event.operation.plannedAttempt.runId === responsibility.plannedAttempt.runId
@@ -2402,7 +2410,7 @@ const decisionAfterCurrentSpecification = (
     if (!currentClaimIsExact) return {}
     const currentWorktreeReadOperationIds = new Set(
       records.flatMap(({ event, position }) =>
-        event._tag === "GitReadIntentRecorded" &&
+        isContinuationGitReadIntentEvent(event) &&
         event.operation._tag === "ReadTaskWorktree" &&
         position > currentClaimRecord.position &&
         event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId &&
@@ -2463,7 +2471,7 @@ const decisionAfterCurrentSpecification = (
       }
       const targetLineageReadOperationIds = new Set(
         records.flatMap(({ event, position }) =>
-          event._tag === "GitReadIntentRecorded" &&
+          isContinuationGitReadIntentEvent(event) &&
           event.operation._tag === "ReadTargetLineage" &&
           position > currentWorktreeRecord.position &&
           event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId &&

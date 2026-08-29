@@ -12,17 +12,18 @@ import {
   type WorkflowInterpreterService
 } from "../../interpretation/interpreter.js"
 import {
-  GitReadIntentRecordedEvent,
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TargetLineageObservedEvent
 } from "../../registry/event.js"
-import { WorkflowOperation, type WorkflowOperation as WorkflowOperationType } from "../../registry/operation.js"
+import type { WorkflowOperation as WorkflowOperationType } from "../../registry/operation.js"
 import {
   ActiveWorkAuthorityRefreshAuthority,
   ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshGitReadPurpose,
   ActiveWorkAuthorityRefreshOrdinal,
-  makeActiveWorkAuthorityRefreshGitReadOperation
+  makeActiveWorkAuthorityRefreshGitReadOperation,
+  type ActiveWorkAuthorityRefreshGitReadOperation,
+  type ActiveWorkAuthorityRefreshSource
 } from "./events.js"
 import {
   activeWorkAuthorityRefreshGitReadFailedRecordKey,
@@ -33,12 +34,10 @@ import type { InRunJournalService, JournalAppendError, JournalRecord } from "../
 
 type GitReadOperation = Extract<WorkflowOperationType, { readonly _tag: "ReadTaskWorktree" | "ReadTargetLineage" }>
 type ActiveRefreshGitReadFailure = GitWorktreeReadFailure | GitTargetLineageReadFailure
-type ActiveRefreshAuthoritySource = "TrackerNotification" | "Timer"
 
 type ActiveRefreshIdentity = {
   readonly authority: ActiveWorkAuthorityRefreshAuthority
-  readonly intentOperation: GitReadOperation
-  readonly operation: ReturnType<typeof makeActiveWorkAuthorityRefreshGitReadOperation>
+  readonly operation: ActiveWorkAuthorityRefreshGitReadOperation
   readonly ordinal: ActiveWorkAuthorityRefreshOrdinal
 }
 
@@ -55,51 +54,36 @@ const activeRefreshFailureFor = (
 
 const makeActiveRefreshIdentity = (
   records: ReadonlyArray<JournalRecord>,
-  operation: GitReadOperation,
-  source: ActiveRefreshAuthoritySource
+  operation: GitReadOperation
 ): ActiveRefreshIdentity => {
   const priorIntent = records.findLast(
-    ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation.operationId === operation.operationId
+    ({ event }) =>
+      event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" &&
+      event.operation.operationId === operation.operationId
   )
-  if (priorIntent?.event._tag === "GitReadIntentRecorded") {
-    const purpose = priorIntent.event.operation.purpose
-    if (purpose?._tag === "ActiveWorkAuthorityRefresh") {
-      const { purpose: _purpose, ...baseOperation } = priorIntent.event.operation
-      return {
-        authority: purpose.authority,
-        intentOperation: priorIntent.event.operation,
-        operation: makeActiveWorkAuthorityRefreshGitReadOperation(baseOperation, purpose.authority, purpose.ordinal),
-        ordinal: purpose.ordinal
-      }
+  if (priorIntent?.event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded") {
+    return {
+      authority: priorIntent.event.operation.authority,
+      operation: priorIntent.event.operation,
+      ordinal: priorIntent.event.operation.ordinal
     }
   }
   const authority = ActiveWorkAuthorityRefreshAuthority.make({
     attemptId: operation.plannedAttempt.attemptId,
-    runId: operation.plannedAttempt.runId,
-    source
+    runId: operation.plannedAttempt.runId
   })
   const latestDurableOrdinal = records.reduce(
     (latest, { event }) =>
-      event._tag === "GitReadIntentRecorded" &&
-      event.operation.purpose?._tag === "ActiveWorkAuthorityRefresh" &&
-      event.operation.purpose.authority.attemptId === operation.plannedAttempt.attemptId &&
-      event.operation.purpose.authority.runId === operation.plannedAttempt.runId
-        ? Math.max(latest, event.operation.purpose.ordinal)
+      event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" &&
+      event.operation.authority.attemptId === operation.plannedAttempt.attemptId &&
+      event.operation.authority.runId === operation.plannedAttempt.runId
+        ? Math.max(latest, event.operation.ordinal)
         : latest,
     0
   )
   const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(latestDurableOrdinal + 1)
-  const purpose = ActiveWorkAuthorityRefreshGitReadPurpose.make({ authority, ordinal })
-  const intentOperation =
-    operation._tag === "ReadTaskWorktree"
-      ? WorkflowOperation.cases.ReadTaskWorktree.make({ ...operation, purpose })
-      : WorkflowOperation.cases.ReadTargetLineage.make({ ...operation, purpose })
-  return {
-    authority,
-    intentOperation,
-    operation: makeActiveWorkAuthorityRefreshGitReadOperation(operation, authority, ordinal),
-    ordinal
-  }
+  const activeOperation = makeActiveWorkAuthorityRefreshGitReadOperation(operation, authority, ordinal)
+  return { authority, operation: activeOperation, ordinal }
 }
 
 const recordActiveRefreshGitReadFailure = <Failure extends ActiveRefreshGitReadFailure>(
@@ -107,6 +91,7 @@ const recordActiveRefreshGitReadFailure = <Failure extends ActiveRefreshGitReadF
   runId: RunId,
   operation: GitReadOperation,
   identity: ActiveRefreshIdentity,
+  source: ActiveWorkAuthorityRefreshSource,
   failure: Failure
 ): Effect.Effect<never, JournalAppendError | Failure> =>
   journal
@@ -119,6 +104,7 @@ const recordActiveRefreshGitReadFailure = <Failure extends ActiveRefreshGitReadF
         occurrenceClassification: "NonActionOccurrence",
         operation: identity.operation,
         ordinal: identity.ordinal,
+        source,
         version: workflowJournalEventVersion
       })
     )
@@ -130,7 +116,7 @@ type ActiveRefreshGitReadState = {
   readonly onIntentRecorded: Effect.Effect<void> | undefined
   readonly operation: GitReadOperation
   readonly runId: RunId
-  readonly source: ActiveRefreshAuthoritySource
+  readonly source: ActiveWorkAuthorityRefreshSource
 }
 
 type ActiveRefreshGitReadCallbacks<Result, Failure extends ActiveRefreshGitReadFailure> = {
@@ -159,16 +145,16 @@ const runActiveWorkAuthorityRefreshGitRead = <Result, Failure extends ActiveRefr
 ): Effect.Effect<Result, Failure | JournalAppendError> =>
   Effect.gen<Effect.Effect<unknown, Failure | JournalAppendError>, Result>(function* () {
     const records = yield* options.journal.read(options.runId)
-    const identity = makeActiveRefreshIdentity(records, options.operation, options.source)
+    const identity = makeActiveRefreshIdentity(records, options.operation)
     yield* Effect.uninterruptible(
       options.journal
         .append(
           options.runId,
           intentRecordKey(options.operation.operationId),
-          GitReadIntentRecordedEvent.make({
+          ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
             initiatedBy: { _tag: "DalphCoordinator" },
             occurrenceClassification: "InitiatedAction",
-            operation: identity.intentOperation,
+            operation: identity.operation,
             version: workflowJournalEventVersion
           })
         )
@@ -183,7 +169,14 @@ const runActiveWorkAuthorityRefreshGitRead = <Result, Failure extends ActiveRefr
       return yield* Effect.failCause(Cause.fail(priorTypedFailure))
     }
     const read = options.read((failure) =>
-      recordActiveRefreshGitReadFailure(options.journal, options.runId, options.operation, identity, failure)
+      recordActiveRefreshGitReadFailure(
+        options.journal,
+        options.runId,
+        options.operation,
+        identity,
+        options.source,
+        failure
+      )
     )
     return yield* runInterruptibleBoundary(
       options.boundary,
@@ -201,9 +194,9 @@ type ActiveRefreshWorktreeReadOptions = {
   readonly interpreter: WorkflowInterpreterService
   readonly journal: InRunJournalService
   readonly onIntentRecorded?: Effect.Effect<void>
-  readonly operation: typeof WorkflowOperation.cases.ReadTaskWorktree.Type
+  readonly operation: Extract<WorkflowOperationType, { readonly _tag: "ReadTaskWorktree" }>
   readonly runId: RunId
-  readonly source: ActiveRefreshAuthoritySource
+  readonly source: ActiveWorkAuthorityRefreshSource
 }
 
 /** Journals one active-refresh worktree read and its exact non-action outcome. */
@@ -246,9 +239,9 @@ type ActiveRefreshTargetLineageReadOptions = {
   readonly interpreter: WorkflowInterpreterService
   readonly journal: InRunJournalService
   readonly onIntentRecorded?: Effect.Effect<void>
-  readonly operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
+  readonly operation: Extract<WorkflowOperationType, { readonly _tag: "ReadTargetLineage" }>
   readonly runId: RunId
-  readonly source: ActiveRefreshAuthoritySource
+  readonly source: ActiveWorkAuthorityRefreshSource
 }
 
 /** Journals one active-refresh lineage read and its exact non-action outcome. */

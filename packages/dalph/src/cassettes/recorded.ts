@@ -512,10 +512,17 @@ const isTaskBoundaryEvent = (event: WorkflowJournalEvent): event is TaskBoundary
 
 type GitObservationEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "GitReadIntentRecorded" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
+  {
+    readonly _tag:
+      | "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
+      | "GitReadIntentRecorded"
+      | "PlannedAttemptWorktreeObserved"
+      | "TargetLineageObserved"
+  }
 >
 
 const gitObservationEventTags = {
+  ActiveWorkAuthorityRefreshGitReadIntentRecorded: true,
   GitReadIntentRecorded: true,
   PlannedAttemptWorktreeObserved: true,
   TargetLineageObserved: true
