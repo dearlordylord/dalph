@@ -19,6 +19,7 @@ import type { RunFinalityDecision as RunFinalityDecisionValue } from "../frontie
 import { ApplicationExitShell } from "../application-exit/application-shell.js"
 import { attachCurrentSignal, type CurrentSignal } from "../delivery/relations.js"
 import type { AcceptedRunControlDirection, AcceptedRunControlObserver, RunReactivationControlState } from "./run.js"
+import { type ActiveWorkAuthorityRefreshSource, RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 /** A non-authoritative request to ask the ordinary Run entry for current facts. */
 export type RunReactivationHint = Data.TaggedEnum<{
@@ -41,7 +42,11 @@ export const RunReactivationHint = Data.taggedEnum<RunReactivationHint>()
 export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   /** Exact workflow Run whose Journal-backed control state this owner serves. */
   readonly runId: RunId
-  readonly activate: Effect.Effect<RunFinalityDecisionValue, E, R>
+  readonly activate: (opportunity: RunActivationOpportunity) => Effect.Effect<RunFinalityDecisionValue, E, R>
+  /** Establishes the Run and captures its validated-prefix Running subjects before active reads. */
+  readonly activateActiveWorkAuthorityRefresh: (
+    source: ActiveWorkAuthorityRefreshSource
+  ) => Effect.Effect<RunFinalityDecisionValue, E, R>
   readonly readControl: Effect.Effect<RunReactivationControlState, E, R>
   readonly activationInterval: Duration.Input
   /** Finite positive delay after a failed read/activation before a later hint is considered. */
@@ -59,6 +64,12 @@ export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   }) => Effect.Effect<void, EInstall, R>
   /** Optional process-local timer lifecycle observation for diagnostics. */
   readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
+  /** Optional process-local activation-finalization observation for deterministic lifecycle tests. */
+  readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
+  /** Optional process-local trailing-obligation observation for deterministic lifecycle tests. */
+  readonly onTrailingOrdinaryRecorded?: (generation: number) => Effect.Effect<void>
+  /** Optional process-local idle-handoff observation for deterministic lifecycle tests. */
+  readonly onActivationHandoffIdle?: () => Effect.Effect<void>
 }
 
 /** Only ephemeral hints are public; ownership, pause state, and shutdown stay in the scoped Layer. */
@@ -77,7 +88,28 @@ export class RunReactivationOwner extends Context.Service<RunReactivationOwner, 
   "@dalph/RunReactivationOwner"
 ) {}
 
-type RunReactivationMessage = { readonly _tag: "Hint"; readonly hint: RunReactivationHint }
+type RunReactivationMessage =
+  | { readonly _tag: "Hint"; readonly hint: RunReactivationHint }
+  /** A hint that arrived while an activation was crossing its handoff boundary. */
+  | { readonly _tag: "TrailingOrdinary"; readonly generation: number }
+
+/**
+ * One ordinary activation promised by a hint that crossed an activation
+ * handoff. This obligation remains process-local until the worker admits it;
+ * it is not represented only by the one-slot wake queue.
+ */
+type TrailingOrdinaryObligation = { readonly _tag: "PendingTrailingOrdinary"; readonly generation: number }
+
+/**
+ * The owner gate's activation phase. Finalizing remains visible until the
+ * worker either admits the trailing ordinary activation or returns to its
+ * idle wait. A generation changes at that handoff, so a producer that
+ * observed the old phase cannot be mistaken for a producer arriving after it.
+ */
+type ActivationPhase =
+  | { readonly _tag: "Idle"; readonly generation: number }
+  | { readonly _tag: "Running"; readonly generation: number }
+  | { readonly _tag: "Finalizing"; readonly generation: number }
 
 const finitePositiveDuration = (input: Duration.Input, name: string) => {
   const duration = Duration.fromInput(input)
@@ -109,6 +141,10 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const commandGate = yield* Semaphore.make(1)
       const shutdown = yield* Deferred.make<void>()
       const stopped = yield* Ref.make(false)
+      /** One tagged phase closes the producer/finalization handoff race. */
+      const activationPhase = yield* Ref.make<ActivationPhase>({ _tag: "Idle", generation: 0 })
+      /** A trailing activation cannot be displaced by later one-slot hints. */
+      const trailingOrdinaryObligation = yield* Ref.make<Option.Option<TrailingOrdinaryObligation>>(Option.none())
       // Registration precedes the authoritative read below. The callback can
       // therefore capture a Pause accepted in the attach/read interval; the
       // mandatory reread then current-first replays the durable state.
@@ -178,15 +214,59 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         )
       )
 
+      /**
+       * Records one trailing ordinary activation and leaves its wake message
+       * in the bounded queue. Later hints observe the obligation and coalesce
+       * into it instead of sliding the wake message out of the queue.
+       */
+      const recordTrailingOrdinaryInsideGate = (generation: number) =>
+        Effect.gen(function* () {
+          if (Option.isSome(yield* Ref.get(trailingOrdinaryObligation))) return
+          // A normal hint can have won the take/admission race just before
+          // this obligation was recorded. It is covered by the ordinary
+          // trailing activation, so remove any queued normal wake first.
+          yield* Queue.clear(messages)
+          const obligation: TrailingOrdinaryObligation = { _tag: "PendingTrailingOrdinary", generation }
+          yield* Ref.set(trailingOrdinaryObligation, Option.some(obligation))
+          yield* Queue.offer(messages, { _tag: "TrailingOrdinary", generation })
+          if (options.onTrailingOrdinaryRecorded !== undefined) {
+            yield* options.onTrailingOrdinaryRecorded(generation)
+          }
+        })
+
+      /**
+       * Offers one process-local hint while holding the owner gate. A hint
+       * arriving during an activation is deliberately reduced to one
+       * ordinary trailing marker: the active handoff has already crossed its
+       * only active boundary, so a second active handoff would duplicate the
+       * refresh rather than establish a fresh current view.
+       */
+      const offerHintInsideGate = (hint: RunReactivationHint, arrivalPhase?: ActivationPhase) =>
+        Effect.gen(function* () {
+          if (yield* Ref.get(stopped)) return
+          const current = yield* Ref.get(controlState)
+          if (current !== "RunUnpaused") return
+          // Once the handoff has promised one ordinary activation, later
+          // hints are already covered. In particular, they must not slide its
+          // marker out of Queue.sliding(1) before the worker takes it.
+          if (Option.isSome(yield* Ref.get(trailingOrdinaryObligation))) return
+          const phase = yield* Ref.get(activationPhase)
+          const arrivedBeforeActivationHandoff =
+            arrivalPhase !== undefined &&
+            (arrivalPhase._tag !== "Idle" || phase._tag !== "Idle" || arrivalPhase.generation !== phase.generation)
+          if (phase._tag !== "Idle" || arrivedBeforeActivationHandoff) {
+            yield* recordTrailingOrdinaryInsideGate(phase.generation)
+            return
+          }
+          yield* Queue.offer(messages, { _tag: "Hint", hint })
+        })
+
       const offerHint = Effect.fn("RunReactivationOwner.hint")(function* (hint: RunReactivationHint) {
-        yield* commandGate.withPermit(
-          Effect.gen(function* () {
-            if (yield* Ref.get(stopped)) return
-            const current = yield* Ref.get(controlState)
-            if (current !== "RunUnpaused") return
-            yield* Queue.offer(messages, { _tag: "Hint", hint })
-          })
-        )
+        // Capture the phase before waiting for the gate. If finalization wins
+        // the permit while this producer waits, the generation mismatch keeps
+        // the hint in the one trailing ordinary activation.
+        const arrivalPhase = yield* Ref.get(activationPhase)
+        yield* commandGate.withPermit(offerHintInsideGate(hint, arrivalPhase))
       })
 
       const startTrackerNotificationSource = Effect.fn("RunReactivationOwner.startTrackerNotificationSource")(() =>
@@ -200,7 +280,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
               yield* commandGate.withPermit(
                 Effect.gen(function* () {
                   if (yield* Ref.get(stopped)) return
-                  yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.TrackerNotification() })
+                  yield* offerHintInsideGate(RunReactivationHint.TrackerNotification())
                   const fiber = yield* attachment.changes.pipe(
                     Stream.runForEach(() => offerHint(RunReactivationHint.TrackerNotification())),
                     Effect.forkIn(ownerScope)
@@ -229,7 +309,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
               yield* stopTimerFiber()
             } else {
               yield* startTimerFiber()
-              yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.OperatorWake() })
+              yield* offerHintInsideGate(RunReactivationHint.OperatorWake())
             }
           })
         )
@@ -249,7 +329,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         Deferred.await(shutdown).pipe(Effect.as(Option.none()))
       )
 
-      const processHint = Effect.gen(function* () {
+      const processHintAttempt = Effect.fn("RunReactivationOwner.processHint")(function* (hint?: RunReactivationHint) {
         if (yield* Ref.get(stopped)) return
         if ((yield* Ref.get(controlState)) === "RunPaused") return
         /* v8 ignore next -- @preserve Initial terminal history stops before queue consumption, and no process-local command can create RunTerminated. */
@@ -258,17 +338,21 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           return
         }
 
-        const decision = yield* options.activate.pipe(
-          Effect.mapError((failure) => ({ _tag: "Activate" as const, failure }))
-        )
+        const decision = yield* (
+          hint !== undefined && (hint._tag === "TrackerNotification" || hint._tag === "Timer")
+            ? options.activateActiveWorkAuthorityRefresh(hint._tag)
+            : options.activate(RunActivationOpportunity.OrdinaryRunEntry())
+        ).pipe(Effect.mapError((failure) => ({ _tag: "Activate" as const, failure })))
         if (decision._tag === "RunMayTerminate") yield* requestStop()
-      }).pipe(
-        Effect.catchTag("Activate", ({ failure }) =>
-          options.isTerminationFailure(failure)
-            ? options.onFailure(failure).pipe(Effect.andThen(requestStop()))
-            : observeFailure(failure)
+      })
+      const processHint = (hint?: RunReactivationHint) =>
+        processHintAttempt(hint).pipe(
+          Effect.catchTag("Activate", ({ failure }) =>
+            options.isTerminationFailure(failure)
+              ? options.onFailure(failure).pipe(Effect.andThen(requestStop()))
+              : observeFailure(failure)
+          )
         )
-      )
 
       yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: requestStop() })
       yield* startupPreparation.cancel
@@ -296,20 +380,106 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           Effect.gen(function* () {
             if (yield* Ref.get(stopped)) return
             if ((yield* Ref.get(controlState)) === "RunUnpaused") {
-              yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.Startup() })
+              // A current-first tracker notification is a stronger startup
+              // ordering fact than the synthetic Startup hint. The check and
+              // offer are serialized with the source attachment so Queue's
+              // sliding capacity cannot replace that first active refresh.
+              if ((yield* Queue.size(messages)) === 0) {
+                yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.Startup() })
+              }
               yield* startTimerFiber()
             }
           })
         )
         const loop = (): Effect.Effect<void, never, R> =>
-          nextMessage.pipe(
-            Effect.flatMap((message) =>
-              Option.match(message, {
-                onNone: () => Effect.void,
-                onSome: () => processHint.pipe(Effect.andThen(loop()))
+          Effect.gen(function* () {
+            // Keep Finalizing visible while the post-activation handoff is
+            // still being admitted. A producer that began during that phase
+            // enqueues a trailing message even if this worker wins the gate
+            // first and returns to the idle wait.
+            const enteredIdle = yield* commandGate.withPermit(
+              Effect.gen(function* () {
+                const phase = yield* Ref.get(activationPhase)
+                const hasTrailingObligation = Option.isSome(yield* Ref.get(trailingOrdinaryObligation))
+                if (phase._tag === "Finalizing" && ((yield* Queue.size(messages)) === 0 || hasTrailingObligation)) {
+                  yield* Ref.set(activationPhase, { _tag: "Idle" as const, generation: phase.generation + 1 })
+                  return true
+                }
+                return false
               })
             )
-          )
+            if (enteredIdle && options.onActivationHandoffIdle !== undefined) {
+              yield* options.onActivationHandoffIdle()
+            }
+            const message = yield* nextMessage
+            if (Option.isNone(message)) return
+            const next = message.value
+            const activation = yield* commandGate.withPermit(
+              Effect.gen(function* () {
+                const phase = yield* Ref.get(activationPhase)
+                if (phase._tag === "Running") {
+                  return yield* Effect.die("Run reactivation entered Running before activation admission")
+                }
+                const pending = yield* Ref.get(trailingOrdinaryObligation)
+                if (Option.isSome(pending)) {
+                  if (next._tag === "TrailingOrdinary" && next.generation !== pending.value.generation) {
+                    return yield* Effect.die("Run reactivation trailing obligation generation changed before admission")
+                  }
+                  // The pending obligation is now beginning. Clear it before
+                  // releasing the gate so later hints follow the ordinary
+                  // active-phase coalescing rules for this new activation.
+                  yield* Ref.set(trailingOrdinaryObligation, Option.none())
+                  yield* Ref.set(activationPhase, {
+                    _tag: "Running" as const,
+                    generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
+                  })
+                  return { hint: undefined, activationKind: "Ordinary" as const }
+                }
+                if (next._tag === "TrailingOrdinary") {
+                  return yield* Effect.die("Run reactivation consumed an unrecorded trailing obligation")
+                }
+                const hint = next.hint
+                yield* Ref.set(activationPhase, {
+                  _tag: "Running" as const,
+                  generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
+                })
+                return {
+                  hint,
+                  activationKind:
+                    hint._tag === "TrackerNotification" || hint._tag === "Timer"
+                      ? ("ActiveWorkAuthorityRefresh" as const)
+                      : ("Ordinary" as const)
+                }
+              })
+            )
+            yield* processHint(activation.hint).pipe(
+              Effect.ensuring(
+                commandGate.withPermit(
+                  Effect.gen(function* () {
+                    const phase = yield* Ref.get(activationPhase)
+                    if (phase._tag !== "Running") {
+                      return yield* Effect.die(`Run reactivation finalized from ${phase._tag}`)
+                    }
+                    yield* Ref.set(activationPhase, { _tag: "Finalizing" as const, generation: phase.generation })
+                    if (options.onActivationFinalizationStart !== undefined) {
+                      yield* options.onActivationFinalizationStart(activation.activationKind)
+                    }
+                    // A producer can win the tiny take/admission interval
+                    // before the Running phase is recorded. Normalize that
+                    // one-slot queue to one durable trailing ordinary
+                    // obligation so it cannot become a second active refresh.
+                    if (
+                      Option.isNone(yield* Ref.get(trailingOrdinaryObligation)) &&
+                      (yield* Queue.size(messages)) > 0
+                    ) {
+                      yield* recordTrailingOrdinaryInsideGate(phase.generation)
+                    }
+                  })
+                )
+              )
+            )
+            yield* loop()
+          })
         yield* loop()
       })
 

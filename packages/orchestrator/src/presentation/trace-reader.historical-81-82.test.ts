@@ -32,6 +32,8 @@ import {
   TaskAttemptPlannedEvent,
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
+  TaskClaimReleasedEvent,
+  TaskClaimReleaseIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent,
@@ -66,12 +68,14 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
+  makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeCompletionTaskFactsObservationOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
-  makeTrackerGraphObservationOperation
+  makeTrackerGraphObservationOperation,
+  TaskClaimReleaseAuthority
 } from "../workflow/registry/operation.js"
 import { OperationId } from "../workflow/identity.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
@@ -119,6 +123,7 @@ import {
   CompletionClaimCleanupReadOrdinal,
   CompletionClaimDeletionReadPurpose,
   CompletionClaimDeletionReadObservedEvent,
+  CompletionClaimMarkerAbsent,
   CompletionClaimDeletedEvent,
   CompletionClaimDeletionAttemptIntendedEvent,
   CompletionClaimDeletionIntendedEvent,
@@ -134,6 +139,7 @@ import {
   CompletionTaskFocusedReadPurpose,
   CompletionTaskClaim,
   FocusedTaskCompletionFacts,
+  completionOriginalTaskClaimReleaseFor,
   completionTaskRequestFor,
   CompletionTaskIntendedEvent,
   CompletionTaskRequestOrdinal,
@@ -769,6 +775,23 @@ const nonConvergentPromotionRecords = (): ReadonlyArray<JournalRecord> => {
   ]
 }
 
+const finalityPosition = {
+  completionAttempt: 27,
+  deletionIntent: 31,
+  exactMarkerBeforeOriginalRelease: 32,
+  originalReleaseIntent: 33,
+  originalReleaseObserved: 34,
+  exactMarkerBeforeDeletion: 35,
+  originalReleaseConfirmed: 36,
+  deletionAttempt: 37,
+  markerAbsentAfterDeletion: 38,
+  activeAbsentAfterMarker: 39,
+  deleted: 40,
+  settled: 41,
+  graphReadIntent: 42,
+  graphObserved: 43
+} as const
+
 const finalityRecords = (): ReadonlyArray<JournalRecord> => {
   const fixture = integrationFinalityFixture
   const runId = fixture.runId
@@ -839,6 +862,12 @@ const finalityRecords = (): ReadonlyArray<JournalRecord> => {
     observedAt: JournalPosition.make(30),
     operationId: confirmationOperation.operationId
   }
+  const deletionRequest = completionClaimDeletionRequestFor(claim, successObservation, deletionOperationId)
+  const originalClaimRelease = makeTaskClaimReleaseOperation({
+    authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+    predecessorOperationIds: [fixture.activeClaim.operationId, successObservation.operationId],
+    release: completionOriginalTaskClaimReleaseFor(claim)
+  })
   return [
     ...integrationPrefix,
     record(
@@ -939,7 +968,7 @@ const finalityRecords = (): ReadonlyArray<JournalRecord> => {
     record(29, confirmationReadIntentEvent, runId),
     record(30, confirmationFactsEvent, runId),
     record(
-      31,
+      finalityPosition.deletionIntent,
       CompletionClaimDeletionIntendedEvent.make({
         claim,
         operationId: deletionOperationId,
@@ -949,7 +978,58 @@ const finalityRecords = (): ReadonlyArray<JournalRecord> => {
       runId
     ),
     record(
-      32,
+      finalityPosition.exactMarkerBeforeOriginalRelease,
+      CompletionClaimDeletionReadObservedEvent.make({
+        observation: claim,
+        purpose: CompletionClaimDeletionReadPurpose.cases.BeforeOriginalClaimRelease.make({
+          readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+        }),
+        replacementOperationId,
+        request: deletionRequest,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      finalityPosition.originalReleaseIntent,
+      TaskClaimReleaseIntendedEvent.make({ operation: originalClaimRelease, version: workflowJournalEventVersion }),
+      runId
+    ),
+    record(
+      finalityPosition.originalReleaseObserved,
+      TaskClaimReleasedEvent.make({ release: originalClaimRelease.release, version: workflowJournalEventVersion }),
+      runId
+    ),
+    record(
+      finalityPosition.exactMarkerBeforeDeletion,
+      CompletionClaimDeletionReadObservedEvent.make({
+        observation: claim,
+        purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+          attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+          readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+        }),
+        replacementOperationId,
+        request: deletionRequest,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      finalityPosition.originalReleaseConfirmed,
+      CompletionClaimDeletionReadObservedEvent.make({
+        observation: UnclaimedTask.make({ taskId: fixture.taskId }),
+        purpose: CompletionClaimDeletionReadPurpose.cases.ConfirmOriginalClaimReleased.make({
+          attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+          readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+        }),
+        replacementOperationId,
+        request: deletionRequest,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      finalityPosition.deletionAttempt,
       CompletionClaimDeletionAttemptIntendedEvent.make({
         attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
         claim,
@@ -960,7 +1040,35 @@ const finalityRecords = (): ReadonlyArray<JournalRecord> => {
       runId
     ),
     record(
-      33,
+      finalityPosition.markerAbsentAfterDeletion,
+      CompletionClaimDeletionReadObservedEvent.make({
+        observation: CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId }),
+        purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+          attemptOrdinal: CompletionClaimRequestOrdinal.make(2),
+          readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+        }),
+        replacementOperationId,
+        request: deletionRequest,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      finalityPosition.activeAbsentAfterMarker,
+      CompletionClaimDeletionReadObservedEvent.make({
+        observation: UnclaimedTask.make({ taskId: fixture.taskId }),
+        purpose: CompletionClaimDeletionReadPurpose.cases.ConfirmNoActiveClaimAfterMarkerAbsent.make({
+          attemptOrdinal: CompletionClaimRequestOrdinal.make(2),
+          readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
+        }),
+        replacementOperationId,
+        request: deletionRequest,
+        version: workflowJournalEventVersion
+      }),
+      runId
+    ),
+    record(
+      finalityPosition.deleted,
       CompletionClaimDeletedEvent.make({
         claim,
         operationId: deletionOperationId,
@@ -970,7 +1078,7 @@ const finalityRecords = (): ReadonlyArray<JournalRecord> => {
       runId
     ),
     record(
-      34,
+      finalityPosition.settled,
       IntegrationFinalitySettledEvent.make({
         claim,
         deletionOperationId,
@@ -980,8 +1088,8 @@ const finalityRecords = (): ReadonlyArray<JournalRecord> => {
       }),
       runId
     ),
-    record(35, taskTrackerReadIntent(fixture.graphOperation), runId),
-    record(36, fixture.graphRecordEvent, runId)
+    record(finalityPosition.graphReadIntent, taskTrackerReadIntent(fixture.graphOperation), runId),
+    record(finalityPosition.graphObserved, fixture.graphRecordEvent, runId)
   ]
 }
 
@@ -1305,7 +1413,7 @@ it.effect(
 
       const finality = finalityRecords()
       const finalityReader = makeTraceReader({ read: () => Effect.succeed(finality) })
-      for (const position of [15, 16, 18, 19, 22, 23, 26, 27, 29, 30, 31, 32, 33, 34, 35, 36]) {
+      for (const position of [15, 16, 18, 19, 22, 23, 26, 29, 30, ...Object.values(finalityPosition)]) {
         const view = yield* finalityReader.readAt(
           TraceCursor.make({ position: JournalPosition.make(position), runId: integrationFinalityFixture.runId })
         )
@@ -1313,7 +1421,10 @@ it.effect(
         vitestExpect(view.facets.integration.facts.every(({ source }) => source.position <= position)).toBe(true)
       }
       const settled = yield* finalityReader.readAt(
-        TraceCursor.make({ position: JournalPosition.make(34), runId: integrationFinalityFixture.runId })
+        TraceCursor.make({
+          position: JournalPosition.make(finalityPosition.settled),
+          runId: integrationFinalityFixture.runId
+        })
       )
       vitestExpect(
         settled.facets.recovery.retainedResponsibilities.some(
@@ -1379,7 +1490,10 @@ it.effect("#81/#82 reject invalid historical relationship tables and property mu
   Effect.gen(function* () {
     const records = finalityRecords()
     const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
-      TraceCursor.make({ position: JournalPosition.make(36), runId: integrationFinalityFixture.runId })
+      TraceCursor.make({
+        position: JournalPosition.make(finalityPosition.graphObserved),
+        runId: integrationFinalityFixture.runId
+      })
     )
     const sessionStarted = view.facets.integration.facts.find(({ _tag }) => _tag === "SessionStarted")
     const responsibility = view.facets.integration.facts.find(({ _tag }) => _tag === "Responsibility")
@@ -1407,23 +1521,28 @@ it.effect("#81/#82 reject invalid historical relationship tables and property mu
     }
     vitestExpect(dependantRelease.graphSource).toEqual({
       runId: integrationFinalityFixture.runId,
-      position: JournalPosition.make(36)
+      position: JournalPosition.make(finalityPosition.graphObserved)
     })
     vitestExpect(dependantRelease.settlementSource).toEqual({
       runId: integrationFinalityFixture.runId,
-      position: JournalPosition.make(34)
+      position: JournalPosition.make(finalityPosition.settled)
     })
     vitestExpect(dependantRelease.graphObservation).toEqual(integrationFinalityFixture.graphObservation)
     vitestExpect(dependantRelease.settlement).toEqual(
-      records.find(({ position }) => position === JournalPosition.make(34))?.event
+      records.find(({ position }) => position === JournalPosition.make(finalityPosition.settled))?.event
     )
-    const graphRecord = records.find(({ position }) => position === JournalPosition.make(36))
+    const graphRecord = records.find(
+      ({ position }) => position === JournalPosition.make(finalityPosition.graphObserved)
+    )
     if (graphRecord?.event._tag !== "TaskTrackerFactsObserved") {
       return yield* Effect.die("dependant-release graph fixture is incomplete")
     }
     const noDependantRelease = (candidate: ReadonlyArray<JournalRecord>) =>
       makeTraceReader({ read: () => Effect.succeed(candidate) }).readAt(
-        TraceCursor.make({ position: JournalPosition.make(36), runId: integrationFinalityFixture.runId })
+        TraceCursor.make({
+          position: JournalPosition.make(finalityPosition.graphObserved),
+          runId: integrationFinalityFixture.runId
+        })
       )
     const reopenedProjection = projectTrackerSnapshot({
       revision: "historical-reopened-revision",
@@ -1439,7 +1558,7 @@ it.effect("#81/#82 reject invalid historical relationship tables and property mu
     if (reopenedProjection._tag !== "Valid") return yield* Effect.die("reopened graph fixture is invalid")
     const reopened = yield* noDependantRelease(
       records.map((item) =>
-        item.position === JournalPosition.make(36)
+        item.position === JournalPosition.make(finalityPosition.graphObserved)
           ? withEvent(
               item,
               taskTrackerFactsObservedEvent(
@@ -1477,9 +1596,9 @@ it.effect("#81/#82 reject invalid historical relationship tables and property mu
     if (blockedProjection._tag !== "Valid") return yield* Effect.die("blocked graph fixture is invalid")
     const blocked = yield* noDependantRelease(
       records.map((item) =>
-        item.position === JournalPosition.make(35)
+        item.position === JournalPosition.make(finalityPosition.graphReadIntent)
           ? withEvent(item, taskTrackerReadIntent(blockedTargetOperation))
-          : item.position === JournalPosition.make(36)
+          : item.position === JournalPosition.make(finalityPosition.graphObserved)
             ? withEvent(
                 item,
                 taskTrackerFactsObservedEvent(
@@ -1501,9 +1620,9 @@ it.effect("#81/#82 reject invalid historical relationship tables and property mu
     )
     const inconsistent = yield* noDependantRelease(
       records.map((item) =>
-        item.position === JournalPosition.make(35)
+        item.position === JournalPosition.make(finalityPosition.graphReadIntent)
           ? withEvent(item, taskTrackerReadIntent(inconsistentOperation))
-          : item.position === JournalPosition.make(36)
+          : item.position === JournalPosition.make(finalityPosition.graphObserved)
             ? withEvent(
                 item,
                 taskTrackerFactsObservedEvent(
@@ -1629,7 +1748,10 @@ it.effect(
     Effect.gen(function* () {
       const records = finalityRecords()
       const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
-        TraceCursor.make({ position: JournalPosition.make(36), runId: integrationFinalityFixture.runId })
+        TraceCursor.make({
+          position: JournalPosition.make(finalityPosition.graphObserved),
+          runId: integrationFinalityFixture.runId
+        })
       )
       const beginning = view.items[0]
       const accepted = view.facets.integration.facts.find(({ _tag }) => _tag === "AcceptedResult")
@@ -1926,8 +2048,10 @@ it.effect(
 it.effect("#82 rejects a bare settlement and duplicate nested finality operation identity", () =>
   Effect.gen(function* () {
     const records = finalityRecords()
-    const attemptRecord = records.find(({ position }) => position === JournalPosition.make(27))
-    const settlementRecord = records.find(({ position }) => position === JournalPosition.make(34))
+    const attemptRecord = records.find(
+      ({ position }) => position === JournalPosition.make(finalityPosition.completionAttempt)
+    )
+    const settlementRecord = records.find(({ position }) => position === JournalPosition.make(finalityPosition.settled))
     if (
       attemptRecord?.event._tag !== "CompletionTaskAttemptIntended" ||
       settlementRecord?.event._tag !== "IntegrationFinalitySettled"
@@ -1937,7 +2061,7 @@ it.effect("#82 rejects a bare settlement and duplicate nested finality operation
     const attemptEvent = attemptRecord.event
     const settlementEvent = settlementRecord.event
     const duplicateNestedOperation = records.map((item) =>
-      item.position === JournalPosition.make(27)
+      item.position === JournalPosition.make(finalityPosition.completionAttempt)
         ? withEvent(
             item,
             CompletionTaskAttemptIntendedEvent.make({
@@ -1948,7 +2072,7 @@ it.effect("#82 rejects a bare settlement and duplicate nested finality operation
         : item
     )
     const bareSettlement = records.map((item) =>
-      item.position === JournalPosition.make(34)
+      item.position === JournalPosition.make(finalityPosition.settled)
         ? withEvent(
             item,
             IntegrationFinalitySettledEvent.make({
@@ -1970,7 +2094,7 @@ it.effect("#82 rejects a bare settlement and duplicate nested finality operation
 it.effect("#82 retains the cleanup claim reread's deletion, replacement, and focused-read identities", () =>
   Effect.gen(function* () {
     const records = finalityRecords()
-    const deletion = records.find(({ position }) => position === JournalPosition.make(31))
+    const deletion = records.find(({ position }) => position === JournalPosition.make(finalityPosition.deletionIntent))
     const replacement = records.find(({ position }) => position === JournalPosition.make(19))
     if (
       deletion?.event._tag !== "CompletionClaimDeletionIntended" ||
@@ -1978,28 +2102,18 @@ it.effect("#82 retains the cleanup claim reread's deletion, replacement, and foc
     ) {
       return yield* Effect.die("cleanup reread fixture is missing its exact claim operations")
     }
-    const reread = CompletionClaimDeletionReadObservedEvent.make({
-      observation: deletion.event.claim,
-      purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
-        attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
-        readOrdinal: CompletionClaimCleanupReadOrdinal.make(1)
-      }),
-      replacementOperationId: replacement.event.operationId,
-      request: completionClaimDeletionRequestFor(
-        deletion.event.claim,
-        deletion.event.successObservation,
-        deletion.event.operationId
-      ),
-      version: workflowJournalEventVersion
-    })
-    const prefix = [...records.slice(0, 31), record(32, reread, integrationFinalityFixture.runId)]
+    const prefix = records.slice(0, finalityPosition.exactMarkerBeforeDeletion)
     const view = yield* makeTraceReader({ read: () => Effect.succeed(prefix) }).readAt(
-      TraceCursor.make({ position: JournalPosition.make(32), runId: integrationFinalityFixture.runId })
+      TraceCursor.make({
+        position: JournalPosition.make(finalityPosition.exactMarkerBeforeDeletion),
+        runId: integrationFinalityFixture.runId
+      })
     )
     const rereadItem = view.items.find(
       ({ occurrence }) =>
         occurrence._tag === "IntegrationClaimDeletionOccurred" &&
-        occurrence.event._tag === "CompletionClaimDeletionReadObserved"
+        occurrence.event._tag === "CompletionClaimDeletionReadObserved" &&
+        occurrence.event.purpose._tag === "BeforeDeletionAttempt"
     )
     if (
       rereadItem?.occurrence._tag !== "IntegrationClaimDeletionOccurred" ||
@@ -2336,20 +2450,24 @@ it.effect("#82 retains post-promotion Git intent and unreadable outcome with exa
       clearOperation.operationId,
       makeCompleteTaskTrackerFactsObserved(clearOperation, clearProjection.snapshot)
     )
+    const clearIntentPosition = finalityPosition.graphObserved + 1
+    const clearFactsPosition = clearIntentPosition + 1
+    const ancestryIntentPosition = clearFactsPosition + 1
+    const ancestryObservedPosition = ancestryIntentPosition + 1
     const records = [
       ...baseRecords.map((item) =>
-        item.position === JournalPosition.make(35)
+        item.position === JournalPosition.make(finalityPosition.graphReadIntent)
           ? withEvent(item, blockedIntent)
-          : item.position === JournalPosition.make(36)
+          : item.position === JournalPosition.make(finalityPosition.graphObserved)
             ? withEvent(item, blockedFacts)
             : item
       ),
-      record(37, clearIntent, integrationFinalityFixture.runId),
-      record(38, clearFacts, integrationFinalityFixture.runId)
+      record(clearIntentPosition, clearIntent, integrationFinalityFixture.runId),
+      record(clearFactsPosition, clearFacts, integrationFinalityFixture.runId)
     ]
     const authorization = PostPromotionBlockerClearAuthorization.make({
-      blockerClearedAt: JournalPosition.make(38),
-      blockerObservedAt: JournalPosition.make(36),
+      blockerClearedAt: JournalPosition.make(clearFactsPosition),
+      blockerObservedAt: JournalPosition.make(finalityPosition.graphObserved),
       claim: settlement.event.claim
     })
     const operationId = postPromotionBlockerAncestryOperationIdFor(authorization)
@@ -2368,10 +2486,15 @@ it.effect("#82 retains post-promotion Git intent and unreadable outcome with exa
       read: () =>
         Effect.succeed([
           ...records,
-          record(39, intent, integrationFinalityFixture.runId),
-          record(40, observed, integrationFinalityFixture.runId)
+          record(ancestryIntentPosition, intent, integrationFinalityFixture.runId),
+          record(ancestryObservedPosition, observed, integrationFinalityFixture.runId)
         ])
-    }).readAt(TraceCursor.make({ position: JournalPosition.make(40), runId: integrationFinalityFixture.runId }))
+    }).readAt(
+      TraceCursor.make({
+        position: JournalPosition.make(ancestryObservedPosition),
+        runId: integrationFinalityFixture.runId
+      })
+    )
     const facts = view.facets.integration.facts.filter(
       (fact) => fact._tag === "FocusedCompletion" && fact.event._tag.startsWith("PostPromotionBlockerCandidateAncestry")
     )
@@ -2851,7 +2974,10 @@ it.effect("#81/#82 validate every remaining public facet relation against its ex
     )
 
     const finality = yield* makeTraceReader({ read: () => Effect.succeed(finalityRecords()) }).readAt(
-      TraceCursor.make({ position: JournalPosition.make(36), runId: integrationFinalityFixture.runId })
+      TraceCursor.make({
+        position: JournalPosition.make(finalityPosition.graphObserved),
+        runId: integrationFinalityFixture.runId
+      })
     )
     expectValid(finality)
     const dependant = finality.facets.integration.facts.find(({ _tag }) => _tag === "DependantRelease")

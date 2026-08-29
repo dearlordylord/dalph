@@ -199,6 +199,7 @@ export type PlannedAttemptExecutorDisposition =
           | "TaskLifecycleConstraint"
           | "TaskMembershipConstraint"
           | "TaskSpecificationChangeConstraint"
+          | "UnreadableFactWait"
       }
     >
   | ExecutorReadyDisposition

@@ -35,7 +35,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
       const applicationExit = yield* makeApplicationExitShell(controlledOwnership, { requestEnd: () => Effect.void })
-      const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
+      const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const controls = Layer.mergeAll(
           attemptChoiceControlLayer,
           controlDirectionApplicationLayer,
@@ -48,10 +48,13 @@ const controlledJournaledRunLayer = (runId: RunId) =>
           undefined,
           undefined,
           undefined,
-          preservingDispositionCleanupBoundaryLayer
+          preservingDispositionCleanupBoundaryLayer,
+          undefined,
+          true,
+          opportunity
         ).pipe(
           Layer.provide(
-            journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
+            journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter), opportunity)
           ),
           Layer.provide(controls),
           Layer.provide(Layer.succeed(OperationIdAllocator, operationIdAllocator)),

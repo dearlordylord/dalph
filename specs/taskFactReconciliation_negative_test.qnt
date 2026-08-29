@@ -3,6 +3,34 @@
 module taskFactReconciliationNegativeTest {
   import taskFactReconciliation.* from "./taskFactReconciliation"
 
+  action conflateActiveRefreshUnreadableWithOrdinarySuspension: bool = all {
+    state.lastAction == ActiveRefreshUnreadableObservedAction,
+    state' = {
+      ...state,
+      constraint: UnreadableClaimConstraint,
+      factDecision: RequestSafeSuspension,
+    },
+  }
+
+  // This mutation preserves active-refresh provenance while re-establishing
+  // Running work after a lifecycle reopen. The canonical establishment action
+  // must clear both fields before it can hold the position again.
+  action reestablishWithStaleActiveRefreshProvenance: bool = all {
+    state.lastAction == LifecycleReopenedAction,
+    state.executorEvidence == ExactSafelySuspended,
+    state.factDecision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.authorityReadPurpose == ActiveWorkRefreshRead,
+    state.refreshSource == Timer,
+    state' = {
+      ...state,
+      executorEvidence: ExactRunning,
+      quiescenceUnbroken: false,
+      positionHeld: true,
+      lastAction: ActiveWorkRunningEstablishedAction,
+    },
+  }
+
   action conflateRunBindingWithPersistedContentError: bool = all {
     state.lastAction == RunMismatchRejectedAction,
     state' = { ...state, lastControlResult: PersistedRequestContentContradiction },
@@ -595,6 +623,26 @@ module taskFactReconciliationNegativeTest {
       .then(observeUnreadableClaim)
       .then(releaseUnreadableClaim)
       .expect(not(absentForeignUnreadableClaimsAreNeverMutated))
+  }
+
+  run activeRefreshUnreadableCannotRequestOrdinarySuspensionTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTrackerNotification)
+      .then(observeUnreadableClaimDuringActiveRefresh)
+      .then(conflateActiveRefreshUnreadableWithOrdinarySuspension)
+      .expect(not(activeRefreshUnreadableAuthorizesNoExecutorAction))
+  }
+
+  run staleRefreshProvenanceOnReestablishmentIsDetectedTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTimer)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(reestablishWithStaleActiveRefreshProvenance)
+      .expect(not(activeWorkRunningEstablishmentRetainsAuthority))
   }
 
   run absentClaimCannotBeReleasedTest = {

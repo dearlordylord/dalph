@@ -1,6 +1,11 @@
 import { it as effectIt } from "@effect/vitest"
 import { Effect, Option } from "effect"
 import { expect, it } from "vitest"
+import {
+  activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsFor,
+  RunActivationOpportunity
+} from "./run-activation-opportunity.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import {
   AttemptId,
@@ -38,6 +43,7 @@ import {
   makeTargetLineageObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
+  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
@@ -59,6 +65,9 @@ import {
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -103,6 +112,12 @@ import {
   CancelledAttemptImplementationResponsibilityRelinquishedEvent,
   RunCancellationAppliedEvent
 } from "../../workflow/protocols/run-cancellation/events.js"
+import {
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshOrdinal,
+  makeActiveWorkAuthorityRefreshGitReadOperation
+} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import type { PlannedAttemptWorktreeObservation } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import {
   GitReadIntentRecordedEvent,
@@ -128,7 +143,10 @@ import {
   continuationFreshnessBaselineForAttempt,
   deriveJournalResponsibilityFacts,
   filterFrontierForActivePauses,
+  frontierForActivationOpportunity,
   makeRunRecoveryProjection,
+  pendingActiveRefreshGraphReadFor,
+  pendingActiveRefreshG2OperationFor,
   safelySuspendedAttemptMayContinue,
   taskPauseSuspensionIsOwed
 } from "./recovery-activation.js"
@@ -1703,6 +1721,182 @@ it("uses the latest completed run pause as an attempt baseline and returns none 
   ).toEqual(Option.none())
 })
 
+it("reconstructs a foreign claim observed after Running when restart ends before Suspend", () => {
+  const foreignClaim = ActiveTaskClaim.make({
+    ...coverageAcquisition,
+    owner: ClaimOwner.make("restart-foreign-owner"),
+    token: ClaimToken.make("restart-foreign-token")
+  })
+  const foreignClaimEvent = taskTrackerFactsObservedEvent(
+    coverageClaimOperation.operationId,
+    makeFocusedTaskClaimFactsObserved(coverageClaimOperation, foreignClaim)
+  )
+  const running = executorReport(5, {
+    _tag: "Running",
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
+  const records = [...coveragePlanRecords(), running, coverageRecord(6, foreignClaimEvent)]
+
+  const [facts] = deriveJournalResponsibilityFacts(
+    coverageRunState(records, [coverageResponsibility]),
+    Option.some(JournalPosition.make(6))
+  )
+
+  expect(facts).toMatchObject({
+    _tag: "PlannedAttemptExecutorFreshFacts",
+    disposition: { _tag: "PlannedAttemptExecutorSuspensionRequested" }
+  })
+})
+
+it("reconstructs a Git worktree constraint observed after Running when restart ends before Suspend", () => {
+  const worktreeOperation = makeTaskWorktreeObservationOperation({
+    operationId: OperationId.make("recovery-activation-coverage-restart-worktree"),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: [coveragePlanOperation.operationId]
+  })
+  const running = executorReport(5, {
+    _tag: "Running",
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
+  const intent = coverageRecord(
+    6,
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: worktreeOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const observed = coverageRecord(
+    7,
+    PlannedAttemptWorktreeObservedEvent.make({
+      observation: UntrackedWorktreePath.make({ worktree: coverageAttempt.worktree }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: worktreeOperation.operationId,
+      version: workflowJournalEventVersion
+    })
+  )
+  const records = [...coveragePlanRecords(), running, intent, observed]
+
+  const [facts] = deriveJournalResponsibilityFacts(
+    coverageRunState(records, [coverageResponsibility]),
+    Option.some(JournalPosition.make(7))
+  )
+
+  expect(facts).toMatchObject({
+    _tag: "PlannedAttemptExecutorFreshFacts",
+    disposition: { _tag: "PlannedAttemptExecutorSuspensionRequested" }
+  })
+})
+
+it("selects exactly one Suspend transition before its command intent after a post-Running constraint", () => {
+  const foreignClaim = ActiveTaskClaim.make({
+    ...coverageAcquisition,
+    owner: ClaimOwner.make("pre-intent-foreign-owner"),
+    token: ClaimToken.make("pre-intent-foreign-token")
+  })
+  const foreignClaimEvent = taskTrackerFactsObservedEvent(
+    coverageClaimOperation.operationId,
+    makeFocusedTaskClaimFactsObserved(coverageClaimOperation, foreignClaim)
+  )
+  const records = [
+    ...coveragePlanRecords(),
+    executorReport(5, { _tag: "Running", correlation: plannedAttemptExecutorCorrelation(coverageAttempt) }),
+    coverageRecord(6, foreignClaimEvent)
+  ]
+  const [facts] = deriveJournalResponsibilityFacts(
+    coverageRunState(records, [coverageResponsibility]),
+    Option.some(JournalPosition.make(6))
+  )
+  if (facts?._tag !== "PlannedAttemptExecutorFreshFacts") return expect.fail("expected executor facts")
+  const frontier = deriveRunnableFrontier({
+    freshEligibleTasks: [],
+    responsibility: { entries: [coverageResponsibility] },
+    responsibilityFacts: [facts]
+  })
+
+  expect(frontier.transitions).toEqual([
+    RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+  ])
+})
+
+it("rereads the executor after a Suspend intent survives a crash before the call", () => {
+  const suspendIntent = coverageRecord(
+    7,
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Suspend",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const suspend = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+
+  expect(
+    continuationDecisionFor(
+      suspend,
+      [
+        ...coveragePlanRecords(),
+        executorReport(5, { _tag: "Running", correlation: plannedAttemptExecutorCorrelation(coverageAttempt) }),
+        suspendIntent
+      ],
+      undefined,
+      Option.some(JournalPosition.make(7)),
+      Option.none()
+    )
+  ).toEqual({
+    transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({
+      plannedAttempt: coverageAttempt
+    })
+  })
+})
+
+it("rereads the executor before resending Suspend after its response is lost", () => {
+  const suspendIntent = coverageRecord(
+    7,
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Suspend",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const executorUnavailable = coverageRecord(
+    8,
+    PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const suspend = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+
+  expect(
+    continuationDecisionFor(
+      suspend,
+      [
+        ...coveragePlanRecords(),
+        executorReport(5, { _tag: "Running", correlation: plannedAttemptExecutorCorrelation(coverageAttempt) }),
+        suspendIntent,
+        executorUnavailable
+      ],
+      undefined,
+      Option.some(JournalPosition.make(8)),
+      Option.none()
+    )
+  ).toEqual({
+    transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({
+      plannedAttempt: coverageAttempt
+    })
+  })
+})
+
 it("stops continuation after a foreign current claim, and preserves a transition for a non-ready worktree", () => {
   const foreignClaim = ActiveTaskClaim.make({
     ...coverageAcquisition,
@@ -1730,6 +1924,372 @@ it("stops continuation after a foreign current claim, and preserves a transition
     Option.none()
   )
   expect(worktreeDecision).toEqual({ transition: coverageContinuationTransition })
+})
+
+it("uses only tracker or timer active refresh to bypass Running and reread current claim authority", () => {
+  const running = executorReport(10, {
+    _tag: "Running",
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
+  const unreadableClaimEvent = taskTrackerFactsObservedEvent(
+    coverageClaimOperation.operationId,
+    makeFocusedTaskClaimFactsUnreadable(coverageClaimOperation)
+  )
+  const records = continuationRecords(
+    coverageClaimEvent,
+    UntrackedWorktreePath.make({ worktree: coverageAttempt.worktree })
+  ).map((record) => (record.position === 7 ? coverageRecord(7, unreadableClaimEvent) : record))
+  const runningRecords = [...records, running]
+
+  const ordinary = continuationDecisionFor(
+    coverageContinuationTransition,
+    runningRecords,
+    { event: coverageGraphEvent, position: JournalPosition.make(5) },
+    Option.none(),
+    Option.none(),
+    RunActivationOpportunity.OrdinaryRunEntry()
+  )
+  const refresh = continuationDecisionFor(
+    coverageContinuationTransition,
+    runningRecords,
+    { event: coverageGraphEvent, position: JournalPosition.make(5) },
+    Option.none(),
+    Option.none(),
+    activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    )
+  )
+
+  expect(ordinary).toEqual({ transition: coverageContinuationTransition })
+  expect(refresh).toEqual({})
+})
+
+it("removes only the exact post-baseline unreadable suspension during an active refresh", () => {
+  const suspend = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })
+  const unreadable = coverageRecord(
+    21,
+    taskTrackerFactsObservedEvent(
+      coverageClaimOperation.operationId,
+      makeFocusedTaskClaimFactsUnreadable(coverageClaimOperation)
+    )
+  )
+  const running = executorReport(16, {
+    _tag: "Running",
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
+  const safelySuspended = executorReport(20, {
+    _tag: "SafelySuspended",
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
+  const frontier = { explanations: [], transitions: [suspend] }
+  const baseline = Option.some(JournalPosition.make(15))
+
+  expect(
+    frontierForActivationOpportunity(
+      frontier,
+      [running, unreadable],
+      baseline,
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+      )
+    ).transitions
+  ).toEqual([])
+  expect(
+    frontierForActivationOpportunity(
+      frontier,
+      [running, unreadable],
+      baseline,
+      RunActivationOpportunity.OrdinaryRunEntry()
+    ).transitions
+  ).toEqual([suspend])
+  expect(
+    frontierForActivationOpportunity(
+      frontier,
+      [running, { ...unreadable, position: JournalPosition.make(15) }],
+      baseline,
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+      )
+    ).transitions
+  ).toEqual([suspend])
+  expect(
+    frontierForActivationOpportunity(
+      frontier,
+      [running, safelySuspended, unreadable],
+      baseline,
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+      )
+    ).transitions
+  ).toEqual([suspend])
+})
+
+it("keeps an independent continuation transition after the active subject reaches G2", () => {
+  const independentAttempt = PlannedTaskAttempt.make({
+    ...coverageAttempt,
+    attemptId: AttemptId.make("recovery-activation-independent-attempt"),
+    taskId: TaskId.make("recovery-activation-independent-task")
+  })
+  const independentOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("recovery-activation-independent-graph"),
+    coverageTarget,
+    [],
+    [independentAttempt.taskId]
+  )
+  const active = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+    operation: coverageGraphOperation,
+    plannedAttempt: coverageAttempt
+  })
+  const independent = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+    operation: independentOperation,
+    plannedAttempt: independentAttempt
+  })
+  const filtered = frontierForActivationOpportunity(
+    { explanations: [], transitions: [active, independent] },
+    [],
+    Option.some(JournalPosition.make(15)),
+    activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    ),
+    {
+      _tag: "ActiveRefreshRuntimeBoundary",
+      runId: coverageRunId,
+      reconciledAttempts: [{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }]
+    }
+  )
+
+  expect(filtered.transitions).toEqual([independent])
+})
+
+it("authorizes no executor command after a healthy refresh of Running work", () => {
+  const ready = PlannedWorktreeReady.make({
+    baseSha: coverageAttempt.baseSha,
+    branch: coverageAttempt.branch,
+    headSha: coverageAttempt.baseSha,
+    worktree: coverageAttempt.worktree
+  })
+  const records = continuationRecords(coverageClaimEvent, ready).map((record) =>
+    record.position >= 5 ? { ...record, position: JournalPosition.make(record.position + 10) } : record
+  )
+  const runningRecords = [
+    ...records,
+    executorReport(5, { _tag: "Running", correlation: plannedAttemptExecutorCorrelation(coverageAttempt) })
+  ]
+  const currentGraph = { event: coverageGraphEvent, position: JournalPosition.make(15) }
+
+  const ordinary = continuationDecisionFor(
+    coverageContinuationTransition,
+    runningRecords,
+    currentGraph,
+    Option.none(),
+    Option.none(),
+    RunActivationOpportunity.OrdinaryRunEntry()
+  )
+  const refresh = continuationDecisionFor(
+    coverageContinuationTransition,
+    runningRecords,
+    currentGraph,
+    Option.none(),
+    Option.none(),
+    activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    )
+  )
+
+  expect(ordinary.transition?._tag).toBe("ContinuePlannedAttemptExecutorWork")
+  expect(refresh).toEqual({})
+})
+
+it("correlates ordinary and active-refresh Git intents before requesting lineage", () => {
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/recovery-activation-continuation.git")
+  })
+  const ready = PlannedWorktreeReady.make({
+    baseSha: coverageAttempt.baseSha,
+    branch: coverageAttempt.branch,
+    headSha: coverageAttempt.baseSha,
+    worktree: coverageAttempt.worktree
+  })
+  const worktreeOperation = makeTaskWorktreeObservationOperation({
+    operationId: OperationId.make("recovery-activation-continuation-worktree"),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: [coverageClaimOperation.operationId]
+  })
+  const recordsFor = (intent: JournalRecord["event"]): ReadonlyArray<JournalRecord> => [
+    ...coveragePlanRecords(),
+    executorReport(5, { _tag: "Running", correlation: plannedAttemptExecutorCorrelation(coverageAttempt) }),
+    coverageRecord(6, coverageGraphEvent),
+    coverageRecord(7, coverageSpecificationEvent),
+    coverageRecord(8, coverageClaimEvent),
+    coverageRecord(9, intent),
+    coverageRecord(
+      10,
+      PlannedAttemptWorktreeObservedEvent.make({
+        observation: ready,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: worktreeOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+  const ordinaryIntent = GitReadIntentRecordedEvent.make({
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    operation: worktreeOperation,
+    version: workflowJournalEventVersion
+  })
+  const activeIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    operation: makeActiveWorkAuthorityRefreshGitReadOperation(
+      worktreeOperation,
+      ActiveWorkAuthorityRefreshAuthority.make({ attemptId: coverageAttempt.attemptId, runId: coverageRunId }),
+      ActiveWorkAuthorityRefreshOrdinal.make(1)
+    ),
+    version: workflowJournalEventVersion
+  })
+  const currentGraphObservation = { event: coverageGraphEvent, position: JournalPosition.make(6) }
+  for (const [label, intent] of [
+    ["ordinary", ordinaryIntent],
+    ["active refresh", activeIntent]
+  ] as const) {
+    const decision = continuationDecisionFor(
+      coverageContinuationTransition,
+      recordsFor(intent),
+      currentGraphObservation,
+      Option.some(JournalPosition.make(5)),
+      Option.some(integrationTarget),
+      activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+      )
+    )
+    expect(decision.transition?._tag, label).toBe("ObservePlannedAttemptContinuationTargetLineage")
+  }
+})
+
+it("requires typed current-run provenance before replaying an active G1", () => {
+  const operationId = OperationId.make(`active-refresh:${coverageRunId}:after:18:graph`)
+  const historicalUnmarked = makeTrackerGraphObservationOperation(
+    operationId,
+    coverageTarget,
+    [coveragePlanOperation.operationId],
+    [coverageAttempt.taskId]
+  )
+  const activeG1 = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    operationId,
+    coverageTarget,
+    [coveragePlanOperation.operationId],
+    [coverageAttempt.taskId]
+  )
+  const activeRecords = [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(activeG1))]
+
+  // Pre-provenance journal records remain ordinary, even when their readable
+  // identity uses the old active-refresh prefix.
+  expect(
+    pendingActiveRefreshGraphReadFor(
+      [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(historicalUnmarked))],
+      coverageRunId,
+      coverageTarget,
+      [coverageAttempt]
+    )
+  ).toBeUndefined()
+
+  // A matching operation in another run cannot authorize this run's boundary.
+  expect(
+    pendingActiveRefreshGraphReadFor(
+      [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(activeG1), RunId.make("foreign-run"))],
+      coverageRunId,
+      coverageTarget,
+      [coverageAttempt]
+    )
+  ).toBeUndefined()
+  expect(pendingActiveRefreshGraphReadFor(activeRecords, coverageRunId, coverageTarget, [coverageAttempt])).toEqual(
+    activeG1
+  )
+})
+
+it("does not reuse an ordinary intent-only G2 as active refresh recovery after a crash", () => {
+  const ordinaryG2 = makeTrackerGraphObservationOperation(OperationId.make("ordinary-pending-g2"), coverageTarget, [
+    coverageGraphOperation.operationId
+  ])
+  const records = [coverageRecord(20, taskTrackerReadIntent(ordinaryG2))]
+  const currentGraph = { operationId: coverageGraphOperation.operationId, recordedAt: JournalPosition.make(6) }
+
+  // This is the journal prefix visible after a process dies with an ordinary
+  // G2 request outstanding. Its shape is intentionally the same as an active
+  // G2 except for the typed operation purpose.
+  expect(pendingActiveRefreshG2OperationFor(records, coverageRunId, coverageTarget, currentGraph)).toBeUndefined()
+
+  const activeG2 = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    ordinaryG2.operationId,
+    coverageTarget,
+    ordinaryG2.predecessorOperationIds
+  )
+  expect(
+    pendingActiveRefreshG2OperationFor(
+      [coverageRecord(20, taskTrackerReadIntent(activeG2))],
+      coverageRunId,
+      coverageTarget,
+      currentGraph
+    )
+  ).toEqual(activeG2)
+})
+
+it("requires each active refresh to reread authorities after its own activation baseline", () => {
+  const ready = PlannedWorktreeReady.make({
+    baseSha: coverageAttempt.baseSha,
+    branch: coverageAttempt.branch,
+    headSha: coverageAttempt.baseSha,
+    worktree: coverageAttempt.worktree
+  })
+  const firstRefreshFacts = continuationRecords(coverageClaimEvent, ready)
+    .filter(({ position }) => position > 4)
+    .map((record) => ({ ...record, position: JournalPosition.make(record.position + 6) }))
+  const records = [
+    ...coveragePlanRecords(),
+    executorReport(10, { _tag: "Running", correlation: plannedAttemptExecutorCorrelation(coverageAttempt) }),
+    ...firstRefreshFacts
+  ]
+  const firstRefresh = continuationDecisionFor(
+    coverageContinuationTransition,
+    records,
+    { event: coverageGraphEvent, position: JournalPosition.make(11) },
+    Option.some(JournalPosition.make(10)),
+    Option.none(),
+    activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    )
+  )
+  expect(firstRefresh).toEqual({})
+
+  // The next opportunity starts after the first refresh's worktree outcome.
+  // Its missing post-baseline graph cannot reuse the prior complete authority
+  // chain, so it must begin a new graph read before any executor action.
+  const secondRefresh = continuationDecisionFor(
+    coverageContinuationTransition,
+    records,
+    undefined,
+    Option.some(JournalPosition.make(15)),
+    Option.none(),
+    activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    )
+  )
+  expect(secondRefresh.transition).toMatchObject({
+    _tag: "ObservePlannedAttemptContinuationGraph",
+    operation: { operationId: OperationId.make(`continuation:${coverageAttempt.attemptId}:after:15:graph`) },
+    plannedAttempt: coverageAttempt
+  })
 })
 
 it("waits for integration configuration after an applied Continue choice has current ready facts", () => {

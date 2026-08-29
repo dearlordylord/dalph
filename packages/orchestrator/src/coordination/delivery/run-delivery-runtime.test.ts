@@ -6,6 +6,7 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -74,6 +75,8 @@ import { makeTestJournaledTrackerGraphObservation } from "../../../test/journale
 import {
   DeliveryRuntimeProposalOwnershipConflict,
   DeliveryRuntimeReconfirmationStateInvalid,
+  DeliveryRuntimePhase,
+  runDeliveryRuntimePhase,
   runDeliveryRuntime,
   type DeliveryRuntimeInput
 } from "./run-delivery-runtime.js"
@@ -140,6 +143,12 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/runtime-test/recovered")
 })
 
+const independentPlannedAttempt = PlannedTaskAttempt.make({
+  ...plannedAttempt,
+  attemptId: AttemptId.make("runtime-test-independent-attempt"),
+  taskId: TaskId.make("runtime-independent-task")
+})
+
 const proposal = (ordinal: number, taskId: TaskId): DeliveryActionProposal => ({
   ...trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(ordinal + 1),
@@ -183,14 +192,19 @@ const handoffProposal = (): DeliveryActionProposal => ({
 
 const recoveredProposalFor = (
   transition: RunnableFrontierTransition,
-  acceptedOperationIds = new Set<OperationId>()
+  acceptedOperationIds = new Set<OperationId>(),
+  attempt = plannedAttempt
 ) => {
   const proposals = deliveryProposalsOf({
     acceptedOperationIds,
     fresh: [],
     integrationResponsibilities: [],
     responsibilities: [
-      { _tag: "PlannedAttemptExecutorWorkResponsibility" as const, beganAt: JournalPosition.make(1), plannedAttempt }
+      {
+        _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+        beganAt: JournalPosition.make(1),
+        plannedAttempt: attempt
+      }
     ],
     runId,
     transitions: [transition]
@@ -1879,4 +1893,444 @@ it.effect(
       expect(yield* Ref.get(deferredCalls)).toBe(2)
       expect(yield* Ref.get(unrelatedCalls)).toBe(1)
     }).pipe(Effect.scoped)
+)
+
+it.effect("processes a changed frontier without a caller-supplied runtime boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const independentTaskId = TaskId.make("runtime-boundary-independent")
+      const graphProjection = projectTrackerSnapshot({
+        revision: "active-refresh-runtime-boundary",
+        tasks: [
+          { id: plannedAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+          { id: independentTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ]
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("active refresh boundary graph must be valid")
+      const acceptedAt = JournalPosition.make(10)
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("active-refresh-runtime-boundary-graph"),
+          recordedAt: acceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const firstProposal = proposal(0, plannedAttempt.taskId)
+      const independentProposal = proposal(1, independentTaskId)
+      const first = {
+        ...withProposals(
+          {
+            ...base,
+            acceptedAt,
+            current: { ...base.current, trackerGraph: graph },
+            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+          },
+          [firstProposal, independentProposal],
+          1
+        ),
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+      }
+      const relation = yield* dynamicEvaluationSignal(first)
+      const executorCalls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const executor = DeliveryActionExecutor.of({
+        execute: (action) =>
+          Effect.gen(function* () {
+            yield* Ref.update(executorCalls, (calls) => [...calls, action.proposal.id])
+            if (action.proposal.id === firstProposal.id) {
+              yield* relation.publish({
+                ...first,
+                acceptedAt: JournalPosition.make(11),
+                current: { ...first.current, trackerGraph: graph },
+                proposedActions: {
+                  _tag: "DeliveryProposalsAvailable",
+                  isolatedIssues: [],
+                  proposals: [independentProposal]
+                }
+              })
+            } else {
+              yield* relation.publish({
+                ...first,
+                acceptedAt: JournalPosition.make(12),
+                current: { ...first.current, trackerGraph: graph },
+                proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+              })
+            }
+            return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+          })
+      })
+
+      const result = yield* runDeliveryRuntimePhase(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor)
+      )
+
+      if (result._tag !== "TrackerReconfirmationQuiescence") {
+        return yield* Effect.die(`expected tracker reconfirmation, got ${result._tag}`)
+      }
+      expect(result.proposedActions.proposals).toEqual([])
+      expect(result.acceptedAt).toBe(JournalPosition.make(12))
+      expect(yield* Ref.get(executorCalls)).toEqual([firstProposal.id, independentProposal.id])
+      const latest = yield* relation.get
+      if (latest.proposedActions._tag !== "DeliveryProposalsAvailable") {
+        return yield* Effect.die("the current evaluation must retain its descriptive proposal frontier")
+      }
+      expect(latest.proposedActions.proposals).toEqual([])
+    })
+  )
+)
+
+it.effect("holds old-graph admission until G2 after direct safe or terminal settlement", () =>
+  Effect.gen(function* () {
+    const reports = [
+      PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId }
+      }),
+      PlannedAttemptExecutorReport.cases.Terminal.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        result: { _tag: "Completed" }
+      })
+    ] as const
+
+    for (const report of reports) {
+      const base = yield* baseEvaluation
+      const active = recoveredProposalFor(
+        RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+      )
+      const independent = recoveredProposalFor(
+        RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+          acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+          plannedAttempt: independentPlannedAttempt
+        }),
+        new Set(),
+        independentPlannedAttempt
+      )
+      const initial = {
+        ...withProposals(base, [active, independent], 2),
+        taskWork: {
+          capacity: TaskWorkCapacity.make(2),
+          held: [{ taskId: plannedAttempt.taskId, correlation: { attemptId: plannedAttempt.attemptId, runId } }]
+        }
+      }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const executor = DeliveryActionExecutor.of({
+        execute: (action) =>
+          Effect.gen(function* () {
+            yield* Ref.update(executed, (ids) => [...ids, action.proposal.id])
+            expect(action.proposal.id).toBe(active.id)
+            yield* relation.publish({
+              ...initial,
+              proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [independent] }
+            })
+            return {
+              _tag: "ExecutorReportPublished",
+              plannedAttempt,
+              proposalId: active.id,
+              report
+            } satisfies DeliveryActionResult
+          })
+      })
+      const result = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(Effect.provide(identityLayers), Effect.provideService(DeliveryActionExecutor, executor))
+
+      expect(result._tag).toBe("PassiveRuntimeQuiescence")
+      expect(yield* Ref.get(executed)).toEqual([active.id])
+    }
+  })
+)
+
+it.effect("rejects a captured active proposal after G2 before admitting independent work", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const active = recoveredProposalFor(
+        RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+      )
+      const independent = proposal(1, independentPlannedAttempt.taskId)
+      const acceptedAt = JournalPosition.make(10)
+      const graphProjection = projectTrackerSnapshot({
+        revision: "post-g2-active-suppression",
+        tasks: [plannedAttempt.taskId, independentPlannedAttempt.taskId].map((taskId) => ({
+          id: taskId,
+          lifecycle: { _tag: "Open" as const },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }))
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("post-G2 suppression graph must be valid")
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("post-g2-active-suppression-graph"),
+          recordedAt: acceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const relation = yield* dynamicEvaluationSignal({
+        ...withProposals(
+          {
+            ...base,
+            acceptedAt,
+            current: { ...base.current, trackerGraph: graph },
+            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+          },
+          [active, independent],
+          2
+        ),
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+        activeRefreshBoundary: {
+          _tag: "ActiveRefreshRuntimeBoundary" as const,
+          runId,
+          reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+        },
+        taskWork: {
+          capacity: TaskWorkCapacity.make(2),
+          held: [{ taskId: plannedAttempt.taskId, correlation: { runId, attemptId: plannedAttempt.attemptId } }]
+        }
+      })
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          Ref.update(executed, (current) => [...current, action.id]).pipe(
+            Effect.andThen(
+              relation.publish({
+                ...withProposals(
+                  {
+                    ...base,
+                    acceptedAt: JournalPosition.make(11),
+                    current: { ...base.current, trackerGraph: graph },
+                    quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+                  },
+                  [],
+                  2
+                ),
+                quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+                activeRefreshBoundary: {
+                  _tag: "ActiveRefreshRuntimeBoundary" as const,
+                  runId,
+                  reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+                },
+                taskWork: { capacity: TaskWorkCapacity.make(2), held: [] }
+              })
+            ),
+            Effect.as({ _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult)
+          )
+      })
+      const result = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(Effect.provide(identityLayers), Effect.provideService(DeliveryActionExecutor, executor))
+
+      expect(result._tag).toBe("TrackerReconfirmationQuiescence")
+      expect(yield* Ref.get(executed)).toEqual([independent.id])
+    })
+  )
+)
+
+it.effect("quiesces after G2 when retained active capacity cannot be freed locally", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const retainedTaskId = plannedAttempt.taskId
+      const independentTaskId = TaskId.make("runtime-post-g2-retained-independent")
+      const graphProjection = projectTrackerSnapshot({
+        revision: "post-g2-retained-capacity",
+        tasks: [
+          { id: retainedTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+          { id: independentTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ]
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("post-G2 retained graph must be valid")
+      const acceptedAt = JournalPosition.make(10)
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("post-g2-retained-graph"),
+          recordedAt: acceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const boundary = {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+      }
+      const independent = proposal(0, independentTaskId)
+      const initial = {
+        ...withProposals(
+          {
+            ...base,
+            acceptedAt,
+            current: { ...base.current, trackerGraph: graph },
+            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+          },
+          [independent],
+          1
+        ),
+        activeRefreshBoundary: boundary,
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+        taskWork: {
+          capacity: TaskWorkCapacity.make(1),
+          held: [{ taskId: retainedTaskId, correlation: { runId, attemptId: plannedAttempt.attemptId } }]
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const result = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: ({ proposal: action }) =>
+              Ref.update(executed, (current) => [...current, action.id]).pipe(
+                Effect.andThen(Effect.die("retained capacity must not admit independent work"))
+              )
+          })
+        )
+      )
+
+      expect(result._tag).toBe("TrackerReconfirmationQuiescence")
+      expect(result.proposedActions.proposals).toEqual([])
+      expect(yield* Ref.get(executed)).toEqual([])
+    })
+  )
+)
+
+it.effect("continues waiting after G2 while an in-flight action can free retained capacity", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const retainedTaskId = plannedAttempt.taskId
+      const independentTaskId = TaskId.make("runtime-post-g2-in-flight-independent")
+      const graphProjection = projectTrackerSnapshot({
+        revision: "post-g2-in-flight-capacity",
+        tasks: [
+          { id: retainedTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+          { id: independentTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ]
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("post-G2 in-flight graph must be valid")
+      const acceptedAt = JournalPosition.make(10)
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("post-g2-in-flight-graph"),
+          recordedAt: acceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const boundary = {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+      }
+      const active = proposal(0, retainedTaskId)
+      const independent = proposal(1, independentTaskId)
+      const initial = {
+        ...withProposals(
+          {
+            ...base,
+            acceptedAt,
+            current: { ...base.current, trackerGraph: graph },
+            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+          },
+          [active],
+          2
+        ),
+        activeRefreshBoundary: boundary,
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const activeStarted = yield* Deferred.make<void>()
+      const independentStarted = yield* Deferred.make<void>()
+      const finishActive = yield* Deferred.make<void>()
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          Effect.gen(function* () {
+            yield* Ref.update(executed, (current) => [...current, action.id])
+            if (action.id === active.id) {
+              yield* Deferred.succeed(activeStarted, undefined)
+              yield* relation.publish({
+                ...initial,
+                acceptedAt: JournalPosition.make(11),
+                proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [independent] },
+                taskWork: {
+                  capacity: TaskWorkCapacity.make(1),
+                  held: [{ taskId: retainedTaskId, correlation: { runId, attemptId: plannedAttempt.attemptId } }]
+                }
+              })
+              yield* Deferred.await(finishActive)
+              yield* relation.publish({
+                ...initial,
+                acceptedAt: JournalPosition.make(12),
+                proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [independent] },
+                taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
+              })
+              return { _tag: "ActionCompleted", proposalId: active.id } satisfies DeliveryActionResult
+            }
+            yield* Deferred.succeed(independentStarted, undefined)
+            yield* relation.publish({
+              ...initial,
+              acceptedAt: JournalPosition.make(13),
+              proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+              taskWork: { capacity: TaskWorkCapacity.make(1), held: [] }
+            })
+            return { _tag: "ActionCompleted", proposalId: independent.id } satisfies DeliveryActionResult
+          })
+      })
+      const runtime = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(Effect.provide(identityLayers), Effect.provideService(DeliveryActionExecutor, executor), Effect.forkChild)
+
+      yield* Deferred.await(activeStarted)
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(independentStarted)).toBe(false)
+      expect(yield* Ref.get(executed)).toEqual([active.id])
+      yield* Deferred.succeed(finishActive, undefined)
+      yield* Deferred.await(independentStarted)
+      expect(yield* Fiber.join(runtime)).toMatchObject({ _tag: "TrackerReconfirmationQuiescence" })
+      expect(yield* Ref.get(executed)).toEqual([active.id, independent.id])
+    })
+  )
+)
+
+it.effect("fails closed on a pre-G2 proposal ownership conflict", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
+    const conflicted = proposal(0, TaskId.make("pre-g2-conflict-task"))
+    const relation = yield* dynamicEvaluationSignal({
+      ...withProposals(base, [], 2),
+      activeRefreshBoundary: {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+      },
+      proposedActions: {
+        _tag: "DeliveryProposalOwnershipConflict" as const,
+        conflicts: [{ id: conflicted.id, order: conflicted.order, owners: ["TrackerGraph", "TicketDelivery"] as const }]
+      }
+    })
+
+    const failure = yield* runDeliveryRuntimePhase(
+      relation,
+      DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }])
+    ).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(
+        DeliveryActionExecutor,
+        DeliveryActionExecutor.of({ execute: () => Effect.die("conflict must fail before execution") })
+      ),
+      Effect.flip
+    )
+
+    expect(failure).toBeInstanceOf(DeliveryRuntimeProposalOwnershipConflict)
+    if (failure instanceof DeliveryRuntimeProposalOwnershipConflict) {
+      expect(failure.proposalIds).toEqual([conflicted.id])
+    }
+  })
 )

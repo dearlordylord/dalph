@@ -33,6 +33,7 @@ const operationIdFor = Effect.fn("DeliveryRuntime.materializeOperationId")(funct
   proposal: FreshOperationProposal
 ) {
   const source = proposal.actionIdentity.source
+  if (source._tag === "Preserve") return source.operationId
   if (source._tag === "TaskClaimReacquisitionRequest") {
     return taskClaimReacquisitionOperationId(source.requestId)
   }

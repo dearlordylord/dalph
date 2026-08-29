@@ -35,6 +35,7 @@ import {
 } from "../frontier/run-finality.js"
 import type { TaskWorkCapacity } from "../admission/capacity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { ActiveRefreshRuntimeBoundary } from "../run/recovery-activation.js"
 import type {
   DeliveryActionProposal,
   DeliveryProposalContributions,
@@ -523,6 +524,8 @@ export interface DeliveryRuntimeFacts {
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
   /** Durable cancellation direction reconstructed for every production Run. */
   readonly cancellationApplied: boolean
+  /** Typed active-refresh completion marker retained until the mandatory G2 read. */
+  readonly activeRefreshBoundary?: ActiveRefreshRuntimeBoundary
   readonly runId?: RunId
 }
 
@@ -561,6 +564,8 @@ export interface DeliveryRuntimeEvaluation {
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
   /** Durable cancellation direction reconstructed for every production Run. */
   readonly cancellationApplied: boolean
+  /** Typed active-refresh completion marker retained until the mandatory G2 read. */
+  readonly activeRefreshBoundary?: ActiveRefreshRuntimeBoundary
 }
 
 const trackerGraphOutcome = (graph: TrackerGraphState): "AllTasksSucceeded" | "Blocked" | "Unsettled" => {

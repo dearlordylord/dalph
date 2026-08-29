@@ -73,6 +73,21 @@ it.effect("rejects malformed payloads, unsupported versions, and invalid event s
       const issue = yield* decodeJournalEvent(encoded).pipe(Effect.flip)
       expect(issue._tag).toBe("JournalEventDecodeIssue")
     }
+
+    const currentEvent = taskTrackerReadIntent(
+      makeTrackerGraphObservationOperation(
+        OperationId.make("prior-version-read"),
+        FixtureTarget.make("fixture"),
+        [],
+        []
+      )
+    )
+    const previousVersion = {
+      ...encodeJournalEvent(currentEvent),
+      version: JournalEventVersion.make(workflowJournalEventVersion - 1)
+    }
+    const previousVersionIssue = yield* decodeJournalEvent(previousVersion).pipe(Effect.flip)
+    expect(previousVersionIssue._tag).toBe("JournalEventDecodeIssue")
   })
 )
 

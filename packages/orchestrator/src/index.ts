@@ -378,6 +378,7 @@ export {
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
+export * from "./workflow/protocols/active-work-authority-refresh/events.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
 export * from "./workflow/protocols/evidence-store.js"
@@ -600,6 +601,7 @@ export {
   type AcceptedRunReactivationObservers,
   JournaledRunReactivationObserverAlreadyRegistered,
   runWorkflowWithControlledDeliveryActionExecutor,
+  runWorkflowWithActiveWorkAuthorityRefresh,
   runWorkflow
 } from "./coordination/run/run.js"
 export {
@@ -610,6 +612,8 @@ export {
   type RunReactivationOwnerOptions,
   type RunReactivationOwnerService
 } from "./coordination/run/run-reactivation-owner.js"
+export { RunActivationOpportunity } from "./coordination/run/run-activation-opportunity.js"
+export type { RunActivationOpportunity as RunActivationOpportunityValue } from "./coordination/run/run-activation-opportunity.js"
 export {
   PauseNotApplied,
   PauseObservationRunMismatch,
@@ -815,6 +819,7 @@ export {
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
+  ActiveWorkAuthorityRefreshGitReadFailed,
   AttemptRestartAuthorityReadFailed,
   decodeWorkflowOccurrence,
   describeWorkflowOccurrence,
@@ -876,9 +881,12 @@ export {
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
+  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation,
+  ActiveWorkAuthorityRefreshTrackerGraphReadOperation,
   TaskClaimAcquisitionAuthority,
   TaskClaimReleaseAuthority,
+  TrackerGraphReadPurpose,
   WorkflowOperation,
   workflowOperationId
 } from "./workflow/registry/operation.js"

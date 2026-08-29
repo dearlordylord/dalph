@@ -16,8 +16,10 @@ import {
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
 import type { DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
-import { makeDeliveryRuntimeAdmissionLoop } from "./delivery-runtime-admission-loop.js"
-import type { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
+import {
+  makeDeliveryRuntimeAdmissionLoop,
+  DeliveryRuntimeProposalOwnershipConflict
+} from "./delivery-runtime-admission-loop.js"
 import {
   attachCurrentSignal,
   type CurrentSignal,
@@ -33,8 +35,14 @@ import type { PlannedAttemptProtocolController } from "../../workflow/protocols/
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
 import { proposalIsPresent } from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
+import {
+  DeliveryRuntimePhase,
+  evaluationForPhase,
+  type DeliveryRuntimePhase as DeliveryRuntimePhaseType
+} from "./delivery-runtime-phase.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
+export * from "./delivery-runtime-phase.js"
 
 /** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
 export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedError<DeliveryRuntimeReconfirmationStateInvalid>()(
@@ -80,6 +88,8 @@ export type DeliveryRuntimeQuiescence =
       readonly current: DeliveryRuntimeSnapshot
       readonly disposition: Extract<DeliveryQuiescenceDisposition, { readonly _tag: "QuiescencePassive" }>
       readonly proposedActions: EmptyProposalFrontier
+      /** Active-refresh completion survives this quiescence until stabilization performs G2. */
+      readonly activeRefreshBoundary?: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]>
     }
   | {
       readonly _tag: "TrackerReconfirmationQuiescence"
@@ -87,6 +97,8 @@ export type DeliveryRuntimeQuiescence =
       readonly current: EstablishedRuntimeSnapshot
       readonly disposition: Extract<DeliveryQuiescenceDisposition, { readonly _tag: "TrackerReconfirmationAllowed" }>
       readonly proposedActions: EmptyProposalFrontier
+      /** Active-refresh completion survives this quiescence until stabilization performs G2. */
+      readonly activeRefreshBoundary?: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]>
     }
 
 /**
@@ -105,7 +117,8 @@ export type DeliveryRuntimeQuiescence =
  * single highest-value model in the study.
  */
 export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
-  relation: DeliveryRuntimeInput<E>
+  relation: DeliveryRuntimeInput<E>,
+  phase: DeliveryRuntimePhaseType = DeliveryRuntimePhase.Ordinary
 ): Effect.fn.Return<
   DeliveryRuntimeQuiescence,
   | E
@@ -140,7 +153,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
       const attachment = yield* attachCurrentSignal(relation)
-      const first = attachment.current
+      const first = evaluationForPhase(phase, attachment.current)
       yield* Ref.set(latest, Option.some(first))
       yield* runtimeObservation.publish(first, [])
       const admission = yield* resources.makeAdmissionController(first.taskWork)
@@ -248,21 +261,32 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const applyEvaluation = Effect.fn("DeliveryRuntime.applyEvaluation")(function* (
         evaluation: DeliveryRuntimeEvaluation
       ) {
+        const phaseEvaluation = evaluationForPhase(phase, evaluation)
         yield* selectionGate.withPermit(
           Effect.gen(function* () {
-            yield* Ref.set(latest, Option.some(evaluation))
+            const current = Option.getOrThrow(yield* Ref.get(latest))
+            // Relation refreshes can be queued behind a newer journal publication while an action is settling.
+            // Never let that older frontier resurrect an already-observed operation or its stale proposal.
+            if (
+              current.acceptedAt !== null &&
+              (phaseEvaluation.acceptedAt === null || phaseEvaluation.acceptedAt < current.acceptedAt)
+            ) {
+              return
+            }
+            yield* Ref.set(latest, Option.some(phaseEvaluation))
             yield* Ref.update(
               deferredAt,
               (current) =>
                 new Map(
                   [...current].filter(
                     ([proposalId, acceptedAt]) =>
-                      acceptedAt === evaluation.acceptedAt && proposalIsPresent(evaluation.proposedActions, proposalId)
+                      acceptedAt === phaseEvaluation.acceptedAt &&
+                      proposalIsPresent(phaseEvaluation.proposedActions, proposalId)
                   )
                 )
             )
-            yield* admission.synchronize(evaluation.taskWork)
-            yield* admissionLoop.pruneSettledOwners(evaluation.proposedActions)
+            yield* admission.synchronize(phaseEvaluation.taskWork)
+            yield* admissionLoop.pruneSettledOwners(phaseEvaluation.proposedActions)
             yield* publishRuntimeObservationInsideGate()
           })
         )
@@ -320,10 +344,11 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         live: ReadonlyMap<DeliveryProposalId, LiveOwner>
       ) {
         const proposedActions = current.proposedActions
-        /* v8 ignore start -- admitPass rejects a conflicting frontier before finality is evaluated. */
-        if (proposedActions._tag === "DeliveryProposalOwnershipConflict")
-          return Option.none<DeliveryRuntimeQuiescence>()
-        /* v8 ignore stop */
+        if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+          return yield* new DeliveryRuntimeProposalOwnershipConflict({
+            proposalIds: proposedActions.conflicts.map(({ id }) => id)
+          })
+        }
         const deferred = yield* Ref.get(deferredAt)
         // An action deferred against these exact accepted facts has released its owner and cannot run again
         // until a later accepted journal position clears that deferral. Its retained proposal must not prevent
@@ -331,7 +356,35 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const everyProposalAwaitsChangedAcceptedFacts = proposedActions.proposals.every(
           ({ id }) => deferred.get(id) === current.acceptedAt
         )
-        if (live.size !== 0 || !everyProposalAwaitsChangedAcceptedFacts) {
+        const activeRefreshG2Pending =
+          phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
+        /**
+         * After G2, an active refresh may deliberately retain a Running
+         * executor position while the relation exposes independent work. If
+         * that position fills the whole configured capacity and no local
+         * action owner remains, waiting for another runtime event cannot free
+         * it: the retained executor responsibility is outside this phase.
+         * Return an unsettled quiescence while leaving the proposal in the
+         * descriptive relation so a later ordinary activation can retry it.
+         */
+        const postG2RetainedCapacityBlocks =
+          phase._tag === "ActiveRefreshPostG2RuntimePhase" &&
+          current.activeRefreshBoundary !== undefined &&
+          current.taskWork.held.length >= Number(current.taskWork.capacity) &&
+          current.taskWork.held.every(({ correlation }) =>
+            current.activeRefreshBoundary?.reconciledAttempts.some(
+              (subject) => subject.runId === correlation.runId && subject.attemptId === correlation.attemptId
+            )
+          ) &&
+          proposedActions.proposals.length > 0 &&
+          proposedActions.proposals.every(
+            ({ admission: { taskWorkPosition } }) =>
+              taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
+          )
+        if (
+          live.size !== 0 ||
+          (!activeRefreshG2Pending && !everyProposalAwaitsChangedAcceptedFacts && !postG2RetainedCapacityBlocks)
+        ) {
           return Option.none<DeliveryRuntimeQuiescence>()
         }
         const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }
@@ -341,7 +394,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             acceptedAt: current.acceptedAt,
             current: current.current,
             disposition: current.quiescence,
-            proposedActions: empty
+            proposedActions: empty,
+            ...(current.activeRefreshBoundary === undefined
+              ? {}
+              : { activeRefreshBoundary: current.activeRefreshBoundary })
           }
           return Option.some(quiescence)
         }
@@ -357,7 +413,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           acceptedAt: current.acceptedAt,
           current: { ...current.current, trackerGraph: graph },
           disposition: current.quiescence,
-          proposedActions: empty
+          proposedActions: empty,
+          ...(current.activeRefreshBoundary === undefined
+            ? {}
+            : { activeRefreshBoundary: current.activeRefreshBoundary })
         }
         return Option.some(quiescence)
       })
@@ -373,16 +432,20 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       })
 
       for (;;) {
-        while (yield* admissionLoop.admitPass()) yield* Effect.yieldNow
-
         const current = Option.getOrThrow(yield* Ref.get(latest))
+        const activeRefreshG2Pending =
+          phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
+        if (!activeRefreshG2Pending) {
+          while (yield* admissionLoop.admitPass()) yield* Effect.yieldNow
+        }
+
+        const currentAfterAdmission = Option.getOrThrow(yield* Ref.get(latest))
         const live = yield* Ref.get(owners)
-        const quiescence = yield* runtimeQuiescence(current, live)
+        const quiescence = yield* runtimeQuiescence(currentAfterAdmission, live)
         if (Option.isSome(quiescence)) {
           yield* publishRuntimeObservation()
           return quiescence.value
         }
-
         yield* applyRuntimeEvent(yield* Queue.take(events))
       }
     })

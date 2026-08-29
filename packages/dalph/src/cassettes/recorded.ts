@@ -88,6 +88,13 @@ import {
   type RecordedGitObservationEntry
 } from "./recorded-git-observation-mapping.js"
 import {
+  eventForActiveWorkAuthorityRefreshGitReadFailedEntry,
+  isActiveWorkAuthorityRefreshGitReadFailedEvent,
+  isRecordedActiveWorkAuthorityRefreshGitReadFailedEntry,
+  lyricForActiveWorkAuthorityRefreshGitReadFailedEntry,
+  recordActiveWorkAuthorityRefreshGitReadFailedEntry
+} from "./recorded-active-work-authority-refresh-mapping.js"
+import {
   eventForRunEntry,
   isJournalRunEntry,
   isRecordedRunEntry,
@@ -505,10 +512,17 @@ const isTaskBoundaryEvent = (event: WorkflowJournalEvent): event is TaskBoundary
 
 type GitObservationEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "GitReadIntentRecorded" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
+  {
+    readonly _tag:
+      | "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
+      | "GitReadIntentRecorded"
+      | "PlannedAttemptWorktreeObserved"
+      | "TargetLineageObserved"
+  }
 >
 
 const gitObservationEventTags = {
+  ActiveWorkAuthorityRefreshGitReadIntentRecorded: true,
   GitReadIntentRecorded: true,
   PlannedAttemptWorktreeObserved: true,
   TargetLineageObserved: true
@@ -910,6 +924,7 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
       requestId: value.requestId,
       subject: value.subject
     })),
+    Match.when(isActiveWorkAuthorityRefreshGitReadFailedEvent, recordActiveWorkAuthorityRefreshGitReadFailedEntry),
     Match.when(isIntegrationPreparationEvent, recordIntegrationPreparationEntry),
     Match.when(isGitObservationEvent, recordGitObservationEntry),
     Match.when(isTrackerEvent, recordTrackerEntry),
@@ -1429,6 +1444,10 @@ const eventForOtherRecordedEntry = (
     Match.when(isRecordedAttemptRestartAuthorityReadFailedEntry, (value) =>
       AttemptRestartAuthorityReadFailedEvent.make({ ...value, version: workflowJournalEventVersion })
     ),
+    Match.when(
+      isRecordedActiveWorkAuthorityRefreshGitReadFailedEntry,
+      eventForActiveWorkAuthorityRefreshGitReadFailedEntry
+    ),
     Match.when(isRecordedOuterIntegratorEntry, eventForOuterIntegratorEntry),
     Match.when(isRecordedIntegrationQuarantineEntry, eventForIntegrationQuarantineEntry),
     Match.when(isRecordedIntegrationPreparationEntry, eventForIntegrationPreparationEntry),
@@ -1765,6 +1784,9 @@ type RecordedPresentationResidualEntry = Exclude<
 >
 
 const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string => {
+  if (isRecordedActiveWorkAuthorityRefreshGitReadFailedEntry(entry)) {
+    return lyricForActiveWorkAuthorityRefreshGitReadFailedEntry(entry)
+  }
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)
