@@ -691,6 +691,7 @@ it.effect("shares one active graph read across Running attempts before their own
     if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("expected one shared active graph read")
     }
+    expect(graphRead.operation.purpose).toBe("ActiveWorkAuthorityRefresh")
     expect(graphRead.operation.readShape.explicitlyCoveredTaskIds).toEqual(
       [independentTaskId, taskId].toSorted((left, right) => left.localeCompare(right))
     )

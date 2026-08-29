@@ -145,6 +145,7 @@ import {
   filterFrontierForActivePauses,
   frontierForActivationOpportunity,
   makeRunRecoveryProjection,
+  pendingActiveRefreshGraphReadFor,
   pendingActiveRefreshG2OperationFor,
   safelySuspendedAttemptMayContinue,
   taskPauseSuspensionIsOwed
@@ -2172,6 +2173,47 @@ it("correlates ordinary and active-refresh Git intents before requesting lineage
     )
     expect(decision.transition?._tag, label).toBe("ObservePlannedAttemptContinuationTargetLineage")
   }
+})
+
+it("requires typed current-run provenance before replaying an active G1", () => {
+  const operationId = OperationId.make(`active-refresh:${coverageRunId}:after:18:graph`)
+  const historicalUnmarked = makeTrackerGraphObservationOperation(
+    operationId,
+    coverageTarget,
+    [coveragePlanOperation.operationId],
+    [coverageAttempt.taskId]
+  )
+  const activeG1 = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    operationId,
+    coverageTarget,
+    [coveragePlanOperation.operationId],
+    [coverageAttempt.taskId]
+  )
+  const activeRecords = [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(activeG1))]
+
+  // Pre-provenance journal records remain ordinary, even when their readable
+  // identity uses the old active-refresh prefix.
+  expect(
+    pendingActiveRefreshGraphReadFor(
+      [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(historicalUnmarked))],
+      coverageRunId,
+      coverageTarget,
+      [coverageAttempt]
+    )
+  ).toBeUndefined()
+
+  // A matching operation in another run cannot authorize this run's boundary.
+  expect(
+    pendingActiveRefreshGraphReadFor(
+      [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(activeG1), RunId.make("foreign-run"))],
+      coverageRunId,
+      coverageTarget,
+      [coverageAttempt]
+    )
+  ).toBeUndefined()
+  expect(pendingActiveRefreshGraphReadFor(activeRecords, coverageRunId, coverageTarget, [coverageAttempt])).toEqual(
+    activeG1
+  )
 })
 
 it("does not reuse an ordinary intent-only G2 as active refresh recovery after a crash", () => {

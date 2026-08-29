@@ -101,6 +101,7 @@ import {
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
@@ -2391,8 +2392,6 @@ type TrackerGraphReadIntentRecord = Omit<JournalRecord, "event"> & {
 const sameStringSequence = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
   left.length === right.length && left.every((operationId, index) => operationId === right[index])
 
-const activeRefreshGraphOperationPrefixFor = (runId: RunId): string => `active-refresh:${runId}:after:`
-
 const trackerGraphReadHasOutcome = (records: ReadonlyArray<JournalRecord>, operationId: OperationId): boolean =>
   records.some(({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId)
 
@@ -2447,10 +2446,13 @@ export const pendingActiveRefreshG2OperationFor = (
  * Reuses the exact graph operation whose active-refresh intent survived a
  * process boundary. The current journal position is not an operation
  * identity: appending the intent necessarily moves it. This first active
- * graph read keeps its established deterministic identity; its covered task
- * set and plan predecessors identify the selected active subjects.
+ * graph read keeps its established deterministic identity; its typed purpose,
+ * current run record, covered task set, target, and plan predecessors identify
+ * the selected active subjects. Historical graph intents without that purpose
+ * are ordinary reads and fail closed here, even when their human-readable
+ * operation ID uses the active-refresh prefix.
  */
-const pendingActiveRefreshGraphReadFor = (
+export const pendingActiveRefreshGraphReadFor = (
   records: ReadonlyArray<JournalRecord>,
   runId: RunId,
   target: NonNullable<ReturnType<typeof continuationTarget>>,
@@ -2466,7 +2468,8 @@ const pendingActiveRefreshGraphReadFor = (
   return records.findLast((record): record is TrackerGraphReadIntentRecord => {
     const { event } = record
     if (event._tag !== "TaskTrackerReadIntentRecorded" || event.operation._tag !== "ReadTrackerGraph") return false
-    if (!event.operation.operationId.startsWith(activeRefreshGraphOperationPrefixFor(runId))) return false
+    if (record.runId !== runId) return false
+    if (event.operation.purpose !== "ActiveWorkAuthorityRefresh") return false
     if (trackerGraphReadHasOutcome(records, event.operation.operationId)) return false
     if (taskTrackerTargetKey(event.operation.target) !== taskTrackerTargetKey(target)) return false
     if (!sameStringSequence([...event.operation.readShape.explicitlyCoveredTaskIds].toSorted(), expectedTaskIds)) {
@@ -2521,7 +2524,7 @@ const activeRefreshGraphReadSelectionFor = (
     baseline,
     operation:
       pendingOperation ??
-      makeTrackerGraphObservationOperation(
+      makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
         OperationId.make(`active-refresh:${runState.runId}:after:${baseline}:graph`),
         target,
         predecessorOperationIds,

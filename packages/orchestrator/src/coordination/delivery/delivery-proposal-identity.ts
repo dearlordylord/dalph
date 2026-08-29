@@ -35,7 +35,13 @@ export const recoveredIdentityFor = (
   ) {
     return { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: preselectedOperationId } }
   }
-  if (action._tag === "ReadTrackerGraph" && preselectedOperationId?.startsWith("active-refresh:")) {
+  // The active-refresh prefix is a human-readable allocator identity only;
+  // typed operation provenance authorizes preserving this graph boundary.
+  if (
+    action._tag === "ReadTrackerGraph" &&
+    preselectedOperationId !== undefined &&
+    action.operation.purpose === "ActiveWorkAuthorityRefresh"
+  ) {
     return { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: preselectedOperationId } }
   }
   return { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } }
