@@ -22,12 +22,35 @@ const TaskGraphReadShape = Schema.TaggedUnion({
   CompleteTargetClosure: { explicitlyCoveredTaskIds: Schema.Array(TaskIdSchema).check(Schema.isUnique()) }
 })
 
-const ReadTrackerGraphOperation = Schema.TaggedStruct("ReadTrackerGraph", {
+/** The durable protocol purpose for one complete tracker-graph read. */
+export const TrackerGraphReadPurpose = Schema.Literals(["Ordinary", "ActiveWorkAuthorityRefresh"])
+export type TrackerGraphReadPurpose = typeof TrackerGraphReadPurpose.Type
+
+/** An ordinary graph read, including historical records written before purpose was explicit. */
+const OrdinaryReadTrackerGraphOperation = Schema.TaggedStruct("ReadTrackerGraph", {
   operationId: OperationId,
   predecessorOperationIds: CausalPredecessorOperationIds,
   readShape: TaskGraphReadShape,
+  target: TrackerTargetSchema,
+  /** Purpose is optional only for decoding pre-provenance journal records. */
+  purpose: Schema.optionalKey(Schema.Literal("Ordinary"))
+})
+
+/** The complete graph read used as the active-work refresh stabilization boundary. */
+export const ActiveWorkAuthorityRefreshTrackerGraphReadOperation = Schema.TaggedStruct("ReadTrackerGraph", {
+  operationId: OperationId,
+  predecessorOperationIds: CausalPredecessorOperationIds,
+  purpose: Schema.Literal("ActiveWorkAuthorityRefresh"),
+  readShape: TaskGraphReadShape,
   target: TrackerTargetSchema
 })
+export type ActiveWorkAuthorityRefreshTrackerGraphReadOperation =
+  typeof ActiveWorkAuthorityRefreshTrackerGraphReadOperation.Type
+
+const ReadTrackerGraphOperation = Schema.Union([
+  OrdinaryReadTrackerGraphOperation,
+  ActiveWorkAuthorityRefreshTrackerGraphReadOperation
+])
 
 const withoutSelfPredecessor = <
   A extends { readonly operationId: OperationId; readonly predecessorOperationIds: ReadonlyArray<OperationId> }
@@ -261,20 +284,55 @@ export const causalGraphProjection = (operations: ReadonlyArray<WorkflowOperatio
 const canonicalPredecessors = (predecessorOperationIds: ReadonlyArray<OperationId>) =>
   [...new Set(predecessorOperationIds)].sort(compareOperationIds)
 
-export const makeTrackerGraphObservationOperation = (
+export function makeTrackerGraphObservationOperation(
+  operationId: OperationId,
+  target: TrackerTarget,
+  predecessorOperationIds: ReadonlyArray<OperationId>,
+  explicitlyCoveredTaskIds: ReadonlyArray<TaskId>,
+  purpose: "ActiveWorkAuthorityRefresh"
+): ActiveWorkAuthorityRefreshTrackerGraphReadOperation
+export function makeTrackerGraphObservationOperation(
+  operationId: OperationId,
+  target: TrackerTarget,
+  predecessorOperationIds?: ReadonlyArray<OperationId>,
+  explicitlyCoveredTaskIds?: ReadonlyArray<TaskId>,
+  purpose?: "Ordinary"
+): typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+export function makeTrackerGraphObservationOperation(
   operationId: OperationId,
   target: TrackerTarget,
   predecessorOperationIds: ReadonlyArray<OperationId> = [],
-  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = []
-): typeof WorkflowOperation.cases.ReadTrackerGraph.Type =>
-  WorkflowOperation.cases.ReadTrackerGraph.make({
+  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [],
+  purpose: TrackerGraphReadPurpose = "Ordinary"
+): typeof WorkflowOperation.cases.ReadTrackerGraph.Type {
+  const fields = {
     operationId,
     predecessorOperationIds: canonicalPredecessors(predecessorOperationIds),
     readShape: TaskGraphReadShape.cases.CompleteTargetClosure.make({
       explicitlyCoveredTaskIds: [...new Set(explicitlyCoveredTaskIds)].sort()
     }),
     target
-  })
+  }
+  if (purpose === "ActiveWorkAuthorityRefresh") {
+    return ActiveWorkAuthorityRefreshTrackerGraphReadOperation.make({ ...fields, purpose })
+  }
+  return OrdinaryReadTrackerGraphOperation.make({ ...fields })
+}
+
+/** Constructs the active-refresh graph operation without changing its allocated identity. */
+export const makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation = (
+  operationId: OperationId,
+  target: TrackerTarget,
+  predecessorOperationIds: ReadonlyArray<OperationId> = [],
+  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = []
+): ActiveWorkAuthorityRefreshTrackerGraphReadOperation =>
+  makeTrackerGraphObservationOperation(
+    operationId,
+    target,
+    predecessorOperationIds,
+    explicitlyCoveredTaskIds,
+    "ActiveWorkAuthorityRefresh"
+  )
 
 export const makeTaskWorkSpecificationObservationOperation = (
   operationId: OperationId,

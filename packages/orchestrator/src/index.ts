@@ -881,9 +881,12 @@ export {
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
+  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation,
+  ActiveWorkAuthorityRefreshTrackerGraphReadOperation,
   TaskClaimAcquisitionAuthority,
   TaskClaimReleaseAuthority,
+  TrackerGraphReadPurpose,
   WorkflowOperation,
   workflowOperationId
 } from "./workflow/registry/operation.js"

@@ -43,6 +43,7 @@ import {
   makeTargetLineageObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
+  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
@@ -144,6 +145,7 @@ import {
   filterFrontierForActivePauses,
   frontierForActivationOpportunity,
   makeRunRecoveryProjection,
+  pendingActiveRefreshG2OperationFor,
   safelySuspendedAttemptMayContinue,
   taskPauseSuspensionIsOwed
 } from "./recovery-activation.js"
@@ -2170,6 +2172,33 @@ it("correlates ordinary and active-refresh Git intents before requesting lineage
     )
     expect(decision.transition?._tag, label).toBe("ObservePlannedAttemptContinuationTargetLineage")
   }
+})
+
+it("does not reuse an ordinary intent-only G2 as active refresh recovery after a crash", () => {
+  const ordinaryG2 = makeTrackerGraphObservationOperation(OperationId.make("ordinary-pending-g2"), coverageTarget, [
+    coverageGraphOperation.operationId
+  ])
+  const records = [coverageRecord(20, taskTrackerReadIntent(ordinaryG2))]
+  const currentGraph = { operationId: coverageGraphOperation.operationId, recordedAt: JournalPosition.make(6) }
+
+  // This is the journal prefix visible after a process dies with an ordinary
+  // G2 request outstanding. Its shape is intentionally the same as an active
+  // G2 except for the typed operation purpose.
+  expect(pendingActiveRefreshG2OperationFor(records, coverageRunId, coverageTarget, currentGraph)).toBeUndefined()
+
+  const activeG2 = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    ordinaryG2.operationId,
+    coverageTarget,
+    ordinaryG2.predecessorOperationIds
+  )
+  expect(
+    pendingActiveRefreshG2OperationFor(
+      [coverageRecord(20, taskTrackerReadIntent(activeG2))],
+      coverageRunId,
+      coverageTarget,
+      currentGraph
+    )
+  ).toEqual(activeG2)
 })
 
 it("requires each active refresh to reread authorities after its own activation baseline", () => {

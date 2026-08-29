@@ -571,6 +571,18 @@ it.effect("replays an intent-only G2 after a crash and allocates a fresh identit
       expect(firstAttempt._tag).toBe("Failure")
       expect(yield* Ref.get(allocated)).toEqual([OperationId.make("g2-crash-fresh-0")])
       const afterCrash = yield* Ref.get(records)
+      const replayableActiveIntent = afterCrash.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.operationId === OperationId.make("g2-crash-fresh-0")
+      )
+      expect(
+        replayableActiveIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+          replayableActiveIntent.event.operation._tag === "ReadTrackerGraph"
+          ? replayableActiveIntent.event.operation.purpose
+          : undefined
+      ).toBe("ActiveWorkAuthorityRefresh")
       expect(
         afterCrash
           .filter(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
@@ -621,6 +633,18 @@ it.effect("replays an intent-only G2 after a crash and allocates a fresh identit
         OperationId.make("g2-crash-fresh-1")
       ])
       const finalRecords = yield* Ref.get(records)
+      const freshActiveIntent = finalRecords.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.operationId === OperationId.make("g2-crash-fresh-1")
+      )
+      expect(
+        freshActiveIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+          freshActiveIntent.event.operation._tag === "ReadTrackerGraph"
+          ? freshActiveIntent.event.operation.purpose
+          : undefined
+      ).toBe("ActiveWorkAuthorityRefresh")
       expect(
         finalRecords
           .filter(({ event }) => event._tag === "TaskTrackerFactsObserved")

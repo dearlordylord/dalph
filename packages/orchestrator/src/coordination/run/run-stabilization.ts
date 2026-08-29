@@ -13,7 +13,10 @@ import {
 } from "../frontier/run-finality.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
-import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import {
+  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { InRunJournal, type InRunJournalService, type JournalRecord } from "../../workflow-journal/store.js"
@@ -234,7 +237,13 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
           const operationId = yield* allocator.allocate()
           const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
           const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
-          return makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
+          return opportunity._tag === "ActiveWorkAuthorityRefresh"
+            ? makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+                operationId,
+                target,
+                predecessorOperationIds
+              )
+            : makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
         }))
       const operationId = operation.operationId
       const accepted = yield* executeTrackerGraphRead(operation).pipe(

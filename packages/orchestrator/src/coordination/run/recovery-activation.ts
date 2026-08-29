@@ -2416,6 +2416,7 @@ export const pendingActiveRefreshG2OperationFor = (
       record.runId !== runId ||
       event._tag !== "TaskTrackerReadIntentRecorded" ||
       event.operation._tag !== "ReadTrackerGraph" ||
+      event.operation.purpose !== "ActiveWorkAuthorityRefresh" ||
       record.position <= currentGraph.recordedAt ||
       taskTrackerTargetKey(event.operation.target) !== taskTrackerTargetKey(target) ||
       event.operation.readShape.explicitlyCoveredTaskIds.length !== 0 ||
@@ -2445,11 +2446,9 @@ export const pendingActiveRefreshG2OperationFor = (
 /**
  * Reuses the exact graph operation whose active-refresh intent survived a
  * process boundary. The current journal position is not an operation
- * identity: appending the intent necessarily moves it. The operation prefix
- * is the existing process-local marker for the active graph boundary; the
- * target, covered task set, and plan predecessors make the match exact for
- * this activation's captured subjects and prevent an ordinary continuation
- * read from being mistaken for an active refresh.
+ * identity: appending the intent necessarily moves it. This first active
+ * graph read keeps its established deterministic identity; its covered task
+ * set and plan predecessors identify the selected active subjects.
  */
 const pendingActiveRefreshGraphReadFor = (
   records: ReadonlyArray<JournalRecord>,

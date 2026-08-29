@@ -58,6 +58,7 @@ import {
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTargetLineageObservationOperation,
+  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
@@ -750,7 +751,7 @@ it.effect("retains the active boundary while a pending G2 intent awaits replay",
       [],
       [taskId, independentTaskId]
     )
-    const pendingG2Operation = makeTrackerGraphObservationOperation(
+    const pendingG2Operation = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
       OperationId.make("opaque-g2-after-active-graph"),
       target,
       [graphOperation.operationId]
