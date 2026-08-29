@@ -2555,6 +2555,8 @@ module taskFactReconciliation {
     state.executorEvidence == ExactSafelySuspended,
     state' = {
       ...state,
+      authorityReadPurpose: OrdinaryContinuationRead,
+      refreshSource: NoRefreshSource,
       executorEvidence: ExactRunning,
       quiescenceUnbroken: false,
       positionHeld: true,

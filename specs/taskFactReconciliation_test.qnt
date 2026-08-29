@@ -16,6 +16,23 @@ module taskFactReconciliationTest {
       .expect(state.factDecision == ContinueWork and changedFactsPreserveWip)
   }
 
+  run lifecycleReopenReestablishmentResetsRefreshProvenanceTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTimer)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(establishRunningAttemptForActiveRefresh)
+      .expect(and {
+        activeWorkRunningEstablishmentRetainsAuthority,
+        state.authorityReadPurpose == OrdinaryContinuationRead,
+        state.refreshSource == NoRefreshSource,
+        state.executorEvidence == ExactRunning,
+        state.positionHeld,
+      })
+  }
+
   run membershipLossWaitsAfterSafeSuspensionTest = {
     init
       .then(observeMembershipLoss)
