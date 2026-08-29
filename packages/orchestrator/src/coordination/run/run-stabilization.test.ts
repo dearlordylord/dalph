@@ -4,9 +4,13 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
   RunId,
+  TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
+  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
@@ -28,7 +32,11 @@ import {
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
-import { DeliveryActionExecutor, type DeliveryActionExecutorService } from "../delivery/delivery-action-executor.js"
+import {
+  DeliveryActionExecutor,
+  DeliverySemanticTrace,
+  type DeliveryActionExecutorService
+} from "../delivery/delivery-action-executor.js"
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
 import { FreshWorkflowStep } from "../delivery/fresh-workflow-step.js"
 import { frontierOf } from "../delivery/ticket-delivery-projection.js"
@@ -182,6 +190,41 @@ const freshGraphReadProposal = (
     transitions: [transition]
   }).ticketDelivery[0]
   if (proposal === undefined) throw new Error("fixture transition must derive one graph-read proposal")
+  return proposal
+}
+
+const activeVerticalTaskA = TaskId.make("active-vertical-A")
+const activeVerticalTaskB = TaskId.make("active-vertical-B")
+const activeVerticalAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("active-vertical-attempt-A"),
+  baseSha: GitCommitSha.make("2".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/active-vertical-A"),
+  executor: TaskExecutorLocator.make("executor:active-vertical-A"),
+  runId,
+  taskId: activeVerticalTaskA,
+  taskRevision: TaskRevision.make("active-vertical-A-revision"),
+  worktree: WorktreeLocator.make("/stabilization/active-vertical-A")
+})
+
+const activeVerticalSuspensionProposal = () => {
+  const transition = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({
+    plannedAttempt: activeVerticalAttempt
+  })
+  const proposal = deliveryProposalsOf({
+    acceptedAt: JournalPosition.make(1),
+    acceptedOperationIds: new Set(),
+    fresh: [],
+    responsibilities: [
+      {
+        _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+        beganAt: JournalPosition.make(1),
+        plannedAttempt: activeVerticalAttempt
+      }
+    ],
+    runId,
+    transitions: [transition]
+  }).ticketDelivery[0]
+  if (proposal === undefined) return expect.fail("fixture transition must derive one active suspension proposal")
   return proposal
 }
 
@@ -399,6 +442,152 @@ it.effect("active refresh performs mandatory G2 once after its typed completion 
       expect(yield* Ref.get(reads)).toBe(1)
       expect(yield* Ref.get(executions)).toBe(0)
       expect(proof.acceptedAt).toBe(JournalPosition.make(4))
+    })
+  )
+)
+
+it.effect("holds an actual independent fresh route until G2 after direct safe or terminal A settlement", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const reports = [
+        PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+          correlation: { attemptId: activeVerticalAttempt.attemptId, runId }
+        }),
+        PlannedAttemptExecutorReport.cases.Terminal.make({
+          correlation: { attemptId: activeVerticalAttempt.attemptId, runId },
+          result: { _tag: "Completed" }
+        })
+      ] as const
+
+      for (const report of reports) {
+        const base = yield* baseEvaluation
+        const g1 = graph(
+          `active-vertical-${report._tag}-G1`,
+          1,
+          snapshot(`active-vertical-${report._tag}-G1`, [
+            { id: activeVerticalTaskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+            { id: activeVerticalTaskB, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+          ])
+        )
+        const activeProposal = activeVerticalSuspensionProposal()
+        const preG2Independent = freshGraphReadProposal(g1, activeVerticalTaskB)
+        expect(preG2Independent.route._tag).toBe("FreshWorkflowRoute")
+        const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
+          _tag: "ActiveRefreshRuntimeBoundary" as const,
+          runId,
+          reconciledAttempts: [{ runId, attemptId: activeVerticalAttempt.attemptId }]
+        }
+        const capacityTwo = TaskWorkCapacity.make(2)
+        const initial = {
+          ...withRunFacts(
+            evaluation(base, g1, { ...emptyFrontier, proposals: [activeProposal, preG2Independent] }),
+            false
+          ),
+          taskWork: {
+            capacity: capacityTwo,
+            held: [
+              {
+                taskId: activeVerticalAttempt.taskId,
+                correlation: { attemptId: activeVerticalAttempt.attemptId, runId }
+              }
+            ]
+          }
+        } satisfies DeliveryRuntimeEvaluation
+        const opportunity = activeWorkAuthorityRefreshForOwner(
+          "Timer",
+          activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: activeVerticalAttempt.attemptId }])
+        )
+        const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>(initial)
+        const graphReads = yield* Ref.make(0)
+        const admitted = yield* Ref.make<ReadonlyArray<string>>([])
+        const executed = yield* Ref.make<ReadonlyArray<string>>([])
+        const preG2IndependentWasAdmitted = yield* Ref.make(false)
+        const activeCompleted = yield* Deferred.make<void>()
+        const interpreter = Layer.mock(WorkflowInterpreter, {
+          readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+            Effect.gen(function* () {
+              yield* Ref.update(graphReads, (count) => count + 1)
+              const g2 = graph(
+                operation.operationId,
+                4,
+                snapshot(`active-vertical-${report._tag}-G2`, [
+                  { id: activeVerticalTaskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+                  { id: activeVerticalTaskB, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+                ])
+              )
+              const postG2Independent = freshGraphReadProposal(g2, activeVerticalTaskB)
+              expect(postG2Independent.route._tag).toBe("FreshWorkflowRoute")
+              yield* SubscriptionRef.set(state, {
+                ...withRunFacts(evaluation(base, g2, { ...emptyFrontier, proposals: [postG2Independent] }), false),
+                activeRefreshBoundary: boundary,
+                taskWork: { capacity: capacityTwo, held: [] }
+              })
+              return g2.observation.snapshot
+            })
+        })
+        const executor: DeliveryActionExecutorService = {
+          execute: ({ proposal }) =>
+            Effect.gen(function* () {
+              yield* Ref.update(executed, (ids) => [...ids, proposal.id])
+              if (proposal.id === activeProposal.id) {
+                expect(proposal.route).toMatchObject({
+                  _tag: "IdentityFreeWorkflowRoute",
+                  transition: { _tag: "SuspendPlannedAttemptExecutorWork" }
+                })
+                expect(yield* Ref.get(graphReads)).toBe(0)
+                // The active report establishes the typed completion boundary. Removing both
+                // proposals makes the pre-G2 quiescent point explicit. If the pre-G2 filter is
+                // removed, B may already have a live owner; it waits for this completion and
+                // the final assertion records that ordering violation.
+                yield* SubscriptionRef.update(state, (current) => ({
+                  ...current,
+                  activeRefreshBoundary: boundary,
+                  proposedActions: emptyFrontier
+                }))
+                yield* Deferred.succeed(activeCompleted, undefined)
+                return {
+                  _tag: "ExecutorReportPublished",
+                  plannedAttempt: activeVerticalAttempt,
+                  proposalId: activeProposal.id,
+                  report
+                } as const
+              }
+              if (proposal.route._tag !== "FreshWorkflowRoute") {
+                return yield* Effect.die("the independent post-G2 action must retain its fresh workflow route")
+              }
+              expect(proposal.route.step.task.id).toBe(activeVerticalTaskB)
+              if ((yield* Ref.get(graphReads)) === 0) {
+                yield* Ref.set(preG2IndependentWasAdmitted, true)
+                yield* Deferred.await(activeCompleted)
+              }
+              yield* SubscriptionRef.update(state, (current) => ({ ...current, proposedActions: emptyFrontier }))
+              return { _tag: "ActionCompleted", proposalId: proposal.id } as const
+            })
+        }
+        const trace = DeliverySemanticTrace.of({
+          emit: (event) =>
+            event._tag === "ProposalAdmitted" ? Ref.update(admitted, (ids) => [...ids, event.proposalId]) : Effect.void
+        })
+
+        const proof = yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+          Effect.provide(support),
+          Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of(executor)),
+          Effect.provideService(DeliverySemanticTrace, trace),
+          Effect.provide(interpreter)
+        )
+
+        expect(yield* Ref.get(graphReads)).toBe(1)
+        expect(yield* Ref.get(preG2IndependentWasAdmitted)).toBe(false)
+        expect(yield* Ref.get(executed)).toHaveLength(2)
+        expect(yield* Ref.get(admitted)).toHaveLength(2)
+        const executedIds = yield* Ref.get(executed)
+        const admittedIds = yield* Ref.get(admitted)
+        expect(executedIds[0]).toBe(activeProposal.id)
+        expect(admittedIds[0]).toBe(activeProposal.id)
+        expect(executedIds[1]).not.toBe(preG2Independent.id)
+        expect(admittedIds[1]).not.toBe(preG2Independent.id)
+        expect(proof.decision).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+      }
     })
   )
 )

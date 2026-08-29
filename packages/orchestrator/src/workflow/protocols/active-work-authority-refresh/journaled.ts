@@ -1,4 +1,4 @@
-import type { RunId } from "@dalph/contracts"
+import { plannedTaskAttemptEquivalence, type RunId } from "@dalph/contracts"
 import { Cause, Effect } from "effect"
 import type { GitTargetLineageReadFailure } from "../../../authorities/git/target-lineage.js"
 import type { GitWorktreeReadFailure } from "../../../authorities/git/worktree.js"
@@ -40,6 +40,19 @@ type ActiveRefreshIdentity = {
   readonly operation: ActiveWorkAuthorityRefreshGitReadOperation
   readonly ordinal: ActiveWorkAuthorityRefreshOrdinal
 }
+
+/** An ordinary Git intent keeps a captured read on the ordinary journal protocol. */
+export const ordinaryGitReadIntentWasRecorded = (
+  records: ReadonlyArray<JournalRecord>,
+  operation: GitReadOperation
+): boolean =>
+  records.some(
+    ({ event }) =>
+      event._tag === "GitReadIntentRecorded" &&
+      event.operation.operationId === operation.operationId &&
+      event.operation._tag === operation._tag &&
+      plannedTaskAttemptEquivalence(event.operation.plannedAttempt, operation.plannedAttempt)
+  )
 
 const activeRefreshFailureFor = (
   records: ReadonlyArray<JournalRecord>,

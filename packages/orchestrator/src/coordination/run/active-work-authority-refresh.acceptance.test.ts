@@ -468,6 +468,66 @@ const appendActiveWorktreeObservation = (
   )
 }
 
+const activeReadIntentFor = (
+  operation: Extract<
+    RunnableFrontierTransition,
+    { readonly _tag: "ObservePlannedAttemptContinuationWorktree" | "ObservePlannedAttemptContinuationTargetLineage" }
+  >["operation"],
+  ordinal: number
+) => {
+  const authority = ActiveWorkAuthorityRefreshAuthority.make({
+    attemptId: operation.plannedAttempt.attemptId,
+    runId: operation.plannedAttempt.runId
+  })
+  return ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    operation: makeActiveWorkAuthorityRefreshGitReadOperation(
+      operation,
+      authority,
+      ActiveWorkAuthorityRefreshOrdinal.make(ordinal)
+    ),
+    version: workflowJournalEventVersion
+  })
+}
+
+const activeWorktreeObservationFor = (
+  operation: Extract<
+    RunnableFrontierTransition,
+    { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
+  >["operation"]
+) =>
+  PlannedAttemptWorktreeObservedEvent.make({
+    observation: {
+      _tag: "PlannedWorktreeReady",
+      baseSha: operation.plannedAttempt.baseSha,
+      branch: operation.plannedAttempt.branch,
+      headSha: operation.plannedAttempt.baseSha,
+      worktree: operation.plannedAttempt.worktree
+    },
+    occurrenceClassification: "NonActionOccurrence",
+    operationId: operation.operationId,
+    version: workflowJournalEventVersion
+  })
+
+const activeLineageObservationFor = (
+  operation: Extract<
+    RunnableFrontierTransition,
+    { readonly _tag: "ObservePlannedAttemptContinuationTargetLineage" }
+  >["operation"]
+) =>
+  TargetLineageObservedEvent.make({
+    observation: TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: operation.plannedAttempt.baseSha,
+      targetHeadSha: GitCommitSha.make("b".repeat(40))
+    }),
+    occurrenceClassification: "NonActionOccurrence",
+    operationId: operation.operationId,
+    plannedAttempt: operation.plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+
 const appendActiveLineageObservation = (
   records: ReadonlyArray<JournalRecord>,
   operation: Extract<
@@ -782,6 +842,220 @@ it.effect(
       )
       expect(laterGraphRead?.operation.operationId).not.toBe(operationId)
     })
+)
+
+it.effect(
+  "reuses an intent-only active worktree operation after a crash and uses a fresh identity after observation",
+  () =>
+    Effect.gen(function* () {
+      const opportunity = activeWorkAuthorityRefreshForOwner(
+        "TrackerNotification",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
+      const worktreeOperation = makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make("active-refresh-crash-worktree-first"),
+        plannedAttempt,
+        predecessorOperationIds: [OperationId.make("active-work-refresh-claim-observation")]
+      })
+      const intentOnly = appendRecord(buildPrefix("Healthy"), activeReadIntentFor(worktreeOperation, 1))
+
+      // The first read is the journal prefix seen before the process died; the
+      // second read includes the intent, but no worktree observation.
+      const restarted = yield* projectionFor(intentOnly, opportunity)
+      const replayed = restarted.frontier.transitions.find(
+        (
+          transition
+        ): transition is Extract<
+          RunnableFrontierTransition,
+          { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
+        > => transition._tag === "ObservePlannedAttemptContinuationWorktree"
+      )
+      if (replayed === undefined) return yield* Effect.die("expected the active worktree read after the crash cut")
+      expect(replayed.operation).toEqual(worktreeOperation)
+      const [replayedProposal] = deliveryProposalsOf({
+        acceptedOperationIds: new Set([worktreeOperation.operationId]),
+        fresh: [],
+        responsibilities: [
+          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(5), plannedAttempt }
+        ],
+        runId,
+        transitions: [replayed]
+      }).ticketDelivery
+      expect(replayedProposal?.actionIdentity).toEqual({ _tag: "ExistingOperationId" })
+
+      const observed = appendRecord(intentOnly, activeWorktreeObservationFor(worktreeOperation))
+      const laterOperation = makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make("active-refresh-crash-worktree-second"),
+        plannedAttempt,
+        predecessorOperationIds: [worktreeOperation.operationId]
+      })
+      const laterIntentOnly = appendRecord(observed, activeReadIntentFor(laterOperation, 2))
+      const later = yield* projectionFor(laterIntentOnly, opportunity)
+      const laterRead = later.frontier.transitions.find(
+        (
+          transition
+        ): transition is Extract<
+          RunnableFrontierTransition,
+          { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
+        > => transition._tag === "ObservePlannedAttemptContinuationWorktree"
+      )
+      if (laterRead === undefined) return yield* Effect.die("expected the later active worktree read")
+      expect(laterRead.operation).toEqual(laterOperation)
+      expect(laterRead.operation.operationId).not.toBe(worktreeOperation.operationId)
+      expect(intentOnly.at(-1)?.event._tag).toBe("ActiveWorkAuthorityRefreshGitReadIntentRecorded")
+      expect(laterIntentOnly.at(-1)?.event._tag).toBe("ActiveWorkAuthorityRefreshGitReadIntentRecorded")
+      const activeIntents = laterIntentOnly.flatMap(({ event }) =>
+        event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ? [event] : []
+      )
+      expect(activeIntents.slice(-2).map(({ operation }) => operation.ordinal)).toEqual([1, 2])
+    })
+)
+
+it.effect(
+  "reuses an intent-only active target-lineage operation after a crash and uses a fresh identity after observation",
+  () =>
+    Effect.gen(function* () {
+      const opportunity = activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
+      const lineageOperation = makeTargetLineageObservationOperation({
+        integrationTarget,
+        operationId: OperationId.make("active-refresh-crash-lineage-first"),
+        plannedAttempt,
+        predecessorOperationIds: [OperationId.make("active-work-refresh-worktree")]
+      })
+      const intentOnly = appendRecord(buildPrefix("Healthy"), activeReadIntentFor(lineageOperation, 1))
+
+      // The operation carried by the recovered transition is the ordinary Git
+      // payload derived from the exact active journal intent. Its identity is
+      // therefore still the one acknowledged before the crash.
+      const restarted = yield* projectionFor(intentOnly, opportunity, integrationTarget)
+      const replayed = restarted.frontier.transitions.find(
+        (
+          transition
+        ): transition is Extract<
+          RunnableFrontierTransition,
+          { readonly _tag: "ObservePlannedAttemptContinuationTargetLineage" }
+        > => transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
+      )
+      if (replayed === undefined)
+        return yield* Effect.die("expected the active target-lineage read after the crash cut")
+      expect(replayed.operation).toEqual(lineageOperation)
+      const [replayedProposal] = deliveryProposalsOf({
+        acceptedOperationIds: new Set([lineageOperation.operationId]),
+        fresh: [],
+        responsibilities: [
+          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(5), plannedAttempt }
+        ],
+        runId,
+        transitions: [replayed]
+      }).ticketDelivery
+      expect(replayedProposal?.actionIdentity).toEqual({ _tag: "ExistingOperationId" })
+
+      const observed = appendRecord(intentOnly, activeLineageObservationFor(lineageOperation))
+      const laterOperation = makeTargetLineageObservationOperation({
+        integrationTarget,
+        operationId: OperationId.make("active-refresh-crash-lineage-second"),
+        plannedAttempt,
+        predecessorOperationIds: [lineageOperation.operationId]
+      })
+      const laterIntentOnly = appendRecord(observed, activeReadIntentFor(laterOperation, 2))
+      const later = yield* projectionFor(laterIntentOnly, opportunity, integrationTarget)
+      const laterRead = later.frontier.transitions.find(
+        (
+          transition
+        ): transition is Extract<
+          RunnableFrontierTransition,
+          { readonly _tag: "ObservePlannedAttemptContinuationTargetLineage" }
+        > => transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
+      )
+      if (laterRead === undefined) return yield* Effect.die("expected the later active target-lineage read")
+      expect(laterRead.operation).toEqual(laterOperation)
+      expect(laterRead.operation.operationId).not.toBe(lineageOperation.operationId)
+      const activeIntents = laterIntentOnly.flatMap(({ event }) =>
+        event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ? [event] : []
+      )
+      expect(activeIntents.slice(-2).map(({ operation }) => operation.ordinal)).toEqual([1, 2])
+    })
+)
+
+it.effect("keeps one recovered proposal for each exact pending active Git read", () =>
+  Effect.sync(() => {
+    const worktreeOperation = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("active-refresh-pending-worktree"),
+      plannedAttempt,
+      predecessorOperationIds: [OperationId.make("active-refresh-pending-claim")]
+    })
+    const lineageOperation = makeTargetLineageObservationOperation({
+      integrationTarget,
+      operationId: OperationId.make("active-refresh-pending-lineage"),
+      plannedAttempt,
+      predecessorOperationIds: [worktreeOperation.operationId]
+    })
+    const cases = [
+      {
+        operation: worktreeOperation,
+        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+          operation: worktreeOperation,
+          plannedAttempt
+        })
+      },
+      {
+        operation: lineageOperation,
+        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+          operation: lineageOperation,
+          plannedAttempt
+        })
+      }
+    ] as const
+
+    for (const { operation, transition } of cases) {
+      const activeOperation = activeReadIntentFor(operation, 1).operation
+      const proposals = deliveryProposalsOf({
+        acceptedOperationIds: new Set([operation.operationId]),
+        activeRefreshPendingGitReadOperations: [activeOperation],
+        fresh: [],
+        responsibilities: [
+          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(5), plannedAttempt }
+        ],
+        runId,
+        transitions: [transition]
+      }).ticketDelivery
+      expect(proposals).toHaveLength(1)
+      expect(proposals[0]?.route._tag).toBe("RecoveredNewActionRoute")
+      expect(proposals[0]?.actionIdentity).toEqual({
+        _tag: "FreshOperationIdRequired",
+        source: { _tag: "Preserve", operationId: operation.operationId }
+      })
+    }
+  })
+)
+
+it.effect("does not recover an active Git intent for an unselected Running attempt", () =>
+  Effect.gen(function* () {
+    const secondWorktreeOperation = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("active-refresh-unselected-worktree"),
+      plannedAttempt: secondPlannedAttempt,
+      predecessorOperationIds: [OperationId.make("active-work-refresh-specification-B")]
+    })
+    const intentOnly = appendRecord(buildTwoRunningPrefix(), activeReadIntentFor(secondWorktreeOperation, 1))
+    const projection = yield* projectionFor(
+      intentOnly,
+      activeWorkAuthorityRefreshForOwner(
+        "TrackerNotification",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+      )
+    )
+
+    expect(
+      projection.frontier.transitions.some(
+        (transition) =>
+          transition._tag === "ObservePlannedAttemptContinuationWorktree" &&
+          transition.operation.operationId === secondWorktreeOperation.operationId
+      )
+    ).toBe(false)
+  })
 )
 
 it.effect(

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Journaled Git dispatch keeps ordinary and active-refresh replay authority at one boundary. */
 import { Effect, Layer, Option } from "effect"
 import { type RunId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
@@ -44,6 +45,7 @@ import { runJournaledTaskClaimRelease } from "../workflow/protocols/task-claim-r
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
 import { journaledTrackerGraphRead } from "../workflow/protocols/task-tracker-read/protocol.js"
 import {
+  ordinaryGitReadIntentWasRecorded,
   runActiveTargetLineageAuthorityRefreshGitRead,
   runActiveWorktreeAuthorityRefreshGitRead
 } from "../workflow/protocols/active-work-authority-refresh/journaled.js"
@@ -173,7 +175,10 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        if (RunActivation.isActiveWorkAuthorityRefreshForAttempt(opportunity, operation.plannedAttempt)) {
+        if (
+          RunActivation.isActiveWorkAuthorityRefreshForAttempt(opportunity, operation.plannedAttempt) &&
+          !ordinaryGitReadIntentWasRecorded(yield* journal.read(runId), operation)
+        ) {
           return yield* runActiveWorktreeAuthorityRefreshGitRead({
             boundary: interruptibleBoundary,
             interpreter,
@@ -229,7 +234,10 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
-        if (RunActivation.isActiveWorkAuthorityRefreshForAttempt(opportunity, operation.plannedAttempt)) {
+        if (
+          RunActivation.isActiveWorkAuthorityRefreshForAttempt(opportunity, operation.plannedAttempt) &&
+          !ordinaryGitReadIntentWasRecorded(yield* journal.read(runId), operation)
+        ) {
           return yield* runActiveTargetLineageAuthorityRefreshGitRead({
             boundary: interruptibleBoundary,
             interpreter,

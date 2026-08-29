@@ -104,6 +104,11 @@ import {
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
+import {
+  activeWorkAuthorityRefreshGitReadOperationMatchesIntent,
+  ordinaryGitReadOperationFor,
+  type ActiveWorkAuthorityRefreshGitReadOperation
+} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -123,9 +128,16 @@ type ContinuationGitReadIntentEvent = Extract<
   { readonly _tag: "GitReadIntentRecorded" | "ActiveWorkAuthorityRefreshGitReadIntentRecorded" }
 >
 
+type ActiveRefreshGitReadIntentRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "ActiveWorkAuthorityRefreshGitReadIntentRecorded" }>
+}
+
 /** Both ordinary and active-refresh Git intents authorize one observed read. */
 const isContinuationGitReadIntentEvent = (event: JournalRecord["event"]): event is ContinuationGitReadIntentEvent =>
   event._tag === "GitReadIntentRecorded" || event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
+
+const isActiveRefreshGitReadIntentRecord = (record: JournalRecord): record is ActiveRefreshGitReadIntentRecord =>
+  record.event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
 
 /**
  * A tracker notification or timer selects one exact currently-running
@@ -2955,6 +2967,80 @@ export const gitReadIntentHasOutcome = (records: ReadonlyArray<JournalRecord>, o
         event.operationId === operationId)
   )
 
+/**
+ * An active-refresh intent is a distinct journal authority from an ordinary
+ * Git intent. Only its exact active failure or matching read observation can
+ * settle it; an ordinary intent with the same operation identity is never
+ * allowed to make the active read look complete.
+ */
+const activeRefreshGitReadIntentHasOutcome = (
+  records: ReadonlyArray<JournalRecord>,
+  intent: ActiveRefreshGitReadIntentRecord
+): boolean => {
+  const activeOperation = intent.event.operation
+  const ordinaryIntentSharesIdentity = records.some(
+    ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation.operationId === activeOperation.operationId
+  )
+  if (ordinaryIntentSharesIdentity) return false
+  const ordinaryOperation = ordinaryGitReadOperationFor(activeOperation)
+  return records.some(({ event }) => {
+    if (event._tag === "ActiveWorkAuthorityRefreshGitReadFailed") {
+      return activeWorkAuthorityRefreshGitReadOperationMatchesIntent(event.operation, activeOperation)
+    }
+    if (ordinaryOperation._tag === "ReadTaskWorktree") {
+      return event._tag === "PlannedAttemptWorktreeObserved" && event.operationId === ordinaryOperation.operationId
+    }
+    return (
+      event._tag === "TargetLineageObserved" &&
+      event.operationId === ordinaryOperation.operationId &&
+      plannedTaskAttemptEquivalence(event.plannedAttempt, ordinaryOperation.plannedAttempt)
+    )
+  })
+}
+
+/**
+ * A process can die after an active Git intent but before its provider call.
+ * Recover only the latest still-unsettled active intent for each exact
+ * RunId/AttemptId subject, preserving its read kind, ordinal, and operation
+ * identity. Ordinary Git intents are deliberately handled by a separate path
+ * below.
+ */
+const pendingActiveRefreshGitReadIntentsFor = (
+  records: ReadonlyArray<JournalRecord>,
+  runId: RunId,
+  opportunity: RunActivationOpportunity
+): ReadonlyArray<ActiveRefreshGitReadIntentRecord> => {
+  if (opportunity._tag !== "ActiveWorkAuthorityRefresh") return []
+  const pending = records.filter(
+    (record): record is ActiveRefreshGitReadIntentRecord =>
+      isActiveRefreshGitReadIntentRecord(record) &&
+      record.event.operation.authority.runId === runId &&
+      record.event.operation.plannedAttempt.runId === runId &&
+      activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, record.event.operation.plannedAttempt) &&
+      !activeRefreshGitReadIntentHasOutcome(records, record)
+  )
+  return pending.filter(
+    (record, index, candidates) =>
+      candidates.findLastIndex(
+        ({ event: candidate }) =>
+          candidate.operation.authority.runId === record.event.operation.authority.runId &&
+          candidate.operation.authority.attemptId === record.event.operation.authority.attemptId
+      ) === index
+  )
+}
+
+/**
+ * The exact active Git reads still awaiting an outcome at this evaluation.
+ * Delivery uses these process-local facts only to distinguish an active
+ * recovery replay from the ordinary accepted continuation it projects.
+ */
+export const pendingActiveRefreshGitReadOperationsFor = (
+  records: ReadonlyArray<JournalRecord>,
+  runId: RunId,
+  opportunity: RunActivationOpportunity
+): ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation> =>
+  pendingActiveRefreshGitReadIntentsFor(records, runId, opportunity).map(({ event }) => event.operation)
+
 const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecoveredRunState")(function* (
   runState: ReconstructedRunState,
   integrationResources: IntegrationTargetResourceController,
@@ -3054,23 +3140,48 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           plannedTaskAttemptEquivalence(event.operation.plannedAttempt, record.event.operation.plannedAttempt)
         ) === index
     )
-  const pendingAttemptIds = new Set(pendingGitReadIntents.map(({ event }) => event.operation.plannedAttempt.attemptId))
-  const pendingTargetLineageAttemptIds = new Set(
-    pendingGitReadIntents.flatMap(({ event }) =>
+  const pendingActiveRefreshGitReadIntents = pendingActiveRefreshGitReadIntentsFor(
+    runState.workflowHistory.records,
+    runState.runId,
+    opportunity
+  )
+  const pendingAttemptIds = new Set([
+    ...pendingGitReadIntents.map(({ event }) => event.operation.plannedAttempt.attemptId),
+    ...pendingActiveRefreshGitReadIntents.map(({ event }) => event.operation.plannedAttempt.attemptId)
+  ])
+  const pendingTargetLineageAttemptIds = new Set([
+    ...pendingGitReadIntents.flatMap(({ event }) =>
+      event.operation._tag === "ReadTargetLineage" ? [event.operation.plannedAttempt.attemptId] : []
+    ),
+    ...pendingActiveRefreshGitReadIntents.flatMap(({ event }) =>
       event.operation._tag === "ReadTargetLineage" ? [event.operation.plannedAttempt.attemptId] : []
     )
-  )
-  const pendingGitReadTransitions = pendingGitReadIntents.map(({ event }) =>
-    event.operation._tag === "ReadTaskWorktree"
-      ? RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
-          operation: event.operation,
-          plannedAttempt: event.operation.plannedAttempt
-        })
-      : RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
-          operation: event.operation,
-          plannedAttempt: event.operation.plannedAttempt
-        })
-  )
+  ])
+  const pendingGitReadTransitions = [
+    ...pendingGitReadIntents.map(({ event }) =>
+      event.operation._tag === "ReadTaskWorktree"
+        ? RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+            operation: event.operation,
+            plannedAttempt: event.operation.plannedAttempt
+          })
+        : RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+            operation: event.operation,
+            plannedAttempt: event.operation.plannedAttempt
+          })
+    ),
+    ...pendingActiveRefreshGitReadIntents.map(({ event }) => {
+      const operation = ordinaryGitReadOperationFor(event.operation)
+      return operation._tag === "ReadTaskWorktree"
+        ? RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+            operation,
+            plannedAttempt: operation.plannedAttempt
+          })
+        : RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+            operation,
+            plannedAttempt: operation.plannedAttempt
+          })
+    })
+  ]
   /**
    * A complete graph is one activation boundary, even when several captured
    * Running attempts independently need that boundary.  Keep each later

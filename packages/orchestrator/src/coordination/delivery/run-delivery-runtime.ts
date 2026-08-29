@@ -264,6 +264,15 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const phaseEvaluation = preG2EvaluationOf(phase, evaluation)
         yield* selectionGate.withPermit(
           Effect.gen(function* () {
+            const current = Option.getOrThrow(yield* Ref.get(latest))
+            // Relation refreshes can be queued behind a newer journal publication while an action is settling.
+            // Never let that older frontier resurrect an already-observed operation or its stale proposal.
+            if (
+              current.acceptedAt !== null &&
+              (phaseEvaluation.acceptedAt === null || phaseEvaluation.acceptedAt < current.acceptedAt)
+            ) {
+              return
+            }
             yield* Ref.set(latest, Option.some(phaseEvaluation))
             yield* Ref.update(
               deferredAt,
@@ -349,7 +358,33 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         )
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
-        if (live.size !== 0 || (!activeRefreshG2Pending && !everyProposalAwaitsChangedAcceptedFacts)) {
+        /**
+         * After G2, an active refresh may deliberately retain a Running
+         * executor position while the relation exposes independent work. If
+         * that position fills the whole configured capacity and no local
+         * action owner remains, waiting for another runtime event cannot free
+         * it: the retained executor responsibility is outside this phase.
+         * Return an unsettled quiescence while leaving the proposal in the
+         * descriptive relation so a later ordinary activation can retry it.
+         */
+        const postG2RetainedCapacityBlocks =
+          phase._tag === "ActiveRefreshPostG2RuntimePhase" &&
+          current.activeRefreshBoundary !== undefined &&
+          current.taskWork.held.length >= Number(current.taskWork.capacity) &&
+          current.taskWork.held.every(({ correlation }) =>
+            current.activeRefreshBoundary?.reconciledAttempts.some(
+              (subject) => subject.runId === correlation.runId && subject.attemptId === correlation.attemptId
+            )
+          ) &&
+          proposedActions.proposals.length > 0 &&
+          proposedActions.proposals.every(
+            ({ admission: { taskWorkPosition } }) =>
+              taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
+          )
+        if (
+          live.size !== 0 ||
+          (!activeRefreshG2Pending && !everyProposalAwaitsChangedAcceptedFacts && !postG2RetainedCapacityBlocks)
+        ) {
           return Option.none<DeliveryRuntimeQuiescence>()
         }
         const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }

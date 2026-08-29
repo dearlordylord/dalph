@@ -322,6 +322,93 @@ it.effect("uses active Git protocol only for the attempts captured at activation
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
+it.effect("does not reinterpret an ordinary Git intent as an active-refresh read", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const calls = yield* Ref.make(0)
+    const ready = AuthoritativePlannedAttemptWorktreeObserved.make({
+      observation: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      })
+    })
+    const lineage = AuthoritativeTargetLineageObserved.make({
+      observation: {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: plannedAttempt.baseSha,
+        targetHeadSha: GitCommitSha.make("b".repeat(40))
+      }
+    })
+    const base = Layer.succeed(
+      WorkflowInterpreter,
+      testInterpreter(
+        () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(ready)),
+        () => Ref.update(calls, (count) => count + 1).pipe(Effect.as(lineage))
+      )
+    )
+    const ordinaryInterpreter = yield* WorkflowInterpreter.pipe(
+      Effect.provide(journaledWorkflowInterpreterLayer(runId, base))
+    )
+    const activeInterpreter = yield* WorkflowInterpreter.pipe(
+      Effect.provide(journaledWorkflowInterpreterLayer(runId, base, activeOpportunity("Timer")))
+    )
+    const worktreeOperation = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("ordinary-intent-captured-worktree"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const lineageOperation = makeTargetLineageObservationOperation({
+      integrationTarget,
+      operationId: OperationId.make("ordinary-intent-captured-lineage"),
+      plannedAttempt,
+      predecessorOperationIds: [worktreeOperation.operationId]
+    })
+
+    expect(
+      (yield* ordinaryInterpreter
+        .readTaskWorktree(worktreeOperation, Effect.die("simulated crash after ordinary Git intent"))
+        .pipe(Effect.exit))._tag
+    ).toBe("Failure")
+    expect((yield* activeInterpreter.readTaskWorktree(worktreeOperation))._tag).toBe(
+      "AuthoritativePlannedAttemptWorktreeObserved"
+    )
+
+    expect(
+      (yield* ordinaryInterpreter
+        .readTargetLineage(lineageOperation, Effect.die("simulated crash after ordinary Git intent"))
+        .pipe(Effect.exit))._tag
+    ).toBe("Failure")
+    expect((yield* activeInterpreter.readTargetLineage(lineageOperation))._tag).toBe(
+      "AuthoritativeTargetLineageObserved"
+    )
+
+    expect(yield* Ref.get(calls)).toBe(2)
+    expect(
+      (yield* journal.read(runId))
+        .map(({ event }) => event._tag)
+        .filter(
+          (tag) =>
+            tag === "GitReadIntentRecorded" ||
+            tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ||
+            tag === "PlannedAttemptWorktreeObserved" ||
+            tag === "TargetLineageObserved"
+        )
+    ).toEqual([
+      "GitReadIntentRecorded",
+      "PlannedAttemptWorktreeObserved",
+      "GitReadIntentRecorded",
+      "TargetLineageObserved"
+    ])
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
 it.effect("records the authored Git interruption and ordinary replay cassette", () =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0)

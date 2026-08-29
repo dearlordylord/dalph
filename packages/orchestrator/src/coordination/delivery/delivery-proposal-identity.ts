@@ -13,7 +13,8 @@ export const freshOperationIdentity = (): FreshOperationIdentity => ({
 
 export const recoveredIdentityFor = (
   action: NewRecoveredWorkflowAction,
-  preselectedOperationId?: OperationId
+  preselectedOperationId?: OperationId,
+  preservePreselectedOperationId = false
 ): FreshOperationIdentity => {
   if (action._tag === "TaskClaimReacquisition") {
     return {
@@ -26,6 +27,13 @@ export const recoveredIdentityFor = (
       _tag: "FreshOperationIdRequired",
       source: { _tag: "ExternalSuccessReleaseClaim", claimOperationId: action.operation.release.claim.operationId }
     }
+  }
+  if (
+    preservePreselectedOperationId &&
+    preselectedOperationId !== undefined &&
+    (action._tag === "ReadTaskWorktree" || action._tag === "ReadTargetLineage")
+  ) {
+    return { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: preselectedOperationId } }
   }
   if (action._tag === "ReadTrackerGraph" && preselectedOperationId?.startsWith("active-refresh:")) {
     return { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: preselectedOperationId } }

@@ -794,6 +794,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const trackerCalls = yield* Ref.make<ReadonlyArray<"graph" | "specification" | "claim" | "acquire">>([])
       const activeSelections = yield* Ref.make<ReadonlyArray<string>>([])
       const activeSelectionTrace = yield* Ref.make<ReadonlyArray<string>>([])
+      const activeSelectionOperationKeys = yield* Ref.make<ReadonlyArray<string>>([])
       const executorCalls = yield* Ref.make<ReadonlyArray<ProductionExecutorCall>>([])
       const executorEntries = yield* Ref.make<ReadonlyArray<ProductionExecutorCall>>([])
       const suspendedTasks = yield* Ref.make<ReadonlySet<TaskId>>(new Set())
@@ -820,6 +821,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           if ((yield* Ref.get(phase)) !== "Active" || !expectedActiveSelections.includes(tag)) return
           yield* Ref.update(activeSelectionTrace, (current) => [...current, tag])
           yield* Ref.update(activeSelections, (current) => (current.includes(tag) ? current : [...current, tag]))
+        })
+
+      const recordActiveSelectionOperation = (tag: string, operationId: string) =>
+        Effect.gen(function* () {
+          if ((yield* Ref.get(phase)) !== "Active" || !expectedActiveSelections.includes(tag)) return
+          yield* recordActiveSelection(tag)
+          yield* Ref.update(activeSelectionOperationKeys, (current) => [...current, `${tag}:${operationId}`])
         })
 
       const readJournal = () =>
@@ -939,7 +947,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             })
             const trace = WorkflowTrace.of({
               emit: (item) =>
-                item._tag === "OperationSelected" ? recordActiveSelection(item.operation._tag) : Effect.void
+                item._tag === "OperationSelected"
+                  ? recordActiveSelectionOperation(
+                      item.operation._tag,
+                      "operationId" in item.operation
+                        ? item.operation.operationId
+                        : item.operation._tag === "ReleaseTaskClaim"
+                          ? item.operation.release.operationId
+                          : item.operation.acquisition.operationId
+                    )
+                  : Effect.void
             })
             const journalStoreLayer =
               processCrash === undefined
@@ -1200,6 +1217,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             : (secondProcess?.activeActivation ?? firstProcess.activeActivation),
         activeDecision: secondProcess?.activeDecision ?? firstProcess.activeDecision,
         activationKinds: yield* Ref.get(activationKinds),
+        activeSelectionOperationKeys: yield* Ref.get(activeSelectionOperationKeys),
         activeSelectionTrace: yield* Ref.get(activeSelectionTrace),
         activeSelections: yield* Ref.get(activeSelections),
         activeSources: yield* Ref.get(activeSources),
@@ -1299,6 +1317,11 @@ it.effect("production owner refreshes Running work once for a TrackerNotificatio
       "ReadTaskWorktree",
       "ReadTargetLineage"
     ])
+    const activeGitSelectionKeys = result.activeSelectionOperationKeys.filter(
+      (key) => key.startsWith("ReadTaskWorktree:") || key.startsWith("ReadTargetLineage:")
+    )
+    expect(activeGitSelectionKeys).toHaveLength(4)
+    expect(new Set(activeGitSelectionKeys).size).toBe(activeGitSelectionKeys.length)
     expect(result.trackerCalls).toEqual(["graph", "specification", "claim", "graph", "specification", "claim"])
     expect(result.executorCalls).toEqual([])
     expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh"])

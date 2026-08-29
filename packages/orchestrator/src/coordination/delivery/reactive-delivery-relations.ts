@@ -11,7 +11,11 @@ import {
   transitionTrackerGraphRequirement,
   type RunnableFrontierTransition
 } from "../frontier/frontier.js"
-import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
+import {
+  pendingActiveRefreshGitReadOperationsFor,
+  readDeliveryProjectionFrom,
+  type RunRecoveryProjectionSource
+} from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
@@ -218,6 +222,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const proposalContributions = deliveryProposalsOf({
       acceptedAt: journal.position,
       acceptedOperationIds: acceptedOperationIdsOf(records),
+      activeRefreshPendingGitReadOperations: pendingActiveRefreshGitReadOperationsFor(records, runId, opportunity),
       fresh,
       integrationResponsibilities,
       responsibilities: journal.reconstructed.responsibility.entries,

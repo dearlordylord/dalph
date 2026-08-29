@@ -391,6 +391,75 @@ it.effect("turns hints arriving during an active refresh into one trailing ordin
   )
 )
 
+it.effect("coalesces a hint blocked by active finalization into one trailing ordinary activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const ownerReady = yield* Deferred.make<RunReactivationOwnerService>()
+      const activeStarted = yield* Deferred.make<void>()
+      const releaseActive = yield* Deferred.make<void>()
+      const producerFiber = yield* Deferred.make<Fiber.Fiber<void, never>>()
+      const finalizationStarted = yield* Deferred.make<void>()
+      const releaseFinalization = yield* Deferred.make<void>()
+      const trailingOrdinaryStarted = yield* Deferred.make<void>()
+      const activeCalls = yield* Ref.make(0)
+      const ordinaryCalls = yield* Ref.make(0)
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-finalization-handoff"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.updateAndGet(ordinaryCalls, (current) => current + 1).pipe(
+              Effect.tap((count) => (count === 1 ? Deferred.succeed(trailingOrdinaryStarted, undefined) : Effect.void)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          activateActiveWorkAuthorityRefresh: () =>
+            Ref.updateAndGet(activeCalls, (current) => current + 1).pipe(
+              Effect.tap(() => Deferred.succeed(activeStarted, undefined)),
+              Effect.andThen(Deferred.await(releaseActive)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          trackerNotificationSource: makeCurrentSignal(Effect.succeed({ current: undefined, changes: Stream.never })),
+          onActivationFinalizationStart: (kind) =>
+            kind === "ActiveWorkAuthorityRefresh"
+              ? Effect.gen(function* () {
+                  yield* Deferred.succeed(finalizationStarted, undefined)
+                  const owner = yield* Deferred.await(ownerReady)
+                  // The callback itself runs while commandGate is held. Let
+                  // the child reach owner.hint before releasing that gate so
+                  // this is a deterministic blocked-producer race.
+                  const producer = yield* owner.hint(RunReactivationHint.Timer()).pipe(Effect.forkChild)
+                  yield* Effect.yieldNow
+                  yield* Deferred.succeed(producerFiber, producer)
+                  yield* Deferred.await(releaseFinalization)
+                })
+              : Effect.void,
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(ownerReady, owner)
+            yield* Deferred.await(activeStarted)
+            yield* Deferred.succeed(releaseActive, undefined)
+            yield* Deferred.await(finalizationStarted)
+            const producer = yield* Deferred.await(producerFiber)
+            yield* Deferred.succeed(releaseFinalization, undefined)
+            yield* Fiber.join(producer)
+            yield* Deferred.await(trailingOrdinaryStarted)
+            yield* Effect.yieldNow
+            expect(yield* Ref.get(activeCalls)).toBe(1)
+            expect(yield* Ref.get(ordinaryCalls)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
 it.effect("retains one trailing ordinary activation when the active handoff rejects", () =>
   Effect.scoped(
     Effect.gen(function* () {
