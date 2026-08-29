@@ -285,8 +285,8 @@ it.effect("rejects nonterminal executor reports as terminal delivery evidence", 
   Effect.gen(function* () {
     const correlation = { attemptId: AttemptId.make("attempt-A"), runId: RunId.make("run-A") }
     const reports = [
-      PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
-      PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
     ]
 
     for (const report of reports) {

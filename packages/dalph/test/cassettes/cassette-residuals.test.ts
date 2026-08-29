@@ -81,7 +81,13 @@ it("consumes the authored cursor's optional and terminal public probes", async (
       expect(Option.isSome(yield* projection.consumeExecutorProjection)).toBe(true)
       const pauseStart = yield* makeStoryCursor([findStoryItem("OperatorStartsPauseObservation")])
       expect(Option.isSome(yield* pauseStart.consumePauseObservationStart)).toBe(true)
-      const pauseAwait = yield* makeStoryCursor([findStoryItem("OperatorAwaitsPauseProgress")])
+      const maintainedPauseProgress = findStoryItem("PauseProgressObserved")
+      const pauseAwait = yield* makeStoryCursor([
+        AuthoredCassetteStoryItem.cases.OperatorAwaitsPauseProgress.make({
+          result: maintainedPauseProgress.result,
+          subject: maintainedPauseProgress.subject
+        })
+      ])
       expect(Option.isSome(yield* pauseAwait.consumePauseProgressAwait)).toBe(true)
       const pauseObserved = yield* makeStoryCursor([findStoryItem("PauseProgressObserved")])
       expect(Option.isSome(yield* pauseObserved.consumePauseProgressObserved)).toBe(true)
@@ -394,7 +400,7 @@ it("round-trips restart, release, worktree, Git, and lost-response histories", a
         maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly,
         maintainedAuthoredCassetteCatalog.changedAttemptStopReleaseResponseLost,
         maintainedAuthoredCassetteCatalog.lostPlannedWorktreeSafelySuspends,
-        maintainedAuthoredCassetteCatalog.changedAttemptRestartRemainsUnproved,
+        maintainedAuthoredCassetteCatalog.changedAttemptRestartCancelsHeldResume,
         maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration
       ]
 

@@ -2,329 +2,54 @@ import { Effect, Match } from "effect"
 import {
   type PlannedTaskAttempt,
   PlannedAttemptExecutor,
-  type TaskWorkSpecification,
-  type PlannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport,
   plannedTaskAttemptEquivalence,
-  samePlannedAttemptExecutorCorrelation
+  samePlannedAttemptExecutorReport
 } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { plannedAttemptExecutorStateObservedRecordKey } from "../../../workflow-journal/record-key.js"
+import { InRunJournal } from "../../../workflow-journal/store.js"
 import {
-  plannedAttemptExecutorCommandIntendedRecordKey,
-  plannedAttemptExecutorCommandProjectionObservedRecordKey,
-  plannedAttemptExecutorCommandResponseContradictedRecordKey,
-  plannedAttemptExecutorStateObservedRecordKey,
-  plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
-} from "../../../workflow-journal/record-key.js"
-import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
-import {
-  PlannedAttemptExecutorCommandIntendedEvent,
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorCommandProjectionObservedEvent,
-  PlannedAttemptExecutorCommandProjectionObservation,
-  PlannedAttemptExecutorCommandProjectionOrdinal,
-  PlannedAttemptExecutorCommandResponseContradictedEvent,
-  PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorStateObservation,
-  PlannedAttemptExecutorStateObservationOrdinal,
-  type PlannedAttemptExecutorContinuationLimit,
-  defaultPlannedAttemptExecutorContinuationLimit,
-  type PlannedAttemptExecutorSuspensionLimit,
-  PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+  PlannedAttemptExecutorStateObservationOrdinal
 } from "./events.js"
-import {
-  latestUnsettledPlannedAttemptExecutorCommand,
-  plannedAttemptExecutorEvidence,
-  plannedAttemptExecutorRequestFor
-} from "./evidence.js"
+import { latestUnsettledPlannedAttemptExecutorCommand } from "./evidence.js"
 import { type PlannedAttemptProtocolPermit, withPlannedAttemptProtocolPermit } from "./protocol-controller.js"
+import { reconcileUnsettledPlannedAttemptExecutorCommand } from "./command.js"
 import {
   PlannedAttemptExecutorCommandReconciliationRequired,
-  PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
   PlannedAttemptExecutorInitializationCorrelationContradiction,
-  PlannedAttemptExecutorProjectionNoCurrentReport,
-  PlannedAttemptExecutorProjectionTemporarilyUnavailable,
-  PlannedAttemptExecutorProjectionUnreadable,
-  PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
   PlannedAttemptExecutorResponsibilityMissing,
   PlannedAttemptExecutorStateNoCurrentReport,
   PlannedAttemptExecutorStateTemporarilyUnavailable,
   PlannedAttemptExecutorStateUnreadable,
-  PlannedAttemptExecutorSuspensionLimitReached,
   validatePlannedAttemptExecutorProjectionCorrelation
 } from "./errors.js"
+import {
+  acceptedPlannedAttemptExecutorReportRecords,
+  acceptDistinctPlannedAttemptExecutorReport,
+  acceptPendingPlannedAttemptExecutorReport,
+  plannedAttemptExecutorLifecycleTransitionError
+} from "./report-acceptance.js"
 
 export * from "./errors.js"
+export { beginPlannedAttemptExecutorResponsibility } from "./responsibility.js"
 
-/** Records ownership before any adapter records a command intent or crosses the executor boundary. */
-export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
-  "PlannedAttemptExecutorWorkflow.beginResponsibility"
-)(function* (plannedAttempt: PlannedTaskAttempt) {
-  const journal = yield* InRunJournal
-  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  const records = yield* journal.read(plannedAttempt.runId)
-  if (
-    records.some(
-      ({ event }) =>
-        event._tag === "AttemptImplementationAbandoned" &&
-        event.subject.plannedAttempt.runId === plannedAttempt.runId &&
-        event.subject.plannedAttempt.attemptId === plannedAttempt.attemptId
-    )
-  ) {
-    return yield* new PlannedAttemptExecutorResponsibilityAbandoned({ correlation })
-  }
-  const responsibilityBegan = records.find(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )
-  if (responsibilityBegan?.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-    if (!plannedTaskAttemptEquivalence(responsibilityBegan.event.plannedAttempt, plannedAttempt)) {
-      return yield* new PlannedAttemptExecutorResponsibilityContradiction({
-        accepted: responsibilityBegan.event.plannedAttempt,
-        requested: plannedAttempt
-      })
-    }
-  } else {
-    yield* journal.append(
-      plannedAttempt.runId,
-      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-    )
-  }
-})
+const lastElementOffset = -1
 
-export type PlannedAttemptExecutorContinuationDisposition =
-  | { readonly _tag: "ExecutorContinuationAvailable" }
-  | { readonly _tag: "ExecutorContinuationLimitReached"; readonly limit: PlannedAttemptExecutorContinuationLimit }
+/** Distinguishes a newly accepted lifecycle fact from an exact passive replay. */
+export type PlannedAttemptExecutorAcceptedFacts = "Changed" | "UnchangedPassiveObservation"
 
-/** Pure durable-budget decision shared by all conforming interpreter Layers. */
-export const plannedAttemptExecutorContinuationDisposition = (
-  correlation: PlannedAttemptExecutorCorrelation,
-  reports: ReadonlyArray<PlannedAttemptExecutorReport>,
-  continuationLimit = defaultPlannedAttemptExecutorContinuationLimit,
-  durableCommandCount?: number
-): PlannedAttemptExecutorContinuationDisposition => {
-  const acceptedReports = reports.filter((report) =>
-    samePlannedAttemptExecutorCorrelation(correlation, report.correlation)
-  )
-  const lastSafeSuspension = acceptedReports.findLastIndex(({ _tag }) => _tag === "SafelySuspended")
-  const runningSinceSafeSuspension = acceptedReports
-    .slice(lastSafeSuspension + 1)
-    .filter(({ _tag }) => _tag === "Running")
-  return (durableCommandCount ?? runningSinceSafeSuspension.length) >= continuationLimit
-    ? { _tag: "ExecutorContinuationLimitReached", limit: continuationLimit }
-    : { _tag: "ExecutorContinuationAvailable" }
+type PlannedAttemptExecutorObservationResult = {
+  readonly acceptedFacts: PlannedAttemptExecutorAcceptedFacts
+  readonly report: PlannedAttemptExecutorReport
 }
 
-const reconcileUnsettledCommand = Effect.fn("PlannedAttemptExecutorWorkflow.reconcileUnsettledCommand")(function* (
-  records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
-  intent: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandIntended" }>
-) {
-  const journal = yield* InRunJournal
-  const executor = yield* PlannedAttemptExecutor
-  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(
-    records.filter(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-        event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-        event.commandOrdinal === intent.ordinal
-    ).length + 1
-  )
-  const projected = yield* executor.project(correlation)
-  const invalidProjection = validatePlannedAttemptExecutorProjectionCorrelation(projected, correlation)
-  if (invalidProjection !== undefined) {
-    return yield* invalidProjection
-  }
-  const recordProjection = (observation: PlannedAttemptExecutorCommandProjectionObservation) =>
-    journal.append(
-      plannedAttempt.runId,
-      plannedAttemptExecutorCommandProjectionObservedRecordKey(
-        plannedAttempt.attemptId,
-        intent.ordinal,
-        projectionOrdinal
-      ),
-      PlannedAttemptExecutorCommandProjectionObservedEvent.make({
-        commandOrdinal: intent.ordinal,
-        observation,
-        occurrenceClassification: "NonActionOccurrence",
-        plannedAttempt,
-        projectionOrdinal,
-        version: workflowJournalEventVersion
-      })
-    )
-  if (projected._tag === "NoReport") {
-    yield* recordProjection(
-      PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateNoCurrentReport.make({})
-    )
-    return yield* new PlannedAttemptExecutorProjectionNoCurrentReport({ commandOrdinal: intent.ordinal, correlation })
-  }
-  if (projected._tag === "TemporarilyUnavailable") {
-    yield* recordProjection(
-      PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateTemporarilyUnavailable.make({})
-    )
-    return yield* new PlannedAttemptExecutorProjectionTemporarilyUnavailable({
-      commandOrdinal: intent.ordinal,
-      correlation
-    })
-  }
-  if (projected._tag === "Unreadable") {
-    yield* recordProjection(PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateUnreadable.make({}))
-    return yield* new PlannedAttemptExecutorProjectionUnreadable({ commandOrdinal: intent.ordinal, correlation })
-  }
-  if (projected._tag === "InitializationCorrelationContradiction") {
-    return yield* new PlannedAttemptExecutorInitializationCorrelationContradiction({
-      correlation,
-      detail: projected.detail
-    })
-  }
-  const projectedReport = projected._tag === "Exact" ? projected.report : projected.observed
-  if (!samePlannedAttemptExecutorCorrelation(correlation, projectedReport.correlation)) {
-    yield* recordProjection(
-      PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorReportContradiction.make({
-        observed: projectedReport
-      })
-    )
-    return yield* new PlannedAttemptExecutorCorrelationMismatch({
-      expected: correlation,
-      observed: projectedReport.correlation
-    })
-  }
-  yield* recordProjection(
-    PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({ report: projectedReport })
-  )
-  return projectedReport
-})
-
-const commandLimitError = (
-  command: "StartOrContinue" | "Suspend",
-  correlation: PlannedAttemptExecutorCorrelation,
-  continuation: PlannedAttemptExecutorContinuationDisposition,
-  suspensionCommandCount: number,
-  suspensionLimit: PlannedAttemptExecutorSuspensionLimit
-): PlannedAttemptExecutorContinuationLimitReached | PlannedAttemptExecutorSuspensionLimitReached | undefined => {
-  if (command === "StartOrContinue" && continuation._tag === "ExecutorContinuationLimitReached") {
-    return new PlannedAttemptExecutorContinuationLimitReached({ correlation, limit: continuation.limit })
-  }
-  if (command === "Suspend" && suspensionCommandCount >= suspensionLimit) {
-    return new PlannedAttemptExecutorSuspensionLimitReached({ correlation, limit: suspensionLimit })
-  }
-  return undefined
-}
-
-/** Journal-first executor command primitive used by guarded protocol entry points. */
-export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(function* (
-  plannedAttempt: PlannedTaskAttempt,
-  command: "StartOrContinue" | "Suspend",
-  continuationLimit: PlannedAttemptExecutorContinuationLimit,
-  suspensionLimit: PlannedAttemptExecutorSuspensionLimit,
-  selectedSpecification?: TaskWorkSpecification
-) {
-  const journal = yield* InRunJournal
-  const executor = yield* PlannedAttemptExecutor
-  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  yield* beginPlannedAttemptExecutorResponsibility(plannedAttempt)
-  const records = yield* journal.read(plannedAttempt.runId)
-  const acceptedReportRecords = records.filter(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      samePlannedAttemptExecutorCorrelation(correlation, event.report.correlation)
-  )
-  const acceptedReports = acceptedReportRecords.flatMap(({ event }) =>
-    /* v8 ignore next -- acceptedReportRecords is closed by the immediately preceding exact-tag and exact-correlation filter. */
-    event._tag === "PlannedAttemptExecutorWorkReported" &&
-    samePlannedAttemptExecutorCorrelation(correlation, event.report.correlation)
-      ? [event.report]
-      : []
-  )
-  const latestSafeSuspensionPosition = plannedAttemptExecutorEvidence(records, plannedAttempt).findLast(
-    ({ report }) => report._tag === "SafelySuspended"
-  )?.observedAt
-  const commandCountSinceSafeSuspension = (candidate: "StartOrContinue" | "Suspend") =>
-    records.filter(
-      ({ event, position }) =>
-        (latestSafeSuspensionPosition === undefined || position > latestSafeSuspensionPosition) &&
-        event._tag === "PlannedAttemptExecutorCommandIntended" &&
-        event.command === candidate &&
-        event.plannedAttempt.runId === plannedAttempt.runId &&
-        event.plannedAttempt.attemptId === plannedAttempt.attemptId
-    ).length
-  const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
-  if (unsettledCommand !== undefined) {
-    return yield* reconcileUnsettledCommand(records, plannedAttempt, unsettledCommand)
-  }
-  const continuation = plannedAttemptExecutorContinuationDisposition(
-    correlation,
-    acceptedReports,
-    continuationLimit,
-    commandCountSinceSafeSuspension("StartOrContinue")
-  )
-  const suspensionCommandCount = commandCountSinceSafeSuspension("Suspend")
-  const limitError = commandLimitError(command, correlation, continuation, suspensionCommandCount, suspensionLimit)
-  if (limitError !== undefined) return yield* limitError
-  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(
-    records.filter(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorCommandIntended" &&
-        event.plannedAttempt.attemptId === plannedAttempt.attemptId
-    ).length + 1
-  )
-  const appendCommandIntent = () =>
-    journal.append(
-      plannedAttempt.runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command,
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: commandOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-  const report: PlannedAttemptExecutorReport = yield* command === "StartOrContinue"
-    ? Effect.gen(function* () {
-        const request = yield* plannedAttemptExecutorRequestFor(records, plannedAttempt, selectedSpecification)
-        yield* appendCommandIntent()
-        return yield* executor.startOrContinue(request)
-      })
-    : Effect.gen(function* () {
-        yield* appendCommandIntent()
-        return yield* executor.requestSuspension(plannedAttempt)
-      })
-  if (!samePlannedAttemptExecutorCorrelation(correlation, report.correlation)) {
-    yield* journal.append(
-      plannedAttempt.runId,
-      plannedAttemptExecutorCommandResponseContradictedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-      PlannedAttemptExecutorCommandResponseContradictedEvent.make({
-        commandOrdinal,
-        observed: report,
-        occurrenceClassification: "NonActionOccurrence",
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    return yield* new PlannedAttemptExecutorCorrelationMismatch({ expected: correlation, observed: report.correlation })
-  }
-
-  const ordinal = PlannedAttemptExecutorReportOrdinal.make(acceptedReports.length + 1)
-  yield* journal.append(
-    plannedAttempt.runId,
-    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
-    PlannedAttemptExecutorWorkReportedEvent.make({ ordinal, report, version: workflowJournalEventVersion })
-  )
-  return report
-})
-
-/** Reads current executor authority without issuing another start, continuation, or suspension command. */
+/** Reads current executor authority without issuing another Begin, Resume, or Suspend command. */
 const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
   "PlannedAttemptExecutorWorkflow.observeStateUnserialized"
 )(function* (plannedAttempt: PlannedTaskAttempt) {
@@ -353,6 +78,13 @@ const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
       correlation
     })
   }
+  const pendingReport = yield* acceptPendingPlannedAttemptExecutorReport(plannedAttempt)
+  if (pendingReport !== undefined) {
+    return {
+      acceptedFacts: "Changed" as const,
+      report: pendingReport
+    } satisfies PlannedAttemptExecutorObservationResult
+  }
   const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(
     records.filter(
       ({ event }) =>
@@ -360,7 +92,7 @@ const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
         event.plannedAttempt.attemptId === plannedAttempt.attemptId
     ).length + 1
   )
-  const projected = yield* executor.project(correlation)
+  const projected = yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
   const invalidProjection = validatePlannedAttemptExecutorProjectionCorrelation(projected, correlation)
   if (invalidProjection !== undefined) {
     return yield* invalidProjection
@@ -387,9 +119,40 @@ const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
         )
       ),
     Exact: ({ report }) =>
-      recordObservation(PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report })).pipe(
-        Effect.as(report)
-      ),
+      Effect.gen(function* () {
+        const latestAccepted = acceptedPlannedAttemptExecutorReportRecords(records, plannedAttempt).at(
+          lastElementOffset
+        )
+        if (
+          latestAccepted?.event._tag === "PlannedAttemptExecutorWorkReported" &&
+          samePlannedAttemptExecutorReport(latestAccepted.event.report, report)
+        ) {
+          return {
+            acceptedFacts: "UnchangedPassiveObservation" as const,
+            report
+          } satisfies PlannedAttemptExecutorObservationResult
+        }
+        const transitionError = plannedAttemptExecutorLifecycleTransitionError(records, plannedAttempt, report)
+        if (transitionError !== undefined) {
+          if (transitionError._tag === "PlannedAttemptExecutorBeginReportContradiction") {
+            return yield* transitionError
+          }
+          yield* recordObservation(
+            transitionError._tag === "PlannedAttemptExecutorInitialReportCausalityContradiction"
+              ? PlannedAttemptExecutorStateObservation.cases.ExecutorInitialReportCausalityContradiction.make({
+                  observed: transitionError.observed
+                })
+              : PlannedAttemptExecutorStateObservation.cases.ExecutorLifecycleTransitionContradiction.make({
+                  accepted: transitionError.accepted,
+                  observed: transitionError.observed
+                })
+          )
+          return yield* transitionError
+        }
+        yield* recordObservation(PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }))
+        yield* acceptDistinctPlannedAttemptExecutorReport(plannedAttempt, report)
+        return { acceptedFacts: "Changed" as const, report } satisfies PlannedAttemptExecutorObservationResult
+      }),
     NoReport: () =>
       recordObservation(PlannedAttemptExecutorStateObservation.cases.ExecutorStateNoCurrentReport.make({})).pipe(
         Effect.andThen(new PlannedAttemptExecutorStateNoCurrentReport({ correlation }))
@@ -414,23 +177,40 @@ export const observePlannedAttemptExecutorStateWithPermit = (
   withPlannedAttemptProtocolPermit(
     permit,
     plannedAttemptExecutorCorrelation(plannedAttempt),
-    observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
+    observePlannedAttemptExecutorStateUnserialized(plannedAttempt).pipe(Effect.map(({ report }) => report))
   )
 
-/** Reconciles one ambiguous command first; otherwise observes the executor without issuing a command. */
-export const reconcileOrObservePlannedAttemptExecutorStateWithPermit = (
+/** Passively reads the executor and preserves whether the Journal accepted a distinct report. */
+export const observePlannedAttemptExecutorStateResultWithPermit = (
   permit: PlannedAttemptProtocolPermit,
   plannedAttempt: PlannedTaskAttempt
 ) =>
   withPlannedAttemptProtocolPermit(
     permit,
     plannedAttemptExecutorCorrelation(plannedAttempt),
-    Effect.gen(function* () {
-      const journal = yield* InRunJournal
-      const records = yield* journal.read(plannedAttempt.runId)
-      const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
-      return unsettledCommand === undefined
-        ? yield* observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
-        : yield* reconcileUnsettledCommand(records, plannedAttempt, unsettledCommand)
-    })
+    observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
+  )
+
+const reconcileOrObservePlannedAttemptExecutorStateResultUnserialized = Effect.fn(
+  "PlannedAttemptExecutorWorkflow.reconcileOrObserveStateResultUnserialized"
+)(function* (plannedAttempt: PlannedTaskAttempt) {
+  const journal = yield* InRunJournal
+  const records = yield* journal.read(plannedAttempt.runId)
+  const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
+  if (unsettledCommand === undefined) {
+    return yield* observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
+  }
+  const report = yield* reconcileUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt, unsettledCommand)
+  return { acceptedFacts: "Changed" as const, report } satisfies PlannedAttemptExecutorObservationResult
+})
+
+/** Reconciles an ambiguous command or passively reads, preserving whether accepted facts changed. */
+export const reconcileOrObservePlannedAttemptExecutorStateResultWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
+  plannedAttempt: PlannedTaskAttempt
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(plannedAttempt),
+    reconcileOrObservePlannedAttemptExecutorStateResultUnserialized(plannedAttempt)
   )

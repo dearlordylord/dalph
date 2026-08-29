@@ -1,21 +1,21 @@
 import { plannedAttemptExecutorCorrelation, type PlannedTaskAttempt } from "@dalph/contracts"
-import { Effect, Match, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { isExactTaskClaim, TaskClaimObservation } from "../../../authorities/task-tracker/claim-mutation.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   attemptImplementationAbandonedRecordKey,
-  attemptStoppageIntentRecordKey,
   stoppedAttemptClaimNoReleaseRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { claimReadMatchesTarget, exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import {
   latestPlannedAttemptExecutorEvidence,
-  type PlannedAttemptExecutorEvidence
+  isAcceptedPlannedAttemptExecutorEvidence,
+  type AcceptedPlannedAttemptExecutorEvidence
 } from "../planned-attempt-executor-work/evidence.js"
-import { observePlannedAttemptExecutorStateWithPermit } from "../planned-attempt-executor-work/protocol.js"
-import { requestPlannedAttemptExecutorSuspensionWithPermit } from "../planned-attempt-executor-work/suspension-commands.js"
 import {
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolPermit,
@@ -26,7 +26,6 @@ import {
   AttemptChoiceSubject,
   AttemptImplementationAbandonedEvent,
   AttemptQuiescenceProof,
-  AttemptStoppageIntendedEvent,
   sameAttemptChoiceRequestId,
   sameAttemptChoiceSubject,
   StoppedAttemptClaimNoReleaseObservedEvent
@@ -63,7 +62,9 @@ export class StoppedAttemptClaimObservationMissing extends Schema.TaggedError<St
 
 export type AttemptStoppageAdvanceResult =
   | { readonly _tag: "AttemptImplementationAbandoned" }
-  | { readonly _tag: "AttemptStoppagePending"; readonly executorState: "Running" }
+  | { readonly _tag: "AttemptStoppageAwaitingLifecycleAcceptance" }
+  | { readonly _tag: "AttemptStoppageChoiceInvalidated"; readonly reason: "ExecutingAccepted" | "LaterCommandRecorded" }
+  | { readonly _tag: "AttemptStoppageSupersededByTerminal" }
 
 const exactAppliedStop = (
   records: ReadonlyArray<JournalRecord>,
@@ -94,20 +95,19 @@ const exactAbandonment = (
       sameAttemptChoiceSubject(record.event.subject, subject)
   )
 
-const evidenceProof = (evidence: PlannedAttemptExecutorEvidence): AttemptQuiescenceProof =>
-  Match.valueTags(evidence.source, {
-    CommandResponse: ({ ordinal }) => AttemptQuiescenceProof.cases.CommandResponse.make({ reportOrdinal: ordinal }),
-    CommandProjection: ({ commandOrdinal, projectionOrdinal }) =>
-      AttemptQuiescenceProof.cases.CommandProjection.make({ commandOrdinal, projectionOrdinal }),
-    StateProjection: ({ ordinal }) => AttemptQuiescenceProof.cases.StateProjection.make({ observationOrdinal: ordinal })
-  })
+const evidenceProof = (evidence: AcceptedPlannedAttemptExecutorEvidence): AttemptQuiescenceProof =>
+  AttemptQuiescenceProof.cases.AcceptedReport.make({ reportOrdinal: evidence.source.ordinal })
 
 const unbrokenQuiescenceEvidence = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
-): PlannedAttemptExecutorEvidence | undefined => {
+): AcceptedPlannedAttemptExecutorEvidence | undefined => {
   const evidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
-  if (evidence === undefined || (evidence.report._tag !== "SafelySuspended" && evidence.report._tag !== "Terminal")) {
+  if (
+    evidence === undefined ||
+    !isAcceptedPlannedAttemptExecutorEvidence(evidence) ||
+    evidence.report._tag !== "ExecutorWorkSafelySuspended"
+  ) {
     return undefined
   }
   const laterCommandExists = records.some(
@@ -123,7 +123,7 @@ const unbrokenQuiescenceEvidence = (
 const recordAbandonment = Effect.fn("AttemptStop.recordAbandonment")(function* (
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject,
-  evidence: PlannedAttemptExecutorEvidence
+  evidence: AcceptedPlannedAttemptExecutorEvidence
 ) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(subject.plannedAttempt.runId)
@@ -145,11 +145,32 @@ const recordAbandonment = Effect.fn("AttemptStop.recordAbandonment")(function* (
   )
 })
 
-/** Advances at most one executor suspension or reconciliation call for one applied Stop. */
+type AttemptStoppageEvidenceDisposition =
+  | { readonly _tag: "AwaitingLifecycleAcceptance" }
+  | { readonly _tag: "ExecutingAccepted" }
+  | { readonly _tag: "Safe"; readonly evidence: AcceptedPlannedAttemptExecutorEvidence }
+  | { readonly _tag: "SupersededByTerminal" }
+  | { readonly _tag: "LaterCommandRecorded" }
+
+const attemptStoppageEvidenceDisposition = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): AttemptStoppageEvidenceDisposition => {
+  const latestEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
+  if (latestEvidence !== undefined && !isAcceptedPlannedAttemptExecutorEvidence(latestEvidence)) {
+    return { _tag: "AwaitingLifecycleAcceptance" }
+  }
+  if (latestEvidence?.report._tag === "ExecutorWorkTerminal") return { _tag: "SupersededByTerminal" }
+  if (latestEvidence?.report._tag === "ExecutorWorkExecuting") return { _tag: "ExecutingAccepted" }
+  const retainedProof = unbrokenQuiescenceEvidence(records, plannedAttempt)
+  return retainedProof === undefined ? { _tag: "LaterCommandRecorded" } : { _tag: "Safe", evidence: retainedProof }
+}
+
+/** Applies Stop only when the latest accepted report is the same unbroken Safe evidence that exposed the choice. */
 const advanceAttemptStoppageUnserialized = Effect.fn("AttemptStop.advanceStoppageUnserialized")(function* (
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject,
-  permit: PlannedAttemptProtocolPermit
+  _permit: PlannedAttemptProtocolPermit
 ) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(subject.plannedAttempt.runId)
@@ -159,40 +180,21 @@ const advanceAttemptStoppageUnserialized = Effect.fn("AttemptStop.advanceStoppag
   if (exactAbandonment(records, requestId, subject) !== undefined) {
     return { _tag: "AttemptImplementationAbandoned" }
   }
-  const retainedProof = unbrokenQuiescenceEvidence(records, subject.plannedAttempt)
-  if (retainedProof !== undefined) {
-    yield* recordAbandonment(requestId, subject, retainedProof)
+  const disposition = attemptStoppageEvidenceDisposition(records, subject.plannedAttempt)
+  if (disposition._tag === "AwaitingLifecycleAcceptance") {
+    return { _tag: "AttemptStoppageAwaitingLifecycleAcceptance" } as const
+  }
+  if (disposition._tag === "SupersededByTerminal") {
+    return { _tag: "AttemptStoppageSupersededByTerminal" } as const
+  }
+  if (disposition._tag === "ExecutingAccepted") {
+    return { _tag: "AttemptStoppageChoiceInvalidated", reason: "ExecutingAccepted" } as const
+  }
+  if (disposition._tag === "Safe") {
+    yield* recordAbandonment(requestId, subject, disposition.evidence)
     return { _tag: "AttemptImplementationAbandoned" }
   }
-  if (
-    !records.some(
-      ({ event }) =>
-        event._tag === "AttemptStoppageIntended" &&
-        sameAttemptChoiceRequestId(event.requestId, requestId) &&
-        sameAttemptChoiceSubject(event.subject, subject)
-    )
-  ) {
-    yield* journal.append(
-      subject.plannedAttempt.runId,
-      attemptStoppageIntentRecordKey(requestId),
-      AttemptStoppageIntendedEvent.make({
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        requestId,
-        subject,
-        version: workflowJournalEventVersion
-      })
-    )
-  }
-  const report = yield* requestPlannedAttemptExecutorSuspensionWithPermit(permit, subject.plannedAttempt)
-  if (report._tag === "Running") return { _tag: "AttemptStoppagePending", executorState: "Running" }
-  const currentRecords = yield* journal.read(subject.plannedAttempt.runId)
-  const proof = unbrokenQuiescenceEvidence(currentRecords, subject.plannedAttempt)
-  /* v8 ignore start -- a non-Running command result is returned only after the same protocol appends its exact safe or terminal report. */
-  if (proof === undefined) return yield* new AttemptStopChoiceContradiction({ requestId, subject })
-  /* v8 ignore stop */
-  yield* recordAbandonment(requestId, subject, proof)
-  return { _tag: "AttemptImplementationAbandoned" }
+  return { _tag: "AttemptStoppageChoiceInvalidated", reason: "LaterCommandRecorded" } as const
 })
 
 export const advanceAttemptStoppageWithPermit = (
@@ -216,31 +218,13 @@ export const advanceAttemptStoppage = Effect.fn("AttemptStop.advanceStoppage")(f
   )
 })
 
-/** Rechecks executor authority without issuing a fourth or duplicate suspension command. */
+/** Rechecks accepted lifecycle authority without contacting the executor. */
 const observeAttemptStoppageExecutorUnserialized = Effect.fn("AttemptStop.observeExecutorUnserialized")(function* (
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject,
   permit: PlannedAttemptProtocolPermit
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(subject.plannedAttempt.runId)
-  if (exactAppliedStop(records, requestId, subject) === undefined) {
-    return yield* new AttemptStopChoiceContradiction({ requestId, subject })
-  }
-  if (exactAbandonment(records, requestId, subject) !== undefined) {
-    return { _tag: "AttemptImplementationAbandoned" } as const
-  }
-  const report = yield* observePlannedAttemptExecutorStateWithPermit(permit, subject.plannedAttempt)
-  if (report._tag === "Running") {
-    return { _tag: "AttemptStoppagePending", executorState: "Running" } as const
-  }
-  const currentRecords = yield* journal.read(subject.plannedAttempt.runId)
-  const proof = unbrokenQuiescenceEvidence(currentRecords, subject.plannedAttempt)
-  /* v8 ignore start -- a non-Running state observation is returned only after the same protocol appends its exact safe or terminal projection. */
-  if (proof === undefined) return yield* new AttemptStopChoiceContradiction({ requestId, subject })
-  /* v8 ignore stop */
-  yield* recordAbandonment(requestId, subject, proof)
-  return { _tag: "AttemptImplementationAbandoned" } as const
+  return yield* advanceAttemptStoppageUnserialized(requestId, subject, permit)
 })
 
 export const observeAttemptStoppageExecutorWithPermit = (
@@ -268,7 +252,7 @@ type FocusedClaimObservationRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }> & {
     readonly observation: Extract<
       Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
-      { readonly _tag: "FocusedTaskClaimFacts" }
+      { readonly _tag: "FocusedTaskClaimFacts" | "FocusedTaskClaimFactsUnreadable" }
     >
   }
 }
@@ -289,21 +273,26 @@ const latestStoppedReleaseIntent = (
 const latestFocusedClaimObservation = (
   records: ReadonlyArray<JournalRecord>,
   observationBaseline: JournalRecord["position"],
-  subject: AttemptChoiceSubject
+  subject: AttemptChoiceSubject,
+  immutableRunTarget: TrackerTarget | undefined
 ) =>
   records.findLast(
     (record): record is FocusedClaimObservationRecord =>
       record.position > observationBaseline &&
+      immutableRunTarget !== undefined &&
       record.event._tag === "TaskTrackerFactsObserved" &&
-      record.event.observation._tag === "FocusedTaskClaimFacts" &&
-      record.event.observation.coverage.taskId === subject.plannedAttempt.taskId
+      (record.event.observation._tag === "FocusedTaskClaimFacts" ||
+        record.event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+      record.event.observation.coverage.taskId === subject.plannedAttempt.taskId &&
+      taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
   )
 
 const focusedClaimReadIntent = (
   records: ReadonlyArray<JournalRecord>,
   observationBaseline: JournalRecord["position"],
   observationRecord: FocusedClaimObservationRecord,
-  subject: AttemptChoiceSubject
+  subject: AttemptChoiceSubject,
+  immutableRunTarget: TrackerTarget | undefined
 ) =>
   records.find(
     ({ event, position }) =>
@@ -312,20 +301,25 @@ const focusedClaimReadIntent = (
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTaskClaim" &&
       event.operation.operationId === observationRecord.event.operationId &&
-      event.operation.taskId === subject.plannedAttempt.taskId
+      event.operation.taskId === subject.plannedAttempt.taskId &&
+      immutableRunTarget !== undefined &&
+      taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
   )
 
 const noReleaseObservationContradicts = (
   observationRecord: FocusedClaimObservationRecord,
   observationIntent: JournalRecord | undefined,
+  observationReadMatchesRunTarget: boolean,
   observationOperationId: OperationId,
   subject: AttemptChoiceSubject,
   expectedClaim: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>["expectedClaim"]
 ): boolean => {
+  if (observationRecord.event.observation._tag !== "FocusedTaskClaimFacts") return true
   const observation = observationRecord.event.observation.observation
   return (
     observationRecord.event.operationId !== observationOperationId ||
     observationIntent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
+    !observationReadMatchesRunTarget ||
     observation.taskId !== subject.plannedAttempt.taskId ||
     (observation._tag === "ActiveTaskClaim" && isExactTaskClaim(observation, expectedClaim))
   )
@@ -345,19 +339,37 @@ export const recordStoppedAttemptClaimNoRelease = Effect.fn("AttemptStop.recordC
   }
   const abandonment = abandonmentRecord.event
   const abandonmentPosition = abandonmentRecord.position
+  const immutableRunTarget = exactWorkflowRunTargetFor(records)
   const latestReleaseIntent = latestStoppedReleaseIntent(records, abandonmentPosition, requestId)
   const observationBaseline = latestReleaseIntent?.position ?? abandonmentPosition
-  const observationRecord = latestFocusedClaimObservation(records, observationBaseline, subject)
+  const observationRecord = latestFocusedClaimObservation(records, observationBaseline, subject, immutableRunTarget)
   if (observationRecord === undefined) {
     return yield* new StoppedAttemptClaimObservationMissing({ observationOperationId, requestId, subject })
   }
-  const observationEvent = observationRecord.event
-  const observation = observationEvent.observation.observation
-  const observationIntent = focusedClaimReadIntent(records, observationBaseline, observationRecord, subject)
+  if (observationRecord.event.observation._tag !== "FocusedTaskClaimFacts") {
+    return yield* new StoppedAttemptClaimObservationMissing({ observationOperationId, requestId, subject })
+  }
+  const observation = observationRecord.event.observation.observation
+  const observationIntent = focusedClaimReadIntent(
+    records,
+    observationBaseline,
+    observationRecord,
+    subject,
+    immutableRunTarget
+  )
+  const observationReadMatchesRunTarget = claimReadMatchesTarget(
+    records,
+    observationOperationId,
+    subject.plannedAttempt.taskId,
+    observationBaseline,
+    observationRecord.position,
+    immutableRunTarget
+  )
   if (
     noReleaseObservationContradicts(
       observationRecord,
       observationIntent,
+      observationReadMatchesRunTarget,
       observationOperationId,
       subject,
       abandonment.expectedClaim

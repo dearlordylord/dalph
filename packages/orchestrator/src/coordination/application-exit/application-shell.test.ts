@@ -69,7 +69,7 @@ const successfulDrain = (
   closeProcessLocalResources,
   flushProducedJournalWrites: record("produced-writes-flushed"),
   releaseCoordinatorLock: record("coordinator-lock-released"),
-  suspendRunningExecutorWork: Effect.succeed([])
+  suspendExecutingExecutorWork: Effect.succeed([])
 })
 
 /** Maintained application-lifecycle cassette; these entries are deliberately outside every Run story. */
@@ -225,7 +225,7 @@ it.effect("coalesces repeated Exit requests without resetting the fixed five-sec
           closeProcessLocalResources: Effect.void,
           flushProducedJournalWrites: Effect.never,
           releaseCoordinatorLock: Effect.void,
-          suspendRunningExecutorWork: Effect.succeed([])
+          suspendExecutingExecutorWork: Effect.succeed([])
         },
         { requestEnd: (decision) => Ref.update(processEnds, (decisions) => [...decisions, decision]) }
       )
@@ -298,7 +298,7 @@ it.effect("uses no fresh drain time when driver start is delayed beyond the orig
           closeProcessLocalResources: Effect.void,
           flushProducedJournalWrites: Effect.never,
           releaseCoordinatorLock: Effect.void,
-          suspendRunningExecutorWork: Effect.succeed([])
+          suspendExecutingExecutorWork: Effect.succeed([])
         },
         { requestEnd: () => Effect.void },
         {
@@ -368,7 +368,7 @@ it.effect("reports a flush failure only after releasing idle process resources a
           closeProcessLocalResources: record("local-resources-closed"),
           flushProducedJournalWrites: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })),
           releaseCoordinatorLock: record("coordinator-lock-released"),
-          suspendRunningExecutorWork: Effect.succeed([])
+          suspendExecutingExecutorWork: Effect.succeed([])
         },
         { requestEnd: (decision) => Ref.update(processEnds, (decisions) => [...decisions, decision]) }
       )
@@ -395,7 +395,7 @@ it.effect("reports a direct executor-family drain failure and still performs eve
           closeProcessLocalResources: record("local-resources-closed"),
           flushProducedJournalWrites: record("produced-writes-flushed"),
           releaseCoordinatorLock: record("coordinator-lock-released"),
-          suspendRunningExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
+          suspendExecutingExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
         },
         { requestEnd: () => Effect.void }
       )
@@ -439,7 +439,7 @@ it.effect("retains every concurrent family diagnostic in stable application-drai
           closeProcessLocalResources: failAfter(localStarted, finishLocal, localDiagnostic),
           flushProducedJournalWrites: failAfter(writeStarted, finishWrite, writeDiagnostic),
           releaseCoordinatorLock: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [lockDiagnostic] })),
-          suspendRunningExecutorWork: failAfter(executorStarted, finishExecutor, executorDiagnostic)
+          suspendExecutingExecutorWork: failAfter(executorStarted, finishExecutor, executorDiagnostic)
         },
         { requestEnd: () => Effect.void }
       )
@@ -571,7 +571,7 @@ it.effect("reports a registered executor-family drain failure after its admitted
       const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       const owner = yield* shell.admission.acquireForwardOwner("RunActivation")
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
+        suspendExecutingExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
       })
       const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
       yield* Effect.yieldNow
@@ -590,7 +590,7 @@ it.effect("settles an interrupted executor drain with a typed diagnostic", () =>
       const started = yield* Deferred.make<void>()
       const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.interrupt))
+        suspendExecutingExecutorWork: Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.interrupt))
       })
 
       const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
@@ -613,7 +613,7 @@ it.effect("normalizes executor drain defects and exposes the settled drain await
       yield* emptyShell.awaitExecutorDrains
 
       const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
-      yield* shell.registerExecutorDrain({ suspendRunningExecutorWork: Effect.die("controlled executor defect") })
+      yield* shell.registerExecutorDrain({ suspendExecutingExecutorWork: Effect.die("controlled executor defect") })
 
       const result = yield* shell.requestBoundary.requestExit
       expect(result).toMatchObject({
@@ -633,7 +633,7 @@ it.effect("reports timeout with an earlier executor failure while an atomic owne
         requestEnd: (decision) => Ref.update(processEnds, (current) => [...current, decision])
       })
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
+        suspendExecutingExecutorWork: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] }))
       })
       yield* shell.admission.acquireForwardOwner("AtomicBoundary")
       const first = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
@@ -656,11 +656,11 @@ it.effect("retains a settled executor failure when another executor drain remain
       const failedDrainSettled = yield* Deferred.make<void>()
       const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Deferred.succeed(failedDrainSettled, undefined).pipe(
+        suspendExecutingExecutorWork: Deferred.succeed(failedDrainSettled, undefined).pipe(
           Effect.andThen(Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })))
         )
       })
-      yield* shell.registerExecutorDrain({ suspendRunningExecutorWork: Effect.never })
+      yield* shell.registerExecutorDrain({ suspendExecutingExecutorWork: Effect.never })
       const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
       yield* Deferred.await(failedDrainSettled)
       yield* TestClock.adjust("5 seconds")
@@ -687,7 +687,7 @@ it.effect("finishes independent cross-family quick drains before reporting one s
         { emit: (event) => Ref.update(lifecycleCassette, (events) => [...events, event]) }
       )
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Deferred.succeed(executorStarted, undefined).pipe(
+        suspendExecutingExecutorWork: Deferred.succeed(executorStarted, undefined).pipe(
           Effect.andThen(Deferred.await(allowExecutorFailure)),
           Effect.andThen(Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })))
         )
@@ -729,7 +729,7 @@ it.effect("drains an admitted Run that registers after the Exit driver captured 
       const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       const owner = yield* shell.admission.acquireForwardOwner("RunActivation")
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Deferred.succeed(firstDrainStarted, undefined).pipe(
+        suspendExecutingExecutorWork: Deferred.succeed(firstDrainStarted, undefined).pipe(
           Effect.andThen(Deferred.await(releaseFirstDrain)),
           Effect.as([])
         )
@@ -738,7 +738,7 @@ it.effect("drains an admitted Run that registers after the Exit driver captured 
       yield* Deferred.await(firstDrainStarted)
 
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Deferred.succeed(lateDrainStarted, undefined).pipe(Effect.as([]))
+        suspendExecutingExecutorWork: Deferred.succeed(lateDrainStarted, undefined).pipe(Effect.as([]))
       })
       yield* Effect.yieldNow
       expect(yield* Deferred.isDone(lateDrainStarted)).toBe(true)
@@ -762,7 +762,7 @@ it.effect("settles the empty executor set before accepting a post-settlement reg
       // The empty activation atomically moved the registry to Settled. A
       // registration arriving after that point cannot become an active drain.
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Deferred.succeed(lateDrainStarted, undefined).pipe(Effect.as([]))
+        suspendExecutingExecutorWork: Deferred.succeed(lateDrainStarted, undefined).pipe(Effect.as([]))
       })
       expect(yield* Deferred.isDone(lateDrainStarted)).toBe(false)
     })
@@ -777,7 +777,7 @@ it.effect("unregisters a serving drain before cutoff so Exit does not start it",
       const shell = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
       yield* shell
         .registerExecutorDrain({
-          suspendRunningExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(Effect.as([]))
+          suspendExecutingExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(Effect.as([]))
         })
         .pipe(Scope.provide(registrationScope))
 
@@ -810,7 +810,7 @@ it.effect("keeps a pre-cutoff executor drain registered when its Run scope close
       )
       yield* shell
         .registerExecutorDrain({
-          suspendRunningExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(
+          suspendExecutingExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(
             Effect.andThen(Deferred.await(releaseDrain)),
             Effect.as([])
           )
@@ -843,7 +843,7 @@ it.effect("reports timeout with an earlier produced-write diagnostic at the orig
           closeProcessLocalResources: Effect.never,
           flushProducedJournalWrites: Effect.fail(new ApplicationExitDrainFailure({ diagnostics: [diagnostic] })),
           releaseCoordinatorLock: Effect.void,
-          suspendRunningExecutorWork: Effect.succeed([])
+          suspendExecutingExecutorWork: Effect.succeed([])
         },
         { requestEnd: () => Effect.void }
       )
@@ -868,7 +868,7 @@ it.effect("an authored process-death cut before the Exit result persists no cuto
         closeProcessLocalResources: Effect.void,
         flushProducedJournalWrites: Effect.never,
         releaseCoordinatorLock: Effect.void,
-        suspendRunningExecutorWork: Effect.succeed([])
+        suspendExecutingExecutorWork: Effect.succeed([])
       },
       { requestEnd: () => Effect.void }
     ).pipe(Scope.provide(applicationScope))

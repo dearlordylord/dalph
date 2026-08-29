@@ -68,7 +68,7 @@ import {
 import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
-import { suspendRunningExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
+import { suspendExecutingExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
 import {
   AppliedRunCancellation,
   ApplyRunCancellationRequest,
@@ -350,7 +350,9 @@ export const journaledRunBootstrapLayer = (
                 InRunJournal.of({ append: journal.append, read: journal.read })
               )
               yield* applicationExit.registerExecutorDrain({
-                suspendRunningExecutorWork: suspendRunningExecutorWorkForApplicationExit().pipe(Effect.provide(context))
+                suspendExecutingExecutorWork: suspendExecutingExecutorWorkForApplicationExit().pipe(
+                  Effect.provide(context)
+                )
               })
               const controls: RuntimeControls = {
                 attemptChoice: Context.get(context, AttemptChoiceControl),

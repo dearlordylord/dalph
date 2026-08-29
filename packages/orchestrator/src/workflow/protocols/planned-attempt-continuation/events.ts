@@ -4,7 +4,7 @@ import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 
 const activeTaskContinuationObservationCount = 3
-const continuationWitnessObservationCount = 4
+const continuationWitnessObservationCount = 5
 
 /**
  * The ordinary current-fact reads that witness one continuation. Keeping the
@@ -31,6 +31,7 @@ export type ActiveTaskContinuationRead = typeof ActiveTaskContinuationRead.Type
 /** Exact witnesses required before continuing one existing executor responsibility. */
 export const PlannedAttemptContinuationWitness = Schema.Struct({
   activeTaskContinuationRead: ActiveTaskContinuationRead,
+  targetLineageObservationOperationId: OperationId,
   worktreeObservationOperationId: OperationId
 }).check(
   Schema.makeFilter((witness) =>
@@ -38,10 +39,11 @@ export const PlannedAttemptContinuationWitness = Schema.Struct({
       witness.activeTaskContinuationRead.graphObservationOperationId,
       witness.activeTaskContinuationRead.taskClaimObservationOperationId,
       witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
+      witness.targetLineageObservationOperationId,
       witness.worktreeObservationOperationId
     ]).size === continuationWitnessObservationCount
       ? undefined
-      : "a continuation authorization must name four distinct observations"
+      : "a continuation authorization must name five distinct observations"
   )
 )
 export type PlannedAttemptContinuationWitness = typeof PlannedAttemptContinuationWitness.Type

@@ -109,8 +109,8 @@ attempt is in a holding phase. It is released on the correlated safe-suspension
 or terminal report, and on nothing else — not a stopped inner process, not a
 timeout, not process death.
 → `plannedAttemptExecutor` states exact-correlated position discipline; its
-finite evidence and Suspend-bound proof projections completely enumerate that
-only safe or terminal evidence releases the position. Benchmark `I7` remains
+canonical invariants and TLC temporal check cover causally requested direct or
+reconciled safe evidence and autonomous terminal evidence. Benchmark `I7` remains
 weaker because it has no report correlation.
 
 **D13 The ceiling binds admission only.** A new admission respects the current
@@ -188,8 +188,8 @@ outcome may become ambiguous, Dalph records the exact intent and waits for the
 append acknowledgement, then calls the owning system, then records the exact
 observed result.
 → `plannedAttemptExecutor` separates every exact command intent, call, and
-observation; its finite evidence, Start-bound, and Suspend-bound projections
-completely enumerate that ordering. `integrationFinality` records replacement
+observation; its focused evidence and Suspend-bound projections enumerate their
+named finite subgraphs. `integrationFinality` records replacement
 and deletion intents before their bounded requests; the fast-check journal arm
 also has the intent/outcome split for claim, worktree and promotion.
 
@@ -320,10 +320,11 @@ never inferred from process loss, a timeout, missing session data, or a
 boundary result that delivery planning has not durably published. After Dalph
 durably publishes an exact terminal executor report and ends its correlated
 planned-attempt executor-work responsibility, that report may supply the
-no-live-owner fact used in quiescence. In issue #66, a late `Accepted` report
-may replace an earlier safe-suspension report as that current quiescence fact;
-it remains neither tracker completion nor integration authority. D35 owns
-termination.
+no-live-owner fact used in quiescence. A terminal report supersedes any earlier
+safe-suspension report and is absorbing: it cannot authorize Stop abandonment
+or Restart replacement. An `Accepted` terminal outcome follows ordinary
+integration admission; `Completed` and `Failed` retain their distinct terminal
+outcomes. D35 owns termination.
 → `I19` and `integrationFinality`'s empty-frontier witness with a retained
 unrelated responsibility. `runActivation.finalityReadRequiresQuiescence` and
 `runActivation.establishmentSourceDoesNotChangeActivationBounds` check the
@@ -466,10 +467,10 @@ resource.
 Order follows accepted-result acceptance, not task identity, completion time, or
 insertion order. The same-target queue is never reordered, and one
 responsibility does not move ahead of another merely because that other is
-waiting. An accepted result whose exact pre-integration Restart choice was
-already applied before that terminal report remains preserved P1 evidence and
-does not create an integration responsibility; the ordinary accepted-result
-path still creates one responsibility exactly once.
+waiting. Every current accepted result follows the ordinary accepted-result
+path and creates one responsibility exactly once. Historical cassette decoders
+may preserve records written under the former late-Resume design, but those
+records do not define current integration admission.
 → `—` no model has a queue.
 
 **D43 The serialized target resource is released while only waiting.** Process-local
@@ -527,34 +528,31 @@ checks the exact prior direction and its observation episode. The scenario seam
 `does not cross cleanup or integration boundaries for a stale direction` traces
 the forbidden later action.
 
-**D48a A late terminal report does not erase an applied Restart choice.**
-When an exact Restart choice is durably applied before a planned attempt's
-terminal `Accepted` report, Dalph preserves that result and evidence without
-creating integration responsibility. The terminal report may replace an
-earlier safe-suspension report as the current executor quiescence fact, but it
-does not authorize replacement by itself. After fresh task and Git reads still
-prove the exact Restart choice, task revision, claim, ready old worktree, and
-target head, Dalph may append the one atomic P1/P2 replacement event and admit
-P2 ordinarily; Alice does not issue Restart again. A changed, missing, or
-unreadable fresh fact authorizes no successor.
-→ `taskFactReconciliation` must state the late-`Accepted` preservation,
-fresh-facts guard, and atomic replacement; the issue #56 scenario and its
-replacement outer-Integrator seam must keep the result outside integration;
-the accepted-result integration model keeps the late result as evidence only
-in `lateAcceptedAfterRestartRemainsEvidenceOnlyTest`.
+**D48a Terminal lifecycle evidence is absorbing.**
+When an exact terminal report is accepted after an applied Restart or Stop,
+the report becomes the sole current lifecycle fact. The earlier terminal choice
+cannot use that report to authorize replacement or abandonment. An Accepted
+result follows ordinary integration admission; Failed and Completed remain
+their exact terminal outcomes. Historical late-Resume cassette records remain
+decoder evidence only.
+→ `taskFactReconciliation` states
+`terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains`; the accepted-result integration
+model has no Restart-specific suppression branch; production admission queues
+the durable Accepted result after Restart once its evidence qualifies.
 
 **D49 Operator request identity is exact.** Exact redelivery of a request returns
 its recorded result rather than acting twice. Reuse of a request identity for a
 different Run, task, attempt, fingerprint pair, or choice is a typed
 contradiction. Where two valid requests race, the first committed to the journal
 wins regardless of arrival order across Continue, Restart, and Stop, and a
-later change of instructions requires a fresh choice. A late terminal result
-does not require exact redelivery of an already applied Restart choice.
+later change of instructions requires a fresh choice. A later fingerprint may
+not turn an earlier terminal choice into Continue authorization for the same
+immutable attempt.
 → `taskFactReconciliation` states `requestIdentityErrorsRemainDistinct`,
 `firstJournaledChoiceWins`, and `changedAgainRequiresNewChoice`. Its collected
 tests reach exact redelivery, conflicting reuse, both race winners, the new
-fingerprint choice, Restart redelivery, and the late-`Accepted` branch; matching
-production cassette tests use those same cases.
+fingerprint choice, and Restart redelivery; matching production cassette tests
+use those same cases.
 
 ## Application Exit
 
@@ -579,7 +577,7 @@ terminal report, every produced journal write to be acknowledged, and every
 process-local owner, reservation, fiber, task-work position, and coordinator
 lock to be released. An ambiguous outside effect may remain only behind its
 acknowledged exact intent and with no local owner able to send a successor.
-Exit never starts an executor `startOrContinue` request, fresh reconciliation,
+Exit never starts an executor `begin` or `resume` request, fresh reconciliation,
 stabilization, durable-resource cleanup, attempt replacement, or Run
 termination.
 → `applicationExit` states the typed owner-disposition and success guards;

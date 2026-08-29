@@ -536,7 +536,7 @@ explicitly provides no Delivery graph, source-stage rows, publications, or
 runtime-owner chronology.
 
 The Lab must not color a proposal or story sentence as live integration, color
-executor Terminal as settlement, fabricate a Delivery publication for a story
+executor `ExecutorWorkTerminal` as settlement, fabricate a Delivery publication for a story
 or runtime transition, persist presentation state as workflow truth, or retain
 the removed throwaway visualization as a second runnable surface.
 
@@ -728,21 +728,22 @@ complete tracker read observes X and the changed G prerequisites. X becomes
 graph-eligible, but B and C occupy both positions, so no X executor work begins
 and no X attempt is planned yet.
 
-The executor then reports B Terminal while C remains Running. B's report leaves
+The executor then reports B `ExecutorWorkTerminal` while C remains
+`ExecutorWorkExecuting`. B's report leaves
 one position unheld but does not itself permit another frontier task to start or
 prove B complete; the graph keeps B
 open and the Lab separately shows C as the remaining holder. C then reports
-Terminal in a later production publication. Only after no current executable
+`ExecutorWorkTerminal` in a later production publication. Only after no current executable
 responsibility remains does an ordinary complete tracker read report B and C
 `CompletedSuccessfully`. That observation exposes D and the already-observed X,
 and those two tasks begin together. No terminal executor report is used as a
 substitute for this tracker observation.
 
-D and X report Terminal in separate production publications, so the Lab first
+D and X report `ExecutorWorkTerminal` in separate production publications, so the Lab first
 shows both positions held, then X as the remaining holder, then neither held.
 The later complete tracker read proves both successful and exposes E and F.
-Those tasks begin together; E reports Terminal first while F remains visibly
-held, then F reports Terminal. The later successful tracker observation exposes
+Those tasks begin together; E reports `ExecutorWorkTerminal` first while F remains visibly
+held, then F reports `ExecutorWorkTerminal`. The later successful tracker observation exposes
 H and I, which likewise begin together and release their positions in separate
 publications. G remains blocked until a later tracker observation proves H, I,
 and X successful. G then begins and reports through the same ordinary executor
@@ -764,7 +765,7 @@ composable node styling for graph eligibility, desired placement, retained
 Retrying the cassette starts fresh controlled boundary state and repeats the
 same chronology. Within one run, restart must not plan replacement B or C
 attempts, admit X before a position is available, infer task success from an
-executor Terminal report, discard a responsibility because Alice closed or
+executor `ExecutorWorkTerminal` report, discard a responsibility because Alice closed or
 removed its tracker task, or draw an absent responsibility as if it were a
 current tracker node.
 
@@ -837,8 +838,8 @@ task whose exact facts are correlated below.
   checks that bounded placements and runtime position holders are distinct
   visible fields.
 - `keeps a paused task held until the exact safe-suspension report` checks the
-  Pause direction and Running report leave A's exact attempt in the held map,
-  and only the declared `SafelySuspended` report releases it.
+  Pause direction and `ExecutorWorkExecuting` report leave A's exact attempt in the held map,
+  and only the declared `ExecutorWorkSafelySuspended` report releases it.
 - `separates every coordinator activation in a multi-restart delivery timeline`
   checks activation ordinals, every initial-to-later and later-to-later
   activation boundary, and exact attempt correlation in a maintained
@@ -853,7 +854,7 @@ task whose exact facts are correlated below.
   action-planning result without implying any proposal ran. When that one
   publication consumed several declared interactions, it also checks the
   visible chronology retains both the concrete Operator Pause and the later
-  executor Running report instead of showing only the final raw tag.
+  executor `ExecutorWorkExecuting` report instead of showing only the final raw tag.
 - `retains every conflicting production proposal owner in the delivery frame`
   evaluates one exact captured publication whose production proposal owners
   collide and checks that the serializable frame retains the conflict instead
@@ -899,7 +900,7 @@ task whose exact facts are correlated below.
   checks B and C hold exact task-work positions before process loss, the first
   later-activation publications retain the same Run and attempt correlations,
   and X receives neither an attempt nor a position until a later publication
-  has observed it and both reconstructed holders have reported Terminal.
+  has observed it and both reconstructed holders have reported `ExecutorWorkTerminal`.
 - `shows represented and off-graph responsibilities without inventing tracker nodes`
   drives established and graph-not-established frames through the Lab
   presentation. It checks the mismatch rail names each exact held Run/attempt,
@@ -943,12 +944,12 @@ task whose exact facts are correlated below.
   selection visibly changes the graph while preserving the frontier, desired
   ticket, held-position, and retained-standing encodings.
 - The real-browser command listens for a delivery-frame event before the
-  selected cassette's settled event, proves the article is still Running when
+  selected cassette's settled event, proves the article is still running when
   a real frame appears, and then checks final auto-follow, rewind, disclosure
   stability, and the complete current-catalog terminal summary. Its
   `drives the staggered double-diamond frontier through every production wave, held-position release, and restart`
   checkpoint additionally observes the graph while the linked cassette is
-  still Running, traverses its exact prerequisite edges and rolling parallel
+  still running, traverses its exact prerequisite edges and rolling parallel
   states, checks X appears only after the later tracker observation, and checks
   the B/C attempt correlations and anonymous occupied positions on both sides
   of restart through the actual served application. At phone width it also
@@ -1034,17 +1035,19 @@ proof of current process-local target ownership.
   waiting, queued, and started visible states without treating them as the
   outer Integrator design.
 
-## A maintainer inspects continuation authorization in the selected recovery cassette
+## A maintainer inspects continuation authorization for an exact safely suspended attempt
 
 ### Starting situation and trigger
 
 A Dalph maintainer opens Reducer Lab at one source revision and selects the
-maintained authored cassette `authored:coordinatorProcessDeathContinues`, the
-recovery story delivered by issue #171. Its production runner is the ordinary
-`runAuthoredScenarioCassette`; the returned `CassetteLabResult` contains the
-fresh in-memory workflow-journal records for that run. No GitHub issue, Git
-repository, executor process, or durable journal outside the cassette run is
-changed.
+maintained authored cassette `authored:taskUnpauseAfterSafeSuspension`. Task A
+already has one exact planned attempt and executor-work responsibility. Alice
+unpauses task A while its Suspend request is in flight, and the executor's
+accepted response reports that exact attempt safely suspended. Its production
+runner is the ordinary `runAuthoredScenarioCassette`; the returned
+`CassetteLabResult` contains the fresh in-memory workflow-journal records for
+that run. No GitHub issue, Git repository, executor process, or durable journal
+outside the cassette run is changed.
 
 The maintainer chooses **Run selected cassette** and, after the production
 runner settles, opens the selected result's continuation-authorization
@@ -1055,25 +1058,24 @@ causal validation rule.
 ### Ordered production and Lab behavior
 
 The production runner first records one executor-work responsibility for task
-A's exact planned attempt. The typed cassette lifecycle control disposes the
-first coordinator activation; it is a harness control and is not a workflow
-journal event. The next production activation keeps the same Run and attempt,
-records fresh tracker observations for the active-task graph, task-work
-specification, and exact claim, and records a fresh Git observation for the
-exact planned worktree. It then records one generic
-`PlannedAttemptContinuationAuthorized` fact naming those four observation
-operation identities before the executor command. The existing executor
-protocol later records a `Running` or `Terminal` report for the same exact
-`(RunId, AttemptId)`; the maintained recovery cassette reaches its Terminal
-report.
+A's exact planned attempt, then accepts its Executing and SafelySuspended
+reports in that order. The SafelySuspended report, rather than the preceding
+command or an executor projection, is the lifecycle authority for one Resume.
+The same activation records fresh tracker observations for the active-task
+graph, task-work specification, and exact claim, and fresh Git observations
+for the exact planned worktree and compatible target lineage. It then records
+one generic `PlannedAttemptContinuationAuthorized` fact naming those five
+observation operation identities and the accepted safely suspended report
+before the Resume command. The executor protocol later records the exact
+attempt's Terminal report under the same `(RunId, AttemptId)`.
 
 The Lab decodes the returned production `journalRecords` and presents three
 durable prefixes for this cassette: the records through the fresh authority
 observations before authorization, the authorization fact before an executor
-report, and the later `Running` or `Terminal` report. It shows each graph,
-specification, claim, and worktree operation identity with its intent and
-observation positions, the authorization position, and the structured Run/attempt
-pair. It also inspects every typed planned-attempt, responsibility,
+report, and the later `ExecutorWorkExecuting` or `ExecutorWorkTerminal`
+report. It shows each graph, specification, claim, worktree, and target-lineage
+operation identity with its intent and observation positions, the
+authorization position, and the structured Run/attempt pair. It also inspects every typed planned-attempt, responsibility,
 authorization, and report fact for the selected Run, so a replacement attempt or
 additional responsibility cannot be hidden by selecting the first one. The
 selected result labels the executor boundary as `ExecutorReportObserved` only
@@ -1084,14 +1086,16 @@ because the typed report is present; a command-intent record alone is shown as
 
 The Lab makes in-memory missing, stale, later, and wrong-attempt witness
 fixtures from the returned records, each ending at the last pre-authorization
-observation and containing no authorization, command-intent, or report fact.
-For each fixture it calls the exported
+observation. Each retains the accepted safely suspended report that grants the
+candidate Resume authority, but contains no Resume intent or later executor
+report. For each fixture it calls the exported
 production `evaluatePlannedAttemptContinuationAuthorization` through the Lab
 contact-decision adapter. A rejected pre-contact evaluation is shown as executor
 contact unavailable with `NoCommandIntent`; the adapter performs no executor
 call. If a fixture contains only the durable command intent, the Lab labels it
 `CommandIntentRecorded`, which is still not physical executor contact. Only a
-typed `Running` or `Terminal` report produces `ExecutorReportObserved`. The Lab
+typed `ExecutorWorkExecuting` or `ExecutorWorkTerminal` report produces
+`ExecutorReportObserved`. The Lab
 does not copy the production chronology or identity validation into a second
 reducer.
 
@@ -1099,37 +1103,39 @@ reducer.
 
 The browser has no persistence, so browser loss discards this local evidence
 and cannot ambiguously change an outside system. Rerunning the selected
-cassette invokes the same #171 production runner with fresh controlled runtime
+cassette invokes the same production runner with fresh controlled runtime
 state and a fresh Run identity; the projection is derived again from that
 returned journal. There is no outside retry, cleanup, or process qualification
 to perform because every boundary is a controlled cassette adapter.
 
-The maintainer sees the exact durable prefixes, the four witness operation
+The maintainer sees the exact durable prefixes, the five witness operation
 identities, the authorization, and the later report under the selected result.
-The Lab must not treat the lifecycle control as a recovery event, allocate a
-replacement attempt, invent a separate executor invocation identity, or allow
-missing, stale, later, or wrong-attempt evidence to advance to executor
-contact.
+The Lab must not authorize Resume from the earlier Executing report, the
+Suspend command, or an unsettled executor projection; allocate a replacement
+attempt; invent a separate executor invocation identity; or allow missing,
+stale, later, wrong-attempt, or already-consumed safe evidence to advance to
+executor contact.
 
 ### Acceptance-test mapping
 
 - `projects maintained continuation prefixes and fails invalid witnesses closed`
-  runs the exact maintained #171 catalog entry through
+  runs the exact maintained safely suspended Resume catalog entry through
   `runAuthoredScenarioCassette`, projects the pre-authorization,
   post-authorization-before-report, and terminal prefixes, and sends missing,
   stale, later, and wrong-attempt pre-authorization fixtures through the shared
-  production evaluator. Every invalid fixture has no command/report contact
-  evidence, remains executor-contact unavailable, and is marked
-  `NoCommandIntent`; an intent-only control fixture is marked
+  production evaluator. Every invalid fixture has no Resume intent or
+  post-Resume report, remains executor-contact unavailable, and is marked
+  `NoCommandIntent`; a Resume-intent-only control fixture is marked
   `CommandIntentRecorded` without claiming physical contact.
 - `shows continuation authorization prefixes and retained Run/attempt identity`
   mounts the selected Lab result and checks that the three durable prefixes,
-  four witness operation identities, one generic authorization, and every
+  five witness operation identities, one generic authorization, and every
   structured planned-attempt/responsibility/authorization/report correlation
   are visible; its typed replacement-attempt fixture checks that a second
   responsibility, authorization, and report cannot be hidden by selecting the
   first attempt, while the restart fixture checks task A's old responsibility
   and held position are `Disappeared` and accepted integration is `Added`.
-- The same two tests check that the responsibility, authorization, and
-  `Running`/`Terminal` report use one exact `(RunId, AttemptId)` and introduce
-  no recovery-named event or replacement attempt.
+- The same two tests check that the responsibility, accepted
+  `ExecutorWorkSafelySuspended` report, authorization, and terminal report use
+  one exact `(RunId, AttemptId)` and introduce no replacement attempt or
+  executor invocation identity.

@@ -42,7 +42,7 @@ it.each([
   [
     "CorrelationContradiction",
     PlannedAttemptExecutorStateObservation.cases.ExecutorReportContradiction.make({
-      observed: PlannedAttemptExecutorReport.cases.Running.make({
+      observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
         correlation: { runId, attemptId: AttemptId.make("foreign-projection-attempt") }
       })
     })

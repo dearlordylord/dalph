@@ -325,7 +325,7 @@ module applicationExitExecutorProof {
   type Phase = Serving | Draining
   type Attempt =
     | NotStarted
-    | Running
+    | Executing
     | SuspensionIntentRecorded
     | FastSuspensionCalled
     | SafelySuspended
@@ -344,7 +344,7 @@ module applicationExitExecutorProof {
 
   val exactSafeOrTerminalEvidenceControlsPositionRelease: bool = and {
     state.positionHeld == or {
-      state.attempt == Running,
+      state.attempt == Executing,
       state.attempt == SuspensionIntentRecorded,
       state.attempt == FastSuspensionCalled,
       state.attempt == SuspensionCallFailed,
@@ -359,7 +359,7 @@ module applicationExitExecutorProof {
 
   val servingReached: bool = state.phase == Serving
   val drainingReached: bool = state.phase == Draining
-  val runningReached: bool = state.attempt == Running
+  val executingReached: bool = state.attempt == Executing
   val suspensionIntentReached: bool = state.attempt == SuspensionIntentRecorded
   val fastSuspensionCalledReached: bool = state.attempt == FastSuspensionCalled
   val safelySuspendedReached: bool = state.attempt == SafelySuspended
@@ -379,7 +379,7 @@ module applicationExitExecutorProof {
   action startAttempt: bool = all {
     state.phase == Serving,
     state.attempt == NotStarted,
-    state' = { ...state, attempt: Running, positionHeld: true },
+    state' = { ...state, attempt: Executing, positionHeld: true },
   }
 
   action acceptExit: bool = all {
@@ -389,7 +389,7 @@ module applicationExitExecutorProof {
 
   action recordSuspensionIntent: bool = all {
     state.phase == Draining,
-    state.attempt == Running,
+    state.attempt == Executing,
     state' = {
       ...state,
       attempt: SuspensionIntentRecorded,
@@ -413,7 +413,7 @@ module applicationExitExecutorProof {
   action reportTerminal: bool = all {
     state.phase == Draining,
     or {
-      state.attempt == Running,
+      state.attempt == Executing,
       state.attempt == SuspensionIntentRecorded,
       state.attempt == FastSuspensionCalled,
     },

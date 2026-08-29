@@ -291,7 +291,13 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               const current = Option.getOrThrow(yield* Ref.get(latest))
               yield* Ref.set(latest, Option.some(current))
               yield* admission.synchronize(current.taskWork)
-              if (completion.exit.value._tag === "ActionDeferred") {
+              const unchangedPassiveObservation =
+                completion.exit.value._tag === "ExecutorReportPublished" &&
+                completion.exit.value.acceptedFacts === "UnchangedPassiveObservation"
+              if (completion.exit.value._tag === "ActionDeferred" || unchangedPassiveObservation) {
+                // A finite passive read that returned the already-accepted exact report must release its
+                // process-local owner without immediately re-admitting the same proposal. A later accepted
+                // signal may clear this deferral; #265 owns when such an observation signal is scheduled.
                 yield* Ref.update(deferredAt, (deferred) =>
                   new Map(deferred).set(completion.proposalId, current.acceptedAt)
                 )

@@ -129,7 +129,7 @@ it("reconciles an already-intended exact claim release as its own responsibility
 
 it("retains a terminal executor report for the exact planned attempt", () => {
   const responsibility = executionResponsibilityFor(taskA)
-  const report = PlannedAttemptExecutorReport.cases.Terminal.make({
+  const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
     correlation: { attemptId: responsibility.plannedAttempt.attemptId, runId: responsibility.plannedAttempt.runId },
     result: PlannedAttemptExecutorResult.cases.Failed.make({})
   })

@@ -53,6 +53,7 @@ separately and are not current implementation authority.
 | `issue-156-reject-stale-task-control.md` | 156 |
 | `issue-192-describe-delivery-actions.md` | 192 |
 | `issue-193-run-reactive-delivery-actions.md` | 193 |
+| `issue-264-autonomous-executor-work.md` | 264 |
 | `issue-194-stabilize-each-run.md` | 194 |
 | `issue-206-interruptible-tracker-git-exit.md` | 206 |
 | `issue-205-running-executor-application-exit.md` | 205 |

@@ -1,6 +1,6 @@
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
-import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
+import { reconstructedTaskGraphFor } from "../reconstruction/graph-knowledge.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
@@ -153,7 +153,7 @@ const graphStateFrom = (
   records: ReadonlyArray<JournalRecord>,
   target: TrackerTarget
 ): TrackerGraphState =>
-  Option.match(latestReconstructedTaskGraph(reconstructed.graphKnowledge), {
+  Option.match(reconstructedTaskGraphFor(reconstructed.graphKnowledge, target), {
     /* v8 ignore next -- A newly journaled complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
     onSome: (graph) => {

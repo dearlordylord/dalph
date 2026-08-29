@@ -518,9 +518,9 @@ it.effect("keeps the active Run alive until its exact executor-family Exit drain
         awaitExecutorDrains: applicationExit.awaitExecutorDrains,
         registerExecutorDrain: (drain) =>
           applicationExit.registerExecutorDrain({
-            suspendRunningExecutorWork: Deferred.succeed(executorDrainStarted, undefined).pipe(
+            suspendExecutingExecutorWork: Deferred.succeed(executorDrainStarted, undefined).pipe(
               Effect.andThen(Deferred.await(releaseExecutorDrain)),
-              Effect.andThen(drain.suspendRunningExecutorWork)
+              Effect.andThen(drain.suspendExecutingExecutorWork)
             )
           })
       }

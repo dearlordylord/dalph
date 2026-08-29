@@ -44,7 +44,7 @@ Acceptance tests:
 ## A Linux supervisor stops running controlled executor work
 
 The child owns one exact planned attempt and its controlled executor has
-reported `Running`. The task-work position, worktree, claim, WIP, and journaled
+reported `ExecutorWorkExecuting`. The task-work position, worktree, claim, WIP, and journaled
 responsibility remain present. No real LLM boundary exists in this controlled
 host fixture. The fixture is the JavaScript application-host executable emitted
 by the normal `@dalph/dalph` package build, not a TypeScript source loader. Its
@@ -53,7 +53,7 @@ SHA, and that worktree contains a concrete uncommitted artifact.
 
 The supervisor sends `SIGTERM`. The same Exit boundary closes admission,
 records the exact suspension intent, uses the fast controlled suspension path,
-and records the correlated `SafelySuspended` report. Only that report releases
+and records the correlated `ExecutorWorkSafelySuspended` report. Only that report releases
 the process-local task-work position. The host emits `Succeeded` and ends with
 status zero while preserving the workflow artifacts and ordinary journal
 evidence.
@@ -62,7 +62,7 @@ If the child dies before the report, the child does not synthesize safe
 suspension. Restart follows the existing planned-attempt recovery protocol.
 
 The supervisor sees success only after exact suspension evidence. Dalph must
-not wait for executor completion, call `startOrContinue`, manufacture a report
+not wait for executor completion, call `begin` or `resume`, manufacture a report
 from signal receipt, delete the registered worktree, or change/delete its
 uncommitted artifact.
 

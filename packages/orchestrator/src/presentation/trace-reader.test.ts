@@ -316,7 +316,7 @@ const appendIntegrationStart = Effect.fn("TraceReaderTest.appendIntegrationStart
   yield* journal.append(runId, describeJournalEvent(responsibility).expectedKey, responsibility)
   const report = PlannedAttemptExecutorWorkReportedEvent.make({
     ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-    report: PlannedAttemptExecutorReport.cases.Terminal.make({
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
       correlation: { attemptId: integrationPlannedAttempt.attemptId, runId },
       result: { _tag: "Accepted", acceptedResult: integrationAcceptedResult }
     }),
@@ -427,7 +427,7 @@ const historicalIntegrationBoundaryRecords = (): ReadonlyArray<JournalRecord> =>
       3,
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
           result: { _tag: "Accepted", acceptedResult: predecessor.acceptedResult }
         }),

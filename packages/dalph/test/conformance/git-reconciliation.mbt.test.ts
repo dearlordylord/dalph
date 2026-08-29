@@ -98,7 +98,7 @@ type Constraint =
   | "WorktreeLostConstraint"
   | "RegistrationConflictConstraint"
   | "TargetRewriteConstraint"
-type Status = "Running" | "SafelySuspended"
+type Status = "Executing" | "SafelySuspended"
 type TrackerBlocker = "NoTrackerBlocker" | "BeforePromotionBlocker" | "AfterPromotionBlocker" | "IncompleteTrackerFacts"
 type ResourceTransition = Extract<
   ReturnType<typeof deriveIntegrationFrontier>["transitions"][number],
@@ -552,7 +552,7 @@ const gitDecisionFromFrontier = (constraint: Constraint, status: Status): string
   const disposition =
     constraint === "NoGitConstraint"
       ? { _tag: "Ready" as const, acceptedProgress }
-      : status === "Running"
+      : status === "Executing"
         ? ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
         : ResponsibilityDisposition.PlannedAttemptGitConstraint({
             gitState:
@@ -567,7 +567,7 @@ const gitDecisionFromFrontier = (constraint: Constraint, status: Status): string
     responsibility: { entries: [responsibility] },
     responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }]
   })
-  if (frontier.transitions[0]?._tag === "ContinuePlannedAttemptExecutorWork") return "ContinueAttempt"
+  if (frontier.transitions[0]?._tag === "ObservePlannedAttemptExecutorWork") return "ContinueAttempt"
   if (frontier.transitions[0]?._tag === "SuspendPlannedAttemptExecutorWork") return "RequestSafeSuspension"
   if (frontier.explanations[0]?._tag === "PlannedAttemptGitConstraint") return "GitConstraintWait"
   return Effect.runSync(Effect.die("production frontier returned no Git reconciliation decision"))
@@ -599,7 +599,7 @@ const gitReconciliationDriver = defineDriver(
   },
   () => {
     const production = makeProductionReconciliationTrace()
-    let status: Status = "Running"
+    let status: Status = "Executing"
     let constraint: Constraint = "NoGitConstraint"
     let decision = "ContinueAttempt"
     let compatibleAdvanceObserved = false
@@ -683,7 +683,7 @@ const gitReconciliationDriver = defineDriver(
     return {
       init: () =>
         Effect.sync(() => {
-          status = "Running"
+          status = "Executing"
           constraint = "NoGitConstraint"
           decision = "ContinueAttempt"
           compatibleAdvanceObserved = false

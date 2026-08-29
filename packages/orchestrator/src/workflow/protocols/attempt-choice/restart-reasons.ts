@@ -4,7 +4,8 @@ export type AttemptRestartPendingReason =
   | "ClaimForeign"
   | "ClaimUnreadable"
   | "ExecutorContradictory"
-  | "ExecutorRunning"
+  | "ExecutorLifecycleAcceptancePending"
+  | "ExecutorExecuting"
   | "ExecutorUnavailable"
   | "OldWorktreeNotReady"
   | "OldWorktreeUnreadable"
@@ -14,8 +15,11 @@ export type AttemptRestartPendingReason =
 
 /** Current durable facts permanently reject the exact applied Restart choice. */
 export type AttemptRestartRejectedReason =
+  | "AcceptedDoesNotAuthorizeReplacement"
   | "CompletedDoesNotAuthorizeReplacement"
+  | "ExecutingDoesNotAuthorizeReplacement"
   | "FailedDoesNotAuthorizeReplacement"
+  | "LaterExecutorCommandInvalidatedChoice"
   | "NewFingerprintChoiceRequired"
 
 /** Recovery also waits when coordinator configuration cannot name the Git integration target to reread. */

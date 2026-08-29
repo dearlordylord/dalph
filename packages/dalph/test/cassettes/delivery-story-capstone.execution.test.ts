@@ -64,7 +64,7 @@ it.effect(
       const taskWork = run.records.flatMap(({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
           ? [`began:${event.plannedAttempt.taskId}`]
-          : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+          : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
             ? [`terminal:${taskByAttempt.get(event.report.correlation.attemptId)}`]
             : []
       )
@@ -112,7 +112,7 @@ it.effect(
         run.records.some(
           ({ event }) =>
             event._tag === "PlannedAttemptExecutorWorkReported" &&
-            event.report._tag === "Terminal" &&
+            event.report._tag === "ExecutorWorkTerminal" &&
             event.report.result._tag === "Completed"
         )
       ).toBe(false)

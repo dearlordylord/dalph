@@ -41,40 +41,27 @@ const plannedAttempt = PlannedTaskAttempt.make({
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
 const request = PlannedAttemptExecutorRequest.make({ plannedAttempt, specification: modelSpecification })
 
-it.effect("accepts representative coarse executor report traces", () =>
+it.effect("keeps begin, suspension, resume, and passive observation as distinct boundary operations", () =>
   Effect.gen(function* () {
-    const traces: ReadonlyArray<ReadonlyArray<"Running" | "SafelySuspended">> = [
-      [],
-      ["Running"],
-      ["SafelySuspended"],
-      ["Running", "Running"],
-      ["Running", "SafelySuspended"],
-      ["SafelySuspended", "Running"],
-      ["Running", "SafelySuspended", "Running"]
-    ]
-    for (const tags of traces) {
-      const reports = [
-        ...tags.map((tag) =>
-          tag === "Running"
-            ? PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-            : PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-        ),
-        PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-      ]
-      const layer = makeControlledFakePlannedAttemptExecutorLayer(
-        reports.map((report) => ControlledFakeExecutorStep.cases.StartOrContinue.make({ correlation, report }))
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const safelySuspended = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation,
+      result: { _tag: "Completed" }
+    })
+    const layer = makeControlledFakePlannedAttemptExecutorLayer([
+      ControlledFakeExecutorStep.cases.Begin.make({ correlation, report: executing }),
+      ControlledFakeExecutorStep.cases.Suspend.make({ correlation, report: safelySuspended }),
+      ControlledFakeExecutorStep.cases.Resume.make({ correlation, report: terminal })
+    ])
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      expect(yield* executor.begin(request)).toEqual(executing)
+      expect(yield* executor.requestSuspension(plannedAttempt)).toEqual(safelySuspended)
+      expect(yield* executor.resume(request)).toEqual(terminal)
+      expect(yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })).toEqual(
+        PlannedAttemptExecutorProjection.cases.Exact.make({ report: terminal })
       )
-      yield* Effect.gen(function* () {
-        const executor = yield* PlannedAttemptExecutor
-        for (const report of reports) {
-          expect(yield* executor.startOrContinue(request)).toEqual(report)
-        }
-        const lastReport = reports.at(-1)
-        if (lastReport === undefined) return yield* Effect.die("executor trace must include a terminal report")
-        expect(yield* executor.project(correlation)).toEqual(
-          PlannedAttemptExecutorProjection.cases.Exact.make({ report: lastReport })
-        )
-      }).pipe(Effect.provide(layer))
-    }
+    }).pipe(Effect.provide(layer))
   })
 )

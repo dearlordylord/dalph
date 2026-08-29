@@ -1,18 +1,21 @@
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
-import { Match, Schema } from "effect"
+import { Schema } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
   attemptChoiceAppliedRecordKey,
-  plannedAttemptReplacedRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
-  plannedAttemptExecutorCommandProjectionObservedRecordKey,
-  plannedAttemptExecutorStateObservedRecordKey,
+  plannedAttemptReplacedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
-import { latestPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
+import {
+  latestPlannedAttemptExecutorEvidence,
+  isAcceptedPlannedAttemptExecutorEvidence,
+  type AcceptedPlannedAttemptExecutorEvidence
+} from "../planned-attempt-executor-work/evidence.js"
+import { hasValidAcceptedPlannedAttemptExecutorLifecycleHistory } from "../planned-attempt-executor-work/lifecycle-history.js"
 import {
   AttemptQuiescenceProof,
   type AttemptChoiceRequestId,
@@ -20,7 +23,6 @@ import {
   sameAttemptChoiceRequestId,
   sameAttemptChoiceSubject
 } from "./events.js"
-import type { PlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
 
 /** Exact durable applied Restart choice used by replacement reconstruction. */
 export type RestartApplicationRecord = Omit<JournalRecord, "event"> & {
@@ -76,38 +78,35 @@ export const restartClaimAuthorityAtApplication = (
   )
 
 /** Converts executor evidence source identity into its durable quiescence proof. */
-export const proofFor = (evidence: PlannedAttemptExecutorEvidence): AttemptQuiescenceProof =>
-  Match.valueTags(evidence.source, {
-    CommandResponse: ({ ordinal }) => ({ _tag: "CommandResponse" as const, reportOrdinal: ordinal }),
-    CommandProjection: ({ commandOrdinal, projectionOrdinal }) => ({
-      _tag: "CommandProjection" as const,
-      commandOrdinal,
-      projectionOrdinal
-    }),
-    StateProjection: ({ ordinal }) => ({ _tag: "StateProjection" as const, observationOrdinal: ordinal })
-  })
+export const proofFor = (evidence: AcceptedPlannedAttemptExecutorEvidence): AttemptQuiescenceProof => ({
+  _tag: "AcceptedReport",
+  reportOrdinal: evidence.source.ordinal
+})
 
 export type RestartQuiescence =
-  | { readonly _tag: "Proof"; readonly evidence: PlannedAttemptExecutorEvidence }
+  | { readonly _tag: "Proof"; readonly evidence: AcceptedPlannedAttemptExecutorEvidence }
   | {
       readonly _tag: "Rejected"
-      readonly reason: "CompletedDoesNotAuthorizeReplacement" | "FailedDoesNotAuthorizeReplacement"
+      readonly reason:
+        | "AcceptedDoesNotAuthorizeReplacement"
+        | "CompletedDoesNotAuthorizeReplacement"
+        | "ExecutingDoesNotAuthorizeReplacement"
+        | "FailedDoesNotAuthorizeReplacement"
+        | "LaterExecutorCommandInvalidatedChoice"
     }
+  | { readonly _tag: "Pending"; readonly reason: "ExecutorLifecycleAcceptancePending" | "ExecutorUnavailable" }
   | { readonly _tag: "Unproved" }
 
-/** Terminal executor evidence proves replacement only after Restart was applied. */
-export const terminalRestartQuiescence = (
-  evidence: PlannedAttemptExecutorEvidence,
-  application: RestartApplicationRecord
-): RestartQuiescence => {
-  if (evidence.report._tag !== "Terminal") return { _tag: "Unproved" }
+/** Terminal executor evidence is absorbing and never proves replacement. */
+export const terminalRestartQuiescence = (evidence: AcceptedPlannedAttemptExecutorEvidence): RestartQuiescence => {
+  if (evidence.report._tag !== "ExecutorWorkTerminal") return { _tag: "Unproved" }
+  if (evidence.report.result._tag === "Accepted") {
+    return { _tag: "Rejected", reason: "AcceptedDoesNotAuthorizeReplacement" }
+  }
   if (evidence.report.result._tag === "Completed") {
     return { _tag: "Rejected", reason: "CompletedDoesNotAuthorizeReplacement" }
   }
-  if (evidence.report.result._tag === "Failed") {
-    return { _tag: "Rejected", reason: "FailedDoesNotAuthorizeReplacement" }
-  }
-  return evidence.observedAt > application.position ? { _tag: "Proof", evidence } : { _tag: "Unproved" }
+  return { _tag: "Rejected", reason: "FailedDoesNotAuthorizeReplacement" }
 }
 
 /** Exact structural equality for the durable executor quiescence witness. */
@@ -118,18 +117,18 @@ const proofEquals = Schema.toEquivalence(AttemptQuiescenceProof)
  * cleanup. A directly forged safe report is insufficient: responsibility,
  * command intent, and the exact correlated response/projection must all be
  * present before the quiescence proof, with no later command before disposal.
+ * Current Stop and Restart may reuse only an already accepted safe suspension
+ * that remains current. Terminal lifecycle evidence is absorbing.
  */
 export const exactExecutorQuiescenceEvidence = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
-  after: JournalPosition,
   before: JournalPosition,
-  expected: AttemptQuiescenceProof,
-  application?: RestartApplicationRecord
+  expected: AttemptQuiescenceProof
 ): boolean => {
   const bounded = records.filter(({ position }) => position < before)
   const evidence = latestPlannedAttemptExecutorEvidence(bounded, plannedAttempt)
-  if (evidence === undefined || evidence.observedAt <= after || evidence.observedAt >= before) return false
+  if (evidence === undefined || evidence.observedAt >= before) return false
   const responsibilities = bounded.filter(
     (record) =>
       record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
@@ -139,89 +138,29 @@ export const exactExecutorQuiescenceEvidence = (
       record.position < evidence.observedAt
   )
   if (responsibilities.length !== 1) return false
-  const commands = bounded.filter((record) => {
-    const { event } = record
-    return (
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+  const commands = bounded.filter(
+    (record) =>
+      record.event._tag === "PlannedAttemptExecutorCommandIntended" &&
       record.runId === plannedAttempt.runId &&
-      event.plannedAttempt.runId === plannedAttempt.runId &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-      record.key === plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, event.ordinal)
-    )
-  })
+      record.key === plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, record.event.ordinal) &&
+      plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt) &&
+      record.position < evidence.observedAt
+  )
   if (commands.length === 0) return false
+  if (!isAcceptedPlannedAttemptExecutorEvidence(evidence)) return false
+  if (!hasValidAcceptedPlannedAttemptExecutorLifecycleHistory(bounded, plannedAttempt)) return false
   const source = evidence.source
-  const exactSource = (() => {
-    switch (source._tag) {
-      case "CommandResponse": {
-        const report = bounded.filter(
-          (record) =>
-            record.event._tag === "PlannedAttemptExecutorWorkReported" &&
-            record.runId === plannedAttempt.runId &&
-            record.key === plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, source.ordinal) &&
-            record.position === evidence.observedAt &&
-            record.event.ordinal === source.ordinal &&
-            record.event.report.correlation.runId === plannedAttempt.runId &&
-            record.event.report.correlation.attemptId === plannedAttempt.attemptId
-        )
-        return (
-          report.length === 1 &&
-          commands.filter((record) => {
-            const { event } = record
-            return (
-              event._tag === "PlannedAttemptExecutorCommandIntended" &&
-              record.position < evidence.observedAt &&
-              Number(event.ordinal) === Number(source.ordinal)
-            )
-          }).length === 1
-        )
-      }
-      case "CommandProjection": {
-        const projection = bounded.filter(
-          (record) =>
-            record.event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-            record.runId === plannedAttempt.runId &&
-            record.key ===
-              plannedAttemptExecutorCommandProjectionObservedRecordKey(
-                plannedAttempt.attemptId,
-                source.commandOrdinal,
-                source.projectionOrdinal
-              ) &&
-            record.position === evidence.observedAt &&
-            record.event.commandOrdinal === source.commandOrdinal &&
-            record.event.projectionOrdinal === source.projectionOrdinal &&
-            record.event.observation._tag === "ExactExecutorReport" &&
-            record.event.observation.report.correlation.runId === plannedAttempt.runId &&
-            record.event.observation.report.correlation.attemptId === plannedAttempt.attemptId
-        )
-        return (
-          projection.length === 1 &&
-          commands.filter((record) => {
-            const { event } = record
-            return (
-              event._tag === "PlannedAttemptExecutorCommandIntended" &&
-              record.position < evidence.observedAt &&
-              event.ordinal === source.commandOrdinal
-            )
-          }).length === 1
-        )
-      }
-      case "StateProjection": {
-        const state = bounded.filter(
-          (record) =>
-            record.event._tag === "PlannedAttemptExecutorStateObserved" &&
-            record.runId === plannedAttempt.runId &&
-            record.key === plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, source.ordinal) &&
-            record.position === evidence.observedAt &&
-            record.event.ordinal === source.ordinal &&
-            record.event.observation._tag === "ExactExecutorReport" &&
-            record.event.observation.report.correlation.runId === plannedAttempt.runId &&
-            record.event.observation.report.correlation.attemptId === plannedAttempt.attemptId
-        )
-        return state.length === 1 && commands.some((record) => record.position < evidence.observedAt)
-      }
-    }
-  })()
+  const exactSource =
+    bounded.filter(
+      (candidate) =>
+        candidate.event._tag === "PlannedAttemptExecutorWorkReported" &&
+        candidate.runId === plannedAttempt.runId &&
+        candidate.key === plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, source.ordinal) &&
+        candidate.position === evidence.observedAt &&
+        candidate.event.ordinal === source.ordinal &&
+        candidate.event.report.correlation.runId === plannedAttempt.runId &&
+        candidate.event.report.correlation.attemptId === plannedAttempt.attemptId
+    ).length === 1
   if (!exactSource) return false
   const laterExecutorCommand = records.some(
     ({ event, position }) =>
@@ -231,9 +170,6 @@ export const exactExecutorQuiescenceEvidence = (
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
   )
   if (laterExecutorCommand) return false
-  const quiescent =
-    evidence.report._tag === "SafelySuspended" ||
-    (evidence.report._tag === "Terminal" && application === undefined) ||
-    (application !== undefined && terminalRestartQuiescence(evidence, application)._tag === "Proof")
+  const quiescent = evidence.report._tag === "ExecutorWorkSafelySuspended"
   return quiescent && proofEquals(proofFor(evidence), expected)
 }

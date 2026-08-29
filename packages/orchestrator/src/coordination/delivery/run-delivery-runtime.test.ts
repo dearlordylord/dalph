@@ -1257,6 +1257,108 @@ it.effect("starts one live action while its proposal remains present", () =>
   }).pipe(Effect.scoped)
 )
 
+it.effect("settles one unchanged passive observation owner without re-admission or successor permission", () =>
+  Effect.gen(function* () {
+    const observe = recoveredProposalFor(
+      RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+        plannedAttempt
+      })
+    )
+    const initial = withProposals(yield* baseEvaluation, [observe], 1)
+    const relation = yield* dynamicEvaluationSignal(initial)
+    const starts = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        Ref.update(starts, (ids) => [...ids, action.proposal.id]).pipe(
+          Effect.as({
+            _tag: "ExecutorReportPublished",
+            acceptedFacts: "UnchangedPassiveObservation",
+            plannedAttempt,
+            proposalId: action.proposal.id,
+            report: {
+              _tag: "ExecutorWorkExecuting",
+              correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+            }
+          } satisfies DeliveryActionResult)
+        )
+    })
+
+    const quiescence = yield* runDeliveryRuntimeQuiescence(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor)
+    )
+
+    expect(yield* Ref.get(starts)).toEqual([observe.id])
+    expect(quiescence.acceptedAt).toBe(initial.acceptedAt)
+    expect(quiescence.proposedActions.proposals).toEqual([])
+    expect(quiescence.current.trackerGraph).toEqual(initial.current.trackerGraph)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("admits an independently proposed suspension after one unchanged passive observation", () =>
+  Effect.gen(function* () {
+    const transitions = [
+      RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+        plannedAttempt
+      }),
+      RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+    ] as const
+    const proposals = deliveryProposalsOf({
+      acceptedOperationIds: new Set<OperationId>(),
+      fresh: [],
+      integrationResponsibilities: [],
+      responsibilities: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibility" as const, beganAt: JournalPosition.make(1), plannedAttempt }
+      ],
+      runId,
+      transitions
+    }).ticketDelivery
+    const observe = proposals.find(({ route }) =>
+      route._tag === "FreshExecutorWorkflowRoute"
+        ? route.step._tag === "ObservePlannedAttemptExecutorWork"
+        : route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "ObservePlannedAttemptExecutorWork"
+    )
+    const suspension = proposals.find(
+      ({ route }) =>
+        route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "SuspendPlannedAttemptExecutorWork"
+    )
+    if (observe === undefined || suspension === undefined) return yield* Effect.die("missing executor proposals")
+    const relation = yield* dynamicEvaluationSignal(withProposals(yield* baseEvaluation, proposals, 1))
+    const starts = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+    const suspensionStarted = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        Ref.update(starts, (ids) => [...ids, action.proposal.id]).pipe(
+          Effect.andThen(
+            action.proposal.id === observe.id
+              ? Effect.succeed({
+                  _tag: "ExecutorReportPublished" as const,
+                  acceptedFacts: "UnchangedPassiveObservation" as const,
+                  plannedAttempt,
+                  proposalId: action.proposal.id,
+                  report: {
+                    _tag: "ExecutorWorkExecuting" as const,
+                    correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+                  }
+                })
+              : Deferred.succeed(suspensionStarted, undefined).pipe(Effect.andThen(Effect.never))
+          )
+        )
+    })
+    const runtime = yield* runDeliveryRuntimeQuiescence(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.forkChild
+    )
+
+    yield* Deferred.await(suspensionStarted)
+    expect(yield* Ref.get(starts)).toEqual([observe.id, suspension.id])
+    yield* Fiber.interrupt(runtime)
+  }).pipe(Effect.scoped)
+)
+
 it.effect("interrupts every scoped live action without manufacturing completion", () =>
   Effect.gen(function* () {
     const a = proposal(0, TaskId.make("A"))

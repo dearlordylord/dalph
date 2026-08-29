@@ -148,8 +148,8 @@ module applicationExitOwnerProofNegativeTest {
 module applicationExitExecutorProofNegativeTest {
   import applicationExitExecutorProof.* from "./applicationExit_proof"
 
-  action releaseRunningPosition: bool = all {
-    state.attempt == Running,
+  action releaseExecutingPosition: bool = all {
+    state.attempt == Executing,
     state' = { ...state, positionHeld: false },
   }
 
@@ -160,18 +160,18 @@ module applicationExitExecutorProofNegativeTest {
 
   action callWithoutAcknowledgedIntent: bool = all {
     state.phase == Draining,
-    state.attempt == Running,
+    state.attempt == Executing,
     not(state.suspensionIntentAcknowledged),
     state' = { ...state, attempt: FastSuspensionCalled },
   }
 
   action releaseForForeignEvidence: bool = all {
-    state.attempt == Running,
+    state.attempt == Executing,
     state' = { ...state, positionHeld: false, foreignReleases: 1 },
   }
 
-  run unsafeRunningReleaseIsDetectedTest = {
-    init.then(startAttempt).then(releaseRunningPosition)
+  run unsafeExecutingReleaseIsDetectedTest = {
+    init.then(startAttempt).then(releaseExecutingPosition)
       .expect(not(exactSafeOrTerminalEvidenceControlsPositionRelease))
   }
 

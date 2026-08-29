@@ -269,8 +269,8 @@ const freshProposalOf = (
   fresh: FreshDecision
 ): Extract<DerivedProposal, { readonly _tag: "ProposalDerived" }> => {
   if (
-    fresh.step._tag === "StartPlannedAttemptExecutorWork" ||
-    fresh.step._tag === "ContinuePlannedAttemptExecutorWork"
+    fresh.step._tag === "BeginPlannedAttemptExecutorWork" ||
+    fresh.step._tag === "ObservePlannedAttemptExecutorWork"
   ) {
     const route: IdentityFreeWorkflowRoute = { _tag: "FreshExecutorWorkflowRoute", step: fresh.step }
     return {
@@ -300,7 +300,7 @@ const missingProvenance = (
   transition: Extract<
     RunnableFrontierTransition,
     {
-      readonly _tag: "CommitFreshTaskClaimIntent" | "ContinueFreshWorkflowOperation" | "StartPlannedAttemptExecutorWork"
+      readonly _tag: "CommitFreshTaskClaimIntent" | "ContinueFreshWorkflowOperation" | "BeginPlannedAttemptExecutorWork"
     }
   >
 ): Extract<DerivedProposal, { readonly _tag: "ProposalIssue" }> => ({

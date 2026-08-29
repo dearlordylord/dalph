@@ -22,20 +22,6 @@ module acceptedResultIntegrationTest {
       })
   }
 
-  run lateAcceptedAfterRestartRemainsEvidenceOnlyTest = {
-    init
-      .then(observeAppliedRestartBeforeAccepted(1))
-      .then(acceptResult(1))
-      .then(recoverCoordinator)
-      .expect(and {
-        state.results.get(1).phase == LateAcceptedEvidence,
-        state.results.get(1).acceptedEvidencePreserved,
-        not(state.results.get(1).integrationResponsibilityRecorded),
-        state.results.get(1).integrationResponsibilityCount == 0,
-        lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility,
-      })
-  }
-
   run ordinaryAcceptedConsumesCancellationAndStartsOneResponsibilityTest = {
     init
       .then(acceptResult(1))

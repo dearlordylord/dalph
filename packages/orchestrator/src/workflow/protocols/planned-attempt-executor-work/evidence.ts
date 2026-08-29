@@ -6,7 +6,9 @@ import {
   type PlannedTaskAttempt,
   type PlannedAttemptExecutorReport,
   type TaskWorkSpecification as TaskWorkSpecificationType,
-  plannedAttemptExecutorCorrelation
+  plannedAttemptExecutorCorrelation,
+  plannedTaskAttemptEquivalence,
+  samePlannedAttemptExecutorReport
 } from "@dalph/contracts"
 import {
   PlannedAttemptExecutorTaskWorkSpecificationMissing,
@@ -71,7 +73,7 @@ export const plannedAttemptExecutorRequestFor = (
 /** Reconstructs accepted focused task-work observations without substituting later tracker text. */
 const taskWorkSpecificationsByPrefix = new WeakMap<object, ReadonlyArray<TaskWorkSpecificationType>>()
 
-export const plannedAttemptExecutorTaskWorkSpecifications = (
+const plannedAttemptExecutorTaskWorkSpecifications = (
   records: ReadonlyArray<Pick<JournalRecord, "event">>
 ): ReadonlyArray<TaskWorkSpecificationType> => {
   const cached = taskWorkSpecificationsByPrefix.get(records)
@@ -113,7 +115,8 @@ export const plannedAttemptExecutorTaskWorkSpecifications = (
 
 /** Provenance of one exact executor report, preserving command response vs read-only projection. */
 type PlannedAttemptExecutorEvidenceSource =
-  | { readonly _tag: "CommandResponse"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
+  | { readonly _tag: "AcceptedReport"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
+  | { readonly _tag: "BoundaryCommandResponse"; readonly commandOrdinal: PlannedAttemptExecutorCommandOrdinal }
   | {
       readonly _tag: "CommandProjection"
       readonly commandOrdinal: PlannedAttemptExecutorCommandOrdinal
@@ -127,12 +130,23 @@ export interface PlannedAttemptExecutorEvidence {
   readonly source: PlannedAttemptExecutorEvidenceSource
 }
 
+/** A distinct lifecycle transition with its durable acceptance ordinal. */
+export type AcceptedPlannedAttemptExecutorEvidence = PlannedAttemptExecutorEvidence & {
+  readonly source: Extract<PlannedAttemptExecutorEvidenceSource, { readonly _tag: "AcceptedReport" }>
+}
+
+export const isAcceptedPlannedAttemptExecutorEvidence = (
+  evidence: PlannedAttemptExecutorEvidence
+): evidence is AcceptedPlannedAttemptExecutorEvidence => evidence.source._tag === "AcceptedReport"
+
 /** The closed reasons why one normalized executor projection cannot authorize work. */
 export type PlannedAttemptExecutorProjectionWaitReason =
   | "NoCurrentReport"
   | "TemporarilyUnavailable"
   | "Unreadable"
   | "CorrelationContradiction"
+  | "InitialReportCausalityContradiction"
+  | "LifecycleTransitionContradiction"
 
 /** A normalized projection outcome that must remain nonterminal until reread. */
 type PlannedAttemptExecutorProjectionIssue = {
@@ -187,7 +201,18 @@ const evidenceFromRecord = (
 ): ReadonlyArray<PlannedAttemptExecutorEvidence> => {
   if (event._tag === "PlannedAttemptExecutorWorkReported") {
     return exactCorrelation(event.report, plannedAttempt)
-      ? [{ observedAt: position, report: event.report, source: { _tag: "CommandResponse", ordinal: event.ordinal } }]
+      ? [{ observedAt: position, report: event.report, source: { _tag: "AcceptedReport", ordinal: event.ordinal } }]
+      : []
+  }
+  if (event._tag === "PlannedAttemptExecutorCommandResponseObserved") {
+    return exactCorrelation(event.report, plannedAttempt)
+      ? [
+          {
+            observedAt: position,
+            report: event.report,
+            source: { _tag: "BoundaryCommandResponse", commandOrdinal: event.commandOrdinal }
+          }
+        ]
       : []
   }
   if (event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
@@ -220,6 +245,10 @@ const projectionIssueReason = (
   if (observation._tag === "ExecutorStateTemporarilyUnavailable") return "TemporarilyUnavailable"
   if (observation._tag === "ExecutorStateUnreadable") return "Unreadable"
   if (observation._tag === "ExecutorReportContradiction") return "CorrelationContradiction"
+  if (observation._tag === "ExecutorInitialReportCausalityContradiction") {
+    return "InitialReportCausalityContradiction"
+  }
+  if (observation._tag === "ExecutorLifecycleTransitionContradiction") return "LifecycleTransitionContradiction"
   return undefined
 }
 
@@ -246,6 +275,7 @@ const latestExecutorEvidenceByPrefix = new WeakMap<object, Map<string, PlannedAt
 
 const executorProjectionEventTags = new Set<JournalRecord["event"]["_tag"]>([
   "PlannedAttemptExecutorCommandProjectionObserved",
+  "PlannedAttemptExecutorCommandResponseObserved",
   "PlannedAttemptExecutorStateObserved"
 ])
 
@@ -259,17 +289,32 @@ const executorEventAffectsAttempt = (event: JournalRecord["event"], plannedAttem
   )
 }
 
+const preferredExactExecutorEvidence = (
+  accepted: PlannedAttemptExecutorEvidence | undefined,
+  observed: PlannedAttemptExecutorEvidence | undefined
+): PlannedAttemptExecutorEvidence | undefined => {
+  if (observed === undefined) return accepted
+  if (accepted === undefined) return observed
+  return observed.observedAt > accepted.observedAt &&
+    !samePlannedAttemptExecutorReport(observed.report, accepted.report)
+    ? observed
+    : accepted
+}
+
 const deriveLatestExecutorEvidence = (
   records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
   plannedAttempt: PlannedTaskAttempt,
   after?: JournalPosition
 ): PlannedAttemptExecutorEvidence | undefined => {
-  const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt, after).at(latestElementOffset)
+  const allEvidence = plannedAttemptExecutorEvidence(records, plannedAttempt, after)
+  const accepted = allEvidence.findLast(({ source }) => source._tag === "AcceptedReport")
+  const observed = allEvidence.findLast(({ source }) => source._tag !== "AcceptedReport")
+  const latestExact = allEvidence.at(latestElementOffset)
+  const evidence = preferredExactExecutorEvidence(accepted, observed)
   const issue =
     evidence === undefined ? undefined : latestPlannedAttemptExecutorProjectionIssue(records, plannedAttempt)
-  return evidence !== undefined && (issue === undefined || evidence.observedAt > issue.observedAt)
-    ? evidence
-    : undefined
+  if (evidence === undefined || latestExact === undefined) return undefined
+  return issue === undefined || latestExact.observedAt > issue.observedAt ? evidence : undefined
 }
 
 /**
@@ -300,6 +345,55 @@ export const latestPlannedAttemptExecutorEvidence = (
   return latest
 }
 
+/** Returns lifecycle authority only when the newest current exact evidence is the accepted report itself. */
+export const latestAcceptedPlannedAttemptExecutorEvidence = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  plannedAttempt: PlannedTaskAttempt,
+  after?: JournalPosition
+): AcceptedPlannedAttemptExecutorEvidence | undefined => {
+  const evidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt, after)
+  return evidence !== undefined && isAcceptedPlannedAttemptExecutorEvidence(evidence) ? evidence : undefined
+}
+
+/**
+ * Returns current accepted Safe lifecycle authority only before any later
+ * Begin/Resume intent and while no executor command remains unsettled.
+ */
+export const currentUnconsumedAcceptedSafeEvidence = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): AcceptedPlannedAttemptExecutorEvidence | undefined => {
+  const safe = latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)
+  if (
+    safe?.report._tag !== "ExecutorWorkSafelySuspended" ||
+    latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt) !== undefined
+  ) {
+    return undefined
+  }
+  const consumed = records.some(
+    ({ event, position }) =>
+      position > safe.observedAt &&
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      (event.command === "Begin" || event.command === "Resume") &&
+      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
+  )
+  return consumed ? undefined : safe
+}
+
+/** Latest distinct exact observation that still needs a lifecycle report ordinal. */
+export const latestUnacceptedPlannedAttemptExecutorReport = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  plannedAttempt: PlannedTaskAttempt
+): PlannedAttemptExecutorEvidence | undefined => {
+  const all = plannedAttemptExecutorEvidence(records, plannedAttempt)
+  const accepted = all.findLast(({ source }) => source._tag === "AcceptedReport")
+  const observed = all.findLast(({ source }) => source._tag !== "AcceptedReport")
+  if (observed === undefined || (accepted !== undefined && observed.observedAt <= accepted.observedAt)) return undefined
+  return accepted === undefined || !samePlannedAttemptExecutorReport(accepted.report, observed.report)
+    ? observed
+    : undefined
+}
+
 /** Latest exact executor command whose boundary response is still ambiguous. */
 export const latestUnsettledPlannedAttemptExecutorCommand = (
   records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
@@ -315,8 +409,8 @@ export const latestUnsettledPlannedAttemptExecutorCommand = (
   const commandEvent = command.event
   const settled = records.some(({ event, position }) => {
     if (position <= command.position) return false
-    if (event._tag === "PlannedAttemptExecutorWorkReported") {
-      return exactCorrelation(event.report, plannedAttempt)
+    if (event._tag === "PlannedAttemptExecutorCommandResponseObserved") {
+      return event.commandOrdinal === commandEvent.ordinal && exactCorrelation(event.report, plannedAttempt)
     }
     return (
       event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&

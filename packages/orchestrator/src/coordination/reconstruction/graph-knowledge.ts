@@ -118,10 +118,15 @@ export const latestReconstructedTaskGraph = (
 /** Selects exact authored instructions only from a focused journaled observation. */
 export const reconstructedTaskWorkSpecificationFor = (
   knowledge: { readonly taskTrackerFacts: ReadonlyArray<TaskTrackerFactsObservation> },
-  taskId: TaskId
+  taskId: TaskId,
+  immutableRunTarget?: TrackerTarget
 ): Option.Option<TaskWorkSpecification> => {
   const observation = knowledge.taskTrackerFacts.findLast(
-    (candidate) => candidate._tag === "FocusedTaskWorkSpecificationFacts" && candidate.factFamily.taskId === taskId
+    (candidate) =>
+      candidate._tag === "FocusedTaskWorkSpecificationFacts" &&
+      candidate.factFamily.taskId === taskId &&
+      (immutableRunTarget === undefined ||
+        taskTrackerTargetKey(candidate.target) === taskTrackerTargetKey(immutableRunTarget))
   )
   if (observation?._tag !== "FocusedTaskWorkSpecificationFacts") return Option.none()
   return Option.some(

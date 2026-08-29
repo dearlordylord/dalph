@@ -25,10 +25,10 @@ const correlationArbitrary = fc
   )
 const reportFor = (correlation: PlannedAttemptExecutorCorrelation) =>
   fc.constantFrom(
-    { _tag: "Running" as const, correlation },
-    { _tag: "SafelySuspended" as const, correlation },
-    { _tag: "Terminal" as const, correlation, result: { _tag: "Completed" as const } },
-    { _tag: "Terminal" as const, correlation, result: { _tag: "Failed" as const } }
+    { _tag: "ExecutorWorkExecuting" as const, correlation },
+    { _tag: "ExecutorWorkSafelySuspended" as const, correlation },
+    { _tag: "ExecutorWorkTerminal" as const, correlation, result: { _tag: "Completed" as const } },
+    { _tag: "ExecutorWorkTerminal" as const, correlation, result: { _tag: "Failed" as const } }
   )
 const correlatedReportArbitrary = correlationArbitrary.chain((correlation) =>
   reportFor(correlation).map((report) => ({ correlation, report }))
@@ -138,7 +138,7 @@ it("rejects arbitrary contradictions whose observed report is not foreign", () =
 })
 
 it("keeps exact identity in the report, so a mismatched outer identity cannot be constructed", () => {
-  const report = PlannedAttemptExecutorReport.cases.Running.make({
+  const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
     correlation: { attemptId: AttemptId.make("attempt"), runId: RunId.make("run") }
   })
   const exact = PlannedAttemptExecutorProjection.cases.Exact.make({ report })

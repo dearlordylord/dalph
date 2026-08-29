@@ -52,7 +52,7 @@ type CursorFailure = AuthoredCassetteInteractionMismatch
 type OuterIntegratorGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationFailed.Type
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type
-type AuthoredExecutorRequest = "StartOrContinue" | "Suspend"
+type AuthoredExecutorRequest = "Begin" | "Resume" | "Suspend"
 type ActiveExecutorReportRequest = { readonly attemptId: AttemptId; readonly request: AuthoredExecutorRequest }
 type GitRequestCorrelation = { readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }
 type PromotionGitStoryItem =
@@ -262,17 +262,17 @@ export interface StoryCursor {
   readonly consumeExecutorReport: Effect.Effect<AuthoredPlannedAttemptExecutorOutcomeItem, CursorFailure>
   /** Concurrent executor requests wait for the exact authored attempt and command response. */
   readonly consumeExecutorReportFor: (
-    request: "StartOrContinue" | "Suspend",
+    request: "Begin" | "Resume" | "Suspend",
     attemptId: AttemptId
   ) => Effect.Effect<AuthoredPlannedAttemptExecutorOutcomeItem, CursorFailure>
   /** Marks the exact executor command in flight before crash and response boundaries are inspected. */
   readonly beginExecutorReportRequest: (
-    request: "StartOrContinue" | "Suspend",
+    request: "Begin" | "Resume" | "Suspend",
     attemptId: AttemptId
   ) => Effect.Effect<void>
   /** Releases one exact in-flight executor command marker after its controlled boundary settles. */
   readonly endExecutorReportRequest: (
-    request: "StartOrContinue" | "Suspend",
+    request: "Begin" | "Resume" | "Suspend",
     attemptId: AttemptId
   ) => Effect.Effect<void>
   readonly consumeExecutorProjection: Effect.Effect<

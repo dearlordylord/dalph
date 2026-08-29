@@ -12,9 +12,11 @@ import type {
   UnchangedTaskTrackerFactsReconfirmed
 } from "../workflow/task-tracker-facts/observation.js"
 import type { RunFinalityEvidence } from "../coordination/frontier/run-finality.js"
-import type { JournalPosition } from "./identity.js"
+import { JournalPosition } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "../workflow/protocols/attempt-choice/events.js"
+import { claimReadMatchesTarget, exactWorkflowRunTargetFor } from "./run-target.js"
+import { taskClaimReleaseSettled } from "./claim-release-settlement.js"
 
 type GraphFactsObservation = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
 
@@ -188,39 +190,10 @@ const settledOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySet
     })
   )
 
-const taskClaimReleaseSettled = (
-  records: ReadonlyArray<JournalRecord>,
-  responsibility: Extract<WorkflowResponsibilityEntry, { readonly _tag: "TaskClaimReleaseResponsibility" }>
-): boolean =>
-  records.some(
-    ({ event, position }) =>
-      position > responsibility.beganAt &&
-      event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
-      event.observation._tag === "ActiveTaskClaim" &&
-      isExactTaskClaim(event.expectedClaim, responsibility.operation.release.claim) &&
-      !isExactTaskClaim(event.observation, event.expectedClaim)
-  ) ||
-  records.some(
-    ({ event, position }) =>
-      position > responsibility.beganAt &&
-      event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
-      event.observation._tag === "UnclaimedTask" &&
-      event.observation.taskId === responsibility.taskId &&
-      event.expectedClaim.taskId === responsibility.taskId
-  ) ||
-  records.some(
-    ({ event, position }) =>
-      position > responsibility.beganAt &&
-      event._tag === "CancelledAttemptClaimNoReleaseObserved" &&
-      isExactTaskClaim(event.expectedClaim, responsibility.operation.release.claim) &&
-      (event.observation._tag === "UnclaimedTask"
-        ? event.observation.taskId === responsibility.taskId
-        : !isExactTaskClaim(event.observation, event.expectedClaim))
-  )
-
 const taskClaimAcquisitionSettled = (
   records: ReadonlyArray<JournalRecord>,
-  responsibility: Extract<WorkflowResponsibilityEntry, { readonly _tag: "TaskClaimResponsibility" }>
+  responsibility: Extract<WorkflowResponsibilityEntry, { readonly _tag: "TaskClaimResponsibility" }>,
+  immutableRunTarget: ReturnType<typeof exactWorkflowRunTargetFor>
 ): boolean => {
   const outcome = records.findLast(({ event, position }) => {
     if (position <= responsibility.beganAt) return false
@@ -240,14 +213,36 @@ const taskClaimAcquisitionSettled = (
     records.some(({ event, position }) => {
       if (position <= outcome.position || event._tag !== "StoppedAttemptClaimNoReleaseObserved") return false
       if (!isExactTaskClaim(event.expectedClaim, acquiredClaim)) return false
-      if (event.observation._tag === "UnclaimedTask") return event.observation.taskId === acquiredClaim.taskId
-      return !isExactTaskClaim(event.observation, acquiredClaim)
+      return (
+        (event.observation._tag === "UnclaimedTask"
+          ? event.observation.taskId === acquiredClaim.taskId
+          : !isExactTaskClaim(event.observation, acquiredClaim)) &&
+        claimReadMatchesTarget(
+          records,
+          event.observationOperationId,
+          acquiredClaim.taskId,
+          JournalPosition.make(1),
+          position,
+          immutableRunTarget
+        )
+      )
     }) ||
     records.some(({ event, position }) => {
       if (position <= outcome.position || event._tag !== "CancelledAttemptClaimNoReleaseObserved") return false
       if (!isExactTaskClaim(event.expectedClaim, acquiredClaim)) return false
-      if (event.observation._tag === "UnclaimedTask") return event.observation.taskId === acquiredClaim.taskId
-      return !isExactTaskClaim(event.observation, acquiredClaim)
+      return (
+        (event.observation._tag === "UnclaimedTask"
+          ? event.observation.taskId === acquiredClaim.taskId
+          : !isExactTaskClaim(event.observation, acquiredClaim)) &&
+        claimReadMatchesTarget(
+          records,
+          event.observationOperationId,
+          acquiredClaim.taskId,
+          JournalPosition.make(1),
+          position,
+          immutableRunTarget
+        )
+      )
     }) ||
     records.some(
       ({ event, position }) =>
@@ -291,14 +286,16 @@ const latestTerminalExecutorReportPosition = (
   plannedAttempt: PlannedTaskAttempt
 ): JournalPosition | undefined => {
   const latest = latestExecutorReport(records, plannedAttempt)
-  return latest?.event._tag === "PlannedAttemptExecutorWorkReported" && latest.event.report._tag === "Terminal"
+  return latest?.event._tag === "PlannedAttemptExecutorWorkReported" &&
+    latest.event.report._tag === "ExecutorWorkTerminal"
     ? latest.position
     : undefined
 }
 
 const abandonedAttemptSettled = (
   records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt
+  plannedAttempt: PlannedTaskAttempt,
+  immutableRunTarget: ReturnType<typeof exactWorkflowRunTargetFor>
 ): boolean => {
   const abandonment = records.findLast(({ event }) => {
     if (event._tag !== "AttemptImplementationAbandoned") return false
@@ -308,19 +305,49 @@ const abandonedAttemptSettled = (
   const abandonmentEvent = abandonment.event
   const released = records.some(({ event, position }) => {
     if (position <= abandonment.position || event._tag !== "TaskClaimReleased") return false
-    return isExactTaskClaim(event.release.claim, abandonmentEvent.expectedClaim)
+    if (!isExactTaskClaim(event.release.claim, abandonmentEvent.expectedClaim)) return false
+    const intent = records.findLast(
+      ({ event: candidate }) =>
+        candidate._tag === "TaskClaimReleaseIntended" &&
+        candidate.operation.release.operationId === event.release.operationId
+    )
+    if (intent?.event._tag !== "TaskClaimReleaseIntended") return false
+    const authority = intent.event.operation.authority
+    return (
+      authority._tag === "WorkflowClaimReleaseAuthority" ||
+      claimReadMatchesTarget(
+        records,
+        authority.observationOperationId,
+        abandonmentEvent.expectedClaim.taskId,
+        JournalPosition.make(1),
+        position,
+        immutableRunTarget
+      )
+    )
   })
-  const noRelease = records.some(({ event }) => {
+  const noRelease = records.some(({ event, position }) => {
     if (event._tag !== "StoppedAttemptClaimNoReleaseObserved") return false
     return (
       sameAttemptChoiceRequestId(event.requestId, abandonmentEvent.requestId) &&
-      sameAttemptChoiceSubject(event.subject, abandonmentEvent.subject)
+      sameAttemptChoiceSubject(event.subject, abandonmentEvent.subject) &&
+      claimReadMatchesTarget(
+        records,
+        event.observationOperationId,
+        abandonmentEvent.expectedClaim.taskId,
+        JournalPosition.make(1),
+        position,
+        immutableRunTarget
+      )
     )
   })
   return released || noRelease
 }
 
-const executorReportSettled = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt): boolean => {
+const executorReportSettled = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  immutableRunTarget: ReturnType<typeof exactWorkflowRunTargetFor>
+): boolean => {
   const cancellationApplied = cancellationForAttempt(records, plannedAttempt)
   const cancellationRelinquished = hasCancellationRelinquishment(records, plannedAttempt)
   const integrationSettled = hasIntegrationSettlement(records, plannedAttempt)
@@ -328,23 +355,27 @@ const executorReportSettled = (records: ReadonlyArray<JournalRecord>, plannedAtt
   if (cancellationApplied !== undefined) {
     return cancellationRelinquished || integrationSettled
   }
-  return cancellationRelinquished || terminalAt !== undefined || abandonedAttemptSettled(records, plannedAttempt)
+  return (
+    cancellationRelinquished ||
+    terminalAt !== undefined ||
+    abandonedAttemptSettled(records, plannedAttempt, immutableRunTarget)
+  )
 }
 
 const responsibilityIssues = (
   records: ReadonlyArray<JournalRecord>,
-  entries: ReadonlyArray<WorkflowResponsibilityEntry>
+  entries: ReadonlyArray<WorkflowResponsibilityEntry>,
+  immutableRunTarget: ReturnType<typeof exactWorkflowRunTargetFor>
 ): ReadonlyArray<string> => {
   const settled = settledOperationIds(records)
   return entries.flatMap((responsibility) => {
     const settledByHistory =
       responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
-        ? executorReportSettled(records, responsibility.plannedAttempt)
+        ? executorReportSettled(records, responsibility.plannedAttempt, immutableRunTarget)
         : responsibility._tag === "TaskClaimReleaseResponsibility"
-          ? settled.has(responsibility.operation.release.operationId) ||
-            taskClaimReleaseSettled(records, responsibility)
+          ? taskClaimReleaseSettled(records, responsibility, immutableRunTarget)
           : responsibility._tag === "TaskClaimResponsibility"
-            ? taskClaimAcquisitionSettled(records, responsibility)
+            ? taskClaimAcquisitionSettled(records, responsibility, immutableRunTarget)
             : settled.has(responsibility.operation.operationId)
     return settledByHistory ? [] : ["termination requires every journal responsibility to be settled"]
   })
@@ -360,7 +391,11 @@ export const terminationPreconditionIssues = (
   if (history._tag === "InvalidWorkflowJournalHistory") {
     return ["termination requires a valid workflow-journal history prefix"]
   }
+  const immutableRunTarget = exactWorkflowRunTargetFor(records)
+  if (immutableRunTarget === undefined) {
+    return ["termination requires the exact WorkflowRunBegan target"]
+  }
   const graphIssues = graphKnowledgeIssues(records)
   if (graphIssues.length > 0) return graphIssues
-  return responsibilityIssues(records, history.runState.responsibility.entries)
+  return responsibilityIssues(records, history.runState.responsibility.entries, immutableRunTarget)
 }

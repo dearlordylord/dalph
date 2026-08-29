@@ -43,28 +43,18 @@ const request = PlannedAttemptExecutorRequest.make({ plannedAttempt: attempt, sp
 it.effect("keeps the dry-run executor deterministic without selecting a production implementation", () =>
   Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    expect(yield* executor.project(correlation)).toEqual(
+    expect(yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })).toEqual(
       PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
     )
 
-    const running = yield* executor.startOrContinue(request)
-    expect(running).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
-    expect(yield* executor.project(correlation)).toEqual(
-      PlannedAttemptExecutorProjection.cases.Exact.make({ report: running })
-    )
-
-    const terminal = yield* executor.startOrContinue(request)
-    expect(terminal).toEqual(
-      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-    )
-    expect(yield* executor.project(correlation)).toEqual(
+    const running = yield* executor.begin(request)
+    expect(running).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+    const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation,
+      result: { _tag: "Completed" }
+    })
+    expect(yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })).toEqual(
       PlannedAttemptExecutorProjection.cases.Exact.make({ report: terminal })
-    )
-
-    const safelySuspended = yield* executor.requestSuspension(attempt)
-    expect(safelySuspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
-    expect(yield* executor.project(correlation)).toEqual(
-      PlannedAttemptExecutorProjection.cases.Exact.make({ report: safelySuspended })
     )
   }).pipe(Effect.provide(dryRunPlannedAttemptExecutorLayer))
 )

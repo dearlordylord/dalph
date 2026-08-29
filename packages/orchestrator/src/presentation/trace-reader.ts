@@ -1890,7 +1890,7 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
     }
     if (
       record.event._tag === "PlannedAttemptExecutorWorkReported" &&
-      record.event.report._tag === "Terminal" &&
+      record.event.report._tag === "ExecutorWorkTerminal" &&
       record.event.report.result._tag === "Accepted"
     ) {
       const attemptId = record.event.report.correlation.attemptId
@@ -1900,11 +1900,6 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
           indexes.acceptedExecutorResults,
           attemptId,
           record.event.report.result.acceptedResult
-        ),
-        acceptedExecutorResultPositions: HashMap.set(
-          indexes.acceptedExecutorResultPositions,
-          attemptId,
-          record.position
         )
       }
     }

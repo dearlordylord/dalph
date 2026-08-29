@@ -9,7 +9,6 @@ module acceptedResultIntegration {
   type Phase =
     | NoAcceptedResult
     | AcceptedResult
-    | LateAcceptedEvidence
     | Queued
     | Started
     | DependencyWait
@@ -87,10 +86,6 @@ module acceptedResultIntegration {
 
   type ResultState = {
     phase: Phase,
-    // The applied Restart direction and the late Accepted report are separate
-    // durable phenomena. The former must predate the latter to select the
-    // evidence-only admission exception.
-    restartChoiceCommittedBeforeTerminal: bool,
     acceptedEvidencePreserved: bool,
     integrationResponsibilityRecorded: bool,
     integrationResponsibilityCount: int,
@@ -300,14 +295,12 @@ module acceptedResultIntegration {
   pure def logicalIntegrationBlockerPhase(phase: Phase): bool =
     phase != NoAcceptedResult
       and phase != AcceptedResult
-      and phase != LateAcceptedEvidence
       and phase != Queued
 
   pure def restartRequiresFreshAuthorityFacts(s: State): bool =
     RESULT_IDS.exists(id => {
       val phase = s.results.get(id).phase
       phase != NoAcceptedResult
-        and phase != LateAcceptedEvidence
         and not(promotionTerminalPhase(phase))
     })
 
@@ -392,10 +385,6 @@ module acceptedResultIntegration {
 
   val acceptedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == AcceptedResult)
-  val restartCommittedBeforeAcceptedReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).restartChoiceCommittedBeforeTerminal)
-  val lateAcceptedEvidenceReached: bool =
-    RESULT_IDS.exists(id => state.results.get(id).phase == LateAcceptedEvidence)
   val queuedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == Queued)
   val startedReached: bool =
@@ -498,7 +487,7 @@ module acceptedResultIntegration {
   val ordinaryAcceptedAdmissionRecordsOneResponsibility: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
-      if (Set(NoAcceptedResult, AcceptedResult, LateAcceptedEvidence).contains(result.phase))
+      if (Set(NoAcceptedResult, AcceptedResult).contains(result.phase))
         and {
           not(result.integrationResponsibilityRecorded),
           result.integrationResponsibilityCount == 0,
@@ -506,7 +495,6 @@ module acceptedResultIntegration {
       else
         and {
           result.acceptedEvidencePreserved,
-          not(result.restartChoiceCommittedBeforeTerminal),
           result.integrationResponsibilityRecorded,
           result.integrationResponsibilityCount == 1,
           result.queuePosition > 0,
@@ -518,22 +506,6 @@ module acceptedResultIntegration {
       state.results.get(id).phase == NoAcceptedResult
         or state.results.get(id).acceptedEvidencePreserved
     )
-
-  // This repeats the late-admission requirement independently of the guard.
-  val lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility: bool =
-    RESULT_IDS.forall(id => {
-      val result = state.results.get(id)
-      not(result.restartChoiceCommittedBeforeTerminal and result.acceptedEvidencePreserved)
-        or and {
-          result.phase == LateAcceptedEvidence,
-          result.integrationResponsibilityCount == 0,
-          not(result.integrationResponsibilityRecorded),
-          result.queuePosition == 0,
-          not(result.preIntegrationCancellation),
-          not(result.targetHeld),
-          result.integrationSession == 0,
-        }
-    })
 
   val queuePositionsAreUnique: bool =
     RESULT_IDS.forall(left =>
@@ -608,7 +580,6 @@ module acceptedResultIntegration {
       val result = state.results.get(id)
       result.phase != NoAcceptedResult
         and result.phase != AcceptedResult
-        and result.phase != LateAcceptedEvidence
         and result.phase != Queued
         implies result.integrationSession == id
     })
@@ -1224,7 +1195,6 @@ module acceptedResultIntegration {
     state' = {
       results: RESULT_IDS.mapBy(id => {
         phase: NoAcceptedResult,
-        restartChoiceCommittedBeforeTerminal: false,
         acceptedEvidencePreserved: false,
         integrationResponsibilityRecorded: false,
         integrationResponsibilityCount: 0,
@@ -1320,24 +1290,6 @@ module acceptedResultIntegration {
     }
   }
 
-  // taskFactReconciliation owns choice identity and replacement. This action
-  // carries only issue #56's late Accepted chronology.
-  action observeAppliedRestartBeforeAccepted(id: int): bool = {
-    val result = state.results.get(id)
-    all {
-      id == 1,
-      result.phase == NoAcceptedResult,
-      not(result.restartChoiceCommittedBeforeTerminal),
-      state' = {
-        ...state,
-        results: state.results.put(id, {
-          ...result,
-          restartChoiceCommittedBeforeTerminal: true,
-        }),
-      },
-    }
-  }
-
   action acceptResult(id: int): bool = {
     val result = state.results.get(id)
     all {
@@ -1347,7 +1299,7 @@ module acceptedResultIntegration {
         ...state,
         results: state.results.put(id, {
           ...result,
-          phase: if (result.restartChoiceCommittedBeforeTerminal) LateAcceptedEvidence else AcceptedResult,
+          phase: AcceptedResult,
           acceptedEvidencePreserved: true,
         }),
       },
@@ -1359,7 +1311,6 @@ module acceptedResultIntegration {
     all {
       RESULT_IDS.contains(id),
       result.phase == AcceptedResult,
-      not(result.restartChoiceCommittedBeforeTerminal),
       result.acceptedEvidencePreserved,
       not(result.integrationResponsibilityRecorded),
       result.integrationResponsibilityCount == 0,
@@ -2504,7 +2455,6 @@ module acceptedResultIntegration {
       state.targetFactsCurrent,
       result.phase != NoAcceptedResult,
       result.phase != AcceptedResult,
-      result.phase != LateAcceptedEvidence,
       state' = {
         ...state,
         targetHeadProof: result.plannedTargetHead + 1,
@@ -2673,7 +2623,6 @@ module acceptedResultIntegration {
   // scenarios and make every normal protocol action reachable to Quint runs.
   action acceptResultOne: bool = acceptResult(1)
   action acceptResultTwo: bool = acceptResult(2)
-  action observeAppliedRestartBeforeAcceptedOne: bool = observeAppliedRestartBeforeAccepted(1)
   action queueAcceptedResultOne: bool = queueAcceptedResult(1)
   action queueAcceptedResultTwo: bool = queueAcceptedResult(2)
   action startIntegrationOne: bool = startIntegration(1)
@@ -2735,7 +2684,6 @@ module acceptedResultIntegration {
   // only leaves a queued result blocked before session creation.
 
   action step: bool = any {
-    observeAppliedRestartBeforeAcceptedOne,
     acceptResultOne,
     acceptResultTwo,
     queueAcceptedResultOne,

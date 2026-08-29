@@ -99,7 +99,7 @@ type LifecyclePhase =
 
 type ExecutorAttempt =
   | "AttemptNotStarted"
-  | "AttemptRunning"
+  | "AttemptExecuting"
   | "AttemptSafelySuspended"
   | "AttemptTerminal"
   | "FastSuspensionCalled"
@@ -141,12 +141,12 @@ const attemptForDrain = (attempt: ExecutorAttempt): ApplicationExitDrainSnapshot
   switch (attempt) {
     case "AttemptNotStarted":
       return ApplicationExitExecutorAttemptEvidence.NotStarted()
-    case "AttemptRunning":
-      return ApplicationExitExecutorAttemptEvidence.Running()
+    case "AttemptExecuting":
+      return ApplicationExitExecutorAttemptEvidence.ExecutorWorkExecuting()
     case "AttemptSafelySuspended":
-      return ApplicationExitExecutorAttemptEvidence.SafelySuspended()
+      return ApplicationExitExecutorAttemptEvidence.ExecutorWorkSafelySuspended()
     case "AttemptTerminal":
-      return ApplicationExitExecutorAttemptEvidence.Terminal()
+      return ApplicationExitExecutorAttemptEvidence.ExecutorWorkTerminal()
     case "FastSuspensionCalled":
       return ApplicationExitExecutorAttemptEvidence.FastSuspensionCalled()
     case "SuspensionCallFailed":
@@ -321,8 +321,8 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
   const reportExecutor = (
     expected: PlannedAttemptExecutorCorrelation,
     report:
-      | ReturnType<typeof PlannedAttemptExecutorReport.cases.SafelySuspended.make>
-      | ReturnType<typeof PlannedAttemptExecutorReport.cases.Terminal.make>
+      | ReturnType<typeof PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make>
+      | ReturnType<typeof PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make>
   ) => decideExecutorPosition(expected, report)._tag === "ReleasePosition"
 
   const drainSnapshot = (): ApplicationExitDrainSnapshot => ({
@@ -375,12 +375,12 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
     registerOwnerB: () => Effect.sync(() => (ownerB = registerOwner(ownerB))),
     startAttemptA: () =>
       Effect.sync(() => {
-        attemptA = "AttemptRunning"
+        attemptA = "AttemptExecuting"
         attemptAPositionHeld = true
       }),
     startAttemptB: () =>
       Effect.sync(() => {
-        attemptB = "AttemptRunning"
+        attemptB = "AttemptExecuting"
         attemptBPositionHeld = true
       }),
     produceJournalWrite: () => Effect.sync(() => (write = "ProducedWritePending")),
@@ -464,7 +464,9 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
       }),
     reportAttemptASafelySuspended: () =>
       Effect.sync(() => {
-        const report = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: correlationA })
+        const report = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+          correlation: correlationA
+        })
         if (reportExecutor(correlationA, report)) {
           attemptA = "AttemptSafelySuspended"
           attemptAPositionHeld = false
@@ -472,7 +474,9 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
       }),
     reportAttemptBSafelySuspended: () =>
       Effect.sync(() => {
-        const report = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: correlationB })
+        const report = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+          correlation: correlationB
+        })
         if (reportExecutor(correlationB, report)) {
           attemptB = "AttemptSafelySuspended"
           attemptBPositionHeld = false
@@ -480,7 +484,7 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
       }),
     reportAttemptATerminal: () =>
       Effect.sync(() => {
-        const report = PlannedAttemptExecutorReport.cases.Terminal.make({
+        const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: correlationA,
           result: { _tag: "Completed" }
         })
@@ -491,7 +495,7 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
       }),
     reportAttemptBTerminal: () =>
       Effect.sync(() => {
-        const report = PlannedAttemptExecutorReport.cases.Terminal.make({
+        const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: correlationB,
           result: { _tag: "Completed" }
         })

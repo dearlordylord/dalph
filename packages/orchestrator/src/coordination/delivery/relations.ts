@@ -281,7 +281,7 @@ export type TicketDeliveryEvidence =
 
 /** Evidence that the executor reported a terminal result for one exact planned attempt. */
 export const PlannedAttemptExecutorTerminalEvidence = Schema.TaggedStruct("PlannedAttemptExecutorTerminal", {
-  report: PlannedAttemptExecutorReport.cases.Terminal
+  report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal
 })
 export type PlannedAttemptExecutorTerminalEvidence = typeof PlannedAttemptExecutorTerminalEvidence.Type
 

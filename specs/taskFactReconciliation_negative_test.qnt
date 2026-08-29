@@ -168,47 +168,9 @@ module taskFactReconciliationNegativeTest {
     state' = { ...state, observedReplacementTargetHead: OtherGitCommit },
   }
 
-  action replaceWhileP1Running: bool = all {
+  action replaceWhileP1Executing: bool = all {
     state.replacementPhase == ReplacementReadyToAppend,
-    state' = { ...state, executorEvidence: ExactRunning, quiescenceUnbroken: false },
-  }
-
-  action replaceWhileExecutorIsUnavailable: bool = all {
-    state.replacementPhase == ReplacementReadyToAppend,
-    state' = {
-      ...state,
-      executorEvidence: ExecutorUnavailable,
-      quiescenceUnbroken: false,
-    },
-  }
-
-  action replaceWithExecutorCorrelationContradiction: bool = all {
-    state.replacementPhase == ReplacementReadyToAppend,
-    state' = {
-      ...state,
-      executorEvidence: ExecutorContradiction,
-      quiescenceUnbroken: false,
-    },
-  }
-
-  action replaceAfterCompletedP1: bool = all {
-    state.replacementPhase == ReplacementReadyToAppend,
-    state' = {
-      ...state,
-      executorEvidence: ExactCompletedTerminal,
-      quiescenceUnbroken: true,
-      completedResultPreserved: true,
-    },
-  }
-
-  action replaceAfterFailedP1: bool = all {
-    state.replacementPhase == ReplacementReadyToAppend,
-    state' = {
-      ...state,
-      executorEvidence: ExactFailedTerminal,
-      quiescenceUnbroken: true,
-      failedResultPreserved: true,
-    },
+    state' = { ...state, executorEvidence: ExactExecuting, quiescenceUnbroken: false },
   }
 
   action supersedeP1WithoutRecordingP2: bool = all {
@@ -277,7 +239,7 @@ module taskFactReconciliationNegativeTest {
     state.replacementPhase == SuccessorWaitingForAdmission,
     state' = {
       ...state,
-      replacementPhase: SuccessorRunning,
+      replacementPhase: SuccessorExecuting,
       successorExecutorStartCount: 1,
       successorExecutorResponsibilityRetained: true,
     },
@@ -293,15 +255,6 @@ module taskFactReconciliationNegativeTest {
     },
   }
 
-  action integrateLateAcceptedP1: bool = all {
-    state.lateAcceptedCommitPreserved,
-    state' = {
-      ...state,
-      lateAcceptedIntegrationResponsibilityCount: 1,
-      integrationSelected: true,
-    },
-  }
-
   action makeFourthReplacementClaimRead: bool = all {
     state.replacementClaimReadsThisActivation == REPLACEMENT_CLAIM_READ_LIMIT,
     state' = {
@@ -311,7 +264,7 @@ module taskFactReconciliationNegativeTest {
   }
 
   action overlapP1AndP2ExecutorResponsibilities: bool = all {
-    state.replacementPhase == SuccessorRunning,
+    state.replacementPhase == SuccessorExecuting,
     state.successorExecutorResponsibilityRetained,
     state' = { ...state, implementationResponsibilityRetained: true },
   }
@@ -324,12 +277,6 @@ module taskFactReconciliationNegativeTest {
       plannedSuccessor: PlannedP2,
       successorAllocationCount: 1,
     },
-  }
-
-  action conflateCompletedWithFailedTerminal: bool = all {
-    state.lastAction == RestartCompletedObservedAction,
-    state.completedResultPreserved,
-    state' = { ...state, failedResultPreserved: true },
   }
 
   action applyContinueAfterTerminalAlone: bool = all {
@@ -377,17 +324,6 @@ module taskFactReconciliationNegativeTest {
     state' = { ...state, continueStage: ContinueResumed, resumedAttempt: AttemptP, positionHeld: true },
   }
 
-  action abandonFromUnprovedExecutorState: bool = all {
-    state.stopStage == NeedQuiescence,
-    not(exactQuiescence(state)),
-    state' = {
-      ...state,
-      implementationResponsibilityRetained: false,
-      positionHeld: false,
-      stopStage: NeedClaimObservation,
-    },
-  }
-
   action abandonFromBrokenSafeEvidence: bool = all {
     state.stopStage == NeedQuiescence,
     state.executorEvidence == ExactSafelySuspended,
@@ -425,36 +361,57 @@ module taskFactReconciliationNegativeTest {
     state' = { ...state, integrationSelected: true },
   }
 
-  action recordFourthStoppageIntent: bool = all {
-    state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
-    not(stopCommandActive(state)),
+  action admitResumeAfterTerminalChoice: bool = all {
+    state.f2WinningChoice == RestartChoice or state.f2WinningChoice == StopChoice,
+    state' = { ...state, heldResumeAdmitted: true },
+  }
+
+  action issueResumeAfterTerminalChoice: bool = all {
+    state.f2WinningChoice == RestartChoice or state.f2WinningChoice == StopChoice,
     state' = {
       ...state,
-      activeStopCommandOrdinal: state.nextStopCommandOrdinal,
-      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
-      stopCommandIntentCount: state.stopCommandIntentCount + 1,
-      suspensionCommandCountSinceSafeEvidence: state.suspensionCommandCountSinceSafeEvidence + 1,
+      resumeCommandIntentCount: state.resumeCommandIntentCount + 1,
+      resumeBoundaryCallCount: state.resumeBoundaryCallCount + 1,
     },
   }
 
-  action settleStoppageAtUnissuedOrdinal: bool = all {
-    state.stopCommandSettlementCount > 0,
+  action replaceAfterAcceptedTerminal: bool = all {
+    state.executorEvidence == ExactTerminal,
     state' = {
       ...state,
-      lastSettledStopCommandOrdinal: state.nextStopCommandOrdinal,
+      implementationResponsibilityRetained: false,
+      replacementEventRecorded: true,
     },
   }
 
-  action takeSecondStopProjectionInActivation: bool = all {
-    state.stopProjectionsThisActivation == 1,
-    state' = { ...state, stopProjectionsThisActivation: 2 },
+  action observeReplacementF3AfterAcceptedTerminal: bool = all {
+    state.f2WinningChoice == RestartChoice,
+    state.replacementPhase == NeedCurrentReplacementTaskFacts,
+    state.executorEvidence == ExactTerminal,
+    state' = {
+      ...state,
+      currentFingerprint: F3,
+      replacementTaskFacts: ReplacementF3Observed,
+      replacementPhase: ReplacementRejected,
+      replacementDisposition: NewFingerprintChoiceRequired,
+      continueStage: NewChoiceRequired,
+      constraint: SpecificationConstraint,
+      factDecision: SpecificationChoices,
+      lastAction: ReplacementF3FactsObservedAction,
+    },
   }
 
-  action makePostLimitReadOnlyStoppageRecoveryUnavailable: bool = all {
-    state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
-    not(stopCommandActive(state)),
-    state.stopProjectionsThisActivation == 1,
-    state' = { ...state, stopRecoveryCount: RECOVERY_LIMIT + 1 },
+  action acceptTerminalAfterAbandonment: bool = all {
+    not(state.implementationResponsibilityRetained),
+    state.executorEvidence == ExactSafelySuspended,
+    state' = {
+      ...state,
+      executorEvidence: ExactTerminal,
+      appliedChoiceCountAtTerminalObservation: state.appliedChoiceCount,
+      quiescenceUnbroken: true,
+      positionHeld: false,
+      lastAction: TerminalObservedAction,
+    },
   }
 
   action makeFourthClaimReleaseCall: bool = all {
@@ -465,12 +422,6 @@ module taskFactReconciliationNegativeTest {
   action dropUnreadableClaimResponsibility: bool = all {
     state.claimObservation == ClaimUnreadable,
     state' = { ...state, unresolvedClaimReleaseResponsibility: false },
-  }
-
-  action releasePositionWhileWriterIsUnproved: bool = all {
-    state.stopStage == NeedQuiescence,
-    not(exactQuiescence(state)),
-    state' = { ...state, positionHeld: false },
   }
 
   run runBindingMismatchCannotBecomeContentContradictionTest = {
@@ -556,27 +507,57 @@ module taskFactReconciliationNegativeTest {
       .expect(not(changedAgainRequiresNewChoice))
   }
 
-  run projectedRunningCannotAuthorizeAbandonmentTest = {
-    init
-      .then(observeF2Change)
-      .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(abandonFromUnprovedExecutorState)
-      .expect(not(abandonmentRequiresExactUnbrokenQuiescence))
-  }
-
   run brokenSafeEvidenceCannotAuthorizeAbandonmentTest = {
     init
       .then(observeF2Change)
       .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then({ state' = { ...state, executorEvidence: ExactSafelySuspended } })
+      .then({ state' = { ...state, quiescenceUnbroken: false } })
       .then(abandonFromBrokenSafeEvidence)
       .expect(not(abandonmentRequiresExactUnbrokenQuiescence))
+  }
+
+  run terminalChoiceCannotAdmitAnotherResumeTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(admitResumeAfterTerminalChoice)
+      .expect(not(terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains))
+  }
+
+  run terminalChoiceCannotIssueResumeAtExecutorBoundaryTest = {
+    init
+      .then(observeF2Change)
+      .then(applyStopF2)
+      .then(issueResumeAfterTerminalChoice)
+      .expect(not(terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains))
+  }
+
+  run acceptedTerminalCannotBeReplacedTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(observeExactTerminal)
+      .then(replaceAfterAcceptedTerminal)
+      .expect(not(acceptedTerminalIsAbsorbing))
+  }
+
+  run acceptedTerminalCannotCreateReplacementChoiceDispositionTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeExactTerminal)
+      .then(observeReplacementF3AfterAcceptedTerminal)
+      .expect(not(specificationOffersEveryExactChoice))
+  }
+
+  run terminalCannotArriveAfterAbandonmentTest = {
+    init
+      .then(observeF2Change)
+      .then(applyStopF2)
+      .then(abandonImplementation)
+      .then(acceptTerminalAfterAbandonment)
+      .expect(not(acceptedTerminalIsAbsorbing) and not(abandonmentRequiresExactUnbrokenQuiescence))
   }
 
   run claimCannotReleaseBeforeImplementationAbandonmentTest = {
@@ -634,78 +615,6 @@ module taskFactReconciliationNegativeTest {
       .expect(not(stopNeverSelectsIntegration))
   }
 
-  run fourthStoppageIntentViolatesBoundTest = {
-    init
-      .then(observeF2Change)
-      .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(recoverStopActivation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(recoverStopActivation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(recordFourthStoppageIntent)
-      .expect(not(stoppageIsBounded))
-  }
-
-  run secondProjectionInOneActivationViolatesBoundTest = {
-    init
-      .then(observeF2Change)
-      .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(takeSecondStopProjectionInActivation)
-      .expect(not(stoppageIsBounded))
-  }
-
-  run unissuedOrdinalCannotSettleStoppageIntentTest = {
-    init
-      .then(observeF2Change)
-      .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(settleStoppageAtUnissuedOrdinal)
-      .expect(not(stoppageCallsHaveExactDurableIntents))
-  }
-
-  run stoppageLimitCannotBecomePermanentReadOnlyDeadEndTest = {
-    init
-      .then(observeF2Change)
-      .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(recoverStopActivation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(recoverStopActivation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactRunningForStoppage)
-      .then(makePostLimitReadOnlyStoppageRecoveryUnavailable)
-      .expect(not(stoppageLimitPreservesReadOnlyRecovery))
-  }
-
   run fourthClaimReleaseCallViolatesBoundTest = {
     init
       .then(observeF2Change)
@@ -735,15 +644,6 @@ module taskFactReconciliationNegativeTest {
       .then(observeUnreadableClaim)
       .then(dropUnreadableClaimResponsibility)
       .expect(not(unreadableClaimRemainsSeparateResponsibility))
-  }
-
-  run unprovedWriterCannotReleaseTaskPositionTest = {
-    init
-      .then(observeF2Change)
-      .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(releasePositionWhileWriterIsUnproved)
-      .expect(not(unprovedWriterRetainsPositionAndClaim))
   }
 
   run restartWinnerCannotBeOverwrittenByContinueOrStopTest = {
@@ -961,65 +861,9 @@ module taskFactReconciliationNegativeTest {
       .then(observeReplacementExactK1)
       .then(observeReplacementExactW1Ready)
       .then(observeReplacementExactH2)
-      .then(replaceWhileP1Running)
+      .then(replaceWhileP1Executing)
       .then(forcePlannedAttemptReplacement)
-      .expect(not(nonAuthorizingExecutorEvidenceNeverRecordsReplacement))
-  }
-
-  run unavailableExecutorCannotAuthorizeReplacementTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(beginReplacementFactsFromRetainedSafeSuspension)
-      .then(observeReplacementExactF2TaskFacts)
-      .then(observeReplacementExactK1)
-      .then(observeReplacementExactW1Ready)
-      .then(observeReplacementExactH2)
-      .then(replaceWhileExecutorIsUnavailable)
-      .then(forcePlannedAttemptReplacement)
-      .expect(not(nonAuthorizingExecutorEvidenceNeverRecordsReplacement))
-  }
-
-  run contradictoryExecutorCannotAuthorizeReplacementTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(beginReplacementFactsFromRetainedSafeSuspension)
-      .then(observeReplacementExactF2TaskFacts)
-      .then(observeReplacementExactK1)
-      .then(observeReplacementExactW1Ready)
-      .then(observeReplacementExactH2)
-      .then(replaceWithExecutorCorrelationContradiction)
-      .then(forcePlannedAttemptReplacement)
-      .expect(not(nonAuthorizingExecutorEvidenceNeverRecordsReplacement))
-  }
-
-  run completedP1CannotAuthorizeReplacementTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(beginReplacementFactsFromRetainedSafeSuspension)
-      .then(observeReplacementExactF2TaskFacts)
-      .then(observeReplacementExactK1)
-      .then(observeReplacementExactW1Ready)
-      .then(observeReplacementExactH2)
-      .then(replaceAfterCompletedP1)
-      .then(forcePlannedAttemptReplacement)
-      .expect(not(nonAuthorizingExecutorEvidenceNeverRecordsReplacement))
-  }
-
-  run failedP1CannotAuthorizeReplacementTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(beginReplacementFactsFromRetainedSafeSuspension)
-      .then(observeReplacementExactF2TaskFacts)
-      .then(observeReplacementExactK1)
-      .then(observeReplacementExactW1Ready)
-      .then(observeReplacementExactH2)
-      .then(replaceAfterFailedP1)
-      .then(forcePlannedAttemptReplacement)
-      .expect(not(nonAuthorizingExecutorEvidenceNeverRecordsReplacement))
+      .expect(not(plannedAttemptReplacementRequiresExactCurrentEvidence))
   }
 
   run P1CannotBeSupersededWithoutAtomicP2Test = {
@@ -1126,19 +970,6 @@ module taskFactReconciliationNegativeTest {
       .expect(not(replacementNeverAllocatesP3))
   }
 
-  run lateAcceptedP1CannotCreateIntegrationResponsibilityTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(breakRestartSafeSuspension)
-      .then(observeRestartAccepted)
-      .then(integrateLateAcceptedP1)
-      .expect(and {
-        not(lateAcceptedNeverCreatesIntegrationResponsibility),
-        not(restartNeverSelectsIntegration),
-      })
-  }
-
   run P1AndP2ExecutorResponsibilitiesCannotOverlapTest = {
     init
       .then(observeF2Change)
@@ -1170,13 +1001,4 @@ module taskFactReconciliationNegativeTest {
       .expect(not(crashKeepsEitherNoP2OrTheSameP2))
   }
 
-  run completedAndFailedTerminalEvidenceCannotConflateTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(breakRestartSafeSuspension)
-      .then(observeRestartCompleted)
-      .then(conflateCompletedWithFailedTerminal)
-      .expect(not(replacementTerminalOutcomesRemainDistinct))
-  }
 }

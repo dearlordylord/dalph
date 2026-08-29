@@ -73,9 +73,11 @@ import {
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptContinuationAuthorizedEvent,
   PlannedAttemptContinuationWitness,
   PlannedWorktreeReady,
+  plannedAttemptProtocolControllerLayer,
   authorizePlannedAttemptContinuation,
   projectWorkflowOccurrences,
   projectTrackerSnapshot,
@@ -119,13 +121,13 @@ import {
   changedAttemptRestartAfterSupersessionCrashAuthoredCassette,
   changedAttemptRestartClaimUnavailableAuthoredCassette,
   changedAttemptRestartFactsChangedAuthoredCassette,
-  changedAttemptRestartLateAcceptedAuthoredCassette,
+  changedAttemptRestartCancelsHeldResumeBeforeChangedFactsAuthoredCassette,
   changedAttemptRestartPastIntegrationRejectedAuthoredCassette,
-  changedAttemptRestartRemainsUnprovedAuthoredCassette,
+  changedAttemptRestartCancelsHeldResumeAuthoredCassette,
   changedAttemptRestartsCleanlyAuthoredCassette,
   changedAttemptRestartWorktreeNotReadyAuthoredCassette,
-  changedAttemptStopLostThirdSuspensionAuthoredCassette,
-  changedAttemptStopRemainsUnprovedAuthoredCassette,
+  changedAttemptStopCancelsHeldResumeAuthoredCassette,
+  changedAttemptStopCancelsHeldResumeWithForeignClaimAuthoredCassette,
   changedAttemptStopsAndReleasesAuthoredCassette,
   changedAttemptStopReleaseResponseLostAuthoredCassette,
   changedAttemptStopsWithAbsentClaimAuthoredCassette,
@@ -447,7 +449,7 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
     )
     const missingProjectionExit = yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      return yield* executor.project(correlation)
+      return yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
     }).pipe(
       Effect.provide(controlledExecutorLayer(emptyCursor, runId, () => Effect.void, reports, unresolved)),
       Effect.exit
@@ -460,12 +462,12 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
     const contradictoryCursor = yield* makeStoryCursor([
       {
         _tag: "PlannedAttemptExecutorProjectionReturned",
-        report: { _tag: "Running", attemptId: AttemptId.make("another-projected-attempt") }
+        report: { _tag: "ExecutorWorkExecuting", attemptId: AttemptId.make("another-projected-attempt") }
       }
     ])
     const contradictoryProjection = yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      return yield* executor.project(correlation)
+      return yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
     }).pipe(
       Effect.provide(
         controlledExecutorLayer(
@@ -487,12 +489,12 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
     const foreignRunCursor = yield* makeStoryCursor([
       {
         _tag: "PlannedAttemptExecutorProjectionReturned",
-        report: { _tag: "Running", attemptId: correlation.attemptId }
+        report: { _tag: "ExecutorWorkExecuting", attemptId: correlation.attemptId }
       }
     ])
     const foreignRunProjection = yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      return yield* executor.project(correlation)
+      return yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
     }).pipe(
       Effect.provide(
         controlledExecutorLayer(
@@ -564,7 +566,7 @@ it.effect("projects reacquisition and non-exact executor evidence through the au
       )).protocolEvidence
     ).toEqual([{ _tag: "TaskClaimReacquisitionDirected", requestId, taskId }])
 
-    const run = yield* runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette)
+    const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
     const projection = run.records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
     if (projection?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") {
       return yield* Effect.die("missing command projection")
@@ -664,9 +666,9 @@ it.effect("records no P2 when fresh restart authority is changed, unreadable, or
   })
 )
 
-it.effect("keeps Restart unproved while P1 is Running and mutates no claim or worktree", () =>
+it.effect("cancels an admitted but unissued Resume when Restart wins, then starts only P2", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(changedAttemptRestartRemainsUnprovedAuthoredCassette)
+    const run = yield* runAuthoredScenarioCassette(changedAttemptRestartCancelsHeldResumeAuthoredCassette)
     const restartAt = run.records.findIndex(
       ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
     )
@@ -675,37 +677,29 @@ it.effect("keeps Restart unproved while P1 is Running and mutates no claim or wo
       .flatMap(({ event }) => (event._tag === "PlannedAttemptExecutorCommandIntended" ? [event.command] : []))
 
     expect(restartAt).toBeGreaterThan(0)
-    expect(laterCommands).toEqual(["StartOrContinue", "Suspend"])
-    expect(
-      run.records.some(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-          event.observation._tag === "ExactExecutorReport" &&
-          event.observation.report._tag === "Running"
-      )
-    ).toBe(true)
-    expect(run.records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+    expect(laterCommands).toEqual(["Begin"])
+    expect(run.records.filter(({ event }) => event._tag === "PlannedAttemptReplaced")).toHaveLength(1)
     expect(run.records.some(({ event }) => event._tag === "TaskClaimReleaseIntended")).toBe(false)
     expectRecordedRoundTrip(run.records, yield* projectRecordedCassette(run.records))
   })
 )
 
-it.effect("preserves late Accepted evidence without P1 integration and still replaces P1 after fresh checks", () =>
+it.effect("cancels held Resume but records no P2 when the fresh Restart specification changed again", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(changedAttemptRestartLateAcceptedAuthoredCassette)
+    const run = yield* runAuthoredScenarioCassette(
+      changedAttemptRestartCancelsHeldResumeBeforeChangedFactsAuthoredCassette
+    )
     const restartAt = run.records.findIndex(
       ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
     )
-    const acceptedAt = run.records.findIndex(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report._tag === "Terminal" &&
-        event.report.result._tag === "Accepted"
-    )
-    const replacementAt = run.records.findIndex(({ event }) => event._tag === "PlannedAttemptReplaced")
-
-    expect(acceptedAt).toBeGreaterThan(restartAt)
-    expect(replacementAt).toBeGreaterThan(acceptedAt)
+    expect(restartAt).toBeGreaterThan(0)
+    expect(run.records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
+    expect(
+      run.records.some(
+        ({ event }, index) =>
+          index > restartAt && event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume"
+      )
+    ).toBe(false)
     expect(
       run.records.some(
         ({ event }) =>
@@ -871,7 +865,8 @@ it.effect("proves the exact executor stopped before abandoning implementation re
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(changedAttemptStopsAndReleasesAuthoredCassette)
     const safe = run.records.find(
-      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
     )?.event
     const abandoned = run.records.find(({ event }) => event._tag === "AttemptImplementationAbandoned")?.event
     if (safe?._tag !== "PlannedAttemptExecutorWorkReported" || abandoned?._tag !== "AttemptImplementationAbandoned") {
@@ -880,7 +875,7 @@ it.effect("proves the exact executor stopped before abandoning implementation re
 
     expect(safe.report.correlation.attemptId).toBe(abandoned.subject.plannedAttempt.attemptId)
     expect(safe.report.correlation.runId).toBe(abandoned.subject.plannedAttempt.runId)
-    expect(abandoned.proof).toEqual({ _tag: "CommandResponse", reportOrdinal: safe.ordinal })
+    expect(abandoned.proof).toEqual({ _tag: "AcceptedReport", reportOrdinal: safe.ordinal })
     expect(
       run.records.some(
         ({ event }, index) =>
@@ -935,7 +930,8 @@ it.effect("preserves worktree WIP session history and evidence after Stop", () =
       ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
     )?.event
     const safe = run.records.find(
-      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
     )?.event
     const abandoned = run.records.find(({ event }) => event._tag === "AttemptImplementationAbandoned")?.event
     if (
@@ -960,7 +956,7 @@ it.effect("preserves worktree WIP session history and evidence after Stop", () =
     })
     expect(executor.plannedAttempt).toEqual(plan.operation.plannedAttempt)
     expect(abandoned.subject.plannedAttempt).toEqual(plan.operation.plannedAttempt)
-    expect(abandoned.proof).toEqual({ _tag: "CommandResponse", reportOrdinal: safe.ordinal })
+    expect(abandoned.proof).toEqual({ _tag: "AcceptedReport", reportOrdinal: safe.ordinal })
     expect(tags).not.toContain("WorkflowRunTerminated")
     expect(tags).not.toContain("IntegrationResponsibilityBegan")
     expect(tags).not.toContain("IntegrationStarted")
@@ -979,10 +975,10 @@ it.effect("preserves worktree WIP session history and evidence after Stop", () =
   })
 )
 
-it.effect("reconciles ambiguous stoppage and claim release across later activations without duplicates", () =>
+it.effect("reconciles ambiguous suspension and claim release across later activations without duplicates", () =>
   Effect.gen(function* () {
     const [stoppage, run] = yield* Effect.all([
-      runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette),
+      runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette),
       runAuthoredScenarioCassette(changedAttemptStopReleaseResponseLostAuthoredCassette)
     ])
 
@@ -997,37 +993,28 @@ it.effect("reconciles ambiguous stoppage and claim release across later activati
   })
 )
 
-it.effect("does not release the claim while an exact writer may remain", () =>
+it.effect("cancels held Resume before Stop and preserves a foreign claim", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(changedAttemptStopRemainsUnprovedAuthoredCassette)
+    const run = yield* runAuthoredScenarioCassette(changedAttemptStopCancelsHeldResumeWithForeignClaimAuthoredCassette)
     const choiceAt = run.records.findIndex(({ event }) => event._tag === "AttemptChoiceApplied")
     const postStopExecutorIntents = run.records.flatMap(({ event }, index) =>
       index > choiceAt && event._tag === "PlannedAttemptExecutorCommandIntended" ? [{ event, index }] : []
     )
-    const continuation = postStopExecutorIntents.find(({ event }) => event.command === "StartOrContinue")
-    if (continuation === undefined) return yield* Effect.die("unproved Stop has no admitted continuation")
-    const runningProjectionAt = run.records.findIndex(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-        event.commandOrdinal === continuation.event.ordinal &&
-        event.observation._tag === "ExactExecutorReport" &&
-        event.observation.report._tag === "Running"
-    )
 
     expect(choiceAt).toBeGreaterThan(0)
-    expect(postStopExecutorIntents.map(({ event }) => event.command)).toEqual(["StartOrContinue"])
-    expect(runningProjectionAt).toBeGreaterThan(continuation.index)
-    expect(run.records.some(({ event }) => event._tag === "AttemptImplementationAbandoned")).toBe(false)
+    expect(postStopExecutorIntents).toEqual([])
+    expect(run.records.filter(({ event }) => event._tag === "AttemptImplementationAbandoned")).toHaveLength(1)
     expect(run.records.some(({ event }) => event._tag === "TaskClaimReleaseIntended")).toBe(false)
     expect(run.records.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+    expect(run.records.filter(({ event }) => event._tag === "StoppedAttemptClaimNoReleaseObserved")).toHaveLength(1)
     const recorded = yield* projectRecordedCassette(run.records)
     expectRecordedRoundTrip(run.records, recorded)
   })
 )
 
-it.effect("preserves every exact resource when executor stoppage is unproved", () =>
+it.effect("preserves every exact attempt artifact after Stop cancels held Resume", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(changedAttemptStopRemainsUnprovedAuthoredCassette)
+    const run = yield* runAuthoredScenarioCassette(changedAttemptStopCancelsHeldResumeWithForeignClaimAuthoredCassette)
     const plan = run.records.find(({ event }) => event._tag === "TaskAttemptPlanned")?.event
     const worktree = run.records.find(({ event }) => event._tag === "TaskWorktreeReady")?.event
     const responsibility = run.records.find(
@@ -1038,7 +1025,7 @@ it.effect("preserves every exact resource when executor stoppage is unproved", (
       worktree?._tag !== "TaskWorktreeReady" ||
       responsibility?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan"
     ) {
-      return yield* Effect.die("unproved Stop lost its planned attempt resources")
+      return yield* Effect.die("Stop lost its planned attempt resources")
     }
 
     expect(worktree.proof).toMatchObject({
@@ -1048,44 +1035,32 @@ it.effect("preserves every exact resource when executor stoppage is unproved", (
     })
     expect(responsibility.plannedAttempt).toEqual(plan.operation.plannedAttempt)
     expect(reduceWorkflowJournalHistory(run.runId, run.records)._tag).toBe("ValidWorkflowJournalHistory")
-    expect(
-      run.records.some(
-        ({ event }) =>
-          event._tag === "AttemptImplementationAbandoned" ||
-          event._tag === "TaskClaimReleaseIntended" ||
-          event._tag === "TaskClaimReleased" ||
-          event._tag === "IntegrationStarted"
-      )
-    ).toBe(false)
+    expect(run.records.filter(({ event }) => event._tag === "AttemptImplementationAbandoned")).toHaveLength(1)
+    expect(run.records.some(({ event }) => event._tag === "TaskClaimReleaseIntended")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "TaskClaimReleased")).toBe(false)
+    expect(run.records.some(({ event }) => event._tag === "IntegrationStarted")).toBe(false)
     const recorded = yield* projectRecordedCassette(run.records)
     expectRecordedRoundTrip(run.records, recorded)
   })
 )
 
-it.effect("uses the injected projection when the public Run entry reconstructs an ambiguous executor command", () =>
+it.effect("uses the injected projection when the public Run entry reconstructs an ambiguous Suspend", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette)
-    const authoredProjections = changedAttemptStopLostThirdSuspensionAuthoredCassette.story.filter(
+    const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
+    const authoredProjections = runUnpauseDuringSuspensionRestartsAuthoredCassette.story.filter(
       (item) => item._tag === "PlannedAttemptExecutorProjectionReturned"
     )
-    const stopAt = run.records.findIndex(({ event }) => event._tag === "AttemptChoiceApplied")
-    const startIntents = run.records.flatMap(({ event }, index) =>
-      index > stopAt && event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "StartOrContinue"
-        ? [{ event, index }]
-        : []
+    const suspendIntents = run.records.flatMap(({ event }, index) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend" ? [{ event, index }] : []
     )
-    const start = startIntents[0]
-    if (start === undefined) return yield* Effect.die("missing admitted continuation command")
+    const suspend = suspendIntents[0]
+    if (suspend === undefined) return yield* Effect.die("missing admitted Suspend command")
     const projectionAt = run.records.findIndex(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-        event.commandOrdinal === start.event.ordinal &&
+        event.commandOrdinal === suspend.event.ordinal &&
         event.observation._tag === "ExactExecutorReport" &&
-        event.observation.report._tag === "Running"
-    )
-    const firstSuspendAt = run.records.findIndex(
-      ({ event }, index) =>
-        index > stopAt && event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+        event.observation.report._tag === "ExecutorWorkSafelySuspended"
     )
     const recordedProjections = run.records.filter(
       ({ event }) =>
@@ -1093,18 +1068,17 @@ it.effect("uses the injected projection when the public Run entry reconstructs a
         event._tag === "PlannedAttemptExecutorStateObserved"
     )
 
-    expect(run.activationOrdinals.filter((ordinal) => ordinal > 1).length).toBeGreaterThan(1)
-    expect(startIntents).toHaveLength(1)
-    expect(projectionAt).toBeGreaterThan(start.index)
-    expect(firstSuspendAt).toBeGreaterThan(projectionAt)
+    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(suspendIntents).toHaveLength(1)
+    expect(projectionAt).toBeGreaterThan(suspend.index)
     expect(recordedProjections).toHaveLength(authoredProjections.length)
     expect(
       recordedProjections.every(
         ({ event }) =>
           (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
             event._tag === "PlannedAttemptExecutorStateObserved") &&
-          event.plannedAttempt.runId === start.event.plannedAttempt.runId &&
-          event.plannedAttempt.attemptId === start.event.plannedAttempt.attemptId
+          event.plannedAttempt.runId === suspend.event.plannedAttempt.runId &&
+          event.plannedAttempt.attemptId === suspend.event.plannedAttempt.attemptId
       )
     ).toBe(true)
     const recorded = yield* projectRecordedCassette(run.records)
@@ -1274,15 +1248,13 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
             blockers: [
               { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" },
               {
-                _tag: "LiveDeliveryAction",
-                owner: {
-                  _tag: "AdmittedDeliveryAction",
-                  proposal: {
-                    _tag: "FreshExecutorWorkflowRoute",
-                    attemptId: "attempt:A:0",
-                    proposalId: '["FreshExecutorWorkflowRoute","StartPlannedAttemptExecutorWork","attempt:A:0","A"]',
-                    taskId: "A"
-                  }
+                _tag: "ProposedDeliveryAction",
+                proposal: {
+                  _tag: "IdentityFreeWorkflowRoute",
+                  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:A:0" },
+                  proposalId:
+                    '["IdentityFreeWorkflowRoute","SuspendPlannedAttemptExecutorWork","attempt:A:0",null,"A"]',
+                  taskId: "A"
                 }
               }
             ],
@@ -1304,7 +1276,7 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
     expect(run.observedBehavior.orchestrationEvidence).toContainEqual({
       _tag: "PlannedAttemptExecutorWorkReported",
       attemptId: "attempt:A:0",
-      report: "SafelySuspended"
+      report: "ExecutorWorkSafelySuspended"
     })
     const recorded = yield* projectRecordedCassette(run.records)
     expectRecordedRoundTrip(run.records, recorded)
@@ -1318,7 +1290,7 @@ it.effect("lets independent B use capacity only after paused A confirms suspensi
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" &&
         event.report.correlation.attemptId === "attempt:A:0" &&
-        event.report._tag === "SafelySuspended"
+        event.report._tag === "ExecutorWorkSafelySuspended"
     )
     const bResponsibilityAt = run.records.findIndex(
       ({ event }) =>
@@ -1387,10 +1359,11 @@ it.effect("freshly rereads preserved task authorities before resuming after task
     )
     const afterUnpause = run.records.slice(unpauseAt + 1)
     const suspendedAt = afterUnpause.findIndex(
-      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
     )
     const resumedAt = afterUnpause.findIndex(
-      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
     )
 
     expect(unpauseAt).toBeGreaterThan(0)
@@ -1408,7 +1381,8 @@ it.effect("freshly rereads preserved task authorities before resuming after task
       "GitReadIntentRecorded",
       "TargetLineageObserved",
       "PlannedAttemptContinuationAuthorized",
-      "PlannedAttemptExecutorCommandIntended"
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved"
     ])
   })
 )
@@ -1418,7 +1392,12 @@ it.effect("reopens after task Unpause and finishes suspension before executor wo
     const run = yield* runAuthoredScenarioCassette(taskUnpauseDuringSuspensionRestartsAuthoredCassette)
 
     expect(run.activationOrdinals).toEqual([1, 2])
-    expect(exactExecutorReportTags(run.records)).toEqual(["Running", "SafelySuspended", "Terminal"])
+    expect(exactExecutorReportTags(run.records)).toEqual([
+      "ExecutorWorkExecuting",
+      "ExecutorWorkSafelySuspended",
+      "ExecutorWorkSafelySuspended",
+      "ExecutorWorkTerminal"
+    ])
   })
 )
 
@@ -1448,7 +1427,7 @@ it.effect("stops before the next forward operation after Alice pauses the Run", 
       afterPause.flatMap(({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report._tag] : []
       )
-    ).toEqual(["Running", "SafelySuspended"])
+    ).toEqual(["ExecutorWorkExecuting", "ExecutorWorkSafelySuspended"])
     expect(afterPause.some(({ event }) => event._tag === "TaskTrackerFactsObserved")).toBe(false)
     expect(afterPause.some(({ event }) => event._tag === "TaskClaimAcquisitionIntended")).toBe(false)
     expect(run.history).toMatchObject({
@@ -1534,7 +1513,7 @@ it.effect("Alice sees current grouping facts add D to task A's Pause", () =>
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" &&
         event.report.correlation.attemptId === "attempt:D:1" &&
-        event.report._tag === "SafelySuspended"
+        event.report._tag === "ExecutorWorkSafelySuspended"
     )
     expect(taskPauseGroupingFactsAddedAuthoredCassette.name).toBe(
       "Alice sees current grouping facts add D to task A's Pause"
@@ -1584,7 +1563,7 @@ it.effect("restarts a confirmed paused Run without selecting new forward progres
       afterPause.flatMap(({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report._tag] : []
       )
-    ).toEqual(["Running", "SafelySuspended"])
+    ).toEqual(["ExecutorWorkExecuting", "ExecutorWorkSafelySuspended"])
     expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
     const recorded = yield* projectRecordedCassette(run.records)
     expect(
@@ -1853,7 +1832,7 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
           event.report.correlation.attemptId === AttemptId.make("attempt:C:1") &&
-          event.report._tag === "Terminal" &&
+          event.report._tag === "ExecutorWorkTerminal" &&
           event.report.result._tag === "Completed"
       )
     ).toBe(true)
@@ -1872,7 +1851,8 @@ it.effect("finishes the exact safe suspension before fresh reads after Unpause",
     const afterUnpause = run.records.slice(unpauseAt + 1)
     const tags = afterUnpause.map(({ event }) => event._tag)
     const safelySuspendedAt = afterUnpause.findIndex(
-      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
     )
     const graphAt = tags.indexOf("TaskTrackerFactsObserved")
     const specificationAt = afterUnpause.findIndex(
@@ -1885,11 +1865,12 @@ it.effect("finishes the exact safe suspension before fresh reads after Unpause",
     const worktreeAt = tags.indexOf("PlannedAttemptWorktreeObserved")
     const targetLineageAt = tags.indexOf("TargetLineageObserved")
     const terminalAt = afterUnpause.findIndex(
-      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
     )
 
     expect(unpauseAt).toBeGreaterThan(0)
-    expect(safelySuspendedAt).toBe(0)
+    expect(tags[0]).toBe("PlannedAttemptExecutorCommandResponseObserved")
+    expect(safelySuspendedAt).toBe(1)
     expect(graphAt).toBeGreaterThan(safelySuspendedAt)
     expect(specificationAt).toBeGreaterThan(graphAt)
     expect(claimAt).toBeGreaterThan(specificationAt)
@@ -1916,17 +1897,22 @@ it.effect("reprojects the exact suspension on the second ordinary Run activation
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette)
     expect(run.activationOrdinals).toEqual([1, 2])
-    expect(exactExecutorReportTags(run.records)).toEqual(["Running", "SafelySuspended", "Terminal"])
+    expect(exactExecutorReportTags(run.records)).toEqual([
+      "ExecutorWorkExecuting",
+      "ExecutorWorkSafelySuspended",
+      "ExecutorWorkSafelySuspended",
+      "ExecutorWorkTerminal"
+    ])
     const commandIntents = run.records.flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorCommandIntended" ? [event] : []
     )
-    expect(commandIntents.map(({ command }) => command)).toEqual(["StartOrContinue", "Suspend", "StartOrContinue"])
+    expect(commandIntents.map(({ command }) => command)).toEqual(["Begin", "Suspend", "Resume"])
     expect(
       run.records.filter(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
           event.observation._tag === "ExactExecutorReport" &&
-          event.observation.report._tag === "SafelySuspended"
+          event.observation.report._tag === "ExecutorWorkSafelySuspended"
       )
     ).toHaveLength(1)
   })
@@ -1935,7 +1921,7 @@ it.effect("reprojects the exact suspension on the second ordinary Run activation
 it.effect("applies an authored operator direction through the production control boundary", () =>
   Effect.gen(function* () {
     const firstRunning = singleton.story.findIndex(
-      (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+      (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkExecuting"
     )
     const cassetteWith = (subject: { readonly _tag: "Run" } | { readonly _tag: "Task"; readonly taskId: TaskId }) => ({
       ...singleton,
@@ -2030,7 +2016,7 @@ it.effect("continues an accepted result after process death and crosses its inte
       run.records.filter(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report._tag === "Terminal" &&
+          event.report._tag === "ExecutorWorkTerminal" &&
           event.report.result._tag === "Accepted"
       )
     ).toHaveLength(1)
@@ -2082,7 +2068,7 @@ it.effect("continues an accepted result after process death and crosses its inte
       ({ event }) =>
         !(
           event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report._tag === "Terminal" &&
+          event.report._tag === "ExecutorWorkTerminal" &&
           event.report.result._tag === "Accepted"
         )
     )
@@ -3426,7 +3412,7 @@ it.effect("releases B only after A's accepted-result finality in one Run", () =>
       run.records.some(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report._tag === "Terminal" &&
+          event.report._tag === "ExecutorWorkTerminal" &&
           event.report.result._tag === "Completed"
       )
     ).toBe(false)
@@ -3663,13 +3649,13 @@ it.effect("separates delivery frames across authored coordinator activations", (
   })
 )
 
-it.effect("separates every coordinator activation in a multi-restart delivery timeline", () =>
+it.effect("separates every coordinator activation while a lost claim-release response is reconciled", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette)
+    const run = yield* runAuthoredScenarioCassette(changedAttemptStopReleaseResponseLostAuthoredCassette)
     const activationOrdinals = [...new Set(run.deliveryFrames.map(({ activationOrdinal }) => activationOrdinal))]
 
-    expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5, 6, 7])
-    expect(activationOrdinals).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5])
+    expect(activationOrdinals).toEqual([1, 2, 3, 4, 5])
     for (const ordinal of activationOrdinals) {
       const frames = run.deliveryFrames.filter(({ activationOrdinal }) => activationOrdinal === ordinal)
       expect(frames.length).toBeGreaterThan(0)
@@ -3966,13 +3952,12 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
         { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Running", attemptId: "attempt:A:0" },
-          request: "StartOrContinue"
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+          request: "Begin"
         },
         {
-          _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
-          request: "StartOrContinue"
+          _tag: "PlannedAttemptExecutorProjectionReturned",
+          report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } }
         },
         ...read(changedGraph),
         ...read(changedGraph),
@@ -3984,13 +3969,12 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
         { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Running", attemptId: "attempt:D:1" },
-          request: "StartOrContinue"
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:1" },
+          request: "Begin"
         },
         {
-          _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Terminal", attemptId: "attempt:D:1", result: { _tag: "Completed" } },
-          request: "StartOrContinue"
+          _tag: "PlannedAttemptExecutorProjectionReturned",
+          report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:D:1", result: { _tag: "Completed" } }
         },
         {
           _tag: "ExpectedBehavior",
@@ -4056,8 +4040,9 @@ it.effect("runs the maintained singleton through production activation and descr
       "TaskWorktreeReady",
       "PlannedAttemptExecutorWorkResponsibilityBegan",
       "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved",
       "PlannedAttemptExecutorWorkReported",
-      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorStateObserved",
       "PlannedAttemptExecutorWorkReported",
       "TaskTrackerReadIntentRecorded",
       "TaskTrackerFactsObserved"
@@ -4069,8 +4054,8 @@ it.effect("runs the maintained singleton through production activation and descr
           : []
       )
     ).toEqual([
-      { attemptId: "attempt:A:0", report: "Running" },
-      { attemptId: "attempt:A:0", report: "Terminal" }
+      { attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:A:0", report: "ExecutorWorkTerminal" }
     ])
   })
 )
@@ -4096,7 +4081,7 @@ it.effect("keeps the maintained singleton Run active while its tracker task rema
       terminalExecutorReport?._tag === "PlannedAttemptExecutorWorkReported"
         ? terminalExecutorReport.report._tag
         : undefined
-    ).toBe("Terminal")
+    ).toBe("ExecutorWorkTerminal")
     expect(renderAuthoredCassetteLyrics(run.cassette)).toContain(
       "The story expects the planned work for task A to complete."
     )
@@ -4234,7 +4219,7 @@ it.effect("requires one terminal assertion group and one owner for every decoded
         {
           _tag: "PlannedAttemptExecutorResponseLost",
           detail: "the coordinator kept running after losing the response",
-          report: { _tag: "Running", attemptId: "attempt:A:0" },
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
           request: "Suspend"
         },
         singleton.story.at(-1)
@@ -4249,7 +4234,7 @@ it.effect("requires one terminal assertion group and one owner for every decoded
         {
           _tag: "PlannedAttemptExecutorResponseLost",
           detail: "the response is lost and the next activation never projects executor authority",
-          report: { _tag: "Running", attemptId: "attempt:A:0" },
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
           request: "Suspend"
         },
         { _tag: "CoordinatorProcessDies" },
@@ -4275,8 +4260,8 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(claimLossWithoutDeath)).toThrow()
 
     const holdWithoutMatchingStop = {
-      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
-      story: changedAttemptStopLostThirdSuspensionAuthoredCassette.story.map((item) =>
+      ...changedAttemptStopCancelsHeldResumeAuthoredCassette,
+      story: changedAttemptStopCancelsHeldResumeAuthoredCassette.story.map((item) =>
         item._tag === "OperatorStopsAttempt" &&
         item.expected._tag === "Applied" &&
         item.expected.status === "AwaitingQuiescence"
@@ -4287,8 +4272,8 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdWithoutMatchingStop)).toThrow()
 
     const duplicateContinuationHold = {
-      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
-      story: changedAttemptStopLostThirdSuspensionAuthoredCassette.story.flatMap(
+      ...changedAttemptStopCancelsHeldResumeAuthoredCassette,
+      story: changedAttemptStopCancelsHeldResumeAuthoredCassette.story.flatMap(
         (item): ReadonlyArray<AuthoredCassetteStoryItem> =>
           item._tag === "DalphHoldsAdmittedContinuationBeforeExecutorIntent" ? [item, item] : [item]
       )
@@ -4296,8 +4281,8 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(duplicateContinuationHold)).toThrow()
 
     const holdWithoutExactUnpause = {
-      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
-      story: changedAttemptStopLostThirdSuspensionAuthoredCassette.story.map((item) =>
+      ...changedAttemptStopCancelsHeldResumeAuthoredCassette,
+      story: changedAttemptStopCancelsHeldResumeAuthoredCassette.story.map((item) =>
         item._tag === "OperatorAppliesControlDirection" && item.direction === "Unpause" && item.subject._tag === "Task"
           ? { ...item, direction: "Pause" }
           : item
@@ -4305,14 +4290,14 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     }
     expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdWithoutExactUnpause)).toThrow()
 
-    const heldStory = changedAttemptStopLostThirdSuspensionAuthoredCassette.story
+    const heldStory = changedAttemptStopCancelsHeldResumeAuthoredCassette.story
     const holdIndex = heldStory.findIndex(({ _tag }) => _tag === "DalphHoldsAdmittedContinuationBeforeExecutorIntent")
     const stopIndex = heldStory.findIndex((item, index) => index > holdIndex && item._tag === "OperatorStopsAttempt")
     const heldSpecificationIndex = heldStory.findIndex(
       (item, index) => index > holdIndex && index < stopIndex && item._tag === "TaskWorkSpecificationReadReturned"
     )
     const holdWithoutExactSpecification = {
-      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
+      ...changedAttemptStopCancelsHeldResumeAuthoredCassette,
       story: heldStory.map((item, index) =>
         index === heldSpecificationIndex && item._tag === "TaskWorkSpecificationReadReturned"
           ? { _tag: "TaskClaimCurrentReadReturned", taskId: "A" }
@@ -4321,25 +4306,26 @@ it.effect("requires one terminal assertion group and one owner for every decoded
     }
     expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdWithoutExactSpecification)).toThrow()
 
-    const holdWithoutExecutorOutcome = {
-      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
-      story: heldStory.map((item, index) =>
-        index > stopIndex && item._tag === "PlannedAttemptExecutorResponseLost" && item.request === "StartOrContinue"
-          ? { ...item, request: "Suspend" }
-          : item
+    const terminalChoiceReleasesHeldResume = {
+      ...changedAttemptStopCancelsHeldResumeAuthoredCassette,
+      story: heldStory.flatMap((item, index) =>
+        index === stopIndex
+          ? [
+              item,
+              {
+                _tag: "PlannedAttemptExecutorWorkReported" as const,
+                report: { _tag: "ExecutorWorkExecuting" as const, attemptId: "attempt:A:0" },
+                request: "Resume" as const
+              }
+            ]
+          : [item]
       )
     }
-    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdWithoutExecutorOutcome)).toThrow()
+    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(terminalChoiceReleasesHeldResume)).toThrow()
 
-    const holdClosedByReturnedExecutorReport = {
-      ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
-      story: heldStory.map((item, index) =>
-        index > stopIndex && item._tag === "PlannedAttemptExecutorResponseLost" && item.request === "StartOrContinue"
-          ? { _tag: "PlannedAttemptExecutorWorkReported", report: item.report, request: item.request }
-          : item
-      )
-    }
-    expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(holdClosedByReturnedExecutorReport)).not.toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(AuthoredScenarioCassette)(changedAttemptStopCancelsHeldResumeAuthoredCassette)
+    ).not.toThrow()
 
     const assertions = singleton.story.at(-1)
     if (assertions?._tag !== "ExpectedBehavior") return yield* Effect.die("missing singleton assertions")
@@ -4386,7 +4372,7 @@ it.effect("requires one terminal assertion group and one owner for every decoded
 it.effect("lowers capacity while A holds a position and admits B only after A releases it", () =>
   Effect.gen(function* () {
     const firstRunning = dependentTasksCompleteInOneRunAuthoredCassette.story.findIndex(
-      (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+      (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkExecuting"
     )
     const withAppliedChange = {
       ...dependentTasksCompleteInOneRunAuthoredCassette,
@@ -4425,7 +4411,7 @@ it.effect("lowers capacity while A holds a position and admits B only after A re
     const aTerminalAt = run.records.findIndex(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report._tag === "Terminal" &&
+        event.report._tag === "ExecutorWorkTerminal" &&
         event.report.correlation.attemptId === "attempt:A:0"
     )
     const bResponsibilityAt = run.records.findIndex(
@@ -4445,7 +4431,7 @@ it.effect("lowers capacity while A holds a position and admits B only after A re
   })
 )
 
-it.effect("reconstructs both retained holders and blocks C through a contracted capacity", () =>
+it.effect("retains both executing holders until terminal observations release contracted capacity", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(contractedCapacityRetainsTwoAttemptsAuthoredCassette)
     const recorded = yield* projectRecordedCassette(run.records)
@@ -4470,7 +4456,7 @@ it.effect("reconstructs both retained holders and blocks C through a contracted 
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
           event.report.correlation.attemptId === attemptId &&
-          event.report._tag === "Terminal"
+          event.report._tag === "ExecutorWorkTerminal"
       )
     const aTerminalAt = terminalAt(AttemptId.make("attempt:A:0"))
     const bTerminalAt = terminalAt(AttemptId.make("attempt:B:1"))
@@ -4478,8 +4464,8 @@ it.effect("reconstructs both retained holders and blocks C through a contracted 
     const bResponsibilityAt = responsibilityAt(TaskId.make("B"))
     const cStartIntents = run.records.flatMap(({ event }, index) =>
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.attemptId === AttemptId.make("attempt:C:0") &&
-      event.command === "StartOrContinue"
+      event.plannedAttempt.attemptId === AttemptId.make("attempt:C:2") &&
+      event.command === "Begin"
         ? [{ event, index }]
         : []
     )
@@ -4505,7 +4491,7 @@ it.effect("reconstructs both retained holders and blocks C through a contracted 
     expect(cStartIntents).toHaveLength(1)
     expect(cStartIntents[0]?.index).toBeGreaterThan(aTerminalAt)
     expect(cStartIntents[0]?.index).toBeGreaterThan(bTerminalAt)
-    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(run.activationOrdinals).toEqual([1])
     expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
     expect(new Set(run.records.map(({ runId }) => runId))).toEqual(new Set([run.runId]))
     expect(reopened._tag).toBe("ValidWorkflowJournalHistory")
@@ -4524,341 +4510,253 @@ it.effect("reconstructs both retained holders and blocks C through a contracted 
   })
 )
 
-it.effect(
-  "safely suspends changed A while independent B continues for membership, specification, lifecycle, and external success",
-  () =>
-    Effect.gen(function* () {
-      const target = "localized-constraint-target"
-      const aAttemptId = AttemptId.make("attempt:A:0")
-      const bAttemptId = AttemptId.make("attempt:B:0")
-      const initialGraph = {
-        revision: TrackerRevision.make("localized-constraint-initial"),
-        tasks: [
-          { id: TaskId.make("A"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] },
-          {
-            id: TaskId.make("B"),
-            lifecycle: { _tag: "Open" } as const,
-            parentTaskId: null,
-            prerequisiteIds: [TaskId.make("A")]
-          }
-        ]
-      }
-      const localizedGraph = {
-        revision: TrackerRevision.make("pipeline-A-left-target"),
-        tasks: [{ id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }]
-      }
-      const localizedCassette = {
-        _tag: "AuthoredScenarioCassette",
-        name: "A leaves the target while independent B continues",
-        schemaVersion: 1,
-        startingFacts: {
-          executorWork: "NoPriorReport",
-          journal: "Empty",
-          taskClaims: [],
-          taskWorkSpecifications: [
-            { body: "Complete task A.", taskId: TaskId.make("A"), title: "Complete A" },
-            { body: "Complete independent task B.", taskId: TaskId.make("B"), title: "Complete B" }
-          ],
-          trackerGraph: initialGraph,
-          worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+it.effect("safely suspends A after membership removal while independent B continues, including external success", () =>
+  Effect.gen(function* () {
+    const target = "localized-constraint-target"
+    const aAttemptId = AttemptId.make("attempt:A:0")
+    const bAttemptId = AttemptId.make("attempt:B:0")
+    const initialGraph = {
+      revision: TrackerRevision.make("localized-constraint-initial"),
+      tasks: [
+        { id: TaskId.make("A"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] },
+        {
+          id: TaskId.make("B"),
+          lifecycle: { _tag: "Open" } as const,
+          parentTaskId: null,
+          prerequisiteIds: [TaskId.make("A")]
+        }
+      ]
+    }
+    const localizedGraph = {
+      revision: TrackerRevision.make("pipeline-A-left-target"),
+      tasks: [{ id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }]
+    }
+    const localizedCassette = {
+      _tag: "AuthoredScenarioCassette",
+      name: "A leaves the target while independent B continues",
+      schemaVersion: 1,
+      startingFacts: {
+        executorWork: "NoPriorReport",
+        journal: "Empty",
+        taskClaims: [],
+        taskWorkSpecifications: [
+          { body: "Complete task A.", taskId: TaskId.make("A"), title: "Complete A" },
+          { body: "Complete independent task B.", taskId: TaskId.make("B"), title: "Complete B" }
+        ],
+        trackerGraph: initialGraph,
+        worktreeObservation: { _tag: "PlannedWorktreeAbsent" }
+      },
+      story: [
+        { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: TaskWorkCapacity.make(2) } },
+        {
+          _tag: "RunCoordinator",
+          baseSha: "3333333333333333333333333333333333333333",
+          claimOwner: "localized-constraint-owner",
+          claimTokenPrefix: "localized-constraint-claim",
+          executor: "executor:controlled-fake",
+          integrationTarget: { repository: "/dalph/cassettes/localized-constraint.git", ref: "refs/heads/master" },
+          target,
+          worktreeRoot: "/dalph/cassettes/localized-constraint"
         },
-        story: [
-          { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: TaskWorkCapacity.make(2) } },
-          {
-            _tag: "RunCoordinator",
-            baseSha: "3333333333333333333333333333333333333333",
-            claimOwner: "localized-constraint-owner",
-            claimTokenPrefix: "localized-constraint-claim",
-            executor: "executor:controlled-fake",
-            integrationTarget: { repository: "/dalph/cassettes/localized-constraint.git", ref: "refs/heads/master" },
-            target,
-            worktreeRoot: "/dalph/cassettes/localized-constraint"
-          },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: initialGraph },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: initialGraph },
-          { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("A") } },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: initialGraph },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("A") } },
-          {
-            _tag: "TaskWorkSpecificationReadReturned",
-            body: "Complete task A.",
-            taskId: TaskId.make("A"),
-            title: "Complete A"
-          },
-          {
-            _tag: "DalphSelects",
-            operation: { _tag: "RecordTaskAttemptPlan", attemptId: aAttemptId, taskId: TaskId.make("A") }
-          },
-          {
-            _tag: "DalphSelects",
-            operation: { _tag: "ReconcileTaskWorktree", attemptId: aAttemptId, taskId: TaskId.make("A") }
-          },
-          {
-            _tag: "PlannedAttemptExecutorWorkReported",
-            report: { _tag: "Running", attemptId: aAttemptId },
-            request: "StartOrContinue"
-          },
-          { _tag: "CoordinatorProcessDies" },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-          {
-            _tag: "PlannedAttemptExecutorWorkReported",
-            report: { _tag: "SafelySuspended", attemptId: aAttemptId },
-            request: "Suspend"
-          },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-          { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("B") } },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
-          { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
-          { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("B") } },
-          {
-            _tag: "TaskWorkSpecificationReadReturned",
-            body: "Complete independent task B.",
-            taskId: TaskId.make("B"),
-            title: "Complete B"
-          },
-          {
-            _tag: "DalphSelects",
-            operation: { _tag: "RecordTaskAttemptPlan", attemptId: bAttemptId, taskId: TaskId.make("B") }
-          },
-          {
-            _tag: "DalphSelects",
-            operation: { _tag: "ReconcileTaskWorktree", attemptId: bAttemptId, taskId: TaskId.make("B") }
-          },
-          {
-            _tag: "PlannedAttemptExecutorWorkReported",
-            report: { _tag: "Running", attemptId: bAttemptId },
-            request: "StartOrContinue"
-          },
-          {
-            _tag: "PlannedAttemptExecutorWorkReported",
-            report: { _tag: "Terminal", attemptId: bAttemptId, result: { _tag: "Completed" } },
-            request: "StartOrContinue"
-          },
-          {
-            _tag: "ExpectedBehavior",
-            orchestration: [
-              {
-                _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
-                attemptId: aAttemptId,
-                taskId: TaskId.make("A")
-              },
-              { _tag: "PlannedAttemptExecutorWorkReported", attemptId: aAttemptId, report: "Running" },
-              { _tag: "PlannedAttemptExecutorWorkReported", attemptId: aAttemptId, report: "SafelySuspended" },
-              {
-                _tag: "PlannedAttemptExecutorWorkResponsibilityBegan",
-                attemptId: bAttemptId,
-                taskId: TaskId.make("B")
-              },
-              { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "Running" },
-              { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "TerminalCompleted" }
-            ] as const,
-            protocol: null,
-            taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: TaskId.make("B") }] }
-          }
-        ]
-      }
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("A") } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: initialGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("A") } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Complete task A.",
+          taskId: TaskId.make("A"),
+          title: "Complete A"
+        },
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "RecordTaskAttemptPlan", attemptId: aAttemptId, taskId: TaskId.make("A") }
+        },
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReconcileTaskWorktree", attemptId: aAttemptId, taskId: TaskId.make("A") }
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: aAttemptId },
+          request: "Begin"
+        },
+        { _tag: "CoordinatorProcessDies" },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+        {
+          _tag: "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
+          attemptId: aAttemptId,
+          request: "Suspend",
+          taskId: TaskId.make("A")
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "ExecutorWorkSafelySuspended", attemptId: aAttemptId },
+          request: "Suspend"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("B") } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: TaskId.make("B") } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Complete independent task B.",
+          taskId: TaskId.make("B"),
+          title: "Complete B"
+        },
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "RecordTaskAttemptPlan", attemptId: bAttemptId, taskId: TaskId.make("B") }
+        },
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReconcileTaskWorktree", attemptId: bAttemptId, taskId: TaskId.make("B") }
+        },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: bAttemptId },
+          request: "Begin"
+        },
+        {
+          _tag: "PlannedAttemptExecutorProjectionReturned",
+          report: { _tag: "ExecutorWorkTerminal", attemptId: bAttemptId, result: { _tag: "Completed" } }
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target } },
+        { _tag: "TrackerGraphReadReturned", graph: localizedGraph },
+        {
+          _tag: "ExpectedBehavior",
+          orchestration: [
+            { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: aAttemptId, taskId: TaskId.make("A") },
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: aAttemptId, report: "ExecutorWorkExecuting" },
+            {
+              _tag: "PlannedAttemptExecutorWorkReported",
+              attemptId: aAttemptId,
+              report: "ExecutorWorkSafelySuspended"
+            },
+            { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: bAttemptId, taskId: TaskId.make("B") },
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: bAttemptId, report: "ExecutorWorkExecuting" },
+            {
+              _tag: "PlannedAttemptExecutorWorkReported",
+              attemptId: bAttemptId,
+              report: "ExecutorWorkTerminalCompleted"
+            }
+          ] as const,
+          protocol: null,
+          taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: TaskId.make("B") }] }
+        }
+      ]
+    }
 
-      const run = yield* runAuthoredScenarioCassette(localizedCassette)
-      const recorded = yield* projectRecordedCassette(run.records)
-      const membershipObservedAt = run.records.findIndex(
+    const run = yield* runAuthoredScenarioCassette(localizedCassette)
+    const recorded = yield* projectRecordedCassette(run.records)
+    const membershipObservedAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "CompleteTaskTrackerFacts" &&
+        event.observation.factFamilies.some(
+          (family) =>
+            family._tag === "TaskTargetMembership" &&
+            family.memberTaskIds.length === 1 &&
+            family.memberTaskIds[0] === TaskId.make("B")
+        )
+    )
+    const bResponsibilityAt = run.records.findIndex(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+        event.plannedAttempt.taskId === TaskId.make("B")
+    )
+
+    expect(run.activationOrdinals).toEqual([1, 2])
+    expect(
+      run.records.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
+          ? [event.report._tag]
+          : []
+      )
+    ).toEqual(["ExecutorWorkExecuting", "ExecutorWorkSafelySuspended"])
+    expect(membershipObservedAt).toBeGreaterThan(0)
+    expect(bResponsibilityAt).toBeGreaterThan(membershipObservedAt)
+    expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    expect(
+      recorded.entries.some(
+        (entry) =>
+          entry._tag === "PlannedAttemptExecutorWorkReported" &&
+          entry.report.correlation.attemptId === aAttemptId &&
+          entry.report._tag === "ExecutorWorkTerminal"
+      )
+    ).toBe(false)
+    expect(renderRecordedCassetteLyrics(recorded)).toContain(
+      `The executor returned ExecutorWorkTerminal for attempt ${bAttemptId}.`
+    )
+    expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "B" }])
+
+    const trackerSuccessfulGraph = {
+      revision: TrackerRevision.make("pipeline-A-completed-externally"),
+      tasks: [
+        {
+          id: TaskId.make("A"),
+          lifecycle: { _tag: "CompletedSuccessfully" } as const,
+          parentTaskId: null,
+          prerequisiteIds: []
+        },
+        {
+          id: TaskId.make("B"),
+          lifecycle: { _tag: "Open" } as const,
+          parentTaskId: null,
+          prerequisiteIds: [TaskId.make("A")]
+        }
+      ]
+    }
+    const trackerSuccessStory = localizedCassette.story.map((item) =>
+      item._tag === "TrackerGraphReadReturned" && item.graph === localizedGraph
+        ? { ...item, graph: trackerSuccessfulGraph }
+        : item
+    )
+    const trackerSuccessSuspensionAt = trackerSuccessStory.findIndex(
+      (item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        "report" in item &&
+        item.report._tag === "ExecutorWorkSafelySuspended" &&
+        item.report.attemptId === aAttemptId
+    )
+    const trackerSuccessCassette = {
+      ...localizedCassette,
+      name: "the tracker reports A complete while its exact claim and WIP remain",
+      story: [
+        ...trackerSuccessStory.slice(0, trackerSuccessSuspensionAt + 3),
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReleaseTaskClaim" as const, taskId: TaskId.make("A") } },
+        ...trackerSuccessStory.slice(trackerSuccessSuspensionAt + 3)
+      ]
+    }
+    const trackerSuccessRun = yield* runAuthoredScenarioCassette(trackerSuccessCassette)
+    const claimReleaseEvents = trackerSuccessRun.records.filter(
+      ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
+    )
+    expect(claimReleaseEvents.map(({ event }) => event._tag)).toEqual(["TaskClaimReleaseIntended", "TaskClaimReleased"])
+    expect(
+      trackerSuccessRun.records.some(
         ({ event }) =>
-          event._tag === "TaskTrackerFactsObserved" &&
-          event.observation._tag === "CompleteTaskTrackerFacts" &&
-          event.observation.factFamilies.some(
-            (family) =>
-              family._tag === "TaskTargetMembership" &&
-              family.memberTaskIds.length === 1 &&
-              family.memberTaskIds[0] === TaskId.make("B")
-          )
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.attemptId === aAttemptId &&
+          event.report._tag === "ExecutorWorkTerminal"
       )
-      const bResponsibilityAt = run.records.findIndex(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-          event.plannedAttempt.taskId === TaskId.make("B")
+    ).toBe(false)
+    expect(
+      trackerSuccessRun.records.some(
+        ({ event }) => event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted"
       )
-
-      expect(run.activationOrdinals).toEqual([1, 2])
-      expect(
-        run.records.flatMap(({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
-            ? [event.report._tag]
-            : []
-        )
-      ).toEqual(["Running", "SafelySuspended"])
-      expect(membershipObservedAt).toBeGreaterThan(0)
-      expect(bResponsibilityAt).toBeGreaterThan(membershipObservedAt)
-      expect(run.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
-      expect(
-        recorded.entries.some(
-          (entry) =>
-            entry._tag === "PlannedAttemptExecutorWorkReported" &&
-            entry.report.correlation.attemptId === aAttemptId &&
-            entry.report._tag === "Terminal"
-        )
-      ).toBe(false)
-      expect(renderRecordedCassetteLyrics(recorded)).toContain(
-        `The executor returned Terminal for attempt ${bAttemptId}.`
-      )
-      expect(run.observedBehavior.taskWorkResults).toEqual([{ _tag: "PlannedWorkForTaskCompleted", taskId: "B" }])
-
-      const trackerSuccessfulGraph = {
-        revision: TrackerRevision.make("pipeline-A-completed-externally"),
-        tasks: [
-          {
-            id: TaskId.make("A"),
-            lifecycle: { _tag: "CompletedSuccessfully" } as const,
-            parentTaskId: null,
-            prerequisiteIds: []
-          },
-          {
-            id: TaskId.make("B"),
-            lifecycle: { _tag: "Open" } as const,
-            parentTaskId: null,
-            prerequisiteIds: [TaskId.make("A")]
-          }
-        ]
-      }
-      const trackerSuccessStory = localizedCassette.story.map((item) =>
-        item._tag === "TrackerGraphReadReturned" && item.graph === localizedGraph
-          ? { ...item, graph: trackerSuccessfulGraph }
-          : item
-      )
-      const trackerSuccessSuspensionAt = trackerSuccessStory.findIndex(
-        (item) =>
-          item._tag === "PlannedAttemptExecutorWorkReported" &&
-          "report" in item &&
-          item.report._tag === "SafelySuspended" &&
-          item.report.attemptId === aAttemptId
-      )
-      const trackerSuccessCassette = {
-        ...localizedCassette,
-        name: "the tracker reports A complete while its exact claim and WIP remain",
-        story: [
-          ...trackerSuccessStory.slice(0, trackerSuccessSuspensionAt + 1),
-          { _tag: "DalphSelects" as const, operation: { _tag: "ReleaseTaskClaim" as const, taskId: TaskId.make("A") } },
-          ...trackerSuccessStory.slice(trackerSuccessSuspensionAt + 1)
-        ]
-      }
-      const trackerSuccessRun = yield* runAuthoredScenarioCassette(trackerSuccessCassette)
-      const claimReleaseEvents = trackerSuccessRun.records.filter(
-        ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
-      )
-      expect(claimReleaseEvents.map(({ event }) => event._tag)).toEqual([
-        "TaskClaimReleaseIntended",
-        "TaskClaimReleased"
-      ])
-      expect(
-        trackerSuccessRun.records.some(
-          ({ event }) =>
-            event._tag === "PlannedAttemptExecutorWorkReported" &&
-            event.report.correlation.attemptId === aAttemptId &&
-            event.report._tag === "Terminal"
-        )
-      ).toBe(false)
-      expect(
-        trackerSuccessRun.records.some(
-          ({ event }) => event._tag === "IntegrationResponsibilityBegan" || event._tag === "IntegrationStarted"
-        )
-      ).toBe(false)
-      expect(trackerSuccessRun.observedBehavior.taskWorkResults).toEqual([
-        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
-      ])
-
-      const changedInstructionsGraph = {
-        revision: TrackerRevision.make("pipeline-A-instructions-changed"),
-        tasks: [
-          { id: TaskId.make("A"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] },
-          { id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }
-        ]
-      }
-      const changedGraphStory = localizedCassette.story.map((item) =>
-        item._tag === "TrackerGraphReadReturned" && item.graph === localizedGraph
-          ? { ...item, graph: changedInstructionsGraph }
-          : item
-      )
-      const firstChangedGraphAt = changedGraphStory.findIndex(
-        (item) => item._tag === "TrackerGraphReadReturned" && item.graph === changedInstructionsGraph
-      )
-      const changedInstructionsCassette = {
-        ...localizedCassette,
-        name: "A instructions change while independent B continues",
-        story: [
-          ...changedGraphStory.slice(0, firstChangedGraphAt + 1),
-          {
-            _tag: "DalphSelects" as const,
-            operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: TaskId.make("A") }
-          },
-          {
-            _tag: "TaskWorkSpecificationReadReturned" as const,
-            body: "Complete changed task A without pretending the old attempt incorporated this text.",
-            taskId: TaskId.make("A"),
-            title: "Complete changed A"
-          },
-          ...changedGraphStory.slice(firstChangedGraphAt + 1)
-        ]
-      }
-      const changedInstructionsRun = yield* runAuthoredScenarioCassette(changedInstructionsCassette)
-      expect(
-        changedInstructionsRun.records.flatMap(({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
-            ? [event.report._tag]
-            : []
-        )
-      ).toEqual(["Running", "SafelySuspended"])
-      expect(
-        changedInstructionsRun.records.some(
-          ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
-        )
-      ).toBe(false)
-      expect(changedInstructionsRun.observedBehavior.taskWorkResults).toEqual([
-        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
-      ])
-
-      const terminalWithoutSuccessGraph = {
-        revision: TrackerRevision.make("pipeline-A-terminal-without-success"),
-        tasks: [
-          {
-            id: TaskId.make("A"),
-            lifecycle: { _tag: "TerminalWithoutSuccess" } as const,
-            parentTaskId: null,
-            prerequisiteIds: []
-          },
-          { id: TaskId.make("B"), lifecycle: { _tag: "Open" } as const, parentTaskId: null, prerequisiteIds: [] }
-        ]
-      }
-      const lifecycleCassette = {
-        ...localizedCassette,
-        name: "A closes without success while independent B continues",
-        story: localizedCassette.story.map((item) =>
-          item._tag === "TrackerGraphReadReturned" && item.graph === localizedGraph
-            ? { ...item, graph: terminalWithoutSuccessGraph }
-            : item
-        )
-      }
-      const lifecycleRun = yield* runAuthoredScenarioCassette(lifecycleCassette)
-      expect(
-        lifecycleRun.records.flatMap(({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === aAttemptId
-            ? [event.report._tag]
-            : []
-        )
-      ).toEqual(["Running", "SafelySuspended"])
-      expect(
-        lifecycleRun.records.some(
-          ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
-        )
-      ).toBe(false)
-      expect(lifecycleRun.observedBehavior.taskWorkResults).toEqual([
-        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
-      ])
-    })
+    ).toBe(false)
+    expect(trackerSuccessRun.observedBehavior.taskWorkResults).toEqual([
+      { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+    ])
+  })
 )
 
 it.effect("rejects cassette-local contradictions and leaves an authority mismatch to its ordinary boundary", () =>
@@ -5073,8 +4971,8 @@ it.effect("reports mismatches through the surface that owns the current story it
 it.effect("rejects a contradictory coordinator activation return decision", () =>
   Effect.gen(function* () {
     const mismatched = {
-      ...changedAttemptStopRemainsUnprovedAuthoredCassette,
-      story: changedAttemptStopRemainsUnprovedAuthoredCassette.story.map((item) =>
+      ...changedAttemptStopReleaseResponseLostAuthoredCassette,
+      story: changedAttemptStopReleaseResponseLostAuthoredCassette.story.map((item) =>
         item._tag === "CoordinatorActivationReturned" ? { ...item, decision: { _tag: "RunMayTerminate" } } : item
       )
     }
@@ -5087,7 +4985,7 @@ it.effect("derives failed task-work results and safely suspended orchestration e
     const failed = {
       ...singleton,
       story: singleton.story.map((item) => {
-        if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal") {
+        if (item._tag === "PlannedAttemptExecutorProjectionReturned" && item.report._tag === "ExecutorWorkTerminal") {
           return { ...item, report: { ...item.report, result: { _tag: "Failed" } } }
         }
         if (item._tag === "ExpectedBehavior") {
@@ -5109,7 +5007,7 @@ it.effect("derives failed task-work results and safely suspended orchestration e
     expect(suspendedRun.observedBehavior.orchestrationEvidence).toContainEqual({
       _tag: "PlannedAttemptExecutorWorkReported",
       attemptId: "attempt:A:0",
-      report: "SafelySuspended"
+      report: "ExecutorWorkSafelySuspended"
     })
   })
 )
@@ -5155,13 +5053,15 @@ it.effect("drives a public operator claim-reacquisition request through a later 
   Effect.gen(function* () {
     const expected = singleton.story.at(-1)
     if (expected?._tag !== "ExpectedBehavior") return yield* Effect.die("singleton has no terminal assertions")
-    const storyBeforeAssertions = singleton.story
-      .slice(0, -1)
-      .flatMap((item) =>
-        item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal"
-          ? [{ _tag: "CoordinatorProcessDies" as const }]
-          : [item]
-      )
+    const safeReportAt = lostPlannedWorktreeSafelySuspendsAuthoredCassette.story.findIndex(
+      (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkSafelySuspended"
+    )
+    if (safeReportAt < 0) return yield* Effect.die("causally suspended story has no Safe executor report")
+    const postSafeGraphReadItemCount = 2
+    const storyBeforeAssertions = lostPlannedWorktreeSafelySuspendsAuthoredCassette.story.slice(
+      0,
+      safeReportAt + 1 + postSafeGraphReadItemCount
+    )
     const requestId = TaskClaimReacquisitionRequestId.make("coverage-reacquire-missing-A")
     const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
       ...singleton,
@@ -5177,30 +5077,18 @@ it.effect("drives a public operator claim-reacquisition request through a later 
         },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
         { _tag: "TaskClaimReadReturned", observation: UnclaimedTask.make({ taskId: TaskId.make("A") }) },
-        {
-          _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
-          request: "Suspend"
-        },
         { _tag: "OperatorDirectsTaskClaimReacquisition", requestId, taskId: "A" },
         { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
         { _tag: "TrackerGraphReadReturned", graph: singleton.startingFacts.trackerGraph },
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-        {
-          _tag: "TaskWorkSpecificationReadReturned",
-          body: "Implement the accepted singleton behavior.",
-          taskId: "A",
-          title: "Implement singleton"
-        },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
         { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
         { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
-          request: "StartOrContinue"
+          report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+          request: "Resume"
         },
         {
           _tag: "CoordinatorActivationReturned",
@@ -5365,7 +5253,7 @@ it.effect("records compatible target advancement and isolates a proven target re
     expect(rewritten.observedBehavior.orchestrationEvidence).toContainEqual({
       _tag: "PlannedAttemptExecutorWorkReported",
       attemptId: "attempt:A:0",
-      report: "SafelySuspended"
+      report: "ExecutorWorkSafelySuspended"
     })
     expect(rewritten.observedBehavior.taskWorkResults).toContainEqual({
       _tag: "PlannedWorkForTaskCompleted",
@@ -5405,7 +5293,7 @@ it.effect("records compatible target advancement and isolates a proven target re
   })
 )
 
-it.effect("reconstructs the same Run and attempt after typed cassette death before executor contact", () =>
+it.effect("reconciles the same Run and attempt after typed cassette death without another Begin", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
     expect(run.activationOrdinals).toEqual([1, 2])
@@ -5413,35 +5301,20 @@ it.effect("reconstructs the same Run and attempt after typed cassette death befo
     const responsibility = run.records.find(
       ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
     )
-    const authorization = run.records.find(
-      (
-        record
-      ): record is JournalRecord & {
-        readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptContinuationAuthorized" }>
-      } => record.event._tag === "PlannedAttemptContinuationAuthorized"
-    )
-    const firstCommand = run.records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+    const commands = run.records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+    const projection = run.records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandProjectionObserved")
     expect(responsibility).toBeDefined()
-    expect(authorization).toBeDefined()
-    expect(firstCommand).toBeDefined()
-    expect(responsibility?.position).toBeLessThan(authorization?.position ?? 0)
-    expect(authorization?.position).toBeLessThan(firstCommand?.position ?? 0)
-    if (authorization === undefined) return yield* Effect.die("missing continuation authorization")
-    const graph = run.records.find(
-      ({ event }) =>
-        event._tag === "TaskTrackerFactsObserved" &&
-        event.operationId === authorization.event.witness.activeTaskContinuationRead.graphObservationOperationId
-    )
-    expect(graph?.event._tag === "TaskTrackerFactsObserved" ? graph.event.observation._tag : undefined).toBe(
-      "UnchangedTaskTrackerFactsReconfirmed"
-    )
-    expect(run.records.filter(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")).toHaveLength(1)
+    expect(commands).toHaveLength(1)
+    expect(commands[0]?.event).toMatchObject({ _tag: "PlannedAttemptExecutorCommandIntended", command: "Begin" })
+    expect(projection).toBeDefined()
+    expect(commands[0]?.position).toBeLessThan(projection?.position ?? 0)
+    expect(run.records.filter(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")).toHaveLength(0)
     const productionEventTags: ReadonlyArray<string> = run.records.map(({ event }) => event._tag)
     expect(productionEventTags).not.toContain("CoordinatorProcessDies")
     const occurrences = yield* projectWorkflowOccurrences(run.records)
     expect(occurrences.occurrences.map(({ _tag }) => _tag)).not.toContain("PlannedAttemptContinuationAuthorized")
     const recorded = yield* projectRecordedCassette(run.records)
-    expect(recorded.entries.map(({ _tag }) => _tag)).toContain("PlannedAttemptContinuationAuthorized")
+    expect(recorded.entries.map(({ _tag }) => _tag)).not.toContain("PlannedAttemptContinuationAuthorized")
     expectRecordedRoundTrip(run.records, recorded)
     const reports = run.records.flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report.correlation] : []
@@ -5453,7 +5326,7 @@ it.effect("reconstructs the same Run and attempt after typed cassette death befo
 
 it.effect("rejects missing, stale, later, and wrong-attempt continuation witnesses before executor contact", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
+    const run = yield* runAuthoredScenarioCassette(taskUnpauseAfterSafeSuspensionAuthoredCassette)
     const plan = run.records.find(({ event }) => event._tag === "TaskAttemptPlanned")
     const authorization = run.records.find(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")
     if (
@@ -5464,10 +5337,10 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
     }
     const plannedAttempt = plan.event.operation.plannedAttempt
     const witness = authorization.event.witness
-    const firstCommandIndex = run.records.findIndex(
-      ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
+    const resumeCommandIndex = run.records.findIndex(
+      ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume"
     )
-    const preCommandRecords = run.records.slice(0, firstCommandIndex)
+    const preCommandRecords = run.records.slice(0, resumeCommandIndex)
     type TaskFactsRecord = JournalRecord & {
       readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>
     }
@@ -5482,6 +5355,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
     const rejectWith = (records: ReadonlyArray<JournalRecord>, candidate: typeof witness) =>
       authorizePlannedAttemptContinuation(plannedAttempt, candidate).pipe(
         Effect.provideService(InRunJournal, journalFor(records)),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
         Effect.flip
       )
     const replaceObservation = (
@@ -5553,7 +5427,8 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       return yield* Effect.die("continuation cassette did not produce graph outcome")
     }
     const idempotent = yield* authorizePlannedAttemptContinuation(plannedAttempt, witness).pipe(
-      Effect.provideService(InRunJournal, journalFor(preCommandRecords))
+      Effect.provideService(InRunJournal, journalFor(preCommandRecords)),
+      Effect.provide(plannedAttemptProtocolControllerLayer)
     )
     expect(idempotent.key).toBe(authorization.key)
 
@@ -5584,6 +5459,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
             taskClaimObservationOperationId: OperationId.make("distinct-witness-claim"),
             taskWorkSpecificationObservationOperationId: OperationId.make("distinct-witness-specification")
           },
+          targetLineageObservationOperationId: OperationId.make("distinct-witness-target-lineage"),
           worktreeObservationOperationId: OperationId.make("duplicate-witness-observation")
         }).pipe(Effect.exit)
       )
@@ -5770,6 +5646,36 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness: "PlannedAttemptWorktree"
     })
 
+    const missingTargetLineage = yield* rejectWith(preCommandRecords, {
+      ...witness,
+      targetLineageObservationOperationId: OperationId.make("missing-continuation-target-lineage")
+    })
+    expect(missingTargetLineage).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "MissingWitness",
+      witness: "PlannedAttemptTargetLineage"
+    })
+    const incompatibleTargetLineage = yield* rejectWith(
+      preCommandRecords.map((record) =>
+        record.event._tag === "TargetLineageObserved" &&
+        record.event.operationId === witness.targetLineageObservationOperationId
+          ? {
+              ...record,
+              event: {
+                ...record.event,
+                observation: { ...record.event.observation, plannedBaseIsAncestorOfTargetHead: false }
+              }
+            }
+          : record
+      ),
+      witness
+    )
+    expect(incompatibleTargetLineage).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "WrongAttemptWitness",
+      witness: "PlannedAttemptTargetLineage"
+    })
+
     const wrongGraph = yield* rejectWith(
       replaceObservation(
         preCommandRecords,
@@ -5784,11 +5690,27 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness: "ActiveTaskContinuationGraph"
     })
 
-    const stale = yield* rejectWith(run.records, witness)
+    const safeReport = preCommandRecords.findLast(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
+    )
+    if (safeReport === undefined)
+      return yield* Effect.die("continuation cassette did not produce an accepted safe report")
+    const stale = yield* rejectWith(
+      replacePosition(preCommandRecords, graphOutcome.event.operationId, safeReport.position),
+      witness
+    )
     expect(stale).toMatchObject({
       _tag: "PlannedAttemptContinuationAuthorizationRejected",
       reason: "StaleWitness",
       witness: "ActiveTaskContinuationGraph"
+    })
+
+    const consumed = yield* rejectWith(run.records, witness)
+    expect(consumed).toMatchObject({
+      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      reason: "WrongAttemptWitness",
+      witness: "AcceptedSafeExecutorReport"
     })
 
     const laterRecords = replaceReadIntentPosition(
@@ -5825,7 +5747,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
 
 it.effect("rejects forged continuation authorization during journal reconstruction", () =>
   Effect.gen(function* () {
-    const run = yield* runAuthoredScenarioCassette(coordinatorProcessDeathContinuesAuthoredCassette)
+    const run = yield* runAuthoredScenarioCassette(taskUnpauseAfterSafeSuspensionAuthoredCassette)
     const authorization = run.records.find(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")
     if (authorization?.event._tag !== "PlannedAttemptContinuationAuthorized") {
       return yield* Effect.die("continuation cassette did not produce authorization")
@@ -5896,6 +5818,7 @@ it.effect("rejects forged continuation authorization during journal reconstructi
             taskClaimObservationOperationId: OperationId.make("missing-history-claim"),
             taskWorkSpecificationObservationOperationId: OperationId.make("missing-history-specification")
           },
+          targetLineageObservationOperationId: OperationId.make("missing-history-target-lineage"),
           worktreeObservationOperationId: OperationId.make("missing-history-worktree")
         }
       }))
@@ -5993,8 +5916,16 @@ it.effect("matches optional orchestration and protocol evidence in exact order",
               ...item,
               orchestration: [
                 { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+                {
+                  _tag: "PlannedAttemptExecutorWorkReported",
+                  attemptId: "attempt:A:0",
+                  report: "ExecutorWorkExecuting"
+                },
+                {
+                  _tag: "PlannedAttemptExecutorWorkReported",
+                  attemptId: "attempt:A:0",
+                  report: "ExecutorWorkTerminalCompleted"
+                }
               ],
               protocol: [
                 { _tag: "TaskClaimAcquired", taskId: "A" },
@@ -6097,8 +6028,8 @@ it.effect("rejects missing, reordered, or additional evidence within either pres
   Effect.gen(function* () {
     const completeOrchestration = [
       { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-      { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-      { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+      { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+      { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkTerminalCompleted" }
     ]
     const completeProtocol = [
       { _tag: "TaskClaimAcquired", taskId: "A" },
@@ -6314,10 +6245,19 @@ it.effect(
               plannedAttempt: executorResponsibilityEntry.plannedAttempt
             },
             {
+              _tag: "PlannedAttemptExecutorCommandResponseObserved" as const,
+              commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+              occurrenceClassification: "NonActionOccurrence" as const,
+              plannedAttempt: executorResponsibilityEntry.plannedAttempt,
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                correlation: executorReportEntry.report.correlation
+              })
+            },
+            {
               _tag: "PlannedAttemptExecutorWorkReported" as const,
               occurrenceClassification: "NonActionOccurrence" as const,
               ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
-              report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
                 correlation: executorReportEntry.report.correlation
               })
             }
@@ -6326,16 +6266,29 @@ it.effect(
         return [
           entry._tag === "PlannedAttemptExecutorCommandIntended" && entry.ordinal === 2
             ? { ...entry, ordinal: PlannedAttemptExecutorCommandOrdinal.make(3) }
-            : entry._tag === "PlannedAttemptExecutorWorkReported" && entry.report._tag === "Terminal"
+            : entry._tag === "PlannedAttemptExecutorStateObserved" &&
+                entry.observation._tag === "ExactExecutorReport" &&
+                entry.observation.report._tag === "ExecutorWorkTerminal"
               ? {
                   ...entry,
-                  ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
-                  report: PlannedAttemptExecutorReport.cases.Terminal.make({
-                    correlation: entry.report.correlation,
-                    result: { _tag: "Accepted", acceptedResult }
-                  })
+                  observation: {
+                    ...entry.observation,
+                    report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                      correlation: entry.observation.report.correlation,
+                      result: { _tag: "Accepted", acceptedResult }
+                    })
+                  }
                 }
-              : entry
+              : entry._tag === "PlannedAttemptExecutorWorkReported" && entry.report._tag === "ExecutorWorkTerminal"
+                ? {
+                    ...entry,
+                    ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
+                    report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                      correlation: entry.report.correlation,
+                      result: { _tag: "Accepted", acceptedResult }
+                    })
+                  }
+                : entry
         ]
       })
       const terminationIndex = entriesWithAcceptedResult.findIndex((entry) => entry._tag === "WorkflowRunTerminated")
@@ -6679,6 +6632,7 @@ it.effect(
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorCommandIntended: true,
         PlannedAttemptExecutorCommandProjectionObserved: true,
+        PlannedAttemptExecutorCommandResponseObserved: true,
         PlannedAttemptExecutorCommandResponseContradicted: true,
         PlannedAttemptExecutorStateObserved: true,
         PlannedAttemptExecutorWorkResponsibilityBegan: true,
@@ -6737,7 +6691,7 @@ it.effect(
         foreignCancellationRun,
         integrationCancellationRun
       ] = yield* Effect.all([
-        runAuthoredScenarioCassette(changedAttemptStopLostThirdSuspensionAuthoredCassette),
+        runAuthoredScenarioCassette(runUnpauseDuringSuspensionRestartsAuthoredCassette),
         runAuthoredScenarioCassette(changedAttemptStopReleaseResponseLostAuthoredCassette),
         runAuthoredScenarioCassette(changedAttemptStopsWithForeignClaimAuthoredCassette),
         runAuthoredScenarioCassette(idleRunCancellationAuthoredCassette),
@@ -6894,11 +6848,11 @@ it.effect(
       ]
         .map(renderRecordedCassetteLyrics)
         .join("\n")
-      expect(stopLyrics).toContain("began stopping attempt")
+      expect(stopLyrics).toContain("chose StopTaskImplementation")
       expect(stopLyrics).toContain("abandoned implementation attempt")
       expect(stopLyrics).toContain("must not release the current claim")
-      expect(stopLyrics).toContain("while reconciling executor command")
-      expect(stopLyrics).toContain("read-only executor projection")
+      expect(stopLyrics).toContain("observed ExactExecutorReport while reconciling executor command")
+      expect(stopLyrics).toContain("returned ExecutorWorkSafelySuspended")
       expect(stopLyrics).toContain("Operator applied Run cancellation")
       expect(stopLyrics).toContain("relinquished implementation responsibility for cancelled attempt")
       expect(stopLyrics).toContain("cancelling attempt")
@@ -6907,19 +6861,23 @@ it.effect(
       const projectionEntry = stoppageRecorded.entries.find(
         (entry) => entry._tag === "PlannedAttemptExecutorCommandProjectionObserved"
       )
-      const stateEntry = stoppageRecorded.entries.find((entry) => entry._tag === "PlannedAttemptExecutorStateObserved")
       if (
         projectionEntry?._tag !== "PlannedAttemptExecutorCommandProjectionObserved" ||
-        projectionEntry.observation._tag !== "ExactExecutorReport" ||
-        stateEntry?._tag !== "PlannedAttemptExecutorStateObserved" ||
-        stateEntry.observation._tag !== "ExactExecutorReport"
+        projectionEntry.observation._tag !== "ExactExecutorReport"
       ) {
-        return yield* Effect.die("Stop recording must contain exact command and state projections")
+        return yield* Effect.die("suspension recording must contain the exact command projection")
+      }
+      const stateEntry = {
+        _tag: "PlannedAttemptExecutorStateObserved" as const,
+        observation: projectionEntry.observation,
+        occurrenceClassification: "NonActionOccurrence" as const,
+        ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+        plannedAttempt: projectionEntry.plannedAttempt
       }
       const responseContradictionEntry = {
         _tag: "PlannedAttemptExecutorCommandResponseContradicted" as const,
         commandOrdinal: projectionEntry.commandOrdinal,
-        observed: PlannedAttemptExecutorReport.cases.Running.make({
+        observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
           correlation: {
             attemptId: AttemptId.make("foreign-response-attempt"),
             runId: projectionEntry.plannedAttempt.runId
@@ -6927,6 +6885,23 @@ it.effect(
         }),
         occurrenceClassification: "NonActionOccurrence" as const,
         plannedAttempt: projectionEntry.plannedAttempt
+      }
+      const appliedStopEntry = noReleaseRecorded.entries.find(
+        (entry) => entry._tag === "AttemptChoiceApplied" && entry.choice === "StopTaskImplementation"
+      )
+      if (appliedStopEntry?._tag !== "AttemptChoiceApplied") {
+        return yield* Effect.die("historical stoppage-intent decoding requires one applied Stop subject")
+      }
+      // This token is now unreachable from maintained #264 authoring: an
+      // accepted Safe report proves quiescence before Stop is exposed. Keep
+      // its version-11 recorded decoder and renaming coverage explicit for
+      // previously recorded journals without inventing a current scenario.
+      const historicalStoppageIntentEntry = {
+        _tag: "AttemptStoppageIntended" as const,
+        initiatedBy: { _tag: "DalphCoordinator" as const },
+        occurrenceClassification: "InitiatedAction" as const,
+        requestId: appliedStopEntry.requestId,
+        subject: appliedStopEntry.subject
       }
       const executorObservationVariants = RecordedCassette.make({
         _tag: "RecordedCassette",
@@ -6941,6 +6916,7 @@ it.effect(
             observation: { _tag: "ExecutorReportContradiction", observed: stateEntry.observation.report }
           },
           { ...stateEntry, observation: { _tag: "ExecutorStateNoCurrentReport" } },
+          historicalStoppageIntentEntry,
           responseContradictionEntry
         ],
         runId: stoppageRecorded.runId,
@@ -6959,6 +6935,7 @@ it.effect(
         "ExecutorStateNoCurrentReport",
         "ExecutorReportContradiction",
         "ExecutorStateNoCurrentReport",
+        undefined,
         undefined
       ])
       expect(renamedExecutorObservationVariants.entries.at(-1)?._tag).toBe(
@@ -7233,7 +7210,7 @@ it.effect("has no recording for an empty unidentified journal", () =>
 )
 
 it.effect(
-  "detects responsibility and Running before worktree readiness even when final operational state converges",
+  "detects responsibility and ExecutorWorkExecuting before worktree readiness even when final operational state converges",
   () =>
     Effect.gen(function* () {
       const run = yield* runAuthoredScenarioCassette(singleton)
@@ -7242,23 +7219,28 @@ it.effect(
         (entry) => entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
       )
       const running = expected.entries.find(
-        (entry) => entry._tag === "PlannedAttemptExecutorWorkReported" && entry.report._tag === "Running"
+        (entry) => entry._tag === "PlannedAttemptExecutorWorkReported" && entry.report._tag === "ExecutorWorkExecuting"
       )
       const runningIntent = expected.entries.find(
         (entry) => entry._tag === "PlannedAttemptExecutorCommandIntended" && entry.ordinal === 1
       )
+      const runningResponse = expected.entries.find(
+        (entry) => entry._tag === "PlannedAttemptExecutorCommandResponseObserved" && entry.commandOrdinal === 1
+      )
       expect(responsibility?._tag).toBe("PlannedAttemptExecutorWorkResponsibilityBegan")
       expect(runningIntent?._tag).toBe("PlannedAttemptExecutorCommandIntended")
+      expect(runningResponse?._tag).toBe("PlannedAttemptExecutorCommandResponseObserved")
       expect(running?._tag).toBe("PlannedAttemptExecutorWorkReported")
       if (
         responsibility?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan" ||
         runningIntent?._tag !== "PlannedAttemptExecutorCommandIntended" ||
+        runningResponse?._tag !== "PlannedAttemptExecutorCommandResponseObserved" ||
         running?._tag !== "PlannedAttemptExecutorWorkReported"
       )
         return
 
       const remaining = expected.entries.filter(
-        (entry) => entry !== responsibility && entry !== runningIntent && entry !== running
+        (entry) => entry !== responsibility && entry !== runningIntent && entry !== runningResponse && entry !== running
       )
       const planIndex = remaining.findIndex((entry) => entry._tag === "TaskAttemptPlanned")
       const actual = RecordedCassette.make({
@@ -7267,6 +7249,7 @@ it.effect(
           ...remaining.slice(0, planIndex + 1),
           responsibility,
           runningIntent,
+          runningResponse,
           running,
           ...remaining.slice(planIndex + 1)
         ]
@@ -7341,6 +7324,9 @@ it.effect("labels the 100-task four-read encoding experiment as a baseline", () 
           }
         }
         if (item._tag === "PlannedAttemptExecutorWorkReported") {
+          return { ...item, report: { ...item.report, attemptId: `attempt:${activeTaskId}:0` } }
+        }
+        if (item._tag === "PlannedAttemptExecutorProjectionReturned") {
           return { ...item, report: { ...item.report, attemptId: `attempt:${activeTaskId}:0` } }
         }
         if (item._tag === "ExpectedBehavior") {

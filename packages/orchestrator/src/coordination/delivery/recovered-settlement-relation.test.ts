@@ -42,7 +42,11 @@ import {
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -57,6 +61,8 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
@@ -138,11 +144,25 @@ const seedTerminalAccepted = Effect.gen(function* () {
     runId,
     plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
     PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "StartOrContinue",
+      command: "Begin",
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
       ordinal: commandOrdinal,
       plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId }
+  })
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report: executingReport,
       version: workflowJournalEventVersion
     })
   )
@@ -152,10 +172,32 @@ const seedTerminalAccepted = Effect.gen(function* () {
     plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal,
-      report: PlannedAttemptExecutorReport.cases.Terminal.make({
-        correlation: { attemptId: plannedAttempt.attemptId, runId },
-        result: { _tag: "Accepted", acceptedResult }
-      }),
+      report: executingReport,
+      version: workflowJournalEventVersion
+    })
+  )
+  const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId },
+    result: { _tag: "Accepted", acceptedResult }
+  })
+  const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+    PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: terminal }),
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: observationOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    runId,
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, PlannedAttemptExecutorReportOrdinal.make(2)),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+      report: terminal,
       version: workflowJournalEventVersion
     })
   )
@@ -233,13 +275,18 @@ it.effect("restart after terminal append advances settlement proposals without r
         proposals.some(
           ({ route }) =>
             route._tag === "IdentityFreeWorkflowRoute" &&
-            (route.transition._tag === "ContinuePlannedAttemptExecutorWork" ||
+            (route.transition._tag === "ObservePlannedAttemptExecutorWork" ||
               route.transition._tag === "SuspendPlannedAttemptExecutorWork")
         )
       ).toBe(false)
+      const reports = (yield* (yield* JournalStore).read(runId)).filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"
+      )
+      expect(reports).toHaveLength(2)
       expect(
         (yield* (yield* JournalStore).read(runId)).filter(
-          ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
         )
       ).toHaveLength(1)
     }).pipe(Effect.provide(settlementTestLayer))

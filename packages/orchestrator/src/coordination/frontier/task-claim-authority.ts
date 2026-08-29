@@ -1,6 +1,7 @@
 import { Option } from "effect"
 import type { TaskId } from "@dalph/contracts"
 import { type ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 
@@ -35,7 +36,8 @@ export const currentTaskClaimAuthority = (
   records: ReadonlyArray<JournalRecord>,
   taskId: TaskId,
   expectedClaim: ActiveTaskClaim | undefined,
-  activationBaselinePosition: Option.Option<JournalPosition>
+  activationBaselinePosition: Option.Option<JournalPosition>,
+  immutableRunTarget?: TrackerTarget
 ): CurrentTaskClaimAuthority => {
   if (expectedClaim === undefined) return { _tag: "Missing" }
   const expectedAt = records.findLast(
@@ -48,7 +50,9 @@ export const currentTaskClaimAuthority = (
       event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "FocusedTaskClaimFacts" ||
         event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-      event.observation.coverage.taskId === taskId
+      event.observation.coverage.taskId === taskId &&
+      (immutableRunTarget === undefined ||
+        taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget))
   )
   const observation = observationRecord?.event
   if (

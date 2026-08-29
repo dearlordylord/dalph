@@ -92,7 +92,7 @@ module applicationExitTest {
       .expect(and {
         state.attemptA == AttemptSafelySuspended,
         not(state.attemptAPositionHeld),
-        state.attemptB == AttemptRunning,
+        state.attemptB == AttemptExecuting,
         state.attemptBPositionHeld,
         exactSafeOrTerminalEvidenceControlsPositionRelease,
       })
@@ -110,7 +110,7 @@ module applicationExitTest {
       })
   }
 
-  run runningAttemptMustConfirmSafetyBeforeSuccessTest = {
+  run executingAttemptMustConfirmSafetyBeforeSuccessTest = {
     init
       .then(startAttemptA)
       .then(acceptExit)
@@ -122,7 +122,7 @@ module applicationExitTest {
       .expect(successfulExitRequiresRecoverableBoundary)
   }
 
-  run unsafeRunningAttemptBlocksSuccessTest = {
+  run unsafeExecutingAttemptBlocksSuccessTest = {
     init
       .then(startAttemptA)
       .then(acceptExit)
@@ -205,7 +205,7 @@ module applicationExitTest {
       .expect(and {
         state.phase == ProcessGoneTimeout,
         state.failureDiagnosticRetained,
-        state.attemptA == AttemptRunning,
+        state.attemptA == AttemptExecuting,
         state.attemptAPositionHeld,
         fifthTickAtomicallyForcesTimedOutTermination,
       })

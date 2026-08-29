@@ -109,7 +109,7 @@ it.effect("keeps proof-based Stop behind an already admitted continuation until 
         { capacity: TaskWorkCapacity.make(1), held: [] },
         yield* makeIntegrationTargetResourceController()
       )
-      const continuationTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      const continuationTransition = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
         acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
         plannedAttempt
       })

@@ -18,7 +18,7 @@ several. The following five seconds are available only for asking the executor
 to suspend exact running attempts, performing the suspension intent and report
 writes required by that protocol, acknowledging already-produced journal
 writes, and releasing process-local resources. Dalph never calls executor
-`startOrContinue`, waits for executor work to finish, starts fresh
+`begin` or `resume`, waits for executor work to finish, starts fresh
 reconciliation merely to make shutdown cleaner, or disposes a durable workflow
 resource during this drain.
 
@@ -138,7 +138,8 @@ dispose the resource named by the unresolved intent.
 ### Starting situation
 
 Alice is the Operator. Run R retains planned attempt P for task A and its exact
-`(RunId, AttemptId)` correlation. The executor has reported `Running`. Dalph
+`(RunId, AttemptId)` correlation. The executor has reported
+`ExecutorWorkExecuting`. Dalph
 holds P's task-work position and may hold other process-local guards. The
 tracker claim, planned worktree, WIP, evidence, and responsibility must survive.
 
@@ -150,10 +151,10 @@ inner worker or interrupting a Dalph fiber does not prove that condition.
 1. Alice requests Exit and the shell closes the Exit admission cutoff.
 2. Dalph records the existing planned-attempt suspension-command intent required
    by the ordinary executor protocol, then calls `requestSuspension` for P.
-3. Dalph does not call `startOrContinue` and does not ask the executor to finish
+3. Dalph does not call `begin` or `resume` and does not ask the executor to finish
    its work. How the executor implementation handles `requestSuspension`
    remains outside the generic Dalph protocol.
-4. If the executor reports exact `SafelySuspended` or `Terminal` before the
+4. If the executor reports exact `ExecutorWorkSafelySuspended` or `ExecutorWorkTerminal` before the
    drain limit, Dalph records that report. Only that report permits release of
    P's task-work position.
 5. Dalph preserves P, its worktree, WIP, claim, evidence, and every later
@@ -167,13 +168,13 @@ restart reconstructs it from the unfinished exact responsibility and consults
 the executor through its accepted recovery boundary.
 
 Alice sees either successful Exit after confirmed suspension or a non-graceful
-timeout result. Dalph must not call `startOrContinue`, await terminal
+timeout result. Dalph must not call `begin` or `resume`, await terminal
 completion, infer suspension from process death, allocate a replacement
 attempt, or delete preserved work.
 
 ### Acceptance-test seam
 
-- `calls requestSuspension without startOrContinue during Exit`
+- `calls requestSuspension without begin or resume during Exit`
 - `exits successfully after every running attempt confirms exact safe suspension`
 - `retains the unfinished attempt when suspension is unresolved at timeout`
 - `never waits for executor completion during Exit`
@@ -294,7 +295,7 @@ operations may still be running within the original five-second limit.
    evidence. It records no invented workflow outcome for the failed operation.
 2. The error makes `Succeeded` unreachable for this drain, but Dalph does not
    interrupt independent useful quick drain operations merely to fail faster.
-3. Dalph starts no replacement operation, executor `startOrContinue` request,
+3. Dalph starts no replacement operation, executor `begin` or `resume` request,
    fresh reconciliation, or durable-resource cleanup. It only lets the
    already-started useful drain work settle within the original limit.
 4. If no useful quick drain operation remains before the limit, the shell
@@ -427,7 +428,7 @@ journal schema.
 
 The existing planned-attempt suspension command intent and exact executor
 report remain workflow facts. Exit reuses `requestSuspension`; its production
-orchestration must not call `startOrContinue` or require terminal completion.
+orchestration must not call `begin` or `resume` or require terminal completion.
 How the executor implementation handles `requestSuspension` remains opaque. A
 new executor identity, executor-internal stage, cancellation outcome, or
 Exit-specific safe-suspension report is forbidden.
@@ -480,7 +481,7 @@ The model must prove at least:
 - success requires acknowledged produced writes, no live owner, no unsafe
   executor, no reservation or fiber, and a released coordinator lock;
 - repeated Exit joins one drain without resetting its clock;
-- Exit starts no executor `startOrContinue` request, fresh reconciliation,
+- Exit starts no executor `begin` or `resume` request, fresh reconciliation,
   stabilization read, durable-resource cleanup, or later Run-termination
   action;
 - failure terminates nonzero after useful quick work settles, while timeout
@@ -494,7 +495,7 @@ The model must prove at least:
 | --- | --- | --- | --- |
 | Idle Exit | cutoff, empty drain, write flush, lock release, success-report ordering | coordinator-lock lifecycle | application-shell test with injected clock and lock |
 | In-flight tracker or Git call | typed interruptible owner becomes known result or durable recoverable ambiguity | tracker/Git reconcile-before-retry protocols | runtime cut-point test plus reopening reconciliation test |
-| Running executor | suspension intent, `requestSuspension` without `startOrContinue`, exact safe-or-terminal release; foreign report negative control | `plannedAttemptExecutor` | controlled executor proving the outer call and exact report correlation |
+| Executing executor | suspension intent, `requestSuspension` without `begin` or `resume`, exact safe-or-terminal release; foreign report negative control | `plannedAttemptExecutor` | controlled executor proving the outer call and exact report correlation |
 | Non-interruptible atomic boundary | atomic owner finishes before tick five or remains until timed-out termination | owning integration, evidence, journal, or cleanup protocol | deterministic return/stuck cut-point tests |
 | Death before successful result | unexpected process loss cannot report success or persist lifecycle state | `runActivation` | authored cassette death cut points and ordinary reopening test |
 | Five-second timeout | ticks never reset; fifth tick atomically force-terminates | none; wall-clock mechanics are application-shell owned | injected monotonic-clock and nonzero-process-result tests |

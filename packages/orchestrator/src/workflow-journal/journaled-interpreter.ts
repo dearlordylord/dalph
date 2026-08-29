@@ -277,7 +277,8 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
                   .slice(0, existingObservationIndex + 1)
                   .flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []))
               },
-              operation.taskId
+              operation.taskId,
+              operation.target
             ),
             operation.operationId
           )
@@ -307,7 +308,8 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
                       event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
                     )
                   },
-                  operation.taskId
+                  operation.taskId,
+                  operation.target
                 ),
                 operation.operationId
               )

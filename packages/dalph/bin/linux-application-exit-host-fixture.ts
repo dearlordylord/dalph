@@ -21,7 +21,7 @@ import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
-  RunningAttemptForApplicationExit,
+  ExecutingAttemptForApplicationExit,
   nodeCoordinatorLockLayer,
   plannedAttemptProtocolControllerLayer,
   suspendApplicationExitAttempts,
@@ -101,7 +101,7 @@ const runningRecords = (plannedAttempt: ReturnType<typeof makeFixturePlannedAtte
     runningReportPosition,
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-      report: PlannedAttemptExecutorReport.cases.Running.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
         correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
       }),
       version: workflowJournalEventVersion
@@ -109,7 +109,7 @@ const runningRecords = (plannedAttempt: ReturnType<typeof makeFixturePlannedAtte
   )
 ]
 
-const runningExecutorDrain = (runningInput: RunningHostFixtureInput) =>
+const executingExecutorDrain = (runningInput: RunningHostFixtureInput) =>
   Effect.gen(function* () {
     const plannedAttempt = makeFixturePlannedAttempt(runningInput)
     const records = yield* Ref.make(runningRecords(plannedAttempt))
@@ -133,19 +133,20 @@ const runningExecutorDrain = (runningInput: RunningHostFixtureInput) =>
     const executor = Layer.succeed(
       PlannedAttemptExecutor,
       PlannedAttemptExecutor.of({
-        project: () => Effect.die("application Exit must not project the controlled executor"),
+        observe: () => Effect.die("application Exit must not project the controlled executor"),
         requestSuspension: (attempt) =>
           Effect.sync(() => {
             writeLine({ controlledExecutor: "FastSuspensionRequested", llmRequests: 0 })
-            return PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            return PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
               correlation: plannedAttemptExecutorCorrelation(attempt)
             })
           }),
-        startOrContinue: () => Effect.die("application Exit must not ask the executor to finish")
+        begin: () => Effect.die("application Exit must not ask the executor to begin"),
+        resume: () => Effect.die("application Exit must not ask the executor to resume")
       })
     )
     const drain = suspendApplicationExitAttempts([
-      RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+      ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
     ]).pipe(Effect.provide(Layer.mergeAll(journal, executor, plannedAttemptProtocolControllerLayer)))
     return { drain, records }
   })
@@ -179,9 +180,9 @@ const application = Effect.scoped(
           worktree: input.worktree
         }
       })
-      const controlled = yield* runningExecutorDrain(input)
+      const controlled = yield* executingExecutorDrain(input)
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: controlled.drain.pipe(
+        suspendExecutingExecutorWork: controlled.drain.pipe(
           Effect.tap(() =>
             Ref.get(controlled.records).pipe(
               Effect.tap((records) =>

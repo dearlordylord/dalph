@@ -29,7 +29,7 @@ _Avoid_: Coordinator process ID, Dalph orchestrator, claim owner
 
 **Dalph executor**:
 The Dalph component that performs the complete work for one planned task
-attempt and reports only the attempt-level running, safely suspended, or
+attempt and reports only the attempt-level executing, safely suspended, or
 terminal result required by generic orchestration. The production executor's
 inner algorithm is post-milestone design.
 _Avoid_: Dalph orchestrator, universal review pipeline
@@ -270,14 +270,15 @@ _Avoid_: Generic draining reason, ticket-level blocker, progress percentage
 
 **Planned-attempt executor work**:
 The injected executor implementation's complete course of work for one planned task attempt.
-Dalph may start, continue, ask to suspend, or receive the outcome of that work
-without learning an internal stage. In v1, the planned task attempt identifies
-this work at the generic executor boundary; Dalph does not allocate a second
-outer-invocation identity. The injected implementation's agents, reviewers,
-sessions, provider calls, commits, retries, and other private stages are not
-part of this outer contract.
+Dalph begins it once, may passively observe it or ask it to suspend, and may
+resume the same attempt only after an accepted safe-suspension rule selects
+that resume. In v1, the planned task attempt identifies this work at the
+generic executor boundary; Dalph does not allocate a second outer-invocation
+identity. The injected implementation's agents, reviewers, sessions, provider
+calls, commits, retries, and other private stages are not part of this outer
+contract.
 _Avoid_: Executor outer invocation, review stage, worker process, workflow
-operation
+operation, repeated continuation command
 
 **Planned-attempt executor-work responsibility began**:
 The initiated action established when Dalph records its intent and assumes
@@ -293,14 +294,24 @@ closed the task, or that Git integrated the work.
 _Avoid_: Executor work started, completed tracker task, integrated task
 
 **Planned-attempt executor-work report**:
-The non-action occurrence established when Dalph receives `Running`,
-`SafelySuspended`, or `Terminal` for one exact planned attempt. It proves the
-reported condition, not an executor-internal action or actor.
-_Avoid_: Executor action, executor decision, completed tracker task
+The non-action occurrence established only when Dalph accepts a distinct
+`ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`, or
+`ExecutorWorkTerminal` lifecycle condition for one exact planned attempt. Its
+monotonic ordinal orders distinct accepted conditions; it grants no command
+permission and does not advance when a passive observation is unchanged.
+_Avoid_: Executor action, command settlement, progress stage, completed tracker task
+
+**Planned-attempt executor command response**:
+The exact non-action occurrence that settles one journaled Begin, Resume, or
+Suspend command at the executor boundary. The response may repeat the already
+accepted lifecycle condition, so command settlement and lifecycle-report
+acceptance are distinct evidence. For example, an executing response to a
+Suspend command settles that command without appending another work report.
+_Avoid_: Accepted lifecycle transition, report ordinal, continuation permission
 
 **Planned-attempt executor-work correlation**:
 The exact `RunId` and `AttemptId` of the planned task attempt that Dalph uses
-across executor start, continuation, safe suspension, and terminal outcome. An
+across executor begin, observation, resume, safe suspension, and terminal outcome. An
 internal `OperationId`, coding-agent invocation, reviewer invocation, provider
 request, session, or worker process cannot replace or supplement this generic
 correlation.
@@ -310,8 +321,9 @@ identity, log correlation
 **Task-work capacity requirement**:
 The zero-or-one task-work position that Dalph says one workflow transition
 needs. The executor does not request, acquire, declare, or release this
-position. For example, Dalph may require one position before it asks the
-executor to continue task A, while a tracker-only read requires none.
+position. For example, Dalph requires one position before it begins or resumes
+task A, retains it while A is executing, and requires none for a tracker-only
+read.
 _Avoid_: Executor-declared capacity, review capacity, operation-name capacity
 
 **Initial control policy**:
@@ -356,10 +368,11 @@ _Avoid_: Internal review result, raw provider response
 
 **Planned-attempt executor-work projection**:
 The injected executor's current normalized declaration that its complete work
-for one exact `(RunId, AttemptId)` is running, safely suspended, or terminal.
-The implementation remains opaque. Starting or resuming is a Dalph request,
-not another persisted executor state, and a missing projection does not prove
-that the responsibility is safe or terminal.
+for one exact `(RunId, AttemptId)` is executing, safely suspended, or terminal.
+The implementation remains opaque. Observing is passive; it never begins or
+resumes work. Starting or resuming is a distinct Dalph command, not another
+persisted executor state, and a missing projection does not prove that the
+responsibility is safe or terminal or authorize replacement.
 _Avoid_: Generic inspection of executor-specific journal events, internal wait
 
 **Historical Ralph harness**:
@@ -666,9 +679,10 @@ that every task completed, every responsibility settled, the tracker graph was
 freshly reconfirmed, the Run may terminate, or the coordinator process should
 remain alive. A durably published exact terminal executor report that ends its
 correlated planned-attempt executor-work responsibility may supply the
-no-live-owner fact used by this condition. In issue #66, a late terminal
-`Accepted` report may replace an earlier safe-suspension report as that current
-fact, but it remains neither tracker completion nor integration authority.
+no-live-owner fact used by this condition. A distinct accepted terminal report
+replaces an earlier safe-suspension report as the current lifecycle fact; an
+Accepted outcome then follows ordinary integration admission, but the report
+remains neither tracker completion nor replacement authority.
 _Avoid_: Run completion, empty target, polling permission, finality proof
 
 **Delivery settlement**:
@@ -819,11 +833,14 @@ integration-ready result from this historical executor outcome. It
 does not imply review, select repository policy, prove integration lineage,
 promote a ref, or complete the tracker task. An ordinary accepted result enters
 one integration responsibility after its terminal report is recorded and
-paired with the configured target. If an exact pre-integration Restart choice
-was already applied before that terminal report, the late accepted result is
-instead preserved as old-attempt evidence, creates no integration
-responsibility, and may supply current executor quiescence for the matching
-replacement only after fresh facts are checked.
+paired with the configured target. Historical journals written under the
+former `StartOrContinue` protocol may contain a Restart choice before a late
+accepted result. That vocabulary is historical documentation and proof
+terminology only: the current journal schema does not decode it, and any
+retained provisional journal requires an explicit offline migration before
+use. Under issue #264,
+a terminal choice cancels an admitted-but-unissued Resume, while a recorded
+Resume intent or accepted executing report makes the choice unavailable.
 _Avoid_: Completed task, integrated commit, promoted result
 
 **Integration-ready result**:
@@ -1142,15 +1159,16 @@ Dalph starts another long-running action for an existing attempt.
 _Avoid_: Initial attempt eligibility, coding-agent progress poll, global refresh
 
 **Planned-attempt continuation authorization**:
-The generic durable workflow fact that permits Dalph to continue one existing
-planned-attempt executor responsibility after the current active-task tracker
-read and exact planned-worktree Git observation are causally recorded. It names
-the exact read operation identities and planned `(RunId, AttemptId)`; it does
-not allocate an attempt, create a recovery occurrence, or prove an executor
-report.
+The generic durable workflow fact that permits Dalph to Resume one existing
+planned-attempt executor responsibility after an accepted safe-suspension
+report and current task graph, task-work specification, exact claim,
+planned-worktree, and target-lineage observations are causally recorded. It
+names the five exact read operation identities and planned `(RunId, AttemptId)`;
+it does not allocate an attempt, create a recovery occurrence, or turn an
+unaccepted projection into lifecycle authority.
 _Avoid_: Recovery event, replacement-attempt permission, executor invocation,
 volatile restart flag
 
 ## Executor-internal policy
 
-The generic orchestrator models only complete planned-attempt executor work and its running, safely suspended, or terminal report. Review, retry, provider-session, handback, restoration, and convergence policy are not current Dalph domain concepts. Any future production executor algorithm requires new accepted operational scenarios and must remain behind this coarse boundary.
+The generic orchestrator models only complete planned-attempt executor work and its executing, safely suspended, or terminal report. Review, retry, provider-session, handback, restoration, and convergence policy are not current Dalph domain concepts. Any future production executor algorithm requires new accepted operational scenarios and must remain behind this coarse boundary.

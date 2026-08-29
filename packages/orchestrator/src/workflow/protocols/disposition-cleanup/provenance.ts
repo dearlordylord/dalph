@@ -427,10 +427,8 @@ const validatePlannedAttemptDisposition = (
       !exactExecutorQuiescenceEvidence(
         records,
         disposition.plannedAttempt,
-        appliedRestart.position,
         record.position,
-        replacement.witness.quiescenceProof,
-        appliedRestart
+        replacement.witness.quiescenceProof
       )
     ) {
       return invalid("replacement provenance lacks the exact executor quiescence proof")
@@ -482,28 +480,7 @@ const validatePlannedAttemptDisposition = (
       )
     })
     if (appliedChoice === undefined) return invalid("abandonment provenance lacks the applied Stop choice")
-    if (
-      record.event.proof._tag === "CommandResponse" &&
-      !exactExecutorQuiescenceEvidence(
-        records,
-        disposition.plannedAttempt,
-        appliedChoice.position,
-        record.position,
-        record.event.proof
-      )
-    ) {
-      return invalid("abandonment provenance lacks the exact executor quiescence proof")
-    }
-    if (
-      record.event.proof._tag !== "CommandResponse" &&
-      !exactExecutorQuiescenceEvidence(
-        records,
-        disposition.plannedAttempt,
-        appliedChoice.position,
-        record.position,
-        record.event.proof
-      )
-    ) {
+    if (!exactExecutorQuiescenceEvidence(records, disposition.plannedAttempt, record.position, record.event.proof)) {
       return invalid("abandonment provenance lacks the exact executor quiescence proof")
     }
     const retainedClaim = authorizedClaimForAttempt(

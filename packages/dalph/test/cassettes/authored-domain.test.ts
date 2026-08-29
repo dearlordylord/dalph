@@ -26,3 +26,21 @@ it("rejects a skipped step in the authored completion-finality boundary chronolo
     /must be an exact prefix of read Active, replace, read Completion, and delete/u
   )
 })
+
+it("rejects an authored Begin response that skips Executing", () => {
+  const invalid = {
+    ...deliveryFinalitySpineAuthoredCassette,
+    story: deliveryFinalitySpineAuthoredCassette.story.map((item) =>
+      item._tag === "PlannedAttemptExecutorWorkReported" && item.request === "Begin"
+        ? {
+            ...item,
+            report: { _tag: "ExecutorWorkTerminal", attemptId: item.report.attemptId, result: { _tag: "Completed" } }
+          }
+        : item
+    )
+  }
+
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(invalid)).toThrow(
+    /an authored Begin response must report ExecutorWorkExecuting/u
+  )
+})

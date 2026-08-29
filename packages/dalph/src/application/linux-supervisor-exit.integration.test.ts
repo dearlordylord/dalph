@@ -203,6 +203,7 @@ it.live(
           "PlannedAttemptExecutorWorkResponsibilityBegan",
           "PlannedAttemptExecutorWorkReported",
           "PlannedAttemptExecutorCommandIntended",
+          "PlannedAttemptExecutorCommandResponseObserved",
           "PlannedAttemptExecutorWorkReported"
         ])
         expect(journalEvidence === undefined ? -1 : lifecycle.indexOf(journalEvidence)).toBeLessThan(result)

@@ -6,6 +6,7 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
+  type PlannedAttemptExecutorObservationPurpose,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorResult,
   PlannedAttemptExecutorCorrelation,
@@ -84,32 +85,33 @@ const commandFailureDetail = (error: unknown): string => {
 }
 
 export const commandFailure = (
-  command: "StartOrContinue" | "Suspend",
+  command: "Begin" | "Resume" | "Suspend",
   correlation: PlannedAttemptExecutorCorrelation,
   error: unknown
 ): PlannedAttemptExecutorCommandFailure =>
   new PlannedAttemptExecutorCommandFailure({ command, correlation, detail: commandFailureDetail(error) })
 
 export const preserveCommandFailure = (
-  command: "StartOrContinue" | "Suspend",
+  command: "Begin" | "Resume" | "Suspend",
   correlation: PlannedAttemptExecutorCorrelation,
   error: unknown
 ): PlannedAttemptExecutorCommandFailure =>
   error instanceof PlannedAttemptExecutorCommandFailure ? error : commandFailure(command, correlation, error)
 
 const running = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorReportType =>
-  PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+  PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
 
 const suspended = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorReportType =>
-  PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+  PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
 
 const terminal = (
   correlation: PlannedAttemptExecutorCorrelation,
   result: PlannedAttemptExecutorResult
-): PlannedAttemptExecutorReportType => PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result })
+): PlannedAttemptExecutorReportType =>
+  PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result })
 
 const foreignReport = (observed: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorReportType =>
-  PlannedAttemptExecutorReport.cases.Running.make({ correlation: observed })
+  PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: observed })
 
 const noReport = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorProjectionType =>
   PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
@@ -135,7 +137,7 @@ const foreign = (
 ): PlannedAttemptExecutorProjectionType =>
   PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
     expected,
-    observed: PlannedAttemptExecutorReport.cases.Running.make({ correlation: observed })
+    observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: observed })
   })
 
 const sameCorrelation = (left: PlannedAttemptExecutorCorrelation, right: PlannedAttemptExecutorCorrelation): boolean =>
@@ -1305,11 +1307,11 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
     })
 
     /** Distinguishes a thread created by this command from private state recovered after a process boundary. */
-    type LoadedStartRecord =
+    type LoadedBeginRecord =
       | { readonly _tag: "FreshAllocation"; readonly record: CodexThreadBackedRecord }
       | { readonly _tag: "Recovered"; readonly record: CodexThreadBackedRecord }
 
-    const loadStartRecord = Effect.fn("CodexPlannedAttemptExecutor.loadStartRecord")(function* (
+    const loadBeginRecord = Effect.fn("CodexPlannedAttemptExecutor.loadBeginRecord")(function* (
       attempt: PlannedTaskAttempt,
       correlation: PlannedAttemptExecutorCorrelation
     ) {
@@ -1318,44 +1320,19 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
         return {
           _tag: "FreshAllocation" as const,
           record: yield* allocateThread(attempt, correlation)
-        } satisfies LoadedStartRecord
+        } satisfies LoadedBeginRecord
       }
       const record = found.value
       if (!isThreadBackedRecord(record)) {
         return {
           _tag: "FreshAllocation" as const,
           record: yield* allocateThread(attempt, correlation)
-        } satisfies LoadedStartRecord
+        } satisfies LoadedBeginRecord
       }
-      return { _tag: "Recovered" as const, record } satisfies LoadedStartRecord
+      return { _tag: "Recovered" as const, record } satisfies LoadedBeginRecord
     })
 
-    const reconcileAssociatedStart = Effect.fn("CodexPlannedAttemptExecutor.reconcileAssociatedStart")(function* (
-      attempt: PlannedTaskAttempt,
-      correlation: PlannedAttemptExecutorCorrelation,
-      record: Extract<CodexAttemptRecord, { readonly _tag: "AssociatedPreTurn" }>
-    ) {
-      const reconciliation = yield* reconcile(attempt, correlation, record).pipe(
-        Effect.catch((error: unknown) =>
-          error instanceof CodexAppServerFailure && error.kind === "NotFound"
-            ? Effect.succeed<ThreadReconciliation | undefined>(undefined)
-            : Effect.fail(error)
-        )
-      )
-      if (reconciliation === undefined) {
-        // Only a conclusively absent empty pre-turn thread may be replaced.
-        return yield* allocateThread(attempt, correlation)
-      }
-      /* v8 ignore next -- @preserve An associated pre-turn record has no owned turn that can be Running or Terminal. */
-      if (reconciliation._tag === "Running" || reconciliation._tag === "Terminal") {
-        return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-      }
-      /* v8 ignore next -- @preserve Associated pre-turn reconciliation is either idle or conclusively absent. */
-      if (reconciliation._tag === "Unresolved") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-      return record
-    })
-
-    const saveRunningStartRecord = Effect.fn("CodexPlannedAttemptExecutor.saveRunningStartRecord")(function* (
+    const saveExecutingResumeRecord = Effect.fn("CodexPlannedAttemptExecutor.saveExecutingResumeRecord")(function* (
       attempt: PlannedTaskAttempt,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexThreadBackedRecord,
@@ -1382,14 +1359,14 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       return running(correlation)
     })
 
-    const continueExistingStart = Effect.fn("CodexPlannedAttemptExecutor.continueExistingStart")(function* (
+    const reconcileExistingResume = Effect.fn("CodexPlannedAttemptExecutor.reconcileExistingResume")(function* (
       attempt: PlannedTaskAttempt,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexThreadBackedRecord
     ) {
       const reconciliation = yield* reconcile(attempt, correlation, record)
       if (reconciliation._tag === "Running") {
-        return yield* saveRunningStartRecord(attempt, correlation, record, reconciliation)
+        return yield* saveExecutingResumeRecord(attempt, correlation, record, reconciliation)
       }
       if (reconciliation._tag === "Terminal") {
         return yield* terminalOrRunning(attempt, correlation, record, reconciliation)
@@ -1398,18 +1375,18 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       if (record._tag === "Terminal") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
     })
 
-    const start = Effect.fn("CodexPlannedAttemptExecutor.start")(function* (request: PlannedAttemptExecutorRequest) {
+    const begin = Effect.fn("CodexPlannedAttemptExecutor.begin")(function* (request: PlannedAttemptExecutorRequest) {
       const attempt = request.plannedAttempt
       const correlation = plannedAttemptExecutorCorrelation(attempt)
-      const loaded = yield* loadStartRecord(attempt, correlation)
-      let record = loaded.record
-      if (loaded._tag === "Recovered" && record._tag === "AssociatedPreTurn") {
-        record = yield* reconcileAssociatedStart(attempt, correlation, record)
-      } else if (loaded._tag === "Recovered") {
-        const existingReport = yield* continueExistingStart(attempt, correlation, record)
-        if (existingReport !== undefined) return existingReport
-      }
-      return yield* sendTurn(attempt, request.specification, correlation, record)
+      const loaded = yield* loadBeginRecord(attempt, correlation)
+      if (loaded._tag === "Recovered") return yield* new CodexTurnBoundaryUnknown({})
+      const report = yield* sendTurn(attempt, request.specification, correlation, loaded.record)
+      // Begin acknowledges that the autonomous turn was established. Even
+      // when Codex finishes before turn/start returns, its exact Terminal
+      // report remains in the private attempt record for the next passive
+      // observation; exposing it here would violate Begin's public Executing
+      // settlement and make the workflow unable to accept report ordinal 1.
+      return report._tag === "ExecutorWorkExecuting" ? report : running(correlation)
     })
 
     const recordMatchesCorrelation = (
@@ -1435,6 +1412,16 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       }
       if (!isThreadBackedRecord(record)) return yield* Effect.fail(new CodexThreadMismatch({}))
       return record
+    })
+
+    const resume = Effect.fn("CodexPlannedAttemptExecutor.resume")(function* (request: PlannedAttemptExecutorRequest) {
+      const attempt = request.plannedAttempt
+      const correlation = plannedAttemptExecutorCorrelation(attempt)
+      const record = yield* readSuspensionRecord(correlation)
+      if (record._tag !== "SafelySuspended") return yield* new CodexTurnBoundaryUnknown({})
+      const existingReport = yield* reconcileExistingResume(attempt, correlation, record)
+      if (existingReport !== undefined) return existingReport
+      return yield* sendTurn(attempt, request.specification, correlation, record)
     })
 
     const canSuspendIdleRecord = (record: CodexAttemptRecord): record is OwnedTurnRecord =>
@@ -1537,6 +1524,9 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
     const isUnusableActivityCensus = (census: CodexOwnedActivityCensusProjection): boolean =>
       census._tag === "Unreadable" || census._tag === "Contradictory"
 
+    const isBeginReconciliation = (purpose: PlannedAttemptExecutorObservationPurpose): boolean =>
+      purpose._tag === "ReconcileCommand" && purpose.command === "Begin"
+
     const projectIdleRecord = Effect.fn("CodexPlannedAttemptExecutor.projectIdleRecord")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexThreadBackedRecord
@@ -1553,18 +1543,23 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexThreadBackedRecord,
       attempt: CodexAttemptContext,
-      reconciliation: ThreadReconciliation
+      reconciliation: ThreadReconciliation,
+      purpose: PlannedAttemptExecutorObservationPurpose
     ) {
       if (reconciliation._tag === "Running") return exact(running(correlation))
       if (reconciliation._tag === "Terminal") {
-        return exact(yield* terminalOrRunning(attempt, correlation, record, reconciliation))
+        const report = yield* terminalOrRunning(attempt, correlation, record, reconciliation)
+        // A Begin reconciliation settles the lost public command response
+        // before ordinary passive delivery can expose the retained terminal.
+        return exact(isBeginReconciliation(purpose) ? running(correlation) : report)
       }
       if (reconciliation._tag === "Unresolved") return unreadable(correlation)
       return yield* projectIdleRecord(correlation, record)
     })
 
     const projectStoredRecord = Effect.fn("CodexPlannedAttemptExecutor.projectStoredRecord")(function* (
-      correlation: PlannedAttemptExecutorCorrelation
+      correlation: PlannedAttemptExecutorCorrelation,
+      purpose: PlannedAttemptExecutorObservationPurpose
     ) {
       const found = yield* store.readAttempt(correlation.runId, correlation.attemptId)
       if (Option.isNone(found)) return noReport(correlation)
@@ -1575,13 +1570,16 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       })
       if (!sameCorrelation(observed, correlation)) return foreign(correlation, observed)
       if (!isThreadBackedRecord(record)) return noReport(correlation)
+      if (isBeginReconciliation(purpose) && record._tag === "Terminal") {
+        return exact(running(correlation))
+      }
       const attempt: CodexAttemptContext = {
         attemptId: correlation.attemptId,
         runId: correlation.runId,
         worktree: record.worktree
       }
       const reconciliation = yield* reconcile(attempt, correlation, record)
-      return yield* projectReconciliation(correlation, record, attempt, reconciliation)
+      return yield* projectReconciliation(correlation, record, attempt, reconciliation, purpose)
     })
 
     const projectFailure = (
@@ -1601,10 +1599,11 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
     }
 
     const project = Effect.fn("CodexPlannedAttemptExecutor.project")(function* (
-      correlation: PlannedAttemptExecutorCorrelation
+      correlation: PlannedAttemptExecutorCorrelation,
+      purpose: PlannedAttemptExecutorObservationPurpose
     ) {
       try {
-        return yield* projectStoredRecord(correlation)
+        return yield* projectStoredRecord(correlation, purpose)
       } catch (error) {
         return projectFailure(correlation, error)
       }
@@ -2325,8 +2324,20 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
     })
 
     const executor: PlannedAttemptExecutorService = {
-      project: (correlation) =>
-        project(correlation).pipe(Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))),
+      observe: (correlation, purpose) =>
+        project(correlation, purpose).pipe(
+          Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))
+        ),
+      begin: (request) => {
+        const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
+        return gateFor(correlation).pipe(
+          Effect.flatMap((gate) => gate.withPermit(begin(request))),
+          Effect.catch((error: unknown) =>
+            error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
+          ),
+          Effect.mapError((error) => preserveCommandFailure("Begin", correlation, error))
+        )
+      },
       requestSuspension: (attempt) => {
         const correlation = plannedAttemptExecutorCorrelation(attempt)
         return gateFor(correlation).pipe(
@@ -2337,14 +2348,14 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
           Effect.mapError((error) => preserveCommandFailure("Suspend", correlation, error))
         )
       },
-      startOrContinue: (request) => {
+      resume: (request) => {
         const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
         return gateFor(correlation).pipe(
-          Effect.flatMap((gate) => gate.withPermit(start(request))),
+          Effect.flatMap((gate) => gate.withPermit(resume(request))),
           Effect.catch((error: unknown) =>
             error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
           ),
-          Effect.mapError((error) => preserveCommandFailure("StartOrContinue", correlation, error))
+          Effect.mapError((error) => preserveCommandFailure("Resume", correlation, error))
         )
       }
     }

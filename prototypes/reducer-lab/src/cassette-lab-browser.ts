@@ -145,7 +145,7 @@ const renderContinuationAuthorization = (parent: HTMLElement, result: CassetteLa
   appendTextElement(
     section,
     "p",
-    "These are durable prefixes projected from the production journal. The coordinator process-death cassette control is not a journal event, and authorization keeps the existing Run/attempt responsibility.",
+    "These are durable prefixes projected from the production journal. Resume follows the exact accepted safely suspended report and fresh authority reads, and authorization keeps the existing Run/attempt responsibility.",
     "continuation-authorization-explanation"
   )
   renderDefinitionList(section, continuationAuthorizationSummaryItems(projection))
@@ -185,7 +185,8 @@ const renderContinuationAuthorization = (parent: HTMLElement, result: CassetteLa
     ["Active-task graph", projection.witnesses.activeTask.graph],
     ["Active-task specification", projection.witnesses.activeTask.specification],
     ["Active-task claim", projection.witnesses.activeTask.claim],
-    ["Planned worktree", projection.witnesses.worktree]
+    ["Planned worktree", projection.witnesses.worktree],
+    ["Target lineage", projection.witnesses.targetLineage]
   ] as const) {
     appendTextElement(
       witnessList,

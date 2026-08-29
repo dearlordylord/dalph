@@ -82,7 +82,7 @@ export const applicationExitWitnessRegistry = Object.freeze({
     "terminationAppendOwnerRegisteredReached",
     "joinedRequestReached",
     "recoverableAmbiguityReached",
-    "runningAttemptReached",
+    "executingAttemptReached",
     "suspensionIntentReached",
     "fastSuspensionCalledReached",
     "safelySuspendedReached",
@@ -118,7 +118,7 @@ export const applicationExitWitnessRegistry = Object.freeze({
   executorProof: Object.freeze([
     "servingReached",
     "drainingReached",
-    "runningReached",
+    "executingReached",
     "suspensionIntentReached",
     "fastSuspensionCalledReached",
     "safelySuspendedReached",

@@ -17,7 +17,7 @@ import type { JournalPosition } from "../../../packages/orchestrator/src/workflo
 import type { OperationId } from "../../../packages/orchestrator/src/workflow/identity.ts"
 import type { CassetteLabResult } from "./cassette-lab.ts"
 
-const continuationCassetteKey = "authored:coordinatorProcessDeathContinues" as const
+const continuationCassetteKey = "authored:taskUnpauseAfterSafeSuspension" as const
 
 type ObservationPair = {
   readonly operationId: OperationId
@@ -31,12 +31,13 @@ export interface ContinuationAuthorizationWitnessPositions {
     readonly specification: ObservationPair
     readonly claim: ObservationPair
   }
+  readonly targetLineage: ObservationPair
   readonly worktree: ObservationPair
 }
 
 export type ContinuationExecutorReport =
-  | { readonly _tag: "Running"; readonly position: JournalPosition }
-  | { readonly _tag: "Terminal"; readonly position: JournalPosition }
+  | { readonly _tag: "ExecutorWorkExecuting"; readonly position: JournalPosition }
+  | { readonly _tag: "ExecutorWorkTerminal"; readonly position: JournalPosition }
 
 export type ContinuationExecutorBoundary =
   | { readonly _tag: "NoCommandIntent" }
@@ -60,14 +61,14 @@ export type ContinuationAuthorizationPrefix =
     readonly executorReport: null
   })
   | (ContinuationPrefixBase & {
-    readonly _tag: "AfterRunning"
+    readonly _tag: "AfterExecutingReport"
     readonly authorizationPosition: JournalPosition
-    readonly executorReport: Extract<ContinuationExecutorReport, { readonly _tag: "Running" }>
+    readonly executorReport: Extract<ContinuationExecutorReport, { readonly _tag: "ExecutorWorkExecuting" }>
   })
   | (ContinuationPrefixBase & {
-    readonly _tag: "AfterTerminal"
+    readonly _tag: "AfterTerminalReport"
     readonly authorizationPosition: JournalPosition
-    readonly executorReport: Extract<ContinuationExecutorReport, { readonly _tag: "Terminal" }>
+    readonly executorReport: Extract<ContinuationExecutorReport, { readonly _tag: "ExecutorWorkTerminal" }>
   })
 
 export interface ContinuationAuthorizationIdentity {
@@ -77,7 +78,7 @@ export interface ContinuationAuthorizationIdentity {
   readonly responsibilityCorrelations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
   /** Every continuation authorization recorded for this Run. */
   readonly authorizationCorrelations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
-  /** Every executor report recorded for this Run, including Running and Terminal reports. */
+  /** Every executor report recorded for this Run, including ExecutorWorkExecuting and ExecutorWorkTerminal reports. */
   readonly reportCorrelations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
   /** Number of durable executor-work responsibilities recorded for this Run. */
   readonly responsibilityCount: number
@@ -115,8 +116,8 @@ const latestRecord = (
 const operationPair = (
   records: ReadonlyArray<JournalRecord>,
   operationId: OperationId,
-  intentTag: "ReadTrackerGraph" | "ReadTaskWorkSpecification" | "ReadTaskClaim" | "ReadTaskWorktree",
-  observationTag: "TaskTrackerFactsObserved" | "PlannedAttemptWorktreeObserved"
+  intentTag: "ReadTrackerGraph" | "ReadTaskWorkSpecification" | "ReadTaskClaim" | "ReadTaskWorktree" | "ReadTargetLineage",
+  observationTag: "TaskTrackerFactsObserved" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved"
 ): ObservationPair | undefined => {
   const intent = latestRecord(
     records,
@@ -164,8 +165,20 @@ const continuationWitnessPositions = (
     "TaskTrackerFactsObserved"
   )
   const worktree = operationPair(prefix, witness.worktreeObservationOperationId, "ReadTaskWorktree", "PlannedAttemptWorktreeObserved")
-  if (graph === undefined || specification === undefined || claim === undefined || worktree === undefined) return undefined
-  return { activeTask: { graph, specification, claim }, worktree }
+  const targetLineage = operationPair(
+    prefix,
+    witness.targetLineageObservationOperationId,
+    "ReadTargetLineage",
+    "TargetLineageObserved"
+  )
+  if (
+    graph === undefined ||
+    specification === undefined ||
+    claim === undefined ||
+    worktree === undefined ||
+    targetLineage === undefined
+  ) return undefined
+  return { activeTask: { graph, specification, claim }, targetLineage, worktree }
 }
 
 const distinct = <T>(values: ReadonlyArray<T>): ReadonlyArray<T> => [...new Set(values)]
@@ -222,7 +235,7 @@ const executorReports = (
     event.report.correlation.attemptId !== plannedAttempt.attemptId ||
     position <= authorizationPosition
   ) return []
-  return event.report._tag === "Running" || event.report._tag === "Terminal"
+  return event.report._tag === "ExecutorWorkExecuting" || event.report._tag === "ExecutorWorkTerminal"
     ? [{ _tag: event.report._tag, position }]
     : []
 })
@@ -235,7 +248,7 @@ const decodeJournalRecords = (result: CassetteLabResult): ReadonlyArray<JournalR
   return Schema.decodeUnknownSync(Schema.Array(JournalRecordSchema))(result.journalRecords)
 }
 
-/** Returns the production journal records for the maintained #171 recovery cassette. */
+/** Returns the production journal records for the maintained safely suspended Resume cassette. */
 export const continuationAuthorizationJournalRecordsOf = (result: CassetteLabResult): ReadonlyArray<JournalRecord> =>
   decodeJournalRecords(result)
 
@@ -282,9 +295,9 @@ export const continuationAuthorizationProjectionOf = (
   for (const report of executorReports(sorted, plannedAttempt, authorization.position)) {
     const through = prefixThrough(sorted, report.position)
     if (through === undefined) continue
-    if (report._tag === "Running") {
+    if (report._tag === "ExecutorWorkExecuting") {
       prefixes.push({
-        _tag: "AfterRunning",
+        _tag: "AfterExecutingReport",
         attemptId: plannedAttempt.attemptId,
         authorizationPosition: authorization.position,
         executorReport: report,
@@ -294,7 +307,7 @@ export const continuationAuthorizationProjectionOf = (
       })
     } else {
       prefixes.push({
-        _tag: "AfterTerminal",
+        _tag: "AfterTerminalReport",
         attemptId: plannedAttempt.attemptId,
         authorizationPosition: authorization.position,
         executorReport: report,
@@ -340,20 +353,22 @@ const executorBoundaryOf = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
 ): ContinuationExecutorBoundary => {
-  const report = records.findLast(({ event, runId }) =>
-    runId === plannedAttempt.runId &&
-    event._tag === "PlannedAttemptExecutorWorkReported" &&
-    event.report.correlation.runId === plannedAttempt.runId &&
-    event.report.correlation.attemptId === plannedAttempt.attemptId
-  )
-  if (report !== undefined) return { _tag: "ExecutorReportObserved", position: report.position }
   const commandIntent = records.findLast(({ event, runId }) =>
     runId === plannedAttempt.runId &&
     event._tag === "PlannedAttemptExecutorCommandIntended" &&
+    event.command === "Resume" &&
     plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
   )
-  if (commandIntent !== undefined) return { _tag: "CommandIntentRecorded", position: commandIntent.position }
-  return { _tag: "NoCommandIntent" }
+  if (commandIntent === undefined) return { _tag: "NoCommandIntent" }
+  const report = records.findLast(({ event, position, runId }) =>
+    runId === plannedAttempt.runId &&
+    event._tag === "PlannedAttemptExecutorWorkReported" &&
+    event.report.correlation.runId === plannedAttempt.runId &&
+    event.report.correlation.attemptId === plannedAttempt.attemptId &&
+    position > commandIntent.position
+  )
+  if (report !== undefined) return { _tag: "ExecutorReportObserved", position: report.position }
+  return { _tag: "CommandIntentRecorded", position: commandIntent.position }
 }
 
 /** Applies the production causal gate to a Lab fixture without contacting an executor. */

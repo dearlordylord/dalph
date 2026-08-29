@@ -78,7 +78,7 @@ Every enterable canonical phase has an explicit witness:
   `terminationAppendOwnerRegisteredReached`.
 - Joined/ambiguous boundary states: `joinedRequestReached`,
   `recoverableAmbiguityReached`.
-- Executor evidence states: `runningAttemptReached`,
+- Executor evidence states: `executingAttemptReached`,
   `suspensionIntentReached`, `fastSuspensionCalledReached`,
   `safelySuspendedReached`, `terminalAttemptReached`,
   `suspensionFailureReached`.
@@ -99,7 +99,7 @@ gate.
 | --- | --- | --- | --- |
 | Idle | `idleExitClosesCutoffBeforeSuccessTest`, `everyExitOutcomeLeavesWorkflowExitRecordCountZeroTest` | admission close, success guard, and process-end unit tests; production-backed MBT | #204 application-shell lock/clock test |
 | Outside call | `acknowledgedInterruptibleIntentMayRemainAmbiguousTest`, `immediatelyAvailableBoundaryResultIsRecordedBeforeReleaseTest`; paired unacknowledged negative controls | interruptible-owner release unit test; production-backed MBT | #206 tracker/Git and #208 exact claim-cleanup runtime cut-point and reopening tests |
-| Executor | `exactSafeSuspensionReleasesOnlyAttemptAPositionTest`, `exactTerminalReportReleasesItsCorrelatedPositionTest`, `runningAttemptMustConfirmSafetyBeforeSuccessTest`, `unsafeRunningAttemptBlocksSuccessTest`; foreign and unsafe negative controls | exact-correlated executor-position unit test; production-backed MBT | #205 controlled-executor boundary and application-shell cassette tests |
+| Executor | `exactSafeSuspensionReleasesOnlyAttemptAPositionTest`, `exactTerminalReportReleasesItsCorrelatedPositionTest`, `executingAttemptMustConfirmSafetyBeforeSuccessTest`, `unsafeExecutingAttemptBlocksSuccessTest`; foreign and unsafe negative controls | exact-correlated executor-position unit test; production-backed MBT | #205 controlled-executor boundary and application-shell cassette tests |
 | Atomic | `cutoffPreservesAnEarlierRegisteredOwnerTest`, `admittedAtomicBoundaryFinishesInsideTheOriginalDrainTest`, `fifthTickForceTerminatesAStuckAtomicBoundaryTest` | `lets an admitted atomic section return under Exit and starts no successor phase`; the three production-backed authored atomic-family cassettes; structured boundary-mismatch tests; `forcefully terminates at five seconds while an atomic integration section remains active`; production-backed MBT | #207 integration/evidence return and stuck cut points; #208 produced cleanup-result recording finish/stuck cut points for both cleanup families |
 | Death | `deathBeforeResultRestartsWithoutLifecycleStateTest`; `unexpectedDeathSuccessIsDetectedTest` | fresh-start and result distinction unit tests; production-backed MBT | #209 authored request-to-death cassette and ordinary fresh-start evidence |
 | Timeout | `fifthTickForceTerminatesAStuckAtomicBoundaryTest`, `timeoutRetainsAnEarlierConclusiveFailureDiagnosticTest`; early/fifth-without-force negative controls | monotonic tick, fifth-tick precedence, forced process-end unit tests, #209 cross-family earlier-diagnostic timeout evidence, and #210 `repeated SIGTERM joins the original stuck Linux child drain and exits nonzero at five seconds`; production-backed MBT | #211 records equivalent manual macOS evidence |

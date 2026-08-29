@@ -20,6 +20,7 @@ import {
   attemptPlanRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorCommandResponseContradictedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
@@ -46,6 +47,7 @@ import {
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
@@ -371,7 +373,7 @@ it("folds the executor command, projection, response, state, and report evidence
     ...plannedAttempt,
     attemptId: AttemptId.make("executor-evidence-foreign-attempt")
   })
-  const command = (ordinal: number, command: "StartOrContinue" | "Suspend") => {
+  const command = (ordinal: number, command: "Begin" | "Resume" | "Suspend") => {
     const brandedOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)
     return {
       event: PlannedAttemptExecutorCommandIntendedEvent.make({
@@ -383,6 +385,19 @@ it("folds the executor command, projection, response, state, and report evidence
         version: workflowJournalEventVersion
       }),
       key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, brandedOrdinal)
+    }
+  }
+  const response = (commandOrdinal: number, report: PlannedAttemptExecutorReport) => {
+    const brandedOrdinal = PlannedAttemptExecutorCommandOrdinal.make(commandOrdinal)
+    return {
+      event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: brandedOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        report,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, brandedOrdinal)
     }
   }
   const report = (ordinal: number, report: PlannedAttemptExecutorReport) => {
@@ -445,10 +460,15 @@ it("folds the executor command, projection, response, state, and report evidence
       key: plannedAttemptExecutorCommandResponseContradictedRecordKey(plannedAttempt.attemptId, brandedOrdinal)
     }
   }
-  const running = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-  const safelySuspended = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-  const terminal = PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-  const foreignRunning = PlannedAttemptExecutorReport.cases.Running.make({ correlation: foreignCorrelation })
+  const running = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+  const safelySuspended = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+  const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+    correlation,
+    result: { _tag: "Completed" }
+  })
+  const foreignRunning = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+    correlation: foreignCorrelation
+  })
   const recordsFor = (
     rows: ReadonlyArray<{ readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] }>
   ) => [
@@ -459,18 +479,21 @@ it("folds the executor command, projection, response, state, and report evidence
     {
       expected: "ValidWorkflowJournalHistory" as const,
       rows: [
-        command(1, "StartOrContinue"),
+        command(1, "Begin"),
+        response(1, running),
         report(1, running),
         command(2, "Suspend"),
+        response(2, safelySuspended),
         report(2, safelySuspended),
-        command(3, "StartOrContinue"),
+        command(3, "Resume"),
+        response(3, terminal),
         report(3, terminal)
       ]
     },
     {
       expected: "ValidWorkflowJournalHistory" as const,
       rows: [
-        command(1, "StartOrContinue"),
+        command(1, "Begin"),
         projection(
           1,
           1,
@@ -481,7 +504,7 @@ it("folds the executor command, projection, response, state, and report evidence
     {
       expected: "ValidWorkflowJournalHistory" as const,
       rows: [
-        command(1, "StartOrContinue"),
+        command(1, "Begin"),
         projection(
           1,
           1,
@@ -493,7 +516,7 @@ it("folds the executor command, projection, response, state, and report evidence
     },
     {
       expected: "ValidWorkflowJournalHistory" as const,
-      rows: [command(1, "StartOrContinue"), responseContradiction(1, foreignRunning)]
+      rows: [command(1, "Begin"), responseContradiction(1, foreignRunning)]
     },
     {
       expected: "ValidWorkflowJournalHistory" as const,
@@ -511,10 +534,7 @@ it("folds the executor command, projection, response, state, and report evidence
         state(1, PlannedAttemptExecutorStateObservation.cases.ExecutorReportContradiction.make({ observed: running }))
       ]
     },
-    {
-      expected: "InvalidWorkflowJournalHistory" as const,
-      rows: [command(1, "StartOrContinue"), command(1, "StartOrContinue")]
-    },
+    { expected: "InvalidWorkflowJournalHistory" as const, rows: [command(1, "Begin"), command(1, "Begin")] },
     { expected: "InvalidWorkflowJournalHistory" as const, rows: [report(1, running)] }
   ]
 

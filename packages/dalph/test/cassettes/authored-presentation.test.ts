@@ -40,11 +40,11 @@ describe("authored delivery landmarks", () => {
         subject: { _tag: "Run" }
       }),
       AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.make({
-        report: { _tag: "Running", attemptId: AttemptId.make("attempt:A:0") },
-        request: "StartOrContinue"
+        report: { _tag: "ExecutorWorkExecuting", attemptId: AttemptId.make("attempt:A:0") },
+        request: "Begin"
       }),
       AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.make({
-        report: { _tag: "SafelySuspended", attemptId: AttemptId.make("attempt:A:0") },
+        report: { _tag: "ExecutorWorkSafelySuspended", attemptId: AttemptId.make("attempt:A:0") },
         request: "Suspend"
       }),
       AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.make({}),
@@ -59,8 +59,8 @@ describe("authored delivery landmarks", () => {
       "Operator unpaused task A",
       "Operator unpaused task A while its executor request was in flight",
       "Operator paused the Run while its executor request was in flight",
-      "Attempt attempt:A:0 reported Running",
-      "Attempt attempt:A:0 reported SafelySuspended; its held position can now be released",
+      "Attempt attempt:A:0 reported ExecutorWorkExecuting",
+      "Attempt attempt:A:0 reported ExecutorWorkSafelySuspended; its held position can now be released",
       "The coordinator process died; the next activation reconstructs accepted journal history",
       null
     ])

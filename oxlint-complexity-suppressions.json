@@ -4,6 +4,16 @@
       "count": 6
     }
   },
+  "packages/orchestrator/src/coordination/frontier/task-claim-authority.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
   "packages/orchestrator/src/workflow/claim-authority-history.ts": {
     "complexity": {
       "count": 6
@@ -11,7 +21,7 @@
   },
   "packages/orchestrator/src/workflow/protocols/attempt-choice/restart-authority-evidence.ts": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/activation.ts": {
@@ -42,11 +52,6 @@
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/loop.ts": {
     "complexity": {
       "count": 2
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/disposition-cleanup/provenance-fixtures.ts": {
-    "complexity": {
-      "count": 1
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/provenance.ts": {

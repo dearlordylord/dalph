@@ -42,7 +42,7 @@ const diagnostic = ApplicationExitDiagnostic.make("journal write failed")
 const successfulSnapshot: ApplicationExitDrainSnapshot = {
   attempts: [
     ApplicationExitExecutorAttemptEvidence.NotStarted(),
-    ApplicationExitExecutorAttemptEvidence.SafelySuspended()
+    ApplicationExitExecutorAttemptEvidence.ExecutorWorkSafelySuspended()
   ],
   coordinatorLockHeld: false,
   fiberOpen: false,
@@ -93,13 +93,17 @@ describe("application Exit lifecycle decisions", () => {
   })
 
   it("releases a task-work position only for exact safe-or-terminal evidence", () => {
-    const running = PlannedAttemptExecutorReport.cases.Running.make({ correlation: expectedCorrelation })
-    const suspended = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: expectedCorrelation })
-    const terminal = PlannedAttemptExecutorReport.cases.Terminal.make({
+    const running = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: expectedCorrelation })
+    const suspended = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+      correlation: expectedCorrelation
+    })
+    const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
       correlation: expectedCorrelation,
       result: { _tag: "Completed" }
     })
-    const foreign = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: foreignCorrelation })
+    const foreign = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+      correlation: foreignCorrelation
+    })
 
     expect(decideExecutorPosition(expectedCorrelation, undefined)).toMatchObject({
       _tag: "RetainPosition",
@@ -107,7 +111,7 @@ describe("application Exit lifecycle decisions", () => {
     })
     expect(decideExecutorPosition(expectedCorrelation, running)).toMatchObject({
       _tag: "RetainPosition",
-      reason: "RunningIsUnsafe"
+      reason: "ExecutingIsUnsafe"
     })
     expect(decideExecutorPosition(expectedCorrelation, foreign)).toMatchObject({
       _tag: "RetainPosition",
@@ -115,11 +119,11 @@ describe("application Exit lifecycle decisions", () => {
     })
     expect(decideExecutorPosition(expectedCorrelation, suspended)).toMatchObject({
       _tag: "ReleasePosition",
-      evidence: "SafelySuspended"
+      evidence: "ExecutorWorkSafelySuspended"
     })
     expect(decideExecutorPosition(expectedCorrelation, terminal)).toMatchObject({
       _tag: "ReleasePosition",
-      evidence: "Terminal"
+      evidence: "ExecutorWorkTerminal"
     })
   })
 
@@ -132,8 +136,8 @@ describe("application Exit lifecycle decisions", () => {
       decideApplicationExitDrain({
         ...successfulSnapshot,
         attempts: [
-          ApplicationExitExecutorAttemptEvidence.Running(),
-          ApplicationExitExecutorAttemptEvidence.SafelySuspended()
+          ApplicationExitExecutorAttemptEvidence.ExecutorWorkExecuting(),
+          ApplicationExitExecutorAttemptEvidence.ExecutorWorkSafelySuspended()
         ]
       })._tag
     ).toBe("ContinueDraining")
@@ -152,7 +156,7 @@ describe("application Exit lifecycle decisions", () => {
     expect(
       decideApplicationExitDrain({
         ...successfulSnapshot,
-        attempts: [ApplicationExitExecutorAttemptEvidence.Running()],
+        attempts: [ApplicationExitExecutorAttemptEvidence.ExecutorWorkExecuting()],
         producedWrite: ApplicationExitProducedWriteEvidence.Failed({ diagnostic })
       })._tag
     ).toBe("ContinueDraining")
@@ -162,11 +166,11 @@ describe("application Exit lifecycle decisions", () => {
     const attemptEvidence = [
       ApplicationExitExecutorAttemptEvidence.FastSuspensionCalled(),
       ApplicationExitExecutorAttemptEvidence.NotStarted(),
-      ApplicationExitExecutorAttemptEvidence.Running(),
-      ApplicationExitExecutorAttemptEvidence.SafelySuspended(),
+      ApplicationExitExecutorAttemptEvidence.ExecutorWorkExecuting(),
+      ApplicationExitExecutorAttemptEvidence.ExecutorWorkSafelySuspended(),
       ApplicationExitExecutorAttemptEvidence.SuspensionCallFailed({ diagnostic }),
       ApplicationExitExecutorAttemptEvidence.SuspensionIntentRecorded(),
-      ApplicationExitExecutorAttemptEvidence.Terminal()
+      ApplicationExitExecutorAttemptEvidence.ExecutorWorkTerminal()
     ]
 
     for (const attempt of attemptEvidence) {

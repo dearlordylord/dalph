@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest"
+import { appendAcceptedSafeExecutorHistory } from "../../../../test/support/planned-attempt-executor-history.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import {
@@ -8,7 +9,6 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutor,
-  PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -36,11 +36,13 @@ import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import {
   reduceWorkflowJournalHistory,
   replacementFollowsIntegrationCutoff,
-  replacementProofIsSafeOrLateAccepted,
+  replacementProofIsAcceptedSafe,
   replacementResourceConflict
 } from "../../../coordination/reconstruction/history.js"
 import {
+  deriveJournalResponsibilityFacts,
   gitReadIntentHasOutcome,
+  hasUnfinishedRunResponsibility,
   makeRunRecoveryProjection,
   recordBeforePause,
   restartReplacementDisposition
@@ -57,11 +59,16 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   taskClaimReacquisitionDirectedRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { InRunJournal, JournalStorageUnavailable, JournalStore } from "../../../workflow-journal/store.js"
+import {
+  InRunJournal,
+  JournalStorageUnavailable,
+  JournalStore,
+  type JournalRecord
+} from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
@@ -71,7 +78,7 @@ import {
   WorkflowInterpreter
 } from "../../interpretation/interpreter.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { terminalRestartQuiescence } from "./restart-authority.js"
+import { currentRestartQuiescence, terminalRestartQuiescence } from "./restart-authority.js"
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
@@ -97,10 +104,12 @@ import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
-  PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorWorkReportedEvent
 } from "../planned-attempt-executor-work/events.js"
-import { continuePlannedAttemptExecutorWork } from "../planned-attempt-executor-work/guarded-protocol.js"
+import { resumePlannedAttemptExecutorWork } from "../planned-attempt-executor-work/guarded-protocol.js"
 import { plannedAttemptProtocolControllerLayer } from "../planned-attempt-executor-work/protocol-controller.js"
 import { AttemptWorktreeLost } from "../planned-attempt-worktree-observation/protocol.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../task-attempt-planning/plan.js"
@@ -223,34 +232,7 @@ const appendExposedRestart = Effect.gen(function* () {
     attemptPlanRecordKey(plannedAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
   )
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-  )
-  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-    PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "StartOrContinue",
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      ordinal: commandOrdinal,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: reportOrdinal,
-      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }),
-      version: workflowJournalEventVersion
-    })
-  )
+  yield* appendAcceptedSafeExecutorHistory(plannedAttempt)
   const originalSpecificationRead = makeTaskWorkSpecificationObservationOperation(
     OperationId.make("attempt-restart-original-F1"),
     target,
@@ -292,8 +274,9 @@ interface RestartHarnessOptions {
   readonly additionalRecordedAttempt?: boolean
   readonly ambiguousReplacementAppend?: boolean
   readonly claim?: "Absent" | "Exact" | "Foreign" | "Unreadable"
-  readonly executor?: "Completed" | "Contradictory" | "Failed" | "Running" | "RunningUntilReadOnlySafe" | "Unavailable"
+  readonly executor?: "Completed" | "Failed"
   readonly factsChangeDuringTargetRead?: boolean
+  readonly foreignSpecificationAfterChoice?: boolean
   readonly planner?: "Exact" | "Wrong"
   readonly postChoiceClaimReacquired?: boolean
   readonly specification?: "F2" | "F3" | "F3ThenF2"
@@ -318,6 +301,32 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       _tag: "AttemptRestartWait",
       reason: "IntegrationTargetUnavailable"
     })
+    if (options.foreignSpecificationAfterChoice === true) {
+      const foreignOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("attempt-restart-foreign-target-F3"),
+        FixtureTarget.make("attempt-restart-foreign-target"),
+        taskId
+      )
+      const foreignSpecification = makeTaskWorkSpecification({
+        body: "foreign target F3",
+        taskId,
+        title: "foreign target F3"
+      })
+      const journal = yield* JournalStore
+      yield* journal.append(
+        runId,
+        intentRecordKey(foreignOperation.operationId),
+        taskTrackerReadIntent(foreignOperation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(foreignOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          foreignOperation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(foreignOperation, foreignSpecification)
+        )
+      )
+    }
     if (options.postChoiceClaimReacquired === true) {
       const journal = yield* JournalStore
       const lossRead = makeTaskClaimObservationOperation(
@@ -377,51 +386,41 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
     const plannerCalls = yield* Ref.make(0)
     const plannerOrdinals = yield* Ref.make<ReadonlyArray<number>>([])
     const specificationReads = yield* Ref.make(0)
-    const suspensionCalls = yield* Ref.make(0)
     const executorReport =
       options.executor === "Completed"
-        ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-        : options.executor === "Failed"
-          ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
-          : PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-    const exactProjection = (report: PlannedAttemptExecutorReport) =>
-      PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+        ? PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } })
+        : PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
     const executor = PlannedAttemptExecutor.of({
-      project: () =>
-        options.executor === "Unavailable"
-          ? Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }))
-          : options.executor === "RunningUntilReadOnlySafe"
-            ? Effect.succeed(exactProjection(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })))
-            : options.executor === "Contradictory"
-              ? Effect.succeed(
-                  PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
-                    expected: correlation,
-                    observed: PlannedAttemptExecutorReport.cases.Running.make({
-                      correlation: { attemptId: AttemptId.make("attempt-restart-other"), runId }
-                    })
-                  })
-                )
-              : unused(),
-      requestSuspension: () => Ref.update(suspensionCalls, (count) => count + 1).pipe(Effect.as(executorReport)),
-      startOrContinue: () => Effect.succeed(executorReport)
+      observe: unused,
+      requestSuspension: unused,
+      begin: () => Effect.die("Restart must not begin already safely suspended executor work"),
+      resume: unused
     })
-    if (options.executor === "Unavailable" || options.executor === "Contradictory") {
-      const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
-      yield* (yield* JournalStore).append(
+    if (options.executor !== undefined) {
+      const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+      const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(3)
+      const journal = yield* JournalStore
+      yield* journal.append(
         runId,
-        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-        PlannedAttemptExecutorCommandIntendedEvent.make({
-          command: "StartOrContinue",
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          ordinal: commandOrdinal,
+        plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+        PlannedAttemptExecutorStateObservedEvent.make({
+          observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+            report: executorReport
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: observationOrdinal,
           plannedAttempt,
           version: workflowJournalEventVersion
         })
       )
-    } else if (options.executor !== undefined) {
-      yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
-        Effect.provideService(PlannedAttemptExecutor, executor)
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: reportOrdinal,
+          report: executorReport,
+          version: workflowJournalEventVersion
+        })
       )
     }
     const durableJournal = yield* JournalStore
@@ -611,86 +610,185 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       plannerCalls: yield* Ref.get(plannerCalls),
       plannerOrdinals: yield* Ref.get(plannerOrdinals),
       records: yield* (yield* JournalStore).read(runId),
-      result,
-      suspensionCalls: yield* Ref.get(suspensionCalls)
+      result
     }
   })
 
-it("accepts only safe suspension or a late accepted terminal as replacement quiescence", () => {
-  const applicationPosition = JournalPosition.make(10)
+it.effect("keeps target-A restart advancement valid after a later foreign-target specification", () =>
+  Effect.gen(function* () {
+    const result = yield* exerciseRestart({ foreignSpecificationAfterChoice: true })
+
+    expect(result.result._tag).toBe("PlannedAttemptReplacementRecorded")
+    expect(result.plannerCalls).toBe(1)
+    expect(reduceWorkflowJournalHistory(runId, result.records)._tag).toBe("ValidWorkflowJournalHistory")
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it("accepts only the latest accepted safe suspension as replacement quiescence", () => {
   const proof = (report: PlannedAttemptExecutorReport, observedAt: number) => ({
     observedAt: JournalPosition.make(observedAt),
     report,
-    source: { _tag: "CommandResponse" as const, ordinal: PlannedAttemptExecutorReportOrdinal.make(1) }
+    source: { _tag: "AcceptedReport" as const, ordinal: PlannedAttemptExecutorReportOrdinal.make(2) }
   })
   const acceptedResult = acceptedResultFixture(targetHeadSha)
   expect(
-    replacementProofIsSafeOrLateAccepted(
-      proof(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }), 9),
-      applicationPosition
+    replacementProofIsAcceptedSafe(
+      proof(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }), 9)
     )
   ).toBe(true)
   expect(
-    replacementProofIsSafeOrLateAccepted(
-      proof(PlannedAttemptExecutorReport.cases.Running.make({ correlation }), 11),
-      applicationPosition
+    replacementProofIsAcceptedSafe(
+      proof(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }), 11)
     )
   ).toBe(false)
   expect(
-    replacementProofIsSafeOrLateAccepted(
+    replacementProofIsAcceptedSafe(
       proof(
-        PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Accepted", acceptedResult } }),
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation,
+          result: { _tag: "Accepted", acceptedResult }
+        }),
         11
-      ),
-      applicationPosition
-    )
-  ).toBe(true)
-  expect(
-    replacementProofIsSafeOrLateAccepted(
-      proof(
-        PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Accepted", acceptedResult } }),
-        9
-      ),
-      applicationPosition
+      )
     )
   ).toBe(false)
   expect(
-    replacementProofIsSafeOrLateAccepted(
-      proof(PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }), 11),
-      applicationPosition
+    replacementProofIsAcceptedSafe(
+      proof(
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation,
+          result: { _tag: "Accepted", acceptedResult }
+        }),
+        9
+      )
+    )
+  ).toBe(false)
+  expect(
+    replacementProofIsAcceptedSafe(
+      proof(
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } }),
+        11
+      )
     )
   ).toBe(false)
 })
 
-it("classifies every terminal replacement-quiescence result at the Restart application boundary", () => {
-  const application = { position: JournalPosition.make(10) } as Parameters<typeof terminalRestartQuiescence>[1]
+it("rejects every terminal replacement-quiescence result", () => {
   const evidence = (report: PlannedAttemptExecutorReport, observedAt: number) =>
     ({ observedAt: JournalPosition.make(observedAt), report }) as Parameters<typeof terminalRestartQuiescence>[0]
-  const accepted = PlannedAttemptExecutorReport.cases.Terminal.make({
+  const accepted = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
     correlation,
     result: { _tag: "Accepted", acceptedResult: acceptedResultFixture(targetHeadSha) }
   })
   expect(
     terminalRestartQuiescence(
-      evidence(PlannedAttemptExecutorReport.cases.Running.make({ correlation }), 11),
-      application
+      evidence(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }), 11)
     )
   ).toEqual({ _tag: "Unproved" })
   expect(
     terminalRestartQuiescence(
-      evidence(PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }), 11),
-      application
+      evidence(
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } }),
+        11
+      )
     )
   ).toMatchObject({ _tag: "Rejected", reason: "CompletedDoesNotAuthorizeReplacement" })
   expect(
     terminalRestartQuiescence(
-      evidence(PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } }), 11),
-      application
+      evidence(
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } }),
+        11
+      )
     )
   ).toMatchObject({ _tag: "Rejected", reason: "FailedDoesNotAuthorizeReplacement" })
-  expect(terminalRestartQuiescence(evidence(accepted, 11), application)).toMatchObject({ _tag: "Proof" })
-  expect(terminalRestartQuiescence(evidence(accepted, 9), application)).toEqual({ _tag: "Unproved" })
+  expect(terminalRestartQuiescence(evidence(accepted, 11))).toMatchObject({
+    _tag: "Rejected",
+    reason: "AcceptedDoesNotAuthorizeReplacement"
+  })
+  expect(terminalRestartQuiescence(evidence(accepted, 9))).toMatchObject({
+    _tag: "Rejected",
+    reason: "AcceptedDoesNotAuthorizeReplacement"
+  })
 })
+
+it.effect("keeps replacement pending or rejects it when executor authority is not a current safe proof", () =>
+  Effect.gen(function* () {
+    expect(yield* currentRestartQuiescence([], subject)).toEqual({ _tag: "Pending", reason: "ExecutorUnavailable" })
+
+    const pendingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    const pendingObservationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+    const pendingObservation: JournalRecord = {
+      event: PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: pendingReport }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: pendingObservationOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, pendingObservationOrdinal),
+      position: JournalPosition.make(1),
+      runId
+    }
+    expect(yield* currentRestartQuiescence([pendingObservation], subject)).toEqual({
+      _tag: "Pending",
+      reason: "ExecutorLifecycleAcceptancePending"
+    })
+
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const executingRecord: JournalRecord = {
+      event: PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+        report: executing,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorWorkReportedRecordKey(
+        plannedAttempt.attemptId,
+        PlannedAttemptExecutorReportOrdinal.make(1)
+      ),
+      position: JournalPosition.make(1),
+      runId
+    }
+    expect(yield* currentRestartQuiescence([executingRecord], subject)).toEqual({
+      _tag: "Rejected",
+      reason: "ExecutingDoesNotAuthorizeReplacement"
+    })
+
+    const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    const safeOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+    const laterCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    const safeRecord: JournalRecord = {
+      event: PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: safeOrdinal,
+        report: safe,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, safeOrdinal),
+      position: JournalPosition.make(1),
+      runId
+    }
+    const laterCommand: JournalRecord = {
+      event: PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Resume",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: laterCommandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, laterCommandOrdinal),
+      position: JournalPosition.make(2),
+      runId
+    }
+    expect(yield* currentRestartQuiescence([safeRecord, laterCommand], subject)).toEqual({
+      _tag: "Rejected",
+      reason: "LaterExecutorCommandInvalidatedChoice"
+    })
+  })
+)
 
 it("classifies every resource event that would invalidate a planned-attempt replacement", () => {
   type ResourceEvent = Parameters<typeof replacementResourceConflict>[0]
@@ -829,7 +927,12 @@ it.effect("atomically supersedes exact P1 with clean P2 from fresh F2 K1 W1 and 
     const allocator = OperationIdAllocator.of({
       allocate: () => Effect.succeed(OperationId.make("attempt-restart-plan-P2"))
     })
-    const executor = PlannedAttemptExecutor.of({ project: unused, requestSuspension: unused, startOrContinue: unused })
+    const executor = PlannedAttemptExecutor.of({
+      observe: unused,
+      requestSuspension: unused,
+      begin: unused,
+      resume: unused
+    })
 
     const [first, redelivery] = yield* Effect.all(
       [
@@ -892,39 +995,7 @@ it.effect("exposes the same exact attempt choice for a replacement-recorded succ
   Effect.gen(function* () {
     yield* exerciseRestart({})
     const journal = yield* JournalStore
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(successorAttempt.attemptId),
-      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-        plannedAttempt: successorAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(successorAttempt.attemptId, commandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: commandOrdinal,
-        plannedAttempt: successorAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkReportedRecordKey(successorAttempt.attemptId, reportOrdinal),
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: reportOrdinal,
-        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-          correlation: { attemptId: successorAttempt.attemptId, runId }
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
+    yield* appendAcceptedSafeExecutorHistory(successorAttempt)
     const specificationRead = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("attempt-restart-successor-F3"),
       target,
@@ -1185,7 +1256,7 @@ it.effect("keeps P1 restart eligibility independent from a later task C graph re
   )
 )
 
-it.effect("lets a new F3 Continue replace the stale F2 Restart recovery disposition", () =>
+it.effect("rejects a new F3 Continue after the earlier F2 Restart choice", () =>
   Effect.gen(function* () {
     yield* appendExposedRestart
     const journal = yield* JournalStore
@@ -1208,19 +1279,22 @@ it.effect("lets a new F3 Continue replace the stale F2 Restart recovery disposit
       )
     )
     const continueRequestId = AttemptChoiceRequestId.make({ nonce: "attempt-restart-new-choice-D2", runId })
-    yield* (yield* AttemptChoiceControl).apply({
-      choice: "ContinueExistingAttempt",
-      requestId: continueRequestId,
-      subject: { observedTaskRevision: thirdSpecification.fingerprint, plannedAttempt }
-    })
+    const rejected = yield* (yield* AttemptChoiceControl)
+      .apply({
+        choice: "ContinueExistingAttempt",
+        requestId: continueRequestId,
+        subject: { observedTaskRevision: thirdSpecification.fingerprint, plannedAttempt }
+      })
+      .pipe(Effect.flip)
+    expect(rejected).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "TerminalChoiceAlreadyApplied" })
 
     const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget)
     const frontier = (yield* recovery.readDeliveryProjection).frontier
 
-    expect(frontier.explanations).not.toContainEqual(
+    expect(frontier.explanations).toContainEqual(
       expect.objectContaining({ _tag: "AttemptRestartRejected", reason: "NewFingerprintChoiceRequired", taskId })
     )
-    expect(frontier.transitions).toContainEqual(
+    expect(frontier.transitions).not.toContainEqual(
       expect.objectContaining({ _tag: "ObservePlannedAttemptContinuationGraph", plannedAttempt })
     )
   }).pipe(
@@ -1563,24 +1637,6 @@ const nonAuthorizingCases = [
     tag: "AttemptRestartPending"
   },
   {
-    name: "waits when executor state is unavailable",
-    options: { executor: "Unavailable" },
-    reason: "ExecutorUnavailable",
-    tag: "AttemptRestartPending"
-  },
-  {
-    name: "waits when executor correlation is contradictory",
-    options: { executor: "Contradictory" },
-    reason: "ExecutorContradictory",
-    tag: "AttemptRestartPending"
-  },
-  {
-    name: "waits when the executor still reports Running",
-    options: { executor: "Running" },
-    reason: "ExecutorRunning",
-    tag: "AttemptRestartPending"
-  },
-  {
     name: "rejects replacement after a Completed terminal",
     options: { executor: "Completed" },
     reason: "CompletedDoesNotAuthorizeReplacement",
@@ -1632,10 +1688,27 @@ for (const fixture of nonAuthorizingCases) {
             )
             expect(reduceWorkflowJournalHistory(runId, withoutApplication)._tag).toBe("InvalidWorkflowJournalHistory")
           }
-          expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
-          expect(
-            restartReplacementDisposition(records, plannedAttempt, Option.none(), Option.some(integrationTarget))
-          ).toMatchObject({
+          const reduction = reduceWorkflowJournalHistory(runId, records)
+          expect(reduction._tag).toBe("ValidWorkflowJournalHistory")
+          if (
+            reduction._tag === "ValidWorkflowJournalHistory" &&
+            (fixture.reason === "CompletedDoesNotAuthorizeReplacement" ||
+              fixture.reason === "FailedDoesNotAuthorizeReplacement")
+          ) {
+            expect(deriveJournalResponsibilityFacts(reduction.runState)).toContainEqual(
+              expect.objectContaining({
+                disposition: expect.objectContaining({ _tag: "PlannedAttemptExecutorWorkTerminal" })
+              })
+            )
+            expect(hasUnfinishedRunResponsibility(reduction.runState)).toBe(false)
+          }
+          const disposition = restartReplacementDisposition(
+            records,
+            plannedAttempt,
+            Option.none(),
+            Option.some(integrationTarget)
+          )
+          expect(disposition).toMatchObject({
             _tag: fixture.tag === "AttemptRestartPending" ? "AttemptRestartWait" : fixture.tag,
             reason: fixture.reason
           })
@@ -1648,28 +1721,35 @@ for (const fixture of nonAuthorizingCases) {
   )
 }
 
-it.effect("uses read-only safe evidence after three consecutive Running suspension responses", () =>
-  exerciseRestart({ executor: "RunningUntilReadOnlySafe", restartAttempts: 4 }).pipe(
-    Effect.tap(({ records, result, suspensionCalls }) =>
-      Effect.sync(() => {
-        expect(result._tag).toBe("PlannedAttemptReplacementRecorded")
-        expect(suspensionCalls).toBe(3)
-        expect(
-          records.filter(
-            ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
-          )
-        ).toHaveLength(3)
-        expect(
-          records.some(
-            ({ event }) =>
-              event._tag === "PlannedAttemptExecutorStateObserved" &&
-              event.observation._tag === "ExactExecutorReport" &&
-              event.observation.report._tag === "SafelySuspended"
-          )
-        ).toBe(true)
-        expect(records.filter(({ event }) => event._tag === "PlannedAttemptReplaced")).toHaveLength(1)
-      })
-    ),
+it.effect("rejects Resume after applied Restart before recording intent or contacting the executor", () =>
+  Effect.gen(function* () {
+    yield* appendExposedRestart
+    const resumeCalls = yield* Ref.make(0)
+    const rejected = yield* resumePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          begin: unused,
+          observe: unused,
+          requestSuspension: unused,
+          resume: () =>
+            Ref.update(resumeCalls, (count) => count + 1).pipe(
+              Effect.as(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+            )
+        })
+      ),
+      Effect.flip
+    )
+    const records = yield* (yield* JournalStore).read(runId)
+    expect(rejected).toMatchObject({
+      _tag: "PlannedAttemptExecutorResumeInvalidatedByTerminalChoice",
+      choice: "RestartTaskImplementation",
+      correlation
+    })
+    expect(yield* Ref.get(resumeCalls)).toBe(0)
+    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toHaveLength(2)
+    expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+  }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
     Effect.provide(memoryJournalTestLayer)

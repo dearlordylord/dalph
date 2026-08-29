@@ -37,6 +37,7 @@ import type {
   CleanupMutationOrdinal,
   CleanupObservationOrdinal
 } from "../workflow/protocols/disposition-cleanup/disposition.js"
+import type { PlannedAttemptContinuationWitness } from "../workflow/protocols/planned-attempt-continuation/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -219,9 +220,20 @@ export const plannedAttemptExecutorWorkResponsibilityBeganRecordKey = (attemptId
 /** Stable key for one exact continuation authorization and its current-fact witnesses. */
 export const plannedAttemptContinuationAuthorizedRecordKey = (
   attemptId: AttemptId,
-  witnessOperationIds: ReadonlyArray<OperationId>
-): JournalRecordKey =>
-  JournalRecordKey.make(`attempt:${attemptId}:continuation-authorized:${[...witnessOperationIds].toSorted().join(":")}`)
+  witness: PlannedAttemptContinuationWitness
+): JournalRecordKey => {
+  const observation = witness.activeTaskContinuationRead
+  const witnessOperationIds = [
+    observation.graphObservationOperationId,
+    observation.taskClaimObservationOperationId,
+    observation.taskWorkSpecificationObservationOperationId,
+    witness.targetLineageObservationOperationId,
+    witness.worktreeObservationOperationId
+  ]
+  return JournalRecordKey.make(
+    `attempt:${attemptId}:continuation-authorized:${witnessOperationIds.toSorted().join(":")}`
+  )
+}
 
 export const plannedAttemptExecutorCommandIntendedRecordKey = (
   attemptId: AttemptId,
@@ -242,6 +254,12 @@ export const plannedAttemptExecutorCommandResponseContradictedRecordKey = (
   commandOrdinal: PlannedAttemptExecutorCommandOrdinal
 ): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:executor-command:${commandOrdinal}:response-contradiction`)
+
+export const plannedAttemptExecutorCommandResponseObservedRecordKey = (
+  attemptId: AttemptId,
+  commandOrdinal: PlannedAttemptExecutorCommandOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:executor-command:${commandOrdinal}:response-observation`)
 
 export const plannedAttemptExecutorWorkReportedRecordKey = (
   attemptId: AttemptId,

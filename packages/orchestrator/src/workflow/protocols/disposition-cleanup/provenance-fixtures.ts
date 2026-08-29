@@ -34,6 +34,7 @@ import {
   plannedAttemptReplacedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import {
@@ -96,6 +97,7 @@ import { PlannedAttemptReplacedEvent, PlannedAttemptReplacementWitness } from ".
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -111,7 +113,8 @@ export {
 
 const quarantinePositionOffset = 5
 const activityAbsencePositionOffset = 4
-const startupCleanupQuiescenceOrdinal = 2
+const suspensionCommandOrdinal = 2
+const safelySuspendedReportOrdinal = 2
 
 /** Builds the same typed P1 -> P2 terminal evidence used by cleanup tests and cassettes. */
 export const replacementProvenanceFor = (
@@ -139,7 +142,7 @@ export const replacementProvenanceFor = (
       headSha: plannedAttempt.baseSha,
       worktree: plannedAttempt.worktree
     }),
-    quiescenceProof: { _tag: "CommandResponse", reportOrdinal: quiescenceReportOrdinal },
+    quiescenceProof: { _tag: "AcceptedReport", reportOrdinal: quiescenceReportOrdinal },
     specificationObservationOperationId: ids.specificationObservationOperationId,
     targetHeadSha: successorAttempt.baseSha,
     targetLineageObservationOperationId: ids.targetLineageObservationOperationId
@@ -167,10 +170,7 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
   chronology: "Cassette" | "StartupValid" = "Cassette"
 ) {
   const journal = yield* JournalStore
-  const quiescenceReportOrdinal =
-    chronology === "StartupValid"
-      ? PlannedAttemptExecutorReportOrdinal.make(startupCleanupQuiescenceOrdinal)
-      : PlannedAttemptExecutorReportOrdinal.make(1)
+  const quiescenceReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(safelySuspendedReportOrdinal)
   const event = replacementProvenanceFor(plannedAttempt, successorAttempt, quiescenceReportOrdinal)
   const ids = replacementFixtureIdsFor(plannedAttempt)
   const began = (yield* journal.read(plannedAttempt.runId)).find(
@@ -299,53 +299,91 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
       )
     )
   }
-  const appendExecutorQuiescenceProof = (
-    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
-    reportOrdinal: PlannedAttemptExecutorReportOrdinal,
-    beginResponsibility: boolean
-  ) =>
+  const appendExecutorQuiescenceProof = () =>
     Effect.gen(function* () {
-      if (beginResponsibility) {
-        yield* journal.append(
-          plannedAttempt.runId,
-          plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-          PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-            plannedAttempt,
-            version: workflowJournalEventVersion
-          })
-        )
-      }
       yield* journal.append(
         plannedAttempt.runId,
-        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-        PlannedAttemptExecutorCommandIntendedEvent.make({
-          command: "StartOrContinue",
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          ordinal: commandOrdinal,
+        plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
           plannedAttempt,
           version: workflowJournalEventVersion
         })
       )
+      const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
       yield* journal.append(
         plannedAttempt.runId,
-        plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, beginOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Begin",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: beginOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+      })
+      yield* journal.append(
+        plannedAttempt.runId,
+        plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, beginOrdinal),
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: beginOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt,
+          report: executing,
+          version: workflowJournalEventVersion
+        })
+      )
+      const executingReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+      yield* journal.append(
+        plannedAttempt.runId,
+        plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, executingReportOrdinal),
         PlannedAttemptExecutorWorkReportedEvent.make({
-          ordinal: reportOrdinal,
-          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-            correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
-          }),
+          ordinal: executingReportOrdinal,
+          report: executing,
+          version: workflowJournalEventVersion
+        })
+      )
+      const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(suspensionCommandOrdinal)
+      yield* journal.append(
+        plannedAttempt.runId,
+        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Suspend",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: suspendOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const safelySuspended = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+      })
+      yield* journal.append(
+        plannedAttempt.runId,
+        plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: suspendOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt,
+          report: safelySuspended,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, quiescenceReportOrdinal),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: quiescenceReportOrdinal,
+          report: safelySuspended,
           version: workflowJournalEventVersion
         })
       )
     })
-  if (chronology === "StartupValid") {
-    yield* appendExecutorQuiescenceProof(
-      PlannedAttemptExecutorCommandOrdinal.make(1),
-      PlannedAttemptExecutorReportOrdinal.make(1),
-      true
-    )
-  }
+  yield* appendExecutorQuiescenceProof()
   yield* journal.append(
     plannedAttempt.runId,
     attemptChoiceAppliedRecordKey(event.requestId),
@@ -357,11 +395,6 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
       subject: event.subject,
       version: workflowJournalEventVersion
     })
-  )
-  yield* appendExecutorQuiescenceProof(
-    PlannedAttemptExecutorCommandOrdinal.make(chronology === "StartupValid" ? startupCleanupQuiescenceOrdinal : 1),
-    quiescenceReportOrdinal,
-    chronology === "Cassette"
   )
   yield* appendTrackerIntent(graphOperation)
   yield* journal.append(
@@ -494,6 +527,82 @@ export const appendAbandonedProvenance = Effect.fn("DispositionCleanupTest.appen
   )
   yield* journal.append(
     plannedAttempt.runId,
+    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+  )
+  const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, beginOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Begin",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: beginOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+  const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, beginOrdinal),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal: beginOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report: executing,
+      version: workflowJournalEventVersion
+    })
+  )
+  const executingReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, executingReportOrdinal),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: executingReportOrdinal,
+      report: executing,
+      version: workflowJournalEventVersion
+    })
+  )
+  const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(suspensionCommandOrdinal)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Suspend",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: suspendOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const safelySuspended = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal: suspendOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report: safelySuspended,
+      version: workflowJournalEventVersion
+    })
+  )
+  const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(safelySuspendedReportOrdinal)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: reportOrdinal,
+      report: safelySuspended,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
     attemptChoiceAppliedRecordKey(requestId),
     AttemptChoiceAppliedEvent.make({
       choice: "StopTaskImplementation",
@@ -504,36 +613,6 @@ export const appendAbandonedProvenance = Effect.fn("DispositionCleanupTest.appen
       version: workflowJournalEventVersion
     })
   )
-  yield* journal.append(
-    plannedAttempt.runId,
-    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-  )
-  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-  yield* journal.append(
-    plannedAttempt.runId,
-    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-    PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "StartOrContinue",
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      ordinal: commandOrdinal,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-  yield* journal.append(
-    plannedAttempt.runId,
-    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: reportOrdinal,
-      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
-      }),
-      version: workflowJournalEventVersion
-    })
-  )
   const abandonment = yield* journal.append(
     plannedAttempt.runId,
     attemptImplementationAbandonedRecordKey(requestId),
@@ -541,7 +620,7 @@ export const appendAbandonedProvenance = Effect.fn("DispositionCleanupTest.appen
       expectedClaim: claim,
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
-      proof: { _tag: "CommandResponse", reportOrdinal },
+      proof: { _tag: "AcceptedReport", reportOrdinal },
       requestId,
       subject,
       version: workflowJournalEventVersion

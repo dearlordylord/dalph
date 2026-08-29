@@ -1,6 +1,7 @@
 import { Option } from "effect"
-import type { AttemptId, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
+import { TaskWorkSpecification, type AttemptId, type PlannedTaskAttempt, type TaskId } from "@dalph/contracts"
 import type { Task } from "../../authorities/task-tracker/task.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -12,8 +13,7 @@ import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } fr
 import { recordedTaskAttemptPlans } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import {
   latestPlannedAttemptExecutorEvidence,
-  latestPlannedAttemptExecutorProjectionIssue,
-  plannedAttemptExecutorTaskWorkSpecifications
+  latestPlannedAttemptExecutorProjectionIssue
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { journalPrefixPredecessorOf } from "../../workflow-journal/prefix-lineage.js"
 
@@ -45,10 +45,10 @@ const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
           taskId: step.task.id,
           taskRevision: taskRevisionFor(step.task)
         })
-      : step._tag === "StartPlannedAttemptExecutorWork" || step._tag === "ContinuePlannedAttemptExecutorWork"
-        ? step._tag === "StartPlannedAttemptExecutorWork"
-          ? RunnableFrontierTransition.StartPlannedAttemptExecutorWork({ plannedAttempt: step.plannedAttempt })
-          : RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      : step._tag === "BeginPlannedAttemptExecutorWork" || step._tag === "ObservePlannedAttemptExecutorWork"
+        ? step._tag === "BeginPlannedAttemptExecutorWork"
+          ? RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({ plannedAttempt: step.plannedAttempt })
+          : RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
               acceptedProgress: step.acceptedProgress,
               plannedAttempt: step.plannedAttempt
             })
@@ -77,18 +77,37 @@ const observedOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySe
   return observed
 }
 
-const plannedSpecificationFor = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) =>
-  plannedAttemptExecutorTaskWorkSpecifications(records).findLast(
-    (specification) =>
-      specification.taskId === plannedAttempt.taskId && specification.fingerprint === plannedAttempt.taskRevision
+const plannedSpecificationFor = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  immutableRunTargetKey: string
+) => {
+  const specification = records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      taskTrackerTargetKey(event.observation.target) === immutableRunTargetKey &&
+      event.observation.factFamily.taskId === plannedAttempt.taskId &&
+      event.observation.factFamily.fingerprint === plannedAttempt.taskRevision
   )
+  return specification?.event._tag === "TaskTrackerFactsObserved" &&
+    specification.event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+    ? TaskWorkSpecification.make({
+        body: specification.event.observation.factFamily.body,
+        fingerprint: specification.event.observation.factFamily.fingerprint,
+        taskId: specification.event.observation.factFamily.taskId,
+        title: specification.event.observation.factFamily.title
+      })
+    : undefined
+}
 
 // eslint-disable-next-line complexity -- Closed journal occurrence families route to one next workflow operation.
 const journaledStepFor = (
   task: Task,
   records: ReadonlyArray<JournalRecord>,
   recoveredAttemptIds: ReadonlySet<AttemptId>,
-  observed: ReadonlySet<OperationId>
+  observed: ReadonlySet<OperationId>,
+  immutableRunTargetKey: string
 ): FreshWorkflowStepType => {
   const executorResponsibility = records.findLast(
     ({ event }) =>
@@ -103,14 +122,14 @@ const journaledStepFor = (
         event._tag === "PlannedAttemptExecutorWorkReported" &&
         event.report.correlation.attemptId === executorResponsibility.plannedAttempt.attemptId
     )?.event
-    const specification = plannedSpecificationFor(records, executorResponsibility.plannedAttempt)
+    const specification = plannedSpecificationFor(records, executorResponsibility.plannedAttempt, immutableRunTargetKey)
     /* v8 ignore start -- A fresh non-running report already transfers the task to terminal or integration responsibility. */
     if (
       report?._tag === "PlannedAttemptExecutorWorkReported" &&
-      report.report._tag === "Running" &&
+      report.report._tag === "ExecutorWorkExecuting" &&
       specification !== undefined
     ) {
-      return FreshWorkflowStep.ContinuePlannedAttemptExecutorWork({
+      return FreshWorkflowStep.ObservePlannedAttemptExecutorWork({
         acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: report.ordinal },
         plannedAttempt: executorResponsibility.plannedAttempt,
         specification,
@@ -128,10 +147,10 @@ const journaledStepFor = (
         event._tag === "TaskWorktreeReconciliationIntended" &&
         event.operation.plannedAttempt.attemptId === plan.plannedAttempt.attemptId
     )?.event
-    const specification = plannedSpecificationFor(records, plan.plannedAttempt)
+    const specification = plannedSpecificationFor(records, plan.plannedAttempt, immutableRunTargetKey)
     if (worktree?._tag === "TaskWorktreeReconciliationIntended" && observed.has(worktree.operation.operationId)) {
       if (specification !== undefined) {
-        return FreshWorkflowStep.StartPlannedAttemptExecutorWork({
+        return FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
           plannedAttempt: plan.plannedAttempt,
           specification,
           task
@@ -150,6 +169,7 @@ const journaledStepFor = (
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      taskTrackerTargetKey(event.observation.target) === immutableRunTargetKey &&
       event.observation.factFamily.taskId === task.id
   )?.event
   if (
@@ -183,6 +203,7 @@ const journaledStepFor = (
         ({ event }) =>
           event._tag === "TaskTrackerReadIntentRecorded" &&
           event.operation._tag === "ReadTrackerGraph" &&
+          taskTrackerTargetKey(event.operation.target) === immutableRunTargetKey &&
           event.operation.predecessorOperationIds.includes(claimOperationId) &&
           observed.has(event.operation.operationId)
       )?.event
@@ -205,6 +226,7 @@ const journaledStepFor = (
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
+      taskTrackerTargetKey(event.operation.target) === immutableRunTargetKey &&
       event.operation.predecessorOperationIds.length === 0 &&
       event.operation.readShape.explicitlyCoveredTaskIds.includes(task.id) &&
       observed.has(event.operation.operationId)
@@ -219,6 +241,7 @@ const journaledStepFor = (
         .flatMap(({ event }) =>
           event._tag === "TaskTrackerReadIntentRecorded" &&
           event.operation._tag === "ReadTrackerGraph" &&
+          taskTrackerTargetKey(event.operation.target) === immutableRunTargetKey &&
           observed.has(event.operation.operationId) &&
           (event.operation.readShape.explicitlyCoveredTaskIds.length === 0 ||
             event.operation.readShape.explicitlyCoveredTaskIds.includes(task.id))
@@ -253,7 +276,7 @@ const executorResponsibilityStillOwnsTask = (
   return (
     latestReport !== undefined &&
     latestReport.event._tag === "PlannedAttemptExecutorWorkReported" &&
-    latestReport.event.report._tag !== "Running"
+    latestReport.event.report._tag !== "ExecutorWorkExecuting"
   )
 }
 
@@ -287,10 +310,12 @@ export const responsibilityStillOwnsTask = (
 // eslint-disable-next-line complexity -- Delivery selection combines the accepted pause, responsibility, graph, and source variants.
 export const deriveFreshWorkflowDecisions = (
   frame: CurrentDeliveryFrame,
-  recoveredAttemptIds: ReadonlySet<AttemptId> = new Set()
+  recoveredAttemptIds: ReadonlySet<AttemptId> = new Set(),
+  immutableRunTarget: TrackerTarget
 ): ReadonlyArray<FreshWorkflowDecision> => {
   if (frame.pause.run._tag === "RunPaused") return []
   const records = frame.workflowHistory.records
+  const immutableRunTargetKey = taskTrackerTargetKey(immutableRunTarget)
   const responsibleTaskIds = new Set(
     frame.responsibility.entries
       .filter((responsibility) => responsibilityStillOwnsTask(responsibility, records, recoveredAttemptIds))
@@ -305,6 +330,7 @@ export const deriveFreshWorkflowDecisions = (
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
+      taskTrackerTargetKey(event.operation.target) === immutableRunTargetKey &&
       event.operation.readShape.explicitlyCoveredTaskIds.length === 0 &&
       observed.has(event.operation.operationId)
   )
@@ -341,7 +367,7 @@ export const deriveFreshWorkflowDecisions = (
   const decisions = candidateGraph
     .eligibleTasks()
     .filter(({ id }) => currentlyEligibleTaskIds.has(id) && !responsibleTaskIds.has(id) && !pauseCoveredTaskIds.has(id))
-    .map((task) => decisionFor(journaledStepFor(task, records, recoveredAttemptIds, observed)))
+    .map((task) => decisionFor(journaledStepFor(task, records, recoveredAttemptIds, observed, immutableRunTargetKey)))
   if (decisions.some(({ step }) => step._tag === "ReadCurrentTaskGraph")) {
     return decisions.filter(({ step }) => step._tag === "ReadCurrentTaskGraph")
   }
@@ -352,7 +378,7 @@ export const deriveFreshWorkflowDecisions = (
         ? claimRank
         : step._tag === "ReadTaskWorkSpecification"
           ? specificationRank
-          : step._tag === "StartPlannedAttemptExecutorWork" || step._tag === "ContinuePlannedAttemptExecutorWork"
+          : step._tag === "BeginPlannedAttemptExecutorWork" || step._tag === "ObservePlannedAttemptExecutorWork"
             ? executorWorkRank
             : otherWorkflowOperationRank
   return decisions.toSorted((left, right) => rank(left.step) - rank(right.step))

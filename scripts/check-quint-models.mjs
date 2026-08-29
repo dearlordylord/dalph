@@ -5,6 +5,7 @@ import {
   acceptedResultIntegrationObligations,
   acceptedResultIntegrationQuarantineProofObligations,
   plannedAttemptExecutorObligations,
+  plannedAttemptExecutorProofObligations,
   runCancellationObligations,
   runActivationObligations,
   taskFactReconciliationObligations
@@ -145,59 +146,10 @@ const plannedAttemptExecutorProofs = [
     testMain: "plannedAttemptExecutorEvidenceProofTest",
     negativeTestMain: "plannedAttemptExecutorEvidenceProofNegativeTest",
     title: "planned-attempt executor evidence proof",
-    maxSteps: "10",
+    maxSteps: "16",
     seed: "6511",
-    invariants: [
-      "everyCallHasDurableIntent",
-      "directResponsesAndProjectionsStayDistinct",
-      "settlementUsesExactOrdinalAndCorrelation",
-      "freshStateProjectionNeverSettlesCommand",
-      "oneReconciliationReadPerActivation",
-      "ambiguousOrUnavailableEvidenceRetainsPosition",
-      "positionReleasesOnlyForSafeOrTerminalEvidence",
-      "evidenceProofTypeOk"
-    ],
-    witnesses: [
-      "startIntentReached",
-      "suspendIntentReached",
-      "commandCalledReached",
-      "responseLostReached",
-      "directResponseReached",
-      "commandProjectionReached",
-      "unavailableProjectionReached",
-      "recoveryActivatedReached",
-      "directResponseSettledReached",
-      "commandProjectionSettledReached",
-      "freshSafeStateProjectionReached",
-      "safePositionReleasedReached",
-      "terminalPositionReleasedReached"
-    ]
-  },
-  {
-    main: "plannedAttemptExecutorStartBoundProof",
-    testMain: "plannedAttemptExecutorStartBoundProofTest",
-    negativeTestMain: "plannedAttemptExecutorStartBoundProofNegativeTest",
-    title: "planned-attempt executor Start-bound proof",
-    maxSteps: "18",
-    seed: "6512",
-    invariants: [
-      "everyStartCallHasItsIntent",
-      "everyStartSettlementUsesItsOrdinal",
-      "lostResponsesStillConsumeStartBudget",
-      "startLimitBlocksFourthCommand",
-      "terminalStartReleasesPosition",
-      "startProofTypeOk"
-    ],
-    witnesses: [
-      "firstStartIntentReached",
-      "thirdStartIntentReached",
-      "startCalledReached",
-      "startResponseLostReached",
-      "directStartSettledReached",
-      "projectedStartSettledReached",
-      "thirdStartSettledReached",
-      "terminalStartReached"
-    ]
+    invariants: plannedAttemptExecutorProofObligations.evidence.invariants,
+    witnesses: plannedAttemptExecutorProofObligations.evidence.witnesses
   },
   {
     main: "plannedAttemptExecutorSuspendBoundProof",
@@ -206,28 +158,8 @@ const plannedAttemptExecutorProofs = [
     title: "planned-attempt executor Suspend-bound proof",
     maxSteps: "24",
     seed: "6513",
-    invariants: [
-      "everySuspendCallHasItsIntent",
-      "everySuspendSettlementUsesItsOrdinal",
-      "lostResponsesStillConsumeSuspendBudget",
-      "suspendLimitBlocksFourthCommand",
-      "postLimitRecoveryIsReadOnly",
-      "positionReleasesOnlyForSafeOrTerminalEvidence",
-      "suspendProofTypeOk"
-    ],
-    witnesses: [
-      "firstSuspendIntentReached",
-      "thirdSuspendIntentReached",
-      "suspendCalledReached",
-      "suspendResponseLostReached",
-      "directSuspendSettledReached",
-      "projectedSuspendSettledReached",
-      "thirdSuspendSettledReached",
-      "safeSuspendReached",
-      "terminalSuspendReached",
-      "readOnlyRecoveryReached",
-      "readOnlySafeReached"
-    ]
+    invariants: plannedAttemptExecutorProofObligations.suspendBound.invariants,
+    witnesses: plannedAttemptExecutorProofObligations.suspendBound.witnesses
   }
 ]
 
@@ -266,9 +198,9 @@ for (const proof of plannedAttemptExecutorProofs) {
     "--verbosity",
     "1"
   ])
-  // TLC enumerates each complete finite projection graph without a depth
-  // token: evidence 109 generated / 45 distinct / depth 8; Start 55 / 52 /
-  // depth 16; Suspend 79 / 76 / depth 19 (Quint 0.32.0, linux-aarch64).
+  // TLC enumerates each complete finite projection graph without imposing the
+  // sampled runner's depth bound; sampled exploration above remains a separate
+  // seeded check of longer traces.
   await run(`${proof.title} exhaustive model`, [
     "verify",
     "specs/plannedAttemptExecutor_proof.qnt",
@@ -537,7 +469,8 @@ await run("task-fact reconciliation sampled model", [
 ])
 
 // The canonical subject model deliberately keeps #136/#137 task facts and the
-// #65 choice, stoppage, claim-disposition, and independent-task sentinels
+// #65 choice, current terminal-choice cancellation, claim-disposition, and
+// independent-task sentinels
 // together. Its production-backed MBT and sampled run stay canonical. ADR 0010
 // permits the following smaller projection of the same accepted #65 chronology
 // to own exhaustive proof without becoming another runtime behavior source.
@@ -568,14 +501,15 @@ const taskFactProofs = [
     ]
   },
   {
-    main: "taskFactStopProof",
-    testMain: "taskFactStopProofTest",
-    negativeTestMain: "taskFactStopProofNegativeTest",
-    title: "task-fact Stop proof",
+    main: "historicalTaskFactStopRecoveryProof",
+    testMain: "historicalTaskFactStopRecoveryProofTest",
+    negativeTestMain: "historicalTaskFactStopRecoveryProofNegativeTest",
+    title: "historical task-fact Stop recovery proof",
     maxSteps: "22",
     seed: "6502",
     invariants: [
       "stopCallsFollowExactDurableIntents",
+      "historicalExecutingRequiresAcceptedCommandReport",
       "stoppageAndRecoveryAreBounded",
       "thirdRunningResultLeavesOnlyReadOnlyRecovery",
       "abandonmentRequiresExactUnbrokenQuiescence",

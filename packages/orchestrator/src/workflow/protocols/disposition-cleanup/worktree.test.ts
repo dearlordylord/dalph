@@ -90,7 +90,7 @@ const successor = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
-  dispositionAt: JournalPosition.make(19),
+  dispositionAt: JournalPosition.make(23),
   plannedAttempt: attempt,
   successorAttempt: successor
 })
@@ -100,7 +100,7 @@ const authorization = WorktreeCleanupAuthorization.make({
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.worktree,
-  observationAt: JournalPosition.make(16),
+  observationAt: JournalPosition.make(20),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
@@ -731,12 +731,12 @@ it.effect("preserves an abandoned cleanup when a later executor command follows 
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
     const abandonedAuthorization = yield* appendAbandonedProvenance(attempt)
-    const laterOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    const laterOrdinal = PlannedAttemptExecutorCommandOrdinal.make(3)
     yield* journal.append(
       runId,
       plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, laterOrdinal),
       PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
+        command: "Resume",
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         ordinal: laterOrdinal,

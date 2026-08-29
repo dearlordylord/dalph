@@ -4,6 +4,7 @@ import {
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
+  type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport as PlannedAttemptExecutorReportType,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
@@ -27,34 +28,43 @@ export const dryRunPlannedAttemptExecutorLayer = Layer.effect(
           ])
       ).pipe(Effect.as(report))
 
+    const projectionFor = (
+      correlation: PlannedAttemptExecutorCorrelation,
+      current: ReadonlyMap<string, PlannedAttemptExecutorReportType>
+    ): PlannedAttemptExecutorProjection => {
+      const report = current.get(plannedAttemptExecutorCorrelationKey(correlation))
+      return report === undefined
+        ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+        : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+    }
+
     return PlannedAttemptExecutor.of({
-      project: (correlation) =>
-        Ref.get(reports).pipe(
-          Effect.map((current) => {
-            const report = current.get(plannedAttemptExecutorCorrelationKey(correlation))
-            return report === undefined
-              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
-              : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
-          })
-        ),
+      observe: Effect.fn("DryRunPlannedAttemptExecutor.observe")((correlation) =>
+        Ref.get(reports).pipe(Effect.map((current) => projectionFor(correlation, current)))
+      ),
       requestSuspension: (attempt) => {
         const correlation = plannedAttemptExecutorCorrelation(attempt)
-        return record(attempt, PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+        return record(attempt, PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
       },
-      startOrContinue: (request) => {
+      begin: Effect.fn("DryRunPlannedAttemptExecutor.begin")(function* (request) {
         const attempt = request.plannedAttempt
         const correlation = plannedAttemptExecutorCorrelation(attempt)
-        return Ref.get(reports).pipe(
-          Effect.flatMap((current) =>
-            record(
-              attempt,
-              current.get(plannedAttemptExecutorCorrelationKey(correlation))?._tag === "Running"
-                ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-                : PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-            )
-          )
+        const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+        yield* record(attempt, executing)
+        // A dry run has no outside process, so it autonomously completes during Begin; Observe remains a pure read.
+        yield* record(
+          attempt,
+          PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } })
         )
-      }
+        return executing
+      }),
+      resume: (request) =>
+        record(
+          request.plannedAttempt,
+          PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt)
+          })
+        )
     })
   })
 )

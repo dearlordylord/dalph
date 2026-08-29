@@ -20,7 +20,7 @@ module runCancellation {
 
   type ExecutorState =
     | NoExecutor
-    | Running
+    | Executing
     | StopIntentRecorded
     | SafelySuspended
     | ExecutorUnreadable
@@ -170,7 +170,7 @@ module runCancellation {
     state.durable.executorSafeReports == 0 or state.durable.executorStopIntents == 1
 
   val executorPositionRetainedUntilSafeReport: bool =
-    state.durable.executor == Running
+    state.durable.executor == Executing
       or state.durable.executor == StopIntentRecorded
       or state.durable.executor == ExecutorUnreadable
       or not(state.process.executorPositionHeld)
@@ -280,7 +280,7 @@ module runCancellation {
       and state.durable.executor == NoExecutor
       and state.durable.integration == NoIntegration
   val cancellationRedeliveryReached: bool = state.durable.cancellationRedeliveries == 1
-  val runningExecutorCancellationReached: bool =
+  val executingExecutorCancellationReached: bool =
     state.durable.cancellationApplied and state.durable.executorStopIntents == 1
   val executorStopIntentReached: bool = state.durable.executorStopIntents == 1
   val executorSafeReportReached: bool = state.durable.executorSafeReports == 1
@@ -386,7 +386,7 @@ module runCancellation {
     },
   }
 
-  action selectRunningExecutor: bool = all {
+  action selectExecutingExecutor: bool = all {
     state.process.phase == Active,
     state.durable.cancellationAppends == 0,
     state.process.admissionOpen,
@@ -398,7 +398,7 @@ module runCancellation {
       ...state,
       durable: {
         ...state.durable,
-        executor: Running,
+        executor: Executing,
         claim: Held,
         integration: NoIntegration,
       },
@@ -490,7 +490,7 @@ module runCancellation {
 
   action recordExecutorStopIntent: bool = all {
     state.process.phase == Cancelling,
-    state.durable.executor == Running,
+    state.durable.executor == Executing,
     state.durable.executorStopIntents == 0,
     state' = {
       ...state,
@@ -810,7 +810,7 @@ module runCancellation {
     state.durable.integration == NoIntegration,
     state' = {
       ...state,
-      durable: { ...state.durable, executor: Running, claim: Held },
+      durable: { ...state.durable, executor: Executing, claim: Held },
       process: {
         ...state.process,
         executorPositionHeld: true,
@@ -823,7 +823,7 @@ module runCancellation {
   action step: bool = any {
     selectIdleRun,
     selectAlreadyPausedRun,
-    selectRunningExecutor,
+    selectExecutingExecutor,
     selectIntegrationOwned,
     selectTemporaryWait,
     selectApplicationExitCutoff,

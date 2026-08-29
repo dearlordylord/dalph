@@ -20,7 +20,8 @@ const sameCorrelation = (
 
 /** One expected request and deterministic response in the contract-only test adapter. */
 export const ControlledFakeExecutorStep = Schema.TaggedUnion({
-  StartOrContinue: { correlation: PlannedAttemptExecutorCorrelation, report: PlannedAttemptExecutorReport },
+  Begin: { correlation: PlannedAttemptExecutorCorrelation, report: PlannedAttemptExecutorReport },
+  Resume: { correlation: PlannedAttemptExecutorCorrelation, report: PlannedAttemptExecutorReport },
   Suspend: { correlation: PlannedAttemptExecutorCorrelation, report: PlannedAttemptExecutorReport }
 }).check(
   Schema.makeFilter((step) =>
@@ -74,7 +75,7 @@ export const makeControlledFakePlannedAttemptExecutorLayer = (steps: ReadonlyArr
         return step.report
       })
       return PlannedAttemptExecutor.of({
-        project: (correlation) =>
+        observe: (correlation) =>
           Ref.get(state).pipe(
             Effect.map((current) => {
               const report = current.reports.get(plannedAttemptExecutorCorrelationKey(correlation))
@@ -83,8 +84,9 @@ export const makeControlledFakePlannedAttemptExecutorLayer = (steps: ReadonlyArr
                 : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
             })
           ),
+        begin: (request) => consume("Begin", request),
         requestSuspension: (attempt) => consume("Suspend", attempt),
-        startOrContinue: (request) => consume("StartOrContinue", request)
+        resume: (request) => consume("Resume", request)
       })
     })
   )
@@ -103,7 +105,7 @@ export const controlledFakePlannedAttemptExecutorLayer = Layer.effect(
           ])
       ).pipe(Effect.as(report))
     return PlannedAttemptExecutor.of({
-      project: (correlation) =>
+      observe: (correlation) =>
         Ref.get(reports).pipe(
           Effect.map((current) => {
             const report = current.get(plannedAttemptExecutorCorrelationKey(correlation))
@@ -112,23 +114,19 @@ export const controlledFakePlannedAttemptExecutorLayer = Layer.effect(
               : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
           })
         ),
-      requestSuspension: (attempt) => {
-        const correlation = plannedAttemptExecutorCorrelation(attempt)
-        return record(attempt, PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
-      },
-      startOrContinue: (request) => {
+      begin: (request) => {
         const attempt = request.plannedAttempt
         const correlation = plannedAttemptExecutorCorrelation(attempt)
-        return Ref.get(reports).pipe(
-          Effect.flatMap((current) =>
-            record(
-              attempt,
-              current.get(plannedAttemptExecutorCorrelationKey(correlation))?._tag === "Running"
-                ? PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-                : PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-            )
-          )
-        )
+        return record(attempt, PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+      },
+      requestSuspension: (attempt) => {
+        const correlation = plannedAttemptExecutorCorrelation(attempt)
+        return record(attempt, PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
+      },
+      resume: (request) => {
+        const attempt = request.plannedAttempt
+        const correlation = plannedAttemptExecutorCorrelation(attempt)
+        return record(attempt, PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
       }
     })
   })

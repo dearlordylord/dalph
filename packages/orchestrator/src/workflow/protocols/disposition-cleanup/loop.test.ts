@@ -74,3 +74,27 @@ it.effect("ignores a malformed tagged authorization record at the journal bounda
     expect(selectCleanupResponsibilities([...records, malformed]).worktree).toBeUndefined()
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
+
+it.effect("refuses cleanup selection from a no-begin journal", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    expect(selectCleanupResponsibilities([])).toEqual({ branch: undefined, candidate: undefined, worktree: undefined })
+    expect(yield* activateDispositionCleanup(runId)).toEqual({ branch: [], candidate: [], worktree: [] })
+    const result = yield* runDispositionCleanupLoop(runId)
+    expect(result).toEqual({
+      branch: undefined,
+      branchOutcomes: [],
+      candidate: undefined,
+      candidateOutcomes: [],
+      selected: { branch: undefined, candidate: undefined, worktree: undefined },
+      worktree: undefined,
+      worktreeOutcomes: []
+    })
+    expect(yield* journal.read(runId)).toEqual([])
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [] })),
+    Effect.provide(branchCleanupTestLayer({ observations: [] })),
+    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)

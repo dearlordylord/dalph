@@ -27,6 +27,9 @@ import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -40,10 +43,10 @@ import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ow
 import { type ApplicationExitTraceEvent, makeApplicationExitShell } from "./application-shell.js"
 import { ApplicationExitResult } from "./lifecycle-decision.js"
 import {
-  RunningAttemptForApplicationExit,
-  runningAttemptsForApplicationExit,
+  ExecutingAttemptForApplicationExit,
+  executingAttemptsForApplicationExit,
   suspendApplicationExitAttempts,
-  suspendRunningExecutorWorkForApplicationExit
+  suspendExecutingExecutorWorkForApplicationExit
 } from "./executor-drain.js"
 
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -83,7 +86,7 @@ const runningHistory = (): ReadonlyArray<JournalRecord> => [
     2,
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-      report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
       version: workflowJournalEventVersion
     })
   )
@@ -95,18 +98,41 @@ const responsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorW
 })
 
 const unusedExecutor = PlannedAttemptExecutor.of({
-  project: () => Effect.die("this scenario must not project executor state"),
+  observe: () => Effect.die("this scenario must not observe executor state"),
   requestSuspension: () => Effect.die("this scenario must not request executor suspension"),
-  startOrContinue: () => Effect.die("this scenario must not start executor work")
+  begin: () => Effect.die("this scenario must not begin executor work"),
+  resume: () => Effect.die("this scenario must not resume executor work")
 })
 
 it("discovers the exact running planned attempt from accepted Run history without another identity", () => {
-  expect(runningAttemptsForApplicationExit({ records: runningHistory(), responsibilities: [responsibility] })).toEqual([
-    RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+  expect(
+    executingAttemptsForApplicationExit({ records: runningHistory(), responsibilities: [responsibility] })
+  ).toEqual([ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })])
+})
+
+it("retains an accepted executing attempt while a distinct safe observation still awaits lifecycle acceptance", () => {
+  const records = [
+    ...runningHistory(),
+    record(
+      3,
+      PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+
+  expect(executingAttemptsForApplicationExit({ records, responsibilities: [responsibility] })).toEqual([
+    ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
   ])
 })
 
-it("ignores non-executor responsibilities and exact attempts without current Running evidence", () => {
+it("ignores non-executor responsibilities and exact attempts without current Executing evidence", () => {
   const claimResponsibility = WorkflowResponsibilityEntry.cases.TaskClaimResponsibility.make({
     acquisition: TaskClaimAcquisition.make({
       operationId: OperationId.make("exit-claim-operation"),
@@ -120,7 +146,7 @@ it("ignores non-executor responsibilities and exact attempts without current Run
   const responsibilityOnly = runningHistory().slice(0, 1)
 
   expect(
-    runningAttemptsForApplicationExit({
+    executingAttemptsForApplicationExit({
       records: responsibilityOnly,
       responsibilities: [claimResponsibility, responsibility]
     })
@@ -135,7 +161,7 @@ it.effect("maps a failed Run-journal state read to one application Exit drain di
       runId: plannedAttempt.runId
     })
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const failure = yield* suspendRunningExecutorWorkForApplicationExit().pipe(
+    const failure = yield* suspendExecutingExecutorWorkForApplicationExit().pipe(
       Effect.flip,
       Effect.provide(
         Layer.mergeAll(
@@ -184,20 +210,21 @@ it.effect("records the exact suspension intent before the fast call and records 
     const records = yield* Ref.make(runningHistory())
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.die("application Exit must not reconcile a fresh executor projection"),
+      observe: () => Effect.die("application Exit must not observe fresh executor state"),
       requestSuspension: (attempt) =>
         Ref.update(calls, (current) => [...current, `Suspend:${attempt.runId}/${attempt.attemptId}`]).pipe(
           Effect.as(
-            PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
               correlation: plannedAttemptExecutorCorrelation(attempt)
             })
           )
         ),
-      startOrContinue: () => Effect.die("application Exit must not ask executor work to finish")
+      begin: () => Effect.die("application Exit must not begin executor work"),
+      resume: () => Effect.die("application Exit must not resume executor work")
     })
 
     yield* suspendApplicationExitAttempts([
-      RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+      ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
     ]).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -213,6 +240,7 @@ it.effect("records the exact suspension intent before the fast call and records 
       "PlannedAttemptExecutorWorkResponsibilityBegan",
       "PlannedAttemptExecutorWorkReported",
       "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved",
       "PlannedAttemptExecutorWorkReported"
     ])
   })
@@ -222,16 +250,17 @@ it.effect("accepts an exact Terminal suspension response as the attempt's safe E
   Effect.gen(function* () {
     const records = yield* Ref.make(runningHistory())
     const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.die("application Exit must not start fresh executor reconciliation"),
+      observe: () => Effect.die("application Exit must not observe executor state"),
       requestSuspension: () =>
         Effect.succeed(
-          PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+          PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } })
         ),
-      startOrContinue: () => Effect.die("application Exit must not ask executor work to finish")
+      begin: () => Effect.die("application Exit must not begin executor work"),
+      resume: () => Effect.die("application Exit must not resume executor work")
     })
 
     const safe = yield* suspendApplicationExitAttempts([
-      RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+      ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
     ]).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -244,7 +273,8 @@ it.effect("accepts an exact Terminal suspension response as the attempt's safe E
     expect(safe).toEqual([correlation])
     expect(
       (yield* Ref.get(records)).some(
-        ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
       )
     ).toBe(true)
   })
@@ -265,28 +295,29 @@ it.effect("requests suspension for every running exact planned attempt retained 
         4,
         PlannedAttemptExecutorWorkReportedEvent.make({
           ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation: correlationB }),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: correlationB }),
           version: workflowJournalEventVersion
         })
       )
     ])
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.die("application Exit must not start fresh executor reconciliation"),
+      observe: () => Effect.die("application Exit must not observe executor state"),
       requestSuspension: (attempt) =>
         Ref.update(calls, (current) => [...current, attempt.attemptId]).pipe(
           Effect.as(
-            PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
               correlation: plannedAttemptExecutorCorrelation(attempt)
             })
           )
         ),
-      startOrContinue: () => Effect.die("application Exit must not ask executor work to finish")
+      begin: () => Effect.die("application Exit must not begin executor work"),
+      resume: () => Effect.die("application Exit must not resume executor work")
     })
 
     const safe = yield* suspendApplicationExitAttempts([
-      RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt }),
-      RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt: plannedAttemptB })
+      ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt }),
+      ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt: plannedAttemptB })
     ]).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -309,14 +340,17 @@ it.effect("rejects a foreign suspension report and records the contradiction wit
     const records = yield* Ref.make(runningHistory())
     const foreignCorrelation = { ...correlation, attemptId: AttemptId.make("foreign-exit-attempt") }
     const executor = PlannedAttemptExecutor.of({
-      project: () => Effect.die("application Exit must not start fresh executor reconciliation"),
+      observe: () => Effect.die("application Exit must not observe executor state"),
       requestSuspension: () =>
-        Effect.succeed(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation: foreignCorrelation })),
-      startOrContinue: () => Effect.die("application Exit must not ask executor work to finish")
+        Effect.succeed(
+          PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation: foreignCorrelation })
+        ),
+      begin: () => Effect.die("application Exit must not begin executor work"),
+      resume: () => Effect.die("application Exit must not resume executor work")
     })
 
     const failure = yield* suspendApplicationExitAttempts([
-      RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+      ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
     ]).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -347,12 +381,13 @@ it.effect("retains an acknowledged suspension intent when the fast call has no r
       const records = yield* Ref.make(runningHistory())
       const called = yield* Deferred.make<void>()
       const executor = PlannedAttemptExecutor.of({
-        project: () => Effect.die("application Exit must not reconcile an unresolved command"),
+        observe: () => Effect.die("application Exit must not observe executor state for an unresolved command"),
         requestSuspension: () => Deferred.succeed(called, undefined).pipe(Effect.andThen(Effect.never)),
-        startOrContinue: () => Effect.die("application Exit must not ask executor work to finish")
+        begin: () => Effect.die("application Exit must not begin executor work"),
+        resume: () => Effect.die("application Exit must not resume executor work")
       })
       const draining = yield* suspendApplicationExitAttempts([
-        RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+        ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
       ]).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -389,7 +424,7 @@ it.effect("does not retry or project an already-unresolved executor command duri
         record(
           3,
           PlannedAttemptExecutorCommandIntendedEvent.make({
-            command: "StartOrContinue",
+            command: "Begin",
             initiatedBy: { _tag: "DalphCoordinator" },
             occurrenceClassification: "InitiatedAction",
             ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
@@ -399,16 +434,17 @@ it.effect("does not retry or project an already-unresolved executor command duri
         )
       ]
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(unresolved)
-      const attempt = runningAttemptsForApplicationExit({ records: unresolved, responsibilities: [responsibility] })
-      expect(attempt).toEqual([RunningAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })])
+      const attempt = executingAttemptsForApplicationExit({ records: unresolved, responsibilities: [responsibility] })
+      expect(attempt).toEqual([ExecutingAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })])
       const executor = PlannedAttemptExecutor.of({
-        project: () => Effect.die("application Exit must not project an already-unresolved executor command"),
+        observe: () => Effect.die("application Exit must not observe an already-unresolved executor command"),
         requestSuspension: () => Effect.die("application Exit must not issue suspension behind an unresolved command"),
-        startOrContinue: () => Effect.die("application Exit must not ask executor work to finish")
+        begin: () => Effect.die("application Exit must not begin executor work"),
+        resume: () => Effect.die("application Exit must not resume executor work")
       })
       // Simulate discovery racing just ahead of the unmatched intent: the guarded protocol must still refuse projection.
       const draining = yield* suspendApplicationExitAttempts([
-        RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+        ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
       ]).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -432,7 +468,7 @@ it.effect("keeps an already-classified unresolved executor command pending for t
     Effect.gen(function* () {
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
       const draining = yield* suspendApplicationExitAttempts([
-        RunningAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })
+        ExecutingAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })
       ]).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -470,11 +506,11 @@ it.effect("waits for the exact attempt permit before a concurrent Exit suspensio
   })
 )
 
-const runningExecutorExitAuthoredCassette = [
+const executingExecutorExitAuthoredCassette = [
   "ExitRequested",
   "AdmissionCutoffClosed",
   "ProcessLocalResourcesClosed",
-  "RunningExecutorWorkReachedSafeBoundary",
+  "ExecutingExecutorWorkReachedSafeBoundary",
   "ProducedJournalWritesFlushed",
   "CoordinatorLockReleased",
   "ExitResultReported",
@@ -487,17 +523,18 @@ it.effect("Alice exits successfully only after the running exact attempt is safe
       const records = yield* Ref.make(runningHistory())
       const lifecycleCassette = yield* Ref.make<ReadonlyArray<ApplicationExitTraceEvent>>([])
       const executor = PlannedAttemptExecutor.of({
-        project: () => Effect.die("application Exit must not start fresh executor reconciliation"),
+        observe: () => Effect.die("application Exit must not observe executor state"),
         requestSuspension: (attempt) =>
           Effect.succeed(
-            PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+            PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
               correlation: plannedAttemptExecutorCorrelation(attempt)
             })
           ),
-        startOrContinue: () => Effect.die("application Exit must not ask executor work to finish")
+        begin: () => Effect.die("application Exit must not begin executor work"),
+        resume: () => Effect.die("application Exit must not resume executor work")
       })
       const executorDrain = suspendApplicationExitAttempts([
-        RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+        ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
       ]).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -512,20 +549,21 @@ it.effect("Alice exits successfully only after the running exact attempt is safe
         { requestEnd: () => Effect.void },
         { emit: (event) => Ref.update(lifecycleCassette, (current) => [...current, event]) }
       )
-      yield* shell.registerExecutorDrain({ suspendRunningExecutorWork: executorDrain })
+      yield* shell.registerExecutorDrain({ suspendExecutingExecutorWork: executorDrain })
 
       expect(yield* shell.requestBoundary.requestExit).toEqual(
         ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })
       )
-      expect((yield* Ref.get(lifecycleCassette)).map(({ _tag }) => _tag)).toEqual(runningExecutorExitAuthoredCassette)
+      expect((yield* Ref.get(lifecycleCassette)).map(({ _tag }) => _tag)).toEqual(executingExecutorExitAuthoredCassette)
       expect(yield* Ref.get(lifecycleCassette)).toContainEqual({
-        _tag: "RunningExecutorWorkReachedSafeBoundary",
+        _tag: "ExecutingExecutorWorkReachedSafeBoundary",
         correlations: [correlation]
       })
       expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
         "PlannedAttemptExecutorWorkResponsibilityBegan",
         "PlannedAttemptExecutorWorkReported",
         "PlannedAttemptExecutorCommandIntended",
+        "PlannedAttemptExecutorCommandResponseObserved",
         "PlannedAttemptExecutorWorkReported"
       ])
     })
@@ -538,20 +576,21 @@ it.effect("Alice receives timeout when the suspension response still reports the
       const records = yield* Ref.make(runningHistory())
       const suspensionReturned = yield* Deferred.make<void>()
       const executor = PlannedAttemptExecutor.of({
-        project: () => Effect.die("application Exit must not start fresh executor reconciliation"),
+        observe: () => Effect.die("application Exit must not observe executor state"),
         requestSuspension: () =>
           Deferred.succeed(suspensionReturned, undefined).pipe(
-            Effect.as(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+            Effect.as(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
           ),
-        startOrContinue: () => Effect.die("application Exit must not ask executor work to finish")
+        begin: () => Effect.die("application Exit must not begin executor work"),
+        resume: () => Effect.die("application Exit must not resume executor work")
       })
       const shell = yield* makeApplicationExitShell(
         CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
         { requestEnd: () => Effect.void }
       )
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: suspendApplicationExitAttempts([
-          RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+        suspendExecutingExecutorWork: suspendApplicationExitAttempts([
+          ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
         ]).pipe(
           Effect.provide(
             Layer.mergeAll(
@@ -573,11 +612,12 @@ it.effect("Alice receives timeout when the suspension response still reports the
         "PlannedAttemptExecutorWorkResponsibilityBegan",
         "PlannedAttemptExecutorWorkReported",
         "PlannedAttemptExecutorCommandIntended",
-        "PlannedAttemptExecutorWorkReported"
+        "PlannedAttemptExecutorCommandResponseObserved"
       ])
       expect(
         (yield* Ref.get(records)).some(
-          ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended"
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
         )
       ).toBe(false)
     })

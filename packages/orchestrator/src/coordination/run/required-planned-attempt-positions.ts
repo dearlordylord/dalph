@@ -1,6 +1,9 @@
 import type { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
-import { latestPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import {
+  latestAcceptedPlannedAttemptExecutorEvidence,
+  latestUnsettledPlannedAttemptExecutorCommand
+} from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 
 /** One exact planned attempt whose unfinished work still requires a process-local task-work position. */
@@ -27,21 +30,13 @@ export const requiredPlannedAttemptPositionsOf = (
         event._tag === "AttemptImplementationAbandoned" &&
         plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt)
     )
-    const evidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
-    const laterCommandExists =
-      evidence !== undefined &&
-      records.some(
-        ({ event, position }) =>
-          position > evidence.observedAt &&
-          event._tag === "PlannedAttemptExecutorCommandIntended" &&
-          event.plannedAttempt.runId === plannedAttempt.runId &&
-          event.plannedAttempt.attemptId === plannedAttempt.attemptId
-      )
+    const evidence = latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)
+    const unsettledCommandExists = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt) !== undefined
     if (
       abandoned ||
       (evidence !== undefined &&
-        !laterCommandExists &&
-        (evidence.report._tag === "SafelySuspended" || evidence.report._tag === "Terminal"))
+        !unsettledCommandExists &&
+        (evidence.report._tag === "ExecutorWorkSafelySuspended" || evidence.report._tag === "ExecutorWorkTerminal"))
     ) {
       return []
     }

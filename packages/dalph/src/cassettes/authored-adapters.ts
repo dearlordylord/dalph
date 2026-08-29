@@ -269,10 +269,11 @@ const executorReport = (
   })
   return Match.value(item.report).pipe(
     Match.tagsExhaustive({
-      Running: () => PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
-      SafelySuspended: () => PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }),
-      Terminal: (report) =>
-        PlannedAttemptExecutorReport.cases.Terminal.make({
+      ExecutorWorkExecuting: () => PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+      ExecutorWorkSafelySuspended: () =>
+        PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+      ExecutorWorkTerminal: (report) =>
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation,
           result: Match.value(report.result).pipe(
             Match.tagsExhaustive({
@@ -294,7 +295,7 @@ export const controlledExecutorLayer = (
   runId: RunId,
   beforeExecutorReport: (
     plannedAttempt: PlannedTaskAttempt,
-    request: "StartOrContinue" | "Suspend"
+    request: "Begin" | "Resume" | "Suspend"
   ) => Effect.Effect<void>,
   survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
   unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>,
@@ -302,7 +303,7 @@ export const controlledExecutorLayer = (
 ) => {
   const reports = survivingReports
   const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
-    request: "StartOrContinue" | "Suspend",
+    request: "Begin" | "Resume" | "Suspend",
     plannedAttempt: PlannedTaskAttempt
   ) {
     yield* cursor.beginExecutorReportRequest(request, plannedAttempt.attemptId)
@@ -354,7 +355,7 @@ export const controlledExecutorLayer = (
   return Layer.succeed(
     PlannedAttemptExecutor,
     PlannedAttemptExecutor.of({
-      project: (correlation) =>
+      observe: (correlation) =>
         Effect.gen(function* () {
           const projection = yield* cursor.consumeExecutorProjection
           if (Option.isNone(projection)) {
@@ -391,7 +392,8 @@ export const controlledExecutorLayer = (
         }),
       /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
       requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
-      startOrContinue: (request: PlannedAttemptExecutorRequest) => consume("StartOrContinue", request.plannedAttempt)
+      begin: (request: PlannedAttemptExecutorRequest) => consume("Begin", request.plannedAttempt),
+      resume: (request: PlannedAttemptExecutorRequest) => consume("Resume", request.plannedAttempt)
     })
   )
 }

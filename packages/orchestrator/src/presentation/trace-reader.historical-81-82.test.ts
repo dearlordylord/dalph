@@ -399,7 +399,7 @@ it.effect("#81 rejects foreign nested Run identities before exposing recovery hi
       token: ClaimToken.make("historical-81-82-foreign-token")
     })
     const quiescenceProof: AttemptQuiescenceProof = {
-      _tag: "CommandResponse",
+      _tag: "AcceptedReport",
       reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1)
     }
     const foreignSuccessor = PlannedTaskAttempt.make({
@@ -542,7 +542,7 @@ const integrationRecords = (): ReadonlyArray<JournalRecord> => {
       3,
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
           result: { _tag: "Accepted", acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult }
         }),

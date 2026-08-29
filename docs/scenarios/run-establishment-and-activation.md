@@ -105,8 +105,8 @@ turn identity allocation into proof that the Run began.
 
 The Journal contains one valid beginning for R and T with initial policy P0,
 then an applied capacity change to revision P1. It also contains exact planned
-attempt P for task A, its worktree facts, and an executor
-start-or-continue intent whose result is not yet conclusive. The process that
+attempt P for task A, its worktree facts, and an executor Begin intent whose
+result is not yet conclusive. The process that
 held A's task-work position and proposal owner has exited. The current P1
 capacity is one, and independent task B would otherwise be eligible.
 
@@ -243,7 +243,7 @@ B's responsibility or position remains.
   `reconstructs both retained holders and blocks C through a contracted capacity`
   checks capacity two to one, both reconstructed holders, no responsibility or
   executor request for C while either holder remains, and one ordinary
-  start-or-continue request for C after both exact terminal settlements.
+  Begin request for C after both exact terminal settlements.
 - `specs/runActivation.qnt` tests
   `contractedRetainedHolderIsRestoredDespiteCapacityTest` and
   `contractedCapacityBlocksNewAdmissionAfterRetainedHolderSettlesTest`, and

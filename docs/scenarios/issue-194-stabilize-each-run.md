@@ -12,7 +12,7 @@ the stabilization or finality path.
 
 The journal contains accepted complete tracker observation G1 for tasks A and
 B. G1 says A is open and B is open with A as its only prerequisite. Dalph owns
-A's exact planned attempt and has called the executor's `startOrContinue`
+A's exact planned attempt and has called the executor's `begin`
 boundary. Git has no attempt, branch, worktree, or integration fact for B, and
 the executor has no attempt for B.
 

@@ -428,7 +428,11 @@ module taskFactChoiceProof {
   }
 }
 
-module taskFactStopProof {
+// Historical compatibility proof for journals written before issue #264's
+// latest-accepted-Safe choice gate. It is not live Stop authorization. The old
+// Safe-to-Executing chronology is reachable only through an exact durable
+// StartOrContinue command and its accepted executing report.
+module historicalTaskFactStopRecoveryProof {
   type Evidence = ExactRunning | ExactSafelySuspended | ExactTerminal
   type Stage =
     | ChoiceReady
@@ -462,6 +466,9 @@ module taskFactStopProof {
     implementationRetained: bool,
     positionHeld: bool,
     claimHeld: bool,
+    historicalStartOrContinueIntent: bool,
+    historicalStartOrContinueCalled: bool,
+    historicalExecutingReportAccepted: bool,
     intentCount: int,
     callCount: int,
     settlementCount: int,
@@ -494,6 +501,13 @@ module taskFactStopProof {
     state.lastSettledOrdinal
       == if (state.settlementCount == 0) 0 else state.settlementCount + 1,
   }
+
+  val historicalExecutingRequiresAcceptedCommandReport: bool =
+    state.evidence != ExactRunning or and {
+      state.historicalStartOrContinueIntent,
+      state.historicalStartOrContinueCalled,
+      state.historicalExecutingReportAccepted,
+    }
 
   val stoppageAndRecoveryAreBounded: bool = and {
     state.intentCount >= 0,
@@ -567,6 +581,9 @@ module taskFactStopProof {
       implementationRetained: true,
       positionHeld: false,
       claimHeld: true,
+      historicalStartOrContinueIntent: false,
+      historicalStartOrContinueCalled: false,
+      historicalExecutingReportAccepted: false,
       intentCount: 0,
       callCount: 0,
       settlementCount: 0,
@@ -591,7 +608,7 @@ module taskFactStopProof {
     state' = { ...state, stopApplied: true, stage: NeedQuiescence, lastEvent: StopApplied },
   }
 
-  action breakRetainedSafeProof: bool = all {
+  action acceptHistoricalExecutingAfterStartOrContinue: bool = all {
     state.stage == NeedQuiescence,
     state.quiescenceUnbroken,
     state.implementationRetained,
@@ -600,6 +617,9 @@ module taskFactStopProof {
       evidence: ExactRunning,
       quiescenceUnbroken: false,
       positionHeld: true,
+      historicalStartOrContinueIntent: true,
+      historicalStartOrContinueCalled: true,
+      historicalExecutingReportAccepted: true,
       lastEvent: SafeProofBroken,
     },
   }
@@ -746,7 +766,7 @@ module taskFactStopProof {
 
   action step: bool = any {
     applyStop,
-    breakRetainedSafeProof,
+    acceptHistoricalExecutingAfterStartOrContinue,
     recordStopIntent,
     callStop,
     loseStopResponse,

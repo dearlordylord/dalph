@@ -22,13 +22,12 @@ module taskFactReconciliation {
   type WorktreeIdentity = NoWorktree | W1Worktree | W2Worktree
 
   // These phases are the journal- and boundary-visible chronology owned by
-  // issue #66. Waiting and rejection reasons remain separate below because a
-  // running writer, an unreadable owner, and a conclusive terminal outcome are
-  // different phenomena even though none authorizes P2.
+  // issue #66 as amended by issue #264. A terminal choice consumes the latest
+  // accepted safe report and cancels an admitted-but-unissued Resume; it never
+  // re-enters executor-quiescence acquisition.
   type ReplacementPhase =
     | ReplacementNotRequested
     | RestartApplied
-    | NeedCurrentExecutorQuiescence
     | NeedCurrentReplacementTaskFacts
     | NeedCurrentReplacementClaim
     | NeedCurrentOldWorktree
@@ -37,17 +36,12 @@ module taskFactReconciliation {
     | PlannedAttemptReplacementRecorded
     | SuccessorWaitingForAdmission
     | SuccessorAdmitted
-    | SuccessorRunning
+    | SuccessorExecuting
     | ReplacementWaiting
     | ReplacementRejected
 
   type ReplacementDisposition =
     | NoReplacementDisposition
-    | RunningWriterWait
-    | ExecutorUnreadableWait
-    | ExecutorCorrelationContradiction
-    | CompletedDoesNotAuthorizeReplacement
-    | FailedDoesNotAuthorizeReplacement
     | NewFingerprintChoiceRequired
     | TaskFactsUnreadableWait
     | TaskNotEligibleWait
@@ -103,15 +97,14 @@ module taskFactReconciliation {
     | ChoiceOutsidePreIntegration
 
   type IntegrationPhase = PreIntegration | IntegrationStarted
+  // ExactTerminal represents the accepted-result terminal report governed by
+  // this task-fact/integration model. Completed and Failed terminal outcomes
+  // settle executor responsibility without selecting integration and are
+  // covered by plannedAttemptExecutor and recovery conformance tests.
   type ExecutorEvidence =
     | ExactSafelySuspended
     | ExactTerminal
-    | ExactCompletedTerminal
-    | ExactFailedTerminal
-    | ExactAcceptedTerminal
-    | ExactRunning
-    | ExecutorUnavailable
-    | ExecutorContradiction
+    | ExactExecuting
 
   type ContinueStage =
     | NotContinuing
@@ -125,6 +118,13 @@ module taskFactReconciliation {
     | ContinueResumed
     | NewChoiceRequired
     | ContinueWaiting
+
+  // The finite subject model represents the successful branch of each fresh
+  // authority read. Pending, failed, and unreadable tracker operations carry
+  // journal operation IDs, predecessor chains, and target facts owned by the
+  // continuation authorization/recovery protocol; they are deliberately not
+  // collapsed into these booleans. The production conformance matrix must
+  // prove that each such outcome remains fail-closed before Continue/Resume.
 
   type StopStage =
     | NotStopping
@@ -168,6 +168,8 @@ module taskFactReconciliation {
   type ActionTag =
     | InitializedAction
     | F2ObservedAction
+    | HeldResumeAdmittedAction
+    | ResumeSettledUnchangedSafeAction
     | ContinueF2AppliedAction
     | RestartF2AppliedAction
     | StopF2AppliedAction
@@ -190,14 +192,6 @@ module taskFactReconciliation {
     | F3ObservedAction
     | ContinueF3AppliedAction
     | RestartFactsBeganAction
-    | RestartQuiescenceBrokenAction
-    | RestartRunningObservedAction
-    | RestartSafeObservedAction
-    | RestartAcceptedObservedAction
-    | RestartCompletedObservedAction
-    | RestartFailedObservedAction
-    | RestartExecutorUnavailableObservedAction
-    | RestartExecutorContradictionObservedAction
     | ReplacementF2FactsObservedAction
     | ReplacementF3FactsObservedAction
     | ReplacementTaskFactsUnreadableAction
@@ -218,15 +212,6 @@ module taskFactReconciliation {
     | SuccessorW2ReadyAction
     | SuccessorOrdinarilyAdmittedAction
     | SuccessorExecutorStartedAction
-    | StoppageReconciliationRequiredAction
-    | StoppageIntentRecordedAction
-    | StoppageCalledAction
-    | StoppageResponseLostAction
-    | StoppageRunningProjectedAction
-    | StoppageSafeProjectedAction
-    | StoppageTerminalProjectedAction
-    | StoppageReadOnlySafeProjectedAction
-    | StopRecoveryActivatedAction
     | ImplementationAbandonedAction
     | ExactClaimObservedAction
     | AbsentClaimObservedAction
@@ -266,6 +251,7 @@ module taskFactReconciliation {
     winningRequestId: RequestId,
     winningSubject: ChoiceSubject,
     appliedChoiceCount: int,
+    appliedChoiceCountAtTerminalObservation: int,
     lastControlResult: ControlResult,
     authorizedFingerprint: Fingerprint,
     continueStage: ContinueStage,
@@ -280,21 +266,19 @@ module taskFactReconciliation {
     quiescenceUnbroken: bool,
     implementationResponsibilityRetained: bool,
     positionHeld: bool,
+    // A delivery owner may reserve a process-local Resume proposal before an
+    // Operator choice wins. It has not crossed the executor boundary and is
+    // canceled by terminal Stop or Restart. `resumeCommandIntentCount` below
+    // is the durable commitIntent boundary; this held owner is intentionally
+    // separate so the choice-before-commit race is representable.
+    heldResumeAdmitted: bool,
+    heldResumeCancellationCount: int,
+    // A durable Resume command intent consumes the exact accepted Safe report
+    // even when the executor returns the same Safe report and no new lifecycle
+    // event is appended.
+    resumeCommandIntentCount: int,
+    resumeBoundaryCallCount: int,
     stopStage: StopStage,
-    nextStopCommandOrdinal: int,
-    activeStopCommandOrdinal: int,
-    lastSettledStopCommandOrdinal: int,
-    stopCommandIntentCount: int,
-    stopCommandCallCount: int,
-    stopCommandSettlementCount: int,
-    // The shared executor protocol resets its three-Suspend budget whenever
-    // exact safe evidence is published; lifetime intent totals do not reset.
-    suspensionCommandCountSinceSafeEvidence: int,
-    stopCommandCalled: bool,
-    stopResponseAmbiguous: bool,
-    runningProjectionSettledStopIntent: bool,
-    stopProjectionsThisActivation: int,
-    stopRecoveryCount: int,
     claimObservation: ClaimObservation,
     claimResult: ClaimResult,
     claimReadsThisActivation: int,
@@ -355,11 +339,6 @@ module taskFactReconciliation {
     successorExecutorStartCount: int,
     successorExecutorResponsibilityRetained: bool,
     replacementProcessLossCount: int,
-    completedResultPreserved: bool,
-    failedResultPreserved: bool,
-    lateAcceptedCommitPreserved: bool,
-    lateAcceptedEvidencePreserved: bool,
-    lateAcceptedIntegrationResponsibilityCount: int,
     p1BranchPreserved: bool,
     p1CommitsPreserved: bool,
     p1JournalEvidencePreserved: bool,
@@ -381,7 +360,6 @@ module taskFactReconciliation {
   pure val WORKTREE_W2: WorktreeIdentity = W2Worktree
   pure val TASK_WORK_CAPACITY = 1
   pure val REPLACEMENT_CLAIM_READ_LIMIT = 3
-  pure val STOP_COMMAND_LIMIT = 3
   pure val RECOVERY_LIMIT = 3
 
   pure val SUBJECT_F2: ChoiceSubject = {
@@ -418,33 +396,13 @@ module taskFactReconciliation {
   }
 
   pure def exactQuiescence(s: State): bool =
-    s.quiescenceUnbroken
-      and Set(
-        ExactSafelySuspended,
-        ExactTerminal,
-        ExactCompletedTerminal,
-        ExactFailedTerminal,
-        ExactAcceptedTerminal,
-      ).contains(s.executorEvidence)
+    s.quiescenceUnbroken and s.executorEvidence == ExactSafelySuspended
 
   pure def replacementQuiescence(s: State): bool =
-    s.quiescenceUnbroken
-      and (s.executorEvidence == ExactSafelySuspended or s.executorEvidence == ExactAcceptedTerminal)
-
-  pure def replacementPendingBeforeAppend(s: State): bool =
-    Set(
-      RestartApplied,
-      NeedCurrentReplacementTaskFacts,
-      NeedCurrentReplacementClaim,
-      NeedCurrentOldWorktree,
-      NeedCurrentTargetHead,
-      ReplacementReadyToAppend,
-    ).contains(s.replacementPhase)
+    s.quiescenceUnbroken and s.executorEvidence == ExactSafelySuspended
 
   pure def stopChoiceApplied(s: State): bool =
     s.f2WinningChoice == StopChoice or s.f3WinningChoice == StopChoice
-
-  pure def stopCommandActive(s: State): bool = s.activeStopCommandOrdinal > 0
 
   var state: State
 
@@ -483,7 +441,12 @@ module taskFactReconciliation {
       }
 
   val terminalObservationAloneExposesNoChoice: bool =
-    state.lastAction != TerminalObservedAction or state.f2WinningChoice == NoChoice
+    state.lastAction != TerminalObservedAction or and {
+      state.appliedChoiceCount == state.appliedChoiceCountAtTerminalObservation,
+      state.appliedChoiceCountAtTerminalObservation != 0
+        or state.f2WinningChoice == NoChoice,
+      Set(NoChoice, StopChoice, RestartChoice).contains(state.f2WinningChoice),
+    }
 
   val continueRequiresEveryFreshExactAuthority: bool =
     state.continueStage != ContinueResumed or exactContinueFacts(state)
@@ -502,54 +465,27 @@ module taskFactReconciliation {
       }
       or state.f3WinningChoice != NoChoice
 
-  val projectedRunningSettlesOnlyItsIntent: bool =
-    not(state.runningProjectionSettledStopIntent)
+  // Current Stop and Restart are exposed only from the latest accepted Safe
+  // report with no unsettled command. Applying either terminal choice consumes
+  // that authority; a later accepted terminal report supersedes Safe and is
+  // absorbing. No later live Resume or Stop-Suspend path exists.
+  val terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains: bool =
+    not(stopChoiceApplied(state) or state.f2WinningChoice == RestartChoice)
       or and {
-        state.executorEvidence == ExactRunning,
-        state.stopCommandSettlementCount > 0,
-        state.lastSettledStopCommandOrdinal == state.stopCommandSettlementCount + 1,
-        state.implementationResponsibilityRetained,
-        state.stopStage == NeedQuiescence,
+        Set(ExactSafelySuspended, ExactTerminal).contains(state.executorEvidence),
+        not(state.heldResumeAdmitted),
+        state.resumeCommandIntentCount == 0,
+        state.resumeBoundaryCallCount == 0,
+        state.heldResumeCancellationCount <= 1,
       }
 
-  val stoppageCallsHaveExactDurableIntents: bool = and {
-    state.stopCommandCallCount <= state.stopCommandIntentCount,
-    state.stopCommandSettlementCount <= state.stopCommandCallCount,
-    state.stopCommandIntentCount
-      == state.stopCommandSettlementCount + (if (stopCommandActive(state)) 1 else 0),
-    state.stopCommandCallCount
-      == state.stopCommandSettlementCount + (if (state.stopCommandCalled) 1 else 0),
-    // Executor command ordinals are shared with StartOrContinue. Restart may
-    // therefore advance the next ordinal without adding a stoppage intent.
-    state.nextStopCommandOrdinal >= state.stopCommandIntentCount + 2,
-    state.activeStopCommandOrdinal == 0
-      or and {
-        state.activeStopCommandOrdinal >= 2,
-        state.activeStopCommandOrdinal < state.nextStopCommandOrdinal,
-      },
-    (state.stopCommandSettlementCount == 0) == (state.lastSettledStopCommandOrdinal == 0),
-    state.lastSettledStopCommandOrdinal == 0
-      or and {
-        state.lastSettledStopCommandOrdinal >= state.stopCommandSettlementCount + 1,
-        state.lastSettledStopCommandOrdinal < state.nextStopCommandOrdinal,
-      },
-  }
-
-  // The existing executor protocol counts Suspend commands only since the
-  // most recent exact safe report, then switches to read-only observation at
-  // the limit. Restart and Stop share that same episode-local allowance.
-  val stoppageIsBounded: bool = and {
-    state.suspensionCommandCountSinceSafeEvidence <= STOP_COMMAND_LIMIT,
-    state.stopProjectionsThisActivation <= 1,
-    state.stopRecoveryCount <= RECOVERY_LIMIT,
-  }
-
-  val stoppageLimitPreservesReadOnlyRecovery: bool =
-    state.suspensionCommandCountSinceSafeEvidence != STOP_COMMAND_LIMIT
-      or stopCommandActive(state)
-      or state.executorEvidence != ExactRunning
-      or state.stopProjectionsThisActivation != 1
-      or state.stopRecoveryCount <= RECOVERY_LIMIT
+  val acceptedTerminalIsAbsorbing: bool =
+    state.executorEvidence != ExactTerminal or and {
+      state.implementationResponsibilityRetained,
+      not(state.replacementEventRecorded),
+      state.resumeCommandIntentCount == 0,
+      state.resumeBoundaryCallCount == 0,
+    }
 
   val abandonmentRequiresExactUnbrokenQuiescence: bool =
     not(state.implementationResponsibilityRetained) implies or {
@@ -562,15 +498,8 @@ module taskFactReconciliation {
         state.f2WinningChoice == RestartChoice,
         state.phase == PreIntegration,
         state.quiescenceUnbroken,
-        or {
-          state.executorEvidence == ExactAcceptedTerminal,
-          state.executorEvidence == ExactCompletedTerminal,
-          state.executorEvidence == ExactFailedTerminal,
-          and {
-            state.replacementEventRecorded,
-            state.executorEvidence == ExactSafelySuspended,
-          },
-        },
+        state.replacementEventRecorded,
+        state.executorEvidence == ExactSafelySuspended,
       },
     }
 
@@ -583,23 +512,17 @@ module taskFactReconciliation {
     not(state.cleanupSelected),
   }
 
+  // Stop or Restart never selects integration itself. A later accepted-result
+  // terminal report follows ordinary integration instead of choice cleanup.
   val stopNeverSelectsIntegration: bool =
-    not(stopChoiceApplied(state)) or not(state.integrationSelected)
+    not(stopChoiceApplied(state))
+      or not(state.integrationSelected)
+      or state.executorEvidence == ExactTerminal
 
   val quiescentStopNeedNotHoldPosition: bool =
     state.implementationResponsibilityRetained
       or exactQuiescence(state)
       or not(state.positionHeld)
-
-  val unprovedWriterRetainsPositionAndClaim: bool =
-    not(stopChoiceApplied(state))
-      or state.stopStage != NeedQuiescence
-      or exactQuiescence(state)
-      or and {
-        state.positionHeld,
-        state.implementationResponsibilityRetained,
-        state.claimResult == NoClaimResult,
-      }
 
   val claimChangesOnlyAfterAbandonmentAndExactRead: bool =
     state.claimReleaseCallCount == 0 or and {
@@ -683,8 +606,7 @@ module taskFactReconciliation {
       state.winningSubject.observedFingerprint == F2,
       state.currentFingerprint == F2,
       state.quiescenceUnbroken,
-      state.executorEvidence == ExactSafelySuspended
-        or state.executorEvidence == ExactAcceptedTerminal,
+      state.executorEvidence == ExactSafelySuspended,
       state.replacementTaskFacts == ExactF2OpenInClosureUnblocked,
       state.replacementClaimFacts == ExactK1Observed,
       state.oldWorktreeFacts == ExactW1Ready,
@@ -788,7 +710,7 @@ module taskFactReconciliation {
       state.successorAdmissionCount == 1,
       state.successorPositionHeld,
       state.successorExecutorResponsibilityRetained,
-      state.replacementPhase == SuccessorRunning,
+      state.replacementPhase == SuccessorExecuting,
     },
     state.successorExecutorStartCount <= 1,
   }
@@ -814,49 +736,10 @@ module taskFactReconciliation {
     },
   }
 
-  val replacementTerminalOutcomesRemainDistinct: bool = and {
-    state.lastAction != RestartCompletedObservedAction or and {
-      state.executorEvidence == ExactCompletedTerminal,
-      state.completedResultPreserved,
-      not(state.failedResultPreserved),
-      not(state.lateAcceptedCommitPreserved),
-    },
-    state.lastAction != RestartFailedObservedAction or and {
-      state.executorEvidence == ExactFailedTerminal,
-      state.failedResultPreserved,
-      not(state.completedResultPreserved),
-      not(state.lateAcceptedCommitPreserved),
-    },
-    state.lastAction != RestartAcceptedObservedAction or and {
-      state.executorEvidence == ExactAcceptedTerminal,
-      state.lateAcceptedCommitPreserved,
-      state.lateAcceptedEvidencePreserved,
-      not(state.completedResultPreserved),
-      not(state.failedResultPreserved),
-    },
-  }
-
-  val nonAuthorizingExecutorEvidenceNeverRecordsReplacement: bool =
-    not(Set(
-      ExactRunning,
-      ExecutorUnavailable,
-      ExecutorContradiction,
-      ExactCompletedTerminal,
-      ExactFailedTerminal,
-    ).contains(state.executorEvidence)) or not(state.replacementEventRecorded)
-
-  val lateAcceptedNeverCreatesIntegrationResponsibility: bool =
-    not(state.lateAcceptedCommitPreserved) or and {
-      state.lateAcceptedEvidencePreserved,
-      state.lateAcceptedIntegrationResponsibilityCount == 0,
-      not(state.integrationSelected),
-    }
-
   val restartNeverSelectsIntegration: bool =
-    state.f2WinningChoice != RestartChoice or and {
-      not(state.integrationSelected),
-      state.lateAcceptedIntegrationResponsibilityCount == 0,
-    }
+    state.f2WinningChoice != RestartChoice
+      or not(state.integrationSelected)
+      or state.executorEvidence == ExactTerminal
 
   val membershipWaitReached: bool = state.factDecision == MembershipWait
   val lifecycleWaitReached: bool = state.factDecision == LifecycleWait
@@ -873,6 +756,8 @@ module taskFactReconciliation {
   val continueF2AppliedReached: bool = state.lastAction == ContinueF2AppliedAction
   val restartF2AppliedReached: bool = state.lastAction == RestartF2AppliedAction
   val f2ObservedReached: bool = state.lastAction == F2ObservedAction
+  val heldResumeAdmittedReached: bool = state.lastAction == HeldResumeAdmittedAction
+  val resumeSettledUnchangedSafeReached: bool = state.lastAction == ResumeSettledUnchangedSafeAction
   val stopF2AppliedReached: bool = state.lastAction == StopF2AppliedAction
   val exactRedeliveredReached: bool = state.lastAction == ExactRedeliveredAction
   val runMismatchRejectedReached: bool = state.lastAction == RunMismatchRejectedAction
@@ -892,16 +777,6 @@ module taskFactReconciliation {
   val continueAdmittedReached: bool = state.lastAction == ContinueAdmittedAction
   val f3ObservedReached: bool = state.lastAction == F3ObservedAction
   val continueF3AppliedReached: bool = state.lastAction == ContinueF3AppliedAction
-  val stoppageReconciliationRequiredReached: bool =
-    state.lastAction == StoppageReconciliationRequiredAction
-  val stoppageIntentRecordedReached: bool = state.lastAction == StoppageIntentRecordedAction
-  val stoppageCalledReached: bool = state.lastAction == StoppageCalledAction
-  val stoppageResponseLostReached: bool = state.lastAction == StoppageResponseLostAction
-  val stoppageRunningProjectedReached: bool = state.lastAction == StoppageRunningProjectedAction
-  val stoppageSafeProjectedReached: bool = state.lastAction == StoppageSafeProjectedAction
-  val stoppageReadOnlySafeProjectedReached: bool =
-    state.lastAction == StoppageReadOnlySafeProjectedAction
-  val stopRecoveryActivatedReached: bool = state.lastAction == StopRecoveryActivatedAction
   val implementationAbandonedReached: bool = state.lastAction == ImplementationAbandonedAction
   val exactClaimObservedReached: bool = state.lastAction == ExactClaimObservedAction
   val absentClaimObservedReached: bool = state.lastAction == AbsentClaimObservedAction
@@ -945,8 +820,6 @@ module taskFactReconciliation {
   // waiting and rejection phases from hiding dead boundary branches.
   val replacementNotRequestedReached: bool = state.replacementPhase == ReplacementNotRequested
   val restartAppliedReached: bool = state.replacementPhase == RestartApplied
-  val replacementQuiescenceRequiredReached: bool =
-    state.replacementPhase == NeedCurrentExecutorQuiescence
   val replacementTaskFactsRequiredReached: bool =
     state.replacementPhase == NeedCurrentReplacementTaskFacts
   val replacementClaimRequiredReached: bool =
@@ -966,15 +839,9 @@ module taskFactReconciliation {
   val successorWaitingAdmissionReached: bool =
     state.replacementPhase == SuccessorWaitingForAdmission
   val successorAdmittedReached: bool = state.replacementPhase == SuccessorAdmitted
-  val successorRunningReached: bool = state.replacementPhase == SuccessorRunning
+  val successorExecutingReached: bool = state.replacementPhase == SuccessorExecuting
   val replacementWaitingReached: bool = state.replacementPhase == ReplacementWaiting
   val replacementRejectedReached: bool = state.replacementPhase == ReplacementRejected
-  val lateAcceptedReplacementEvidenceReached: bool =
-    state.executorEvidence == ExactAcceptedTerminal and state.lateAcceptedCommitPreserved
-  val completedReplacementEvidenceReached: bool =
-    state.executorEvidence == ExactCompletedTerminal and state.completedResultPreserved
-  val failedReplacementEvidenceReached: bool =
-    state.executorEvidence == ExactFailedTerminal and state.failedResultPreserved
 
   action init: bool = all {
     state' = {
@@ -986,6 +853,7 @@ module taskFactReconciliation {
       winningRequestId: NO_REQUEST,
       winningSubject: SUBJECT_F2,
       appliedChoiceCount: 0,
+      appliedChoiceCountAtTerminalObservation: 0,
       lastControlResult: NoControlResult,
       authorizedFingerprint: F1,
       continueStage: NotContinuing,
@@ -1000,20 +868,11 @@ module taskFactReconciliation {
       quiescenceUnbroken: true,
       implementationResponsibilityRetained: true,
       positionHeld: false,
+      heldResumeAdmitted: false,
+      heldResumeCancellationCount: 0,
+      resumeCommandIntentCount: 0,
+      resumeBoundaryCallCount: 0,
       stopStage: NotStopping,
-      // The accepted attempt already journaled StartOrContinue ordinal 1.
-      nextStopCommandOrdinal: 2,
-      activeStopCommandOrdinal: 0,
-      lastSettledStopCommandOrdinal: 0,
-      stopCommandIntentCount: 0,
-      stopCommandCallCount: 0,
-      stopCommandSettlementCount: 0,
-      suspensionCommandCountSinceSafeEvidence: 0,
-      stopCommandCalled: false,
-      stopResponseAmbiguous: false,
-      runningProjectionSettledStopIntent: false,
-      stopProjectionsThisActivation: 0,
-      stopRecoveryCount: 0,
       claimObservation: ClaimNotRead,
       claimResult: NoClaimResult,
       claimReadsThisActivation: 0,
@@ -1072,11 +931,6 @@ module taskFactReconciliation {
       successorExecutorStartCount: 0,
       successorExecutorResponsibilityRetained: false,
       replacementProcessLossCount: 0,
-      completedResultPreserved: false,
-      failedResultPreserved: false,
-      lateAcceptedCommitPreserved: false,
-      lateAcceptedEvidencePreserved: false,
-      lateAcceptedIntegrationResponsibilityCount: 0,
       p1BranchPreserved: true,
       p1CommitsPreserved: true,
       p1JournalEvidencePreserved: true,
@@ -1096,12 +950,48 @@ module taskFactReconciliation {
     },
   }
 
+  // Admission is process-local and has not created a command intent or crossed
+  // the executor boundary. A terminal choice may therefore cancel it without
+  // manufacturing a lifecycle report.
+  action admitHeldResumeBeforeTerminalChoice: bool = all {
+    state.phase == PreIntegration,
+    state.f2WinningChoice == NoChoice,
+    state.currentFingerprint == F2,
+    state.executorEvidence == ExactSafelySuspended,
+    not(state.heldResumeAdmitted),
+    state.resumeBoundaryCallCount == 0,
+    state' = { ...state, heldResumeAdmitted: true, lastAction: HeldResumeAdmittedAction },
+  }
+
+  // Resume crosses the command seam, returns the identical Safe report, and
+  // therefore appends no new lifecycle report. The durable command intent is
+  // nevertheless later than the accepted Safe authority and blocks Stop or
+  // Restart from using that stale report.
+  action settleResumeWithUnchangedSafe: bool = all {
+    state.phase == PreIntegration,
+    state.f2WinningChoice == NoChoice,
+    state.currentFingerprint == F2,
+    state.executorEvidence == ExactSafelySuspended,
+    not(state.heldResumeAdmitted),
+    state.resumeCommandIntentCount == 0,
+    state.resumeBoundaryCallCount == 0,
+    state' = {
+      ...state,
+      resumeCommandIntentCount: 1,
+      resumeBoundaryCallCount: 1,
+      lastAction: ResumeSettledUnchangedSafeAction,
+    },
+  }
+
   action applyContinueF2: bool = all {
     state.phase == PreIntegration,
     state.f2WinningChoice == NoChoice,
     state.currentFingerprint == F2,
     state.executorEvidence == ExactSafelySuspended,
     state.quiescenceUnbroken,
+    state.resumeCommandIntentCount == 0,
+    state.resumeBoundaryCallCount == 0,
+    not(state.heldResumeAdmitted),
     CONTINUE_D1.runId == SUBJECT_F2.runId,
     state' = {
       ...state,
@@ -1124,6 +1014,8 @@ module taskFactReconciliation {
     state.currentFingerprint == F2,
     state.executorEvidence == ExactSafelySuspended,
     state.quiescenceUnbroken,
+    state.resumeCommandIntentCount == 0,
+    state.resumeBoundaryCallCount == 0,
     RESTART_D1.runId == SUBJECT_F2.runId,
     state' = {
       ...state,
@@ -1147,6 +1039,9 @@ module taskFactReconciliation {
       observedOldWorktreeHead: NoGitCommit,
       oldBaseB1IsAncestor: false,
       observedReplacementTargetHead: NoGitCommit,
+      heldResumeAdmitted: false,
+      heldResumeCancellationCount:
+        state.heldResumeCancellationCount + (if (state.heldResumeAdmitted) 1 else 0),
       lastAction: RestartF2AppliedAction,
     },
   }
@@ -1157,6 +1052,8 @@ module taskFactReconciliation {
     state.currentFingerprint == F2,
     state.executorEvidence == ExactSafelySuspended,
     state.quiescenceUnbroken,
+    state.resumeCommandIntentCount == 0,
+    state.resumeBoundaryCallCount == 0,
     STOP_D2.runId == SUBJECT_F2.runId,
     state' = {
       ...state,
@@ -1166,6 +1063,9 @@ module taskFactReconciliation {
       winningSubject: SUBJECT_F2,
       appliedChoiceCount: 1,
       lastControlResult: ChoiceApplied,
+      heldResumeAdmitted: false,
+      heldResumeCancellationCount:
+        state.heldResumeCancellationCount + (if (state.heldResumeAdmitted) 1 else 0),
       stopStage: NeedQuiescence,
       factDecision: ContinueWork,
       lastAction: StopF2AppliedAction,
@@ -1213,12 +1113,16 @@ module taskFactReconciliation {
   }
 
   action observeExactTerminal: bool = all {
-    state.f2WinningChoice == NoChoice,
+    Set(NoChoice, StopChoice, RestartChoice).contains(state.f2WinningChoice),
     state.executorEvidence == ExactSafelySuspended,
+    state.implementationResponsibilityRetained,
     state.constraint == NoConstraint,
+    state.resumeCommandIntentCount == 0,
+    state.resumeBoundaryCallCount == 0,
     state' = {
       ...state,
       executorEvidence: ExactTerminal,
+      appliedChoiceCountAtTerminalObservation: state.appliedChoiceCount,
       quiescenceUnbroken: true,
       positionHeld: false,
       lastAction: TerminalObservedAction,
@@ -1226,8 +1130,8 @@ module taskFactReconciliation {
   }
 
   action beginIntegration: bool = all {
-    state.f2WinningChoice == NoChoice,
-    state.currentFingerprint == F1,
+    state.phase == PreIntegration,
+    Set(NoChoice, StopChoice, RestartChoice).contains(state.f2WinningChoice),
     state.executorEvidence == ExactTerminal,
     state' = {
       ...state,
@@ -1334,9 +1238,10 @@ module taskFactReconciliation {
       ...state,
       continueStage: ContinueResumed,
       resumedAttempt: AttemptP,
-      executorEvidence: ExactRunning,
+      executorEvidence: ExactExecuting,
       quiescenceUnbroken: false,
-      runningProjectionSettledStopIntent: false,
+      resumeCommandIntentCount: state.resumeCommandIntentCount + 1,
+      resumeBoundaryCallCount: state.resumeBoundaryCallCount + 1,
       positionHeld: true,
       lastAction: ContinueAdmittedAction,
     },
@@ -1364,6 +1269,10 @@ module taskFactReconciliation {
   }
 
   action applyContinueF3: bool = all {
+    // A changed fingerprint may require a new Continue only when the earlier
+    // choice was Continue. Once Stop or Restart wins, no later choice may
+    // issue Resume for this immutable attempt.
+    state.f2WinningChoice == ContinueChoice,
     state.continueStage == NewChoiceRequired,
     state.f3WinningChoice == NoChoice,
     CONTINUE_D3.runId == SUBJECT_F3.runId,
@@ -1396,211 +1305,6 @@ module taskFactReconciliation {
     },
   }
 
-  // A later StartOrContinue command breaks the retained proof. Every task/Git
-  // observation made before this new writer fact is cleared so a later exact
-  // Accepted or safely-suspended report is followed by fresh reads.
-  action breakRestartSafeSuspension: bool = all {
-    state.f2WinningChoice == RestartChoice,
-    replacementPendingBeforeAppend(state),
-    not(state.replacementEventRecorded),
-    state.implementationResponsibilityRetained,
-    state' = {
-      ...state,
-      replacementPhase: NeedCurrentExecutorQuiescence,
-      replacementDisposition: NoReplacementDisposition,
-      executorEvidence: ExactRunning,
-      quiescenceUnbroken: false,
-      positionHeld: true,
-      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
-      replacementTaskFacts: ReplacementTaskFactsNotRead,
-      replacementClaimFacts: ReplacementClaimNotRead,
-      replacementClaimReadsThisActivation: 0,
-      oldWorktreeFacts: OldWorktreeNotRead,
-      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
-      observedOldWorktreeHead: NoGitCommit,
-      oldBaseB1IsAncestor: false,
-      observedReplacementTargetHead: NoGitCommit,
-      lastAction: RestartQuiescenceBrokenAction,
-    },
-  }
-
-  action observeRestartRunning: bool = all {
-    state.f2WinningChoice == RestartChoice,
-    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
-    state.implementationResponsibilityRetained,
-    state' = {
-      ...state,
-      executorEvidence: ExactRunning,
-      quiescenceUnbroken: false,
-      positionHeld: true,
-      lastSettledStopCommandOrdinal:
-        if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT)
-          state.nextStopCommandOrdinal
-        else state.lastSettledStopCommandOrdinal,
-      nextStopCommandOrdinal:
-        state.nextStopCommandOrdinal
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      stopCommandIntentCount:
-        state.stopCommandIntentCount
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      stopCommandCallCount:
-        state.stopCommandCallCount
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      stopCommandSettlementCount:
-        state.stopCommandSettlementCount
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      suspensionCommandCountSinceSafeEvidence:
-        state.suspensionCommandCountSinceSafeEvidence
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      replacementPhase: ReplacementWaiting,
-      replacementDisposition: RunningWriterWait,
-      lastAction: RestartRunningObservedAction,
-    },
-  }
-
-  action observeRestartExecutorUnavailable: bool = all {
-    state.f2WinningChoice == RestartChoice,
-    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
-    state.implementationResponsibilityRetained,
-    state' = {
-      ...state,
-      executorEvidence: ExecutorUnavailable,
-      quiescenceUnbroken: false,
-      replacementPhase: ReplacementWaiting,
-      replacementDisposition: ExecutorUnreadableWait,
-      lastAction: RestartExecutorUnavailableObservedAction,
-    },
-  }
-
-  action observeRestartExecutorContradiction: bool = all {
-    state.f2WinningChoice == RestartChoice,
-    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
-    state.implementationResponsibilityRetained,
-    state' = {
-      ...state,
-      executorEvidence: ExecutorContradiction,
-      quiescenceUnbroken: false,
-      replacementPhase: ReplacementWaiting,
-      replacementDisposition: ExecutorCorrelationContradiction,
-      lastAction: RestartExecutorContradictionObservedAction,
-    },
-  }
-
-  action observeRestartSafelySuspended: bool = all {
-    state.f2WinningChoice == RestartChoice,
-    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
-    not(state.replacementEventRecorded),
-    state.implementationResponsibilityRetained,
-    state' = {
-      ...state,
-      executorEvidence: ExactSafelySuspended,
-      quiescenceUnbroken: true,
-      positionHeld: false,
-      lastSettledStopCommandOrdinal:
-        if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT)
-          state.nextStopCommandOrdinal
-        else state.lastSettledStopCommandOrdinal,
-      nextStopCommandOrdinal:
-        state.nextStopCommandOrdinal
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      stopCommandIntentCount:
-        state.stopCommandIntentCount
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      stopCommandCallCount:
-        state.stopCommandCallCount
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      stopCommandSettlementCount:
-        state.stopCommandSettlementCount
-          + (if (state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT) 1 else 0),
-      suspensionCommandCountSinceSafeEvidence: 0,
-      replacementPhase: NeedCurrentReplacementTaskFacts,
-      replacementDisposition: NoReplacementDisposition,
-      replacementTaskFacts: ReplacementTaskFactsNotRead,
-      replacementClaimFacts: ReplacementClaimNotRead,
-      replacementClaimReadsThisActivation: 0,
-      oldWorktreeFacts: OldWorktreeNotRead,
-      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
-      observedOldWorktreeHead: NoGitCommit,
-      oldBaseB1IsAncestor: false,
-      observedReplacementTargetHead: NoGitCommit,
-      lastAction: RestartSafeObservedAction,
-    },
-  }
-
-  action observeRestartAccepted: bool = all {
-    state.f2WinningChoice == RestartChoice,
-    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
-    not(state.replacementEventRecorded),
-    state.implementationResponsibilityRetained,
-    not(state.completedResultPreserved),
-    not(state.failedResultPreserved),
-    state' = {
-      ...state,
-      executorEvidence: ExactAcceptedTerminal,
-      quiescenceUnbroken: true,
-      implementationResponsibilityRetained: false,
-      positionHeld: false,
-      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
-      lateAcceptedCommitPreserved: true,
-      lateAcceptedEvidencePreserved: true,
-      lateAcceptedIntegrationResponsibilityCount: 0,
-      integrationSelected: false,
-      replacementPhase: NeedCurrentReplacementTaskFacts,
-      replacementDisposition: NoReplacementDisposition,
-      replacementTaskFacts: ReplacementTaskFactsNotRead,
-      replacementClaimFacts: ReplacementClaimNotRead,
-      replacementClaimReadsThisActivation: 0,
-      oldWorktreeFacts: OldWorktreeNotRead,
-      replacementTargetHeadFacts: ReplacementTargetHeadNotRead,
-      observedOldWorktreeHead: NoGitCommit,
-      oldBaseB1IsAncestor: false,
-      observedReplacementTargetHead: NoGitCommit,
-      lastAction: RestartAcceptedObservedAction,
-    },
-  }
-
-  action observeRestartCompleted: bool = all {
-    state.f2WinningChoice == RestartChoice,
-    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
-    not(state.replacementEventRecorded),
-    state.implementationResponsibilityRetained,
-    not(state.lateAcceptedCommitPreserved),
-    not(state.failedResultPreserved),
-    state' = {
-      ...state,
-      executorEvidence: ExactCompletedTerminal,
-      quiescenceUnbroken: true,
-      implementationResponsibilityRetained: false,
-      positionHeld: false,
-      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
-      completedResultPreserved: true,
-      replacementPhase: ReplacementRejected,
-      replacementDisposition: CompletedDoesNotAuthorizeReplacement,
-      lastAction: RestartCompletedObservedAction,
-    },
-  }
-
-  action observeRestartFailed: bool = all {
-    state.f2WinningChoice == RestartChoice,
-    Set(NeedCurrentExecutorQuiescence, ReplacementWaiting).contains(state.replacementPhase),
-    not(state.replacementEventRecorded),
-    state.implementationResponsibilityRetained,
-    not(state.lateAcceptedCommitPreserved),
-    not(state.completedResultPreserved),
-    state' = {
-      ...state,
-      executorEvidence: ExactFailedTerminal,
-      quiescenceUnbroken: true,
-      implementationResponsibilityRetained: false,
-      positionHeld: false,
-      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
-      failedResultPreserved: true,
-      replacementPhase: ReplacementRejected,
-      replacementDisposition: FailedDoesNotAuthorizeReplacement,
-      lastAction: RestartFailedObservedAction,
-    },
-  }
-
   action observeReplacementExactF2TaskFacts: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementTaskFacts,
@@ -1618,6 +1322,7 @@ module taskFactReconciliation {
   action observeReplacementF3TaskFacts: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementTaskFacts,
+    replacementQuiescence(state),
     state' = {
       ...state,
       currentFingerprint: F3,
@@ -1634,6 +1339,7 @@ module taskFactReconciliation {
   action observeReplacementTaskFactsUnreadable: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementTaskFacts,
+    replacementQuiescence(state),
     state' = {
       ...state,
       replacementTaskFacts: ReplacementTaskFactsUnreadable,
@@ -1646,6 +1352,7 @@ module taskFactReconciliation {
   action observeReplacementTaskNotEligible: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementTaskFacts,
+    replacementQuiescence(state),
     state' = {
       ...state,
       replacementTaskFacts: ReplacementTaskNotEligible,
@@ -1658,6 +1365,7 @@ module taskFactReconciliation {
   action observeReplacementExactK1: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementClaim,
+    replacementQuiescence(state),
     state' = {
       ...state,
       replacementClaimFacts: ExactK1Observed,
@@ -1673,6 +1381,7 @@ module taskFactReconciliation {
   action observeReplacementClaimAbsent: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementClaim,
+    replacementQuiescence(state),
     state' = {
       ...state,
       replacementClaimFacts: ReplacementClaimAbsent,
@@ -1688,6 +1397,7 @@ module taskFactReconciliation {
   action observeReplacementClaimForeign: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementClaim,
+    replacementQuiescence(state),
     state' = {
       ...state,
       replacementClaimFacts: ReplacementClaimForeign,
@@ -1703,6 +1413,7 @@ module taskFactReconciliation {
   action observeReplacementClaimUnreadable: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementClaim,
+    replacementQuiescence(state),
     state.replacementClaimReadsThisActivation < REPLACEMENT_CLAIM_READ_LIMIT,
     state' = {
       ...state,
@@ -1726,6 +1437,7 @@ module taskFactReconciliation {
   action observeReplacementClaimUnreadableBounded: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementClaim,
+    replacementQuiescence(state),
     state.replacementClaimReadsThisActivation == 0,
     state' = {
       ...state,
@@ -1744,6 +1456,7 @@ module taskFactReconciliation {
   action recoverReplacementClaimReadActivation: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentReplacementClaim,
+    replacementQuiescence(state),
     state.replacementClaimReadsThisActivation > 0,
     state.replacementClaimReadsThisActivation < REPLACEMENT_CLAIM_READ_LIMIT,
     state' = {
@@ -1758,6 +1471,7 @@ module taskFactReconciliation {
   action observeReplacementExactW1Ready: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentOldWorktree,
+    replacementQuiescence(state),
     state' = {
       ...state,
       oldWorktreeFacts: ExactW1Ready,
@@ -1771,6 +1485,7 @@ module taskFactReconciliation {
   action observeReplacementW1NotReady: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentOldWorktree,
+    replacementQuiescence(state),
     state' = {
       ...state,
       oldWorktreeFacts: OldWorktreeNotReady,
@@ -1783,6 +1498,7 @@ module taskFactReconciliation {
   action observeReplacementW1Unreadable: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentOldWorktree,
+    replacementQuiescence(state),
     state' = {
       ...state,
       oldWorktreeFacts: OldWorktreeUnreadable,
@@ -1795,6 +1511,7 @@ module taskFactReconciliation {
   action observeReplacementExactH2: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentTargetHead,
+    replacementQuiescence(state),
     state' = {
       ...state,
       replacementTargetHeadFacts: ExactH2Observed,
@@ -1807,6 +1524,7 @@ module taskFactReconciliation {
   action observeReplacementH2Unreadable: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == NeedCurrentTargetHead,
+    replacementQuiescence(state),
     state' = {
       ...state,
       replacementTargetHeadFacts: ReplacementTargetHeadUnreadable,
@@ -1822,6 +1540,7 @@ module taskFactReconciliation {
   action recoverReplacementAppendAbsent: bool = all {
     state.f2WinningChoice == RestartChoice,
     state.replacementPhase == ReplacementReadyToAppend,
+    replacementQuiescence(state),
     not(state.replacementEventRecorded),
     state' = {
       ...state,
@@ -1855,8 +1574,7 @@ module taskFactReconciliation {
     state.replacementPhase == ReplacementReadyToAppend,
     state.currentFingerprint == F2,
     state.quiescenceUnbroken,
-    state.executorEvidence == ExactSafelySuspended
-      or state.executorEvidence == ExactAcceptedTerminal,
+    state.executorEvidence == ExactSafelySuspended,
     state.replacementTaskFacts == ExactF2OpenInClosureUnblocked,
     state.replacementClaimFacts == ExactK1Observed,
     state.oldWorktreeFacts == ExactW1Ready,
@@ -1946,170 +1664,8 @@ module taskFactReconciliation {
       ...state,
       successorExecutorStartCount: 1,
       successorExecutorResponsibilityRetained: true,
-      replacementPhase: SuccessorRunning,
+      replacementPhase: SuccessorExecuting,
       lastAction: SuccessorExecutorStartedAction,
-    },
-  }
-
-  // A later exact Running projection breaks retained proof. Stop now needs its
-  // durable stoppage intent and exact command-projection protocol.
-  action requireStoppageReconciliation: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    state.stopStage == NeedQuiescence,
-    exactQuiescence(state),
-    state' = {
-      ...state,
-      executorEvidence: ExactRunning,
-      quiescenceUnbroken: false,
-      runningProjectionSettledStopIntent: false,
-      positionHeld: true,
-      lastAction: StoppageReconciliationRequiredAction,
-    },
-  }
-
-  action recordStoppageIntent: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    state.stopStage == NeedQuiescence,
-    not(exactQuiescence(state)),
-    not(stopCommandActive(state)),
-    state.suspensionCommandCountSinceSafeEvidence < STOP_COMMAND_LIMIT,
-    state' = {
-      ...state,
-      activeStopCommandOrdinal: state.nextStopCommandOrdinal,
-      nextStopCommandOrdinal: state.nextStopCommandOrdinal + 1,
-      stopCommandIntentCount: state.stopCommandIntentCount + 1,
-      suspensionCommandCountSinceSafeEvidence: state.suspensionCommandCountSinceSafeEvidence + 1,
-      lastAction: StoppageIntentRecordedAction,
-    },
-  }
-
-  action callStoppage: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    stopCommandActive(state),
-    not(state.stopCommandCalled),
-    state' = {
-      ...state,
-      stopCommandCalled: true,
-      stopCommandCallCount: state.stopCommandCallCount + 1,
-      lastAction: StoppageCalledAction,
-    },
-  }
-
-  action loseStoppageResponse: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    state.stopCommandCalled,
-    not(state.stopResponseAmbiguous),
-    state' = { ...state, stopResponseAmbiguous: true, lastAction: StoppageResponseLostAction },
-  }
-
-  action projectExactRunningForStoppage: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    state.stopCommandCalled,
-    state.stopResponseAmbiguous,
-    state.stopProjectionsThisActivation == 0,
-    state' = {
-      ...state,
-      executorEvidence: ExactRunning,
-      runningProjectionSettledStopIntent: true,
-      quiescenceUnbroken: false,
-      lastSettledStopCommandOrdinal: state.activeStopCommandOrdinal,
-      activeStopCommandOrdinal: 0,
-      stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
-      stopCommandCalled: false,
-      stopResponseAmbiguous: false,
-      stopProjectionsThisActivation: 1,
-      positionHeld: true,
-      lastAction: StoppageRunningProjectedAction,
-    },
-  }
-
-  action projectExactSafeForStoppage: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    state.stopCommandCalled,
-    state.stopResponseAmbiguous,
-    state.stopProjectionsThisActivation == 0,
-    state' = {
-      ...state,
-      executorEvidence: ExactSafelySuspended,
-      runningProjectionSettledStopIntent: false,
-      quiescenceUnbroken: true,
-      lastSettledStopCommandOrdinal: state.activeStopCommandOrdinal,
-      activeStopCommandOrdinal: 0,
-      stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
-      suspensionCommandCountSinceSafeEvidence: 0,
-      stopCommandCalled: false,
-      stopResponseAmbiguous: false,
-      stopProjectionsThisActivation: 1,
-      positionHeld: false,
-      lastAction: StoppageSafeProjectedAction,
-    },
-  }
-
-  action projectExactTerminalForStoppage: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    state.stopCommandCalled,
-    state.stopResponseAmbiguous,
-    state.stopProjectionsThisActivation == 0,
-    state' = {
-      ...state,
-      executorEvidence: ExactTerminal,
-      runningProjectionSettledStopIntent: false,
-      quiescenceUnbroken: true,
-      lastSettledStopCommandOrdinal: state.activeStopCommandOrdinal,
-      activeStopCommandOrdinal: 0,
-      stopCommandSettlementCount: state.stopCommandSettlementCount + 1,
-      stopCommandCalled: false,
-      stopResponseAmbiguous: false,
-      stopProjectionsThisActivation: 1,
-      positionHeld: false,
-      lastAction: StoppageTerminalProjectedAction,
-    },
-  }
-
-  action recoverStopActivation: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    state.stopStage == NeedQuiescence,
-    if (stopCommandActive(state) and state.stopCommandCalled and state.stopResponseAmbiguous)
-      state.stopProjectionsThisActivation <= 1
-    else
-      not(stopCommandActive(state)) and state.stopProjectionsThisActivation == 1,
-    state.stopRecoveryCount < RECOVERY_LIMIT
-      or and {
-        state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
-        not(stopCommandActive(state)),
-        state.stopProjectionsThisActivation == 1,
-        state.stopRecoveryCount == RECOVERY_LIMIT,
-      },
-    state' = {
-      ...state,
-      stopProjectionsThisActivation: 0,
-      stopRecoveryCount:
-        if (state.stopRecoveryCount < RECOVERY_LIMIT) state.stopRecoveryCount + 1
-        else state.stopRecoveryCount,
-      lastAction: StopRecoveryActivatedAction,
-    },
-  }
-
-  action projectReadOnlyExactSafeAfterStoppageLimit: bool = all {
-    state.f2WinningChoice == StopChoice or state.f3WinningChoice == StopChoice,
-    state.stopStage == NeedQuiescence,
-    state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
-    not(stopCommandActive(state)),
-    not(state.stopCommandCalled),
-    state.stopProjectionsThisActivation == 0,
-    state.executorEvidence == ExactRunning,
-    state' = {
-      ...state,
-      executorEvidence: ExactSafelySuspended,
-      suspensionCommandCountSinceSafeEvidence: 0,
-      quiescenceUnbroken: true,
-      runningProjectionSettledStopIntent: false,
-      stopProjectionsThisActivation: 1,
-      positionHeld: false,
-      implementationResponsibilityRetained: false,
-      unresolvedClaimReleaseResponsibility: true,
-      stopStage: NeedClaimObservation,
-      lastAction: StoppageReadOnlySafeProjectedAction,
     },
   }
 
@@ -2297,7 +1853,7 @@ module taskFactReconciliation {
       ...state,
       constraint: MembershipConstraint,
       factDecision: RequestSafeSuspension,
-      executorEvidence: ExactRunning,
+      executorEvidence: ExactExecuting,
       quiescenceUnbroken: false,
       positionHeld: true,
       lastAction: MembershipLossObservedAction,
@@ -2313,7 +1869,7 @@ module taskFactReconciliation {
       ...state,
       constraint: LifecycleConstraint,
       factDecision: RequestSafeSuspension,
-      executorEvidence: ExactRunning,
+      executorEvidence: ExactExecuting,
       quiescenceUnbroken: false,
       positionHeld: true,
       lastAction: LifecycleClosureObservedAction,
@@ -2329,7 +1885,7 @@ module taskFactReconciliation {
       ...state,
       constraint: SpecificationConstraint,
       factDecision: RequestSafeSuspension,
-      executorEvidence: ExactRunning,
+      executorEvidence: ExactExecuting,
       quiescenceUnbroken: false,
       positionHeld: true,
       lastAction: SpecificationChangeObservedAction,
@@ -2345,7 +1901,7 @@ module taskFactReconciliation {
       ...state,
       constraint: ExternalSuccessConstraint,
       factDecision: RequestSafeSuspension,
-      executorEvidence: ExactRunning,
+      executorEvidence: ExactExecuting,
       quiescenceUnbroken: false,
       positionHeld: true,
       dependantsReleasedByFreshGraph: true,
@@ -2372,7 +1928,7 @@ module taskFactReconciliation {
       ...state,
       constraint: MissingClaimConstraint,
       factDecision: RequestSafeSuspension,
-      executorEvidence: ExactRunning,
+      executorEvidence: ExactExecuting,
       quiescenceUnbroken: false,
       positionHeld: true,
       claimState: MissingClaim,
@@ -2390,7 +1946,7 @@ module taskFactReconciliation {
       ...state,
       constraint: ForeignClaimConstraint,
       factDecision: RequestSafeSuspension,
-      executorEvidence: ExactRunning,
+      executorEvidence: ExactExecuting,
       quiescenceUnbroken: false,
       positionHeld: true,
       claimState: ForeignClaim,
@@ -2409,7 +1965,7 @@ module taskFactReconciliation {
       ...state,
       constraint: UnreadableClaimConstraint,
       factDecision: RequestSafeSuspension,
-      executorEvidence: ExactRunning,
+      executorEvidence: ExactExecuting,
       quiescenceUnbroken: false,
       positionHeld: true,
       claimState: UnreadableClaim,
@@ -2423,7 +1979,6 @@ module taskFactReconciliation {
       ...state,
       executorEvidence: ExactSafelySuspended,
       quiescenceUnbroken: true,
-      suspensionCommandCountSinceSafeEvidence: 0,
       positionHeld: false,
       factDecision:
         if (state.constraint == MembershipConstraint) MembershipWait
@@ -2528,6 +2083,8 @@ module taskFactReconciliation {
 
   action step: bool = any {
     observeF2Change,
+    admitHeldResumeBeforeTerminalChoice,
+    settleResumeWithUnchangedSafe,
     applyContinueF2,
     applyRestartF2,
     applyStopF2,
@@ -2550,14 +2107,6 @@ module taskFactReconciliation {
     observeF3BeforeContinuation,
     applyContinueF3,
     beginReplacementFactsFromRetainedSafeSuspension,
-    breakRestartSafeSuspension,
-    observeRestartRunning,
-    observeRestartExecutorUnavailable,
-    observeRestartExecutorContradiction,
-    observeRestartSafelySuspended,
-    observeRestartAccepted,
-    observeRestartCompleted,
-    observeRestartFailed,
     observeReplacementExactF2TaskFacts,
     observeReplacementF3TaskFacts,
     observeReplacementTaskFactsUnreadable,
@@ -2579,15 +2128,6 @@ module taskFactReconciliation {
     prepareCleanSuccessorW2,
     admitSuccessorThroughOrdinaryCapacity,
     startSuccessorExecutor,
-    requireStoppageReconciliation,
-    recordStoppageIntent,
-    callStoppage,
-    loseStoppageResponse,
-      projectExactRunningForStoppage,
-      projectExactSafeForStoppage,
-      projectExactTerminalForStoppage,
-    recoverStopActivation,
-    projectReadOnlyExactSafeAfterStoppageLimit,
     abandonImplementation,
     observeExactClaim,
     observeAbsentClaim,
@@ -2689,81 +2229,10 @@ module taskFactReconciliation {
     all {
       state.f2WinningChoice == StopChoice,
       state.stopStage == NeedQuiescence,
-      stopCommandActive(state),
-      not(state.stopCommandCalled),
-      any { callStoppage },
-    },
-    all {
-      state.f2WinningChoice == StopChoice,
-      state.stopStage == NeedQuiescence,
-      stopCommandActive(state),
-      state.stopCommandCalled,
-      not(state.stopResponseAmbiguous),
-      any { loseStoppageResponse },
-    },
-    all {
-      state.f2WinningChoice == StopChoice,
-      state.stopStage == NeedQuiescence,
-      stopCommandActive(state),
-      state.stopCommandCalled,
-      state.stopResponseAmbiguous,
-      state.stopProjectionsThisActivation == 0,
-      any {
-        projectExactRunningForStoppage,
-        projectExactSafeForStoppage,
-        projectExactTerminalForStoppage,
-        recoverStopActivation,
-      },
-    },
-    all {
-      state.f2WinningChoice == StopChoice,
-      state.stopStage == NeedQuiescence,
-      stopCommandActive(state),
-      state.stopCommandCalled,
-      state.stopResponseAmbiguous,
-      state.stopProjectionsThisActivation != 0,
-      any { recoverStopActivation },
-    },
-    all {
-      state.f2WinningChoice == StopChoice,
-      state.stopStage == NeedQuiescence,
-      not(stopCommandActive(state)),
       exactQuiescence(state),
       any {
-        requireStoppageReconciliation,
         abandonImplementation,
-        redeliverExactF2Choice,
-        rejectPersistedRequestContentReuse,
-        rejectLosingF2Choice,
-      },
-    },
-    all {
-      state.f2WinningChoice == StopChoice,
-      state.stopStage == NeedQuiescence,
-      not(stopCommandActive(state)),
-      not(exactQuiescence(state)),
-      state.stopProjectionsThisActivation == 1,
-      any { recoverStopActivation },
-    },
-    all {
-      state.f2WinningChoice == StopChoice,
-      state.stopStage == NeedQuiescence,
-      not(stopCommandActive(state)),
-      not(exactQuiescence(state)),
-      state.stopProjectionsThisActivation != 1,
-      state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
-      any { projectReadOnlyExactSafeAfterStoppageLimit },
-    },
-    all {
-      state.f2WinningChoice == StopChoice,
-      state.stopStage == NeedQuiescence,
-      not(stopCommandActive(state)),
-      not(exactQuiescence(state)),
-      state.stopProjectionsThisActivation != 1,
-      state.suspensionCommandCountSinceSafeEvidence != STOP_COMMAND_LIMIT,
-      any {
-        recordStoppageIntent,
-        selectIndependentTaskB,
+        observeExactTerminal,
         redeliverExactF2Choice,
         rejectPersistedRequestContentReuse,
         rejectLosingF2Choice,
@@ -2799,6 +2268,18 @@ module taskFactReconciliation {
       state.f2WinningChoice == StopChoice,
       state.stopStage == StopWaiting,
       any { recoverClaimActivation, selectIndependentTaskB },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.executorEvidence == ExactTerminal,
+      state.phase == PreIntegration,
+      any { beginIntegration, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == StopChoice,
+      state.executorEvidence == ExactTerminal,
+      state.phase == IntegrationStarted,
+      redeliverExactF2Choice,
     },
     all {
       state.f2WinningChoice == StopChoice,
@@ -2846,20 +2327,19 @@ module taskFactReconciliation {
     all {
       state.f2WinningChoice == RestartChoice,
       state.replacementPhase == RestartApplied,
-      any { beginReplacementFactsFromRetainedSafeSuspension, breakRestartSafeSuspension },
+      any { beginReplacementFactsFromRetainedSafeSuspension, observeExactTerminal },
     },
     all {
       state.f2WinningChoice == RestartChoice,
-      state.replacementPhase == NeedCurrentExecutorQuiescence,
-      any {
-        observeRestartRunning,
-        observeRestartExecutorUnavailable,
-        observeRestartExecutorContradiction,
-        observeRestartSafelySuspended,
-        observeRestartAccepted,
-        observeRestartCompleted,
-        observeRestartFailed,
-      },
+      state.executorEvidence == ExactTerminal,
+      state.phase == PreIntegration,
+      any { beginIntegration, redeliverExactF2Choice, rejectPersistedRequestContentReuse, rejectLosingF2Choice },
+    },
+    all {
+      state.f2WinningChoice == RestartChoice,
+      state.executorEvidence == ExactTerminal,
+      state.phase == IntegrationStarted,
+      redeliverExactF2Choice,
     },
     all {
       state.f2WinningChoice == RestartChoice,

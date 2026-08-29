@@ -20,11 +20,14 @@ import {
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
-  PlannedAttemptExecutorStateObservedEvent
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorWorkReportedEvent
 } from "./events.js"
 import {
+  latestAcceptedPlannedAttemptExecutorEvidence,
   latestPlannedAttemptExecutorEvidence,
   plannedAttemptExecutorEvidence,
   plannedAttemptExecutorRequestFor
@@ -74,14 +77,22 @@ it.each([
   PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
   PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({}),
   PlannedAttemptExecutorStateObservation.cases.ExecutorReportContradiction.make({
-    observed: PlannedAttemptExecutorReport.cases.Running.make({
+    observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
       correlation: { attemptId: AttemptId.make("foreign-evidence-attempt"), runId: plannedAttempt.runId }
+    })
+  }),
+  PlannedAttemptExecutorStateObservation.cases.ExecutorLifecycleTransitionContradiction.make({
+    accepted: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+      correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+    }),
+    observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+      correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
     })
   })
 ])("invalidates older exact authority after a newer $._tag projection until an exact reread", (issue) => {
   const exact = PlannedAttemptExecutorStateObservedEvent.make({
     observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
-      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
         correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
       })
     }),
@@ -126,6 +137,101 @@ it.each([
   ).toBe(3)
 })
 
+it("does not fall back to an older accepted report when a distinct exact report still awaits acceptance", () => {
+  const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+  const acceptedSafe = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+    version: workflowJournalEventVersion
+  })
+  const observedTerminal = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Completed" }
+      })
+    }),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const records = [
+    { event: acceptedSafe, position: JournalPosition.make(1) },
+    { event: observedTerminal, position: JournalPosition.make(2) }
+  ]
+
+  expect(latestPlannedAttemptExecutorEvidence(records, plannedAttempt)).toMatchObject({
+    observedAt: 2,
+    source: { _tag: "StateProjection" }
+  })
+  expect(latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)).toBeUndefined()
+})
+
+it("retains accepted authority after an unchanged exact passive replay", () => {
+  const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+  const acceptedSafe = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+    version: workflowJournalEventVersion
+  })
+  const replayedSafe = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: acceptedSafe.report }),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const records = [
+    { event: acceptedSafe, position: JournalPosition.make(1) },
+    { event: replayedSafe, position: JournalPosition.make(2) }
+  ]
+
+  expect(latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)).toMatchObject({
+    observedAt: 1,
+    source: { _tag: "AcceptedReport" }
+  })
+})
+
+it("restores accepted authority when an unchanged exact reread follows a lifecycle contradiction", () => {
+  const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+  const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+  const acceptedSafe = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+    report: safe,
+    version: workflowJournalEventVersion
+  })
+  const contradiction = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorLifecycleTransitionContradiction.make({
+      accepted: safe,
+      observed: executing
+    }),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const reread = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: safe }),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(2),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+
+  expect(
+    latestAcceptedPlannedAttemptExecutorEvidence(
+      [
+        { event: acceptedSafe, position: JournalPosition.make(1) },
+        { event: contradiction, position: JournalPosition.make(2) },
+        { event: reread, position: JournalPosition.make(3) }
+      ],
+      plannedAttempt
+    )
+  ).toMatchObject({ observedAt: 1, source: { _tag: "AcceptedReport" } })
+})
+
 it("classifies selected and journal-derived task work specifications exactly", async () => {
   const wrongTask = makeTaskWorkSpecification({ body: "wrong", taskId: TaskId.make("other"), title: "wrong" })
   const stale = makeTaskWorkSpecification({ body: "stale", taskId: plannedAttempt.taskId, title: "stale" })
@@ -150,7 +256,7 @@ it("classifies selected and journal-derived task work specifications exactly", a
 it("applies the executor-evidence position cutoff inclusively", () => {
   const event = PlannedAttemptExecutorStateObservedEvent.make({
     observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
-      report: PlannedAttemptExecutorReport.cases.Running.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
         correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
       })
     }),

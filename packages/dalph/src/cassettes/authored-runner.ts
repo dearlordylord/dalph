@@ -815,15 +815,15 @@ const proposalActionLabels = {
   CommitFreshTaskClaimIntent: "Record intent to create the task claim",
   CommitTaskClaimReacquisitionIntent: "Record intent to reacquire the task claim",
   ContinueFreshWorkflowOperation: "Send the already-journaled request to its recorded owning system",
-  ContinuePlannedAttemptExecutorWork: "Tell the executor to continue the exact planned attempt",
-  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts:
-    "Authorize current tracker and Git facts, then tell the executor to continue the exact planned attempt",
+  ObservePlannedAttemptExecutorWork: "Passively observe the executor's current report for the exact planned attempt",
+  ResumePlannedAttemptExecutorWorkAfterCurrentFacts:
+    "Authorize current tracker and Git facts, then tell the executor to resume the exact safely suspended attempt",
   FixIntegratorSuccessorSession: "Fix the one FullRerun successor after the operator direction and fresh Git lineage",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
   ObserveCancelledAttemptClaim: "Check the tracker claim after cancelling the exact attempt",
   ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",
   ObservePlannedAttemptContinuationClaim: "Check the tracker claim before continuing the planned attempt",
-  ObservePlannedAttemptContinuationExecutor: "Check the executor before continuing the planned attempt",
+  ReconcilePlannedAttemptExecutorWork: "Reconcile one ambiguous executor command before another command",
   ObservePlannedAttemptContinuationGraph: "Check the tracker graph before continuing the planned attempt",
   ObservePlannedAttemptContinuationSpecification:
     "Check tracker work instructions before continuing the planned attempt",
@@ -862,7 +862,7 @@ const proposalActionLabels = {
   RelinquishCancelledAttemptImplementation: "Relinquish the cancelled attempt's implementation responsibility",
   RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",
   RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
-  StartPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
+  BeginPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
   StartQueuedIntegration: "Start the exact queued integration responsibility",
   SuspendPlannedAttemptExecutorWork: "Request safe suspension of the exact planned-attempt executor work",
   TaskClaimReacquisition: "Try to reacquire the exact task claim",
@@ -1494,7 +1494,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const prepareExecutorReport = Effect.fn("AuthoredCassette.sealAcceptedExecutorEvidence")(function* (
         report: PlannedAttemptExecutorReport
       ) {
-        if (report._tag !== "Terminal" || report.result._tag !== "Accepted") return report
+        if (report._tag !== "ExecutorWorkTerminal" || report.result._tag !== "Accepted") return report
         const acceptedResult = report.result.acceptedResult
         const evidenceManifest = yield* evidenceStore
           .put(
@@ -1514,7 +1514,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             Effect.tapError((failure) => Ref.set(acceptedEvidencePublicationFailure, failure)),
             Effect.orElseSucceed(() => acceptedResult.evidenceManifest)
           )
-        return PlannedAttemptExecutorReport.cases.Terminal.make({
+        return PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: report.correlation,
           result: { _tag: "Accepted", acceptedResult: { commit: acceptedResult.commit, evidenceManifest } }
         })
@@ -1679,7 +1679,7 @@ const runAuthoredScenarioCassetteWith = (request: {
 
       const awaitPlannedSuspensionBoundary = Effect.fn("AuthoredCassette.awaitPlannedSuspensionBoundary")(function* (
         plannedAttempt: PlannedTaskAttempt,
-        request: "StartOrContinue" | "Suspend"
+        request: "Begin" | "Resume" | "Suspend"
       ) {
         const hold = yield* Ref.get(plannedSuspensionExecutorBoundaryGate)
         if (
@@ -1750,7 +1750,7 @@ const runAuthoredScenarioCassetteWith = (request: {
 
       const awaitExecutorPublicationHold = Effect.fn("AuthoredCassette.awaitExecutorPublicationHold")(function* (
         plannedAttempt: PlannedTaskAttempt,
-        request: "StartOrContinue" | "Suspend"
+        request: "Begin" | "Resume" | "Suspend"
       ) {
         const hold = yield* cursor.consumeExecutorRequestPublicationHold
         if (Option.isNone(hold)) return
@@ -1769,7 +1769,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         yield* Queue.take(deliveryPublicationSignals)
       })
 
-      const applyNextControlDirection = (plannedAttempt: PlannedTaskAttempt, request: "StartOrContinue" | "Suspend") =>
+      const applyNextControlDirection = (plannedAttempt: PlannedTaskAttempt, request: "Begin" | "Resume" | "Suspend") =>
         Effect.gen(function* () {
           yield* awaitPlannedSuspensionBoundary(plannedAttempt, request)
           yield* applyInFlightControlDirection(plannedAttempt)
@@ -2595,33 +2595,45 @@ const runAuthoredScenarioCassetteWith = (request: {
         Effect.gen(function* () {
           const live = yield* makeLiveDeliveryActionExecutor(factoryRunId, factoryTarget)
           type ControlledDeliveryAction = Parameters<DeliveryActionExecutorService["execute"]>[0]
-          const heldContinuationPlannedAttempt = (action: ControlledDeliveryAction): PlannedTaskAttempt | undefined => {
+          const observedOrResumedPlannedAttempt = (
+            action: ControlledDeliveryAction
+          ): PlannedTaskAttempt | undefined => {
             /* v8 ignore next -- @preserve This helper is called only by the identity-free delivery executor wrapper. */
             if (action._tag !== "IdentityFreeAction") return undefined
             const route = action.proposal.route
             if (route._tag === "FreshExecutorWorkflowRoute") {
-              return route.step._tag === "ContinuePlannedAttemptExecutorWork" ? route.step.plannedAttempt : undefined
+              return route.step._tag === "ObservePlannedAttemptExecutorWork" ? route.step.plannedAttempt : undefined
             }
             const transition = route.transition
             if (
-              transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
-              transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
+              transition._tag !== "ObservePlannedAttemptExecutorWork" &&
+              transition._tag !== "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
             ) {
               return undefined
             }
             return transition.plannedAttempt
           }
 
+          const resumedPlannedAttempt = (action: ControlledDeliveryAction): PlannedTaskAttempt | undefined => {
+            if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "IdentityFreeWorkflowRoute") {
+              return undefined
+            }
+            const transition = action.proposal.route.transition
+            return transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
+              ? transition.plannedAttempt
+              : undefined
+          }
+
           const awaitAdmittedContinuationChoice = Effect.fn("AuthoredCassette.awaitAdmittedContinuationChoice")(
             function* (action: ControlledDeliveryAction) {
               const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
               if (Option.isNone(hold)) return
-              const plannedAttempt = heldContinuationPlannedAttempt(action)
-              /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Continue action. */
+              const plannedAttempt = resumedPlannedAttempt(action)
+              /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Resume action. */
               if (plannedAttempt === undefined) {
                 return yield* Effect.die(
                   new Error(
-                    `authored continuation hold expected ContinuePlannedAttemptExecutorWork, received ${action.proposal.route._tag}`
+                    `authored continuation hold expected ResumePlannedAttemptExecutorWorkAfterCurrentFacts, received ${action.proposal.route._tag}`
                   )
                 )
               }
@@ -2641,7 +2653,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           const awaitPlannedContinuationExecutorBoundary = Effect.fn(
             "AuthoredCassette.awaitPlannedContinuationExecutorBoundary"
           )(function* (action: ControlledDeliveryAction) {
-            const plannedAttempt = heldContinuationPlannedAttempt(action)
+            const plannedAttempt = observedOrResumedPlannedAttempt(action)
             if (plannedAttempt === undefined) return
             const key = `${plannedAttempt.taskId}:${plannedAttempt.attemptId}`
             const current = yield* cursor.currentStoryItem

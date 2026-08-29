@@ -528,7 +528,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     report: PlannedAttemptExecutorReport
   },
   PlannedAttemptExecutorCommandIntended: {
-    command: Schema.Literals(["StartOrContinue", "Suspend"]),
+    command: Schema.Literals(["Begin", "Resume", "Suspend"]),
     ...initiatedByCoordinator,
     ordinal: PlannedAttemptExecutorCommandOrdinal,
     plannedAttempt: PlannedTaskAttempt
@@ -539,6 +539,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     observation: PlannedAttemptExecutorCommandProjectionObservation,
     plannedAttempt: PlannedTaskAttempt,
     projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
+  },
+  PlannedAttemptExecutorCommandResponseObserved: {
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    ...nonActionOccurrence,
+    plannedAttempt: PlannedTaskAttempt,
+    report: PlannedAttemptExecutorReport
   },
   PlannedAttemptExecutorCommandResponseContradicted: {
     commandOrdinal: PlannedAttemptExecutorCommandOrdinal,

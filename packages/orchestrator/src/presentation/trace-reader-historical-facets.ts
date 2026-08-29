@@ -444,7 +444,7 @@ const acceptedExecutorReportOf = (
 ): AcceptedExecutorReport["report"] | undefined => {
   if (
     source._tag !== "PlannedAttemptExecutorWorkReported" ||
-    source.report._tag !== "Terminal" ||
+    source.report._tag !== "ExecutorWorkTerminal" ||
     source.report.result._tag !== "Accepted" ||
     !acceptedResultEquivalence(fact.acceptedResult, source.report.result.acceptedResult)
   ) {
@@ -1241,7 +1241,7 @@ const reduceExecutorResponsibilities = (item: TraceHistoryItem, state: Historica
   }
   if (occurrence._tag !== "PlannedAttemptExecutorWorkReported") return
   state.executorReports.set(occurrence.report.correlation.attemptId, occurrence)
-  if (occurrence.report._tag !== "Running") {
+  if (occurrence.report._tag !== "ExecutorWorkExecuting") {
     state.retainedExecutorWork.delete(occurrence.report.correlation.attemptId)
   }
 }
@@ -1385,7 +1385,7 @@ const reduceAcceptedResultFact = (item: TraceHistoryItem, state: HistoricalFacet
   const occurrence = item.occurrence
   if (
     occurrence._tag !== "PlannedAttemptExecutorWorkReported" ||
-    occurrence.report._tag !== "Terminal" ||
+    occurrence.report._tag !== "ExecutorWorkTerminal" ||
     occurrence.report.result._tag !== "Accepted"
   ) {
     return

@@ -227,10 +227,15 @@ const renameExecutorReport = (
   })
   return Match.value(report).pipe(
     Match.tagsExhaustive({
-      Running: (value) => completeFields<typeof value>({ _tag: "Running", correlation }),
-      SafelySuspended: (value) => completeFields<typeof value>({ _tag: "SafelySuspended", correlation }),
-      Terminal: (value) =>
-        completeFields<typeof value>({ _tag: "Terminal", correlation, result: preserveCassetteValue(value.result) })
+      ExecutorWorkExecuting: (value) => completeFields<typeof value>({ _tag: "ExecutorWorkExecuting", correlation }),
+      ExecutorWorkSafelySuspended: (value) =>
+        completeFields<typeof value>({ _tag: "ExecutorWorkSafelySuspended", correlation }),
+      ExecutorWorkTerminal: (value) =>
+        completeFields<typeof value>({
+          _tag: "ExecutorWorkTerminal",
+          correlation,
+          result: preserveCassetteValue(value.result)
+        })
     })
   )
 }
@@ -1932,6 +1937,14 @@ const renameRecordedCassetteEntry = (
           plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps),
           projectionOrdinal: preserveCassetteValue(observationEntry.projectionOrdinal)
         }),
+      PlannedAttemptExecutorCommandResponseObserved: (observationEntry) =>
+        completeFields<typeof observationEntry>({
+          _tag: "PlannedAttemptExecutorCommandResponseObserved",
+          commandOrdinal: preserveCassetteValue(observationEntry.commandOrdinal),
+          occurrenceClassification: preserveCassetteValue(observationEntry.occurrenceClassification),
+          plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps),
+          report: renameExecutorReport(observationEntry.report, maps)
+        }),
       PlannedAttemptExecutorCommandResponseContradicted: (observationEntry) =>
         completeFields<typeof observationEntry>({
           _tag: "PlannedAttemptExecutorCommandResponseContradicted",
@@ -1974,6 +1987,10 @@ const renameRecordedCassetteEntry = (
                 maps.operationIds
               )
             },
+            targetLineageObservationOperationId: renamed(
+              authorizationEntry.witness.targetLineageObservationOperationId,
+              maps.operationIds
+            ),
             worktreeObservationOperationId: renamed(
               authorizationEntry.witness.worktreeObservationOperationId,
               maps.operationIds
