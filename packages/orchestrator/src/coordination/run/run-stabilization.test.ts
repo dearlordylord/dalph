@@ -22,12 +22,13 @@ import type { TaskLifecycle } from "../../authorities/task-tracker/task.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import type { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { InRunJournal } from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import {
   deterministicOperationIdAllocatorLayer,
-  deterministicPlannedTaskAttemptLayer
+  deterministicPlannedTaskAttemptLayer,
+  OperationIdAllocator
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
@@ -62,6 +63,12 @@ import {
 } from "./run-activation-opportunity.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { type ApplicationExitLifecycleService, makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
+import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 const runId = RunId.make("run-stabilization")
 const target = FixtureTarget.make("run-stabilization-target")
 const emptyFrontier = { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] }
@@ -163,6 +170,36 @@ const support = Layer.merge(
     makeApplicationExitLifecycle().pipe(Effect.map((lifecycle) => deliveryRuntimeResourcesLayer(lifecycle.admission)))
   )
 )
+
+const supportWithoutAllocator = Layer.mergeAll(
+  deterministicPlannedTaskAttemptLayer({
+    baseSha: GitCommitSha.make("1".repeat(40)),
+    executor: TaskExecutorLocator.make("executor:stabilization"),
+    runId,
+    worktreeRoot: WorktreeLocator.make("/stabilization")
+  }),
+  plannedAttemptProtocolControllerLayer,
+  Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
+)
+const supportWithResourcesWithoutAllocator = Layer.merge(
+  supportWithoutAllocator,
+  Layer.unwrap(
+    makeApplicationExitLifecycle().pipe(Effect.map((lifecycle) => deliveryRuntimeResourcesLayer(lifecycle.admission)))
+  )
+)
+
+const appendableJournalFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+  InRunJournal.of({
+    append: (requestedRunId, key, event) =>
+      Ref.modify(records, (current) => {
+        const existing = current.find((candidate) => candidate.key === key)
+        if (existing !== undefined) return [Effect.succeed(existing), current] as const
+        const position = JournalPosition.make(Number(current.at(-1)?.position ?? 0) + 1)
+        const appended: JournalRecord = { event, key, position, runId: requestedRunId }
+        return [Effect.succeed(appended), [...current, appended]] as const
+      }).pipe(Effect.flatten),
+    read: () => Ref.get(records)
+  })
 
 const freshGraphReadProposal = (
   trackerGraph: Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>,
@@ -442,6 +479,153 @@ it.effect("active refresh performs mandatory G2 once after its typed completion 
       expect(yield* Ref.get(reads)).toBe(1)
       expect(yield* Ref.get(executions)).toBe(0)
       expect(proof.acceptedAt).toBe(JournalPosition.make(4))
+    })
+  )
+)
+
+it.effect("replays an intent-only G2 after a crash and allocates a fresh identity after its outcome", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const contents = snapshot("g2-crash-replay", [
+        { id: activeVerticalTaskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+      ])
+      const g1Operation = makeTrackerGraphObservationOperation(OperationId.make("g2-crash-G1"), target)
+      const g1 = graph(g1Operation.operationId, 2, contents)
+      const g1Records: ReadonlyArray<JournalRecord> = [
+        {
+          event: taskTrackerReadIntent(g1Operation),
+          key: intentRecordKey(g1Operation.operationId),
+          position: JournalPosition.make(1),
+          runId
+        },
+        {
+          event: taskTrackerFactsObservedEvent(
+            g1Operation.operationId,
+            makeCompleteTaskTrackerFactsObserved(g1Operation, contents)
+          ),
+          key: outcomeRecordKey(g1Operation.operationId),
+          position: JournalPosition.make(3),
+          runId
+        }
+      ]
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(g1Records)
+      const journal = appendableJournalFor(records)
+      const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
+        _tag: "ActiveRefreshRuntimeBoundary",
+        runId,
+        reconciledAttempts: [{ runId, attemptId: activeVerticalAttempt.attemptId }]
+      }
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+        ...withRunFacts(evaluation(base, g1), false),
+        activeRefreshBoundary: boundary
+      })
+      const allocated = yield* Ref.make<ReadonlyArray<OperationId>>([])
+      const reads = yield* Ref.make<ReadonlyArray<OperationId>>([])
+      const allocator = OperationIdAllocator.of({
+        allocate: () =>
+          Ref.modify(allocated, (current) => {
+            const operationId = OperationId.make(`g2-crash-fresh-${current.length}`)
+            return [operationId, [...current, operationId]] as const
+          })
+      })
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+          Effect.gen(function* () {
+            const readNumber = yield* Ref.getAndUpdate(reads, (current) => [...current, operation.operationId])
+            const call = readNumber.length
+            yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+            if (call === 0) return yield* Effect.die("crash after G2 intent")
+            const nextGraph = graph(operation.operationId, call === 1 ? 4 : 6, contents)
+            yield* journal.append(
+              runId,
+              outcomeRecordKey(operation.operationId),
+              taskTrackerFactsObservedEvent(
+                operation.operationId,
+                makeCompleteTaskTrackerFactsObserved(operation, contents)
+              )
+            )
+            yield* SubscriptionRef.set(state, {
+              ...withRunFacts(evaluation(base, nextGraph), false),
+              activeRefreshBoundary: boundary
+            })
+            return contents
+          })
+      })
+      const opportunity = activeWorkAuthorityRefreshForOwner(
+        "Timer",
+        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: activeVerticalAttempt.attemptId }])
+      )
+      const firstAttempt = yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+        Effect.provide(supportWithResourcesWithoutAllocator),
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(OperationIdAllocator, allocator),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("G2 replay fixture has no action") })
+        ),
+        Effect.provide(interpreter),
+        Effect.exit
+      )
+
+      expect(firstAttempt._tag).toBe("Failure")
+      expect(yield* Ref.get(allocated)).toEqual([OperationId.make("g2-crash-fresh-0")])
+      const afterCrash = yield* Ref.get(records)
+      expect(
+        afterCrash
+          .filter(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
+          .map(({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" ? event.operation.operationId : undefined
+          )
+      ).toEqual([g1Operation.operationId, OperationId.make("g2-crash-fresh-0")])
+      expect(
+        afterCrash.some(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" && event.operationId === OperationId.make("g2-crash-fresh-0")
+        )
+      ).toBe(false)
+
+      yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+        Effect.provide(supportWithResourcesWithoutAllocator),
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(OperationIdAllocator, allocator),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("G2 replay fixture has no action") })
+        ),
+        Effect.provide(interpreter)
+      )
+      expect(yield* Ref.get(reads)).toEqual([
+        OperationId.make("g2-crash-fresh-0"),
+        OperationId.make("g2-crash-fresh-0")
+      ])
+      expect(yield* Ref.get(allocated)).toEqual([OperationId.make("g2-crash-fresh-0")])
+
+      yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+        Effect.provide(supportWithResourcesWithoutAllocator),
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(OperationIdAllocator, allocator),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("G2 replay fixture has no action") })
+        ),
+        Effect.provide(interpreter)
+      )
+      expect(yield* Ref.get(reads)).toEqual([
+        OperationId.make("g2-crash-fresh-0"),
+        OperationId.make("g2-crash-fresh-0"),
+        OperationId.make("g2-crash-fresh-1")
+      ])
+      expect(yield* Ref.get(allocated)).toEqual([
+        OperationId.make("g2-crash-fresh-0"),
+        OperationId.make("g2-crash-fresh-1")
+      ])
+      const finalRecords = yield* Ref.get(records)
+      expect(
+        finalRecords
+          .filter(({ event }) => event._tag === "TaskTrackerFactsObserved")
+          .map(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? event.operationId : undefined))
+      ).toEqual([g1Operation.operationId, OperationId.make("g2-crash-fresh-0"), OperationId.make("g2-crash-fresh-1")])
     })
   )
 )

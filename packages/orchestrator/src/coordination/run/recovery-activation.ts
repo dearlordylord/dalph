@@ -2397,6 +2397,52 @@ const trackerGraphReadHasOutcome = (records: ReadonlyArray<JournalRecord>, opera
   records.some(({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId)
 
 /**
+ * Finds the one complete graph read that stabilization started after its
+ * accepted first graph. The intent is the only durable purpose marker for
+ * this second read: it has no explicitly covered task subset and names every
+ * graph-read operation known before the intent, including the accepted first
+ * graph. A still-pending intent is recoverable; any typed tracker outcome
+ * settles it and therefore forces a new operation on a later activation.
+ */
+export const pendingActiveRefreshG2OperationFor = (
+  records: ReadonlyArray<JournalRecord>,
+  runId: RunId,
+  target: NonNullable<ReturnType<typeof continuationTarget>>,
+  currentGraph: { readonly operationId: OperationId; readonly recordedAt: JournalPosition }
+): TrackerGraphObservationOperation | undefined =>
+  records.findLast((record): record is TrackerGraphReadIntentRecord => {
+    const { event } = record
+    if (
+      record.runId !== runId ||
+      event._tag !== "TaskTrackerReadIntentRecorded" ||
+      event.operation._tag !== "ReadTrackerGraph" ||
+      record.position <= currentGraph.recordedAt ||
+      taskTrackerTargetKey(event.operation.target) !== taskTrackerTargetKey(target) ||
+      event.operation.readShape.explicitlyCoveredTaskIds.length !== 0 ||
+      !event.operation.predecessorOperationIds.includes(currentGraph.operationId) ||
+      trackerGraphReadHasOutcome(records, event.operation.operationId)
+    ) {
+      return false
+    }
+    const graphPredecessorsBeforeIntent = records
+      .filter(
+        ({ event: candidate, position, runId: recordRunId }) =>
+          recordRunId === runId &&
+          position < record.position &&
+          candidate._tag === "TaskTrackerReadIntentRecorded" &&
+          candidate.operation._tag === "ReadTrackerGraph" &&
+          taskTrackerTargetKey(candidate.operation.target) === taskTrackerTargetKey(target)
+      )
+      .flatMap(({ event: candidate }) =>
+        candidate._tag === "TaskTrackerReadIntentRecorded" && candidate.operation._tag === "ReadTrackerGraph"
+          ? [candidate.operation.operationId]
+          : []
+      )
+    const expectedPredecessors = [...new Set([...graphPredecessorsBeforeIntent, currentGraph.operationId])].toSorted()
+    return sameStringSequence([...event.operation.predecessorOperationIds].toSorted(), expectedPredecessors)
+  })?.event.operation
+
+/**
  * Reuses the exact graph operation whose active-refresh intent survived a
  * process boundary. The current journal position is not an operation
  * identity: appending the intent necessarily moves it. The operation prefix
@@ -2869,23 +2915,33 @@ const activeRefreshRuntimeBoundaryFor = (
       isActiveRefreshSubject(runState.runId, plannedAttempt, opportunity) &&
       latestPlannedAttemptExecutorEvidence(records, plannedAttempt)?.report._tag === "Running"
   )
+  const currentGraph = currentCompleteGraphObservationAfter(records, Option.none())
+  const pendingG2Operation =
+    currentGraph === undefined
+      ? undefined
+      : pendingActiveRefreshG2OperationFor(records, runState.runId, currentGraph.event.observation.target, {
+          operationId: currentGraph.event.operationId,
+          recordedAt: currentGraph.position
+        })
   const reconciledAttempts = runningAttempts.filter((plannedAttempt) =>
     suspensionWasReconciledToRunningDuringActiveRefresh(records, plannedAttempt, baseline)
   )
   if (
     runningAttempts.length === 0 ||
-    !runningAttempts.every((plannedAttempt) =>
-      reconciledAttempts.some((reconciled) => plannedTaskAttemptEquivalence(reconciled, plannedAttempt))
-    )
+    (pendingG2Operation === undefined &&
+      !runningAttempts.every((plannedAttempt) =>
+        reconciledAttempts.some((reconciled) => plannedTaskAttemptEquivalence(reconciled, plannedAttempt))
+      ))
   ) {
     return undefined
   }
-  const runId = reconciledAttempts[0]?.runId
+  const boundaryAttempts = pendingG2Operation === undefined ? reconciledAttempts : runningAttempts
+  const runId = boundaryAttempts[0]?.runId
   if (runId === undefined) return undefined
   return {
     _tag: "ActiveRefreshRuntimeBoundary",
     runId,
-    reconciledAttempts: reconciledAttempts.map(({ attemptId, runId }) => ({ attemptId, runId }))
+    reconciledAttempts: boundaryAttempts.map(({ attemptId, runId }) => ({ attemptId, runId }))
   }
 }
 

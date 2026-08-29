@@ -66,6 +66,10 @@ export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
   /** Optional process-local activation-finalization observation for deterministic lifecycle tests. */
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
+  /** Optional process-local trailing-obligation observation for deterministic lifecycle tests. */
+  readonly onTrailingOrdinaryRecorded?: (generation: number) => Effect.Effect<void>
+  /** Optional process-local idle-handoff observation for deterministic lifecycle tests. */
+  readonly onActivationHandoffIdle?: () => Effect.Effect<void>
 }
 
 /** Only ephemeral hints are public; ownership, pause state, and shutdown stay in the scoped Layer. */
@@ -87,7 +91,14 @@ export class RunReactivationOwner extends Context.Service<RunReactivationOwner, 
 type RunReactivationMessage =
   | { readonly _tag: "Hint"; readonly hint: RunReactivationHint }
   /** A hint that arrived while an activation was crossing its handoff boundary. */
-  | { readonly _tag: "TrailingOrdinary" }
+  | { readonly _tag: "TrailingOrdinary"; readonly generation: number }
+
+/**
+ * One ordinary activation promised by a hint that crossed an activation
+ * handoff. This obligation remains process-local until the worker admits it;
+ * it is not represented only by the one-slot wake queue.
+ */
+type TrailingOrdinaryObligation = { readonly _tag: "PendingTrailingOrdinary"; readonly generation: number }
 
 /**
  * The owner gate's activation phase. Finalizing remains visible until the
@@ -132,6 +143,8 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const stopped = yield* Ref.make(false)
       /** One tagged phase closes the producer/finalization handoff race. */
       const activationPhase = yield* Ref.make<ActivationPhase>({ _tag: "Idle", generation: 0 })
+      /** A trailing activation cannot be displaced by later one-slot hints. */
+      const trailingOrdinaryObligation = yield* Ref.make<Option.Option<TrailingOrdinaryObligation>>(Option.none())
       // Registration precedes the authoritative read below. The callback can
       // therefore capture a Pause accepted in the attach/read interval; the
       // mandatory reread then current-first replays the durable state.
@@ -202,6 +215,26 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       )
 
       /**
+       * Records one trailing ordinary activation and leaves its wake message
+       * in the bounded queue. Later hints observe the obligation and coalesce
+       * into it instead of sliding the wake message out of the queue.
+       */
+      const recordTrailingOrdinaryInsideGate = (generation: number) =>
+        Effect.gen(function* () {
+          if (Option.isSome(yield* Ref.get(trailingOrdinaryObligation))) return
+          // A normal hint can have won the take/admission race just before
+          // this obligation was recorded. It is covered by the ordinary
+          // trailing activation, so remove any queued normal wake first.
+          yield* Queue.clear(messages)
+          const obligation: TrailingOrdinaryObligation = { _tag: "PendingTrailingOrdinary", generation }
+          yield* Ref.set(trailingOrdinaryObligation, Option.some(obligation))
+          yield* Queue.offer(messages, { _tag: "TrailingOrdinary", generation })
+          if (options.onTrailingOrdinaryRecorded !== undefined) {
+            yield* options.onTrailingOrdinaryRecorded(generation)
+          }
+        })
+
+      /**
        * Offers one process-local hint while holding the owner gate. A hint
        * arriving during an activation is deliberately reduced to one
        * ordinary trailing marker: the active handoff has already crossed its
@@ -213,12 +246,16 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           if (yield* Ref.get(stopped)) return
           const current = yield* Ref.get(controlState)
           if (current !== "RunUnpaused") return
+          // Once the handoff has promised one ordinary activation, later
+          // hints are already covered. In particular, they must not slide its
+          // marker out of Queue.sliding(1) before the worker takes it.
+          if (Option.isSome(yield* Ref.get(trailingOrdinaryObligation))) return
           const phase = yield* Ref.get(activationPhase)
           const arrivedBeforeActivationHandoff =
             arrivalPhase !== undefined &&
             (arrivalPhase._tag !== "Idle" || phase._tag !== "Idle" || arrivalPhase.generation !== phase.generation)
           if (phase._tag !== "Idle" || arrivedBeforeActivationHandoff) {
-            yield* Queue.offer(messages, { _tag: "TrailingOrdinary" })
+            yield* recordTrailingOrdinaryInsideGate(phase.generation)
             return
           }
           yield* Queue.offer(messages, { _tag: "Hint", hint })
@@ -360,35 +397,62 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
             // still being admitted. A producer that began during that phase
             // enqueues a trailing message even if this worker wins the gate
             // first and returns to the idle wait.
-            yield* commandGate.withPermit(
+            const enteredIdle = yield* commandGate.withPermit(
               Effect.gen(function* () {
                 const phase = yield* Ref.get(activationPhase)
-                if (phase._tag === "Finalizing" && (yield* Queue.size(messages)) === 0) {
+                const hasTrailingObligation = Option.isSome(yield* Ref.get(trailingOrdinaryObligation))
+                if (phase._tag === "Finalizing" && ((yield* Queue.size(messages)) === 0 || hasTrailingObligation)) {
                   yield* Ref.set(activationPhase, { _tag: "Idle" as const, generation: phase.generation + 1 })
+                  return true
                 }
+                return false
               })
             )
+            if (enteredIdle && options.onActivationHandoffIdle !== undefined) {
+              yield* options.onActivationHandoffIdle()
+            }
             const message = yield* nextMessage
             if (Option.isNone(message)) return
             const next = message.value
-            const hint = next._tag === "Hint" ? next.hint : undefined
-            const activationKind =
-              hint !== undefined && (hint._tag === "TrackerNotification" || hint._tag === "Timer")
-                ? ("ActiveWorkAuthorityRefresh" as const)
-                : ("Ordinary" as const)
-            yield* commandGate.withPermit(
+            const activation = yield* commandGate.withPermit(
               Effect.gen(function* () {
                 const phase = yield* Ref.get(activationPhase)
                 if (phase._tag === "Running") {
                   return yield* Effect.die("Run reactivation entered Running before activation admission")
                 }
+                const pending = yield* Ref.get(trailingOrdinaryObligation)
+                if (Option.isSome(pending)) {
+                  if (next._tag === "TrailingOrdinary" && next.generation !== pending.value.generation) {
+                    return yield* Effect.die("Run reactivation trailing obligation generation changed before admission")
+                  }
+                  // The pending obligation is now beginning. Clear it before
+                  // releasing the gate so later hints follow the ordinary
+                  // active-phase coalescing rules for this new activation.
+                  yield* Ref.set(trailingOrdinaryObligation, Option.none())
+                  yield* Ref.set(activationPhase, {
+                    _tag: "Running" as const,
+                    generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
+                  })
+                  return { hint: undefined, activationKind: "Ordinary" as const }
+                }
+                if (next._tag === "TrailingOrdinary") {
+                  return yield* Effect.die("Run reactivation consumed an unrecorded trailing obligation")
+                }
+                const hint = next.hint
                 yield* Ref.set(activationPhase, {
                   _tag: "Running" as const,
                   generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
                 })
+                return {
+                  hint,
+                  activationKind:
+                    hint._tag === "TrackerNotification" || hint._tag === "Timer"
+                      ? ("ActiveWorkAuthorityRefresh" as const)
+                      : ("Ordinary" as const)
+                }
               })
             )
-            yield* processHint(hint).pipe(
+            yield* processHint(activation.hint).pipe(
               Effect.ensuring(
                 commandGate.withPermit(
                   Effect.gen(function* () {
@@ -398,14 +462,18 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                     }
                     yield* Ref.set(activationPhase, { _tag: "Finalizing" as const, generation: phase.generation })
                     if (options.onActivationFinalizationStart !== undefined) {
-                      yield* options.onActivationFinalizationStart(activationKind)
+                      yield* options.onActivationFinalizationStart(activation.activationKind)
                     }
                     // A producer can win the tiny take/admission interval
                     // before the Running phase is recorded. Normalize that
-                    // one-slot queue to one trailing ordinary message so it
-                    // cannot become a second active refresh.
-                    const queued = yield* Queue.clear(messages)
-                    if (queued.length > 0) yield* Queue.offer(messages, { _tag: "TrailingOrdinary" })
+                    // one-slot queue to one durable trailing ordinary
+                    // obligation so it cannot become a second active refresh.
+                    if (
+                      Option.isNone(yield* Ref.get(trailingOrdinaryObligation)) &&
+                      (yield* Queue.size(messages)) > 0
+                    ) {
+                      yield* recordTrailingOrdinaryInsideGate(phase.generation)
+                    }
                   })
                 )
               )

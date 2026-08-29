@@ -742,6 +742,45 @@ it.effect("shares one active graph read across Running attempts before their own
   })
 )
 
+it.effect("retains the active boundary while a pending G2 intent awaits replay", () =>
+  Effect.gen(function* () {
+    const graphOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("active-work-refresh-graph"),
+      target,
+      [],
+      [taskId, independentTaskId]
+    )
+    const pendingG2Operation = makeTrackerGraphObservationOperation(
+      OperationId.make("opaque-g2-after-active-graph"),
+      target,
+      [graphOperation.operationId]
+    )
+    const opportunity = activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([
+        { runId, attemptId: plannedAttempt.attemptId },
+        { runId, attemptId: secondPlannedAttempt.attemptId }
+      ])
+    )
+    const projection = yield* projectionFor(
+      appendRecord(buildTwoRunningPrefix(), taskTrackerReadIntent(pendingG2Operation)),
+      opportunity
+    )
+
+    expect(projection.activeRefreshBoundary).toEqual({
+      _tag: "ActiveRefreshRuntimeBoundary",
+      runId,
+      reconciledAttempts: [
+        { runId, attemptId: plannedAttempt.attemptId },
+        { runId, attemptId: secondPlannedAttempt.attemptId }
+      ]
+    })
+    expect(
+      projection.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
+    ).toEqual([])
+  })
+)
+
 it.effect(
   "reuses an intent-only active graph operation after a crash and allocates a new one on later activation",
   () =>

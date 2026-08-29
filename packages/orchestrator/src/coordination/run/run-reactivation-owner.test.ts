@@ -460,6 +460,100 @@ it.effect("coalesces a hint blocked by active finalization into one trailing ord
   )
 )
 
+it.effect("keeps a blocked trailing marker ahead of a post-idle hint until it is consumed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const ownerReady = yield* Deferred.make<RunReactivationOwnerService>()
+      const firstOrdinaryFinished = yield* Deferred.make<void>()
+      const activeStarted = yield* Deferred.make<void>()
+      const releaseActive = yield* Deferred.make<void>()
+      const finalizationStarted = yield* Deferred.make<void>()
+      const releaseFinalization = yield* Deferred.make<void>()
+      const producerFiber = yield* Deferred.make<Fiber.Fiber<void, never>>()
+      const trailingRecorded = yield* Deferred.make<void>()
+      const postIdleHintSent = yield* Deferred.make<void>()
+      const trailingOrdinaryStarted = yield* Deferred.make<void>()
+      const idleHookArmed = yield* Ref.make(false)
+      const kinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-durable-trailing-marker"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.updateAndGet(kinds, (current) => [...current, "OrdinaryRunEntry" as const]).pipe(
+              Effect.tap((current) =>
+                current.length === 1
+                  ? Deferred.succeed(firstOrdinaryFinished, undefined)
+                  : Deferred.succeed(trailingOrdinaryStarted, undefined)
+              ),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          activateActiveWorkAuthorityRefresh: () =>
+            Ref.update(kinds, (current) => [...current, "ActiveWorkAuthorityRefresh" as const]).pipe(
+              Effect.andThen(Deferred.succeed(activeStarted, undefined)),
+              Effect.andThen(Deferred.await(releaseActive)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          onActivationFinalizationStart: (kind) =>
+            kind === "ActiveWorkAuthorityRefresh"
+              ? Effect.gen(function* () {
+                  yield* Ref.set(idleHookArmed, true)
+                  const owner = yield* Deferred.await(ownerReady)
+                  // This producer captures Finalizing before the finalizer
+                  // releases its gate, then waits to record the marker.
+                  const producer = yield* owner.hint(RunReactivationHint.Timer()).pipe(Effect.forkChild)
+                  yield* Deferred.succeed(producerFiber, producer)
+                  yield* Effect.yieldNow
+                  yield* Deferred.succeed(finalizationStarted, undefined)
+                  yield* Deferred.await(releaseFinalization)
+                })
+              : Effect.void,
+          onTrailingOrdinaryRecorded: () => Deferred.succeed(trailingRecorded, undefined),
+          // The worker observes Idle before taking its next queue value. Wait
+          // for the blocked producer's marker, then send the second hint in
+          // that exact pre-take interval.
+          onActivationHandoffIdle: () =>
+            Effect.gen(function* () {
+              if (!(yield* Ref.getAndSet(idleHookArmed, false))) return
+              yield* Deferred.await(trailingRecorded)
+              const owner = yield* Deferred.await(ownerReady)
+              yield* owner.hint(RunReactivationHint.TrackerNotification())
+              yield* Deferred.succeed(postIdleHintSent, undefined)
+            }),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(ownerReady, owner)
+            yield* Deferred.await(firstOrdinaryFinished)
+            yield* Effect.yieldNow
+            yield* Effect.yieldNow
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* Deferred.await(activeStarted)
+            yield* Deferred.succeed(releaseActive, undefined)
+            yield* Deferred.await(finalizationStarted)
+            yield* Deferred.succeed(releaseFinalization, undefined)
+            const producer = yield* Deferred.await(producerFiber)
+            yield* Fiber.join(producer)
+            yield* Deferred.await(postIdleHintSent)
+            yield* Deferred.await(trailingOrdinaryStarted)
+            expect(yield* Ref.get(kinds)).toEqual([
+              "OrdinaryRunEntry",
+              "ActiveWorkAuthorityRefresh",
+              "OrdinaryRunEntry"
+            ])
+          })
+      )
+    })
+  )
+)
+
 it.effect("retains one trailing ordinary activation when the active handoff rejects", () =>
   Effect.scoped(
     Effect.gen(function* () {

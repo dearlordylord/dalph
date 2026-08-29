@@ -16,8 +16,9 @@ import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-plan
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
-import { InRunJournal, type InRunJournalService } from "../../workflow-journal/store.js"
+import { InRunJournal, type InRunJournalService, type JournalRecord } from "../../workflow-journal/store.js"
 import type { RunActivationOpportunity } from "./run-activation-opportunity.js"
+import { pendingActiveRefreshG2OperationFor } from "./recovery-activation.js"
 
 type EstablishedTrackerGraph = Extract<
   DeliveryRuntimeQuiescence["current"]["trackerGraph"],
@@ -215,13 +216,27 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
       if (Option.isNone(owner)) return proofOf(target, firstQuiescence)
 
-      const allocator = yield* OperationIdAllocator
-      const operationId = yield* allocator.allocate()
       const currentGraphOperationId = currentGraph.observation.operationId
       const runId = firstQuiescence.current.runId
-      const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
-      const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
-      const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
+      let journalRecords: ReadonlyArray<JournalRecord> = []
+      if (runId !== undefined) journalRecords = yield* journal.read(runId)
+      const pendingOperation =
+        opportunity._tag === "ActiveWorkAuthorityRefresh" && runId !== undefined
+          ? pendingActiveRefreshG2OperationFor(journalRecords, runId, target, {
+              operationId: currentGraphOperationId,
+              recordedAt: currentGraph.observation.recordedAt
+            })
+          : undefined
+      const operation =
+        pendingOperation ??
+        (yield* Effect.gen(function* () {
+          const allocator = yield* OperationIdAllocator
+          const operationId = yield* allocator.allocate()
+          const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
+          const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
+          return makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
+        }))
+      const operationId = operation.operationId
       const accepted = yield* executeTrackerGraphRead(operation).pipe(
         Effect.andThen(awaitAcceptedObservation(evaluations, operationId, currentGraph.observation.recordedAt)),
         Effect.ensuring(owner.value.release)
