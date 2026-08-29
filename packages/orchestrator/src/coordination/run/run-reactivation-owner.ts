@@ -381,7 +381,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
             if (yield* Ref.get(stopped)) return
             if ((yield* Ref.get(controlState)) === "RunUnpaused") {
               // A current-first tracker notification is a stronger startup
-              // ordering fact than the synthetic Startup hint. The check and
+              // ordering fact than the initial Startup hint. The check and
               // offer are serialized with the source attachment so Queue's
               // sliding capacity cannot replace that first active refresh.
               if ((yield* Queue.size(messages)) === 0) {
