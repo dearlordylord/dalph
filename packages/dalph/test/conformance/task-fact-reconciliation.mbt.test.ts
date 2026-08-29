@@ -236,6 +236,21 @@ const graphProjection = projectTrackerSnapshot({
 const graphSnapshot = Option.getOrThrow(
   graphProjection._tag === "Valid" ? Option.some(graphProjection.snapshot) : Option.none()
 )
+const closedGraphProjection = projectTrackerSnapshot({
+  revision: TrackerRevision.make("task-fact-model-closed-graph"),
+  tasks: [
+    {
+      id: taskId,
+      lifecycle: TaskLifecycle.cases.TerminalWithoutSuccess.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    },
+    { id: independentTaskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
+  ]
+})
+const closedGraphSnapshot = Option.getOrThrow(
+  closedGraphProjection._tag === "Valid" ? Option.some(closedGraphProjection.snapshot) : Option.none()
+)
 const independentOnlyGraphProjection = projectTrackerSnapshot({
   revision: TrackerRevision.make("task-fact-model-independent-only-graph"),
   tasks: [
@@ -295,10 +310,12 @@ const SpecProjection = Schema.Struct({
     claimReleaseResponseAmbiguous: Schema.Boolean,
     claimResult: Variant,
     cleanupSelected: Schema.Boolean,
+    constraint: Variant,
     continueStage: Variant,
     currentFingerprint: Variant,
     evidencePreserved: Schema.Boolean,
     executorEvidence: Variant,
+    factDecision: Variant,
     f2WinningChoice: Variant,
     f3WinningChoice: Variant,
     freshClaimExact: Schema.Boolean,
@@ -499,6 +516,8 @@ const taskFactReconciliationDriver = defineDriver(
     let currentSpecification = plannedSpecification
     let currentClaim: "Exact" | "Absent" | "Foreign" | "Unreadable" = "Exact"
     let currentOldWorktree: "Ready" | "NotReady" | "Unreadable" = "Ready"
+    let currentTrackerGraphSnapshot = graphSnapshot
+    let trackerGraphLifecycle: "Open" | "Closed" = "Open"
     let replacementTaskFactsReadable = true
     let replacementTaskEligible = true
     let replacementTargetHeadReadable = true
@@ -675,10 +694,14 @@ const taskFactReconciliationDriver = defineDriver(
     })
     const baseInterpreter = WorkflowInterpreter.of({
       acquireTaskClaim: () => Effect.die("claim acquisition is outside this adapter"),
-      readTrackerGraph: () =>
-        replacementTaskFactsReadable
-          ? Effect.succeed(replacementTaskEligible ? graphSnapshot : independentOnlyGraphSnapshot)
-          : Effect.fail(new FixtureReadError({ detail: "replacement task facts unreadable", target })),
+      readTrackerGraph: (operation) => {
+        if (operation.target !== target) {
+          return Effect.fail(new FixtureReadError({ detail: "graph read used a foreign target", target }))
+        }
+        return replacementTaskFactsReadable
+          ? Effect.succeed(replacementTaskEligible ? currentTrackerGraphSnapshot : independentOnlyGraphSnapshot)
+          : Effect.fail(new FixtureReadError({ detail: "replacement task facts unreadable", target }))
+      },
       readTaskClaim: () =>
         currentClaim === "Unreadable"
           ? Effect.succeed(TaskClaimObservationUnreadable.make({ attempts: 3, taskId }))
@@ -862,6 +885,41 @@ const taskFactReconciliationDriver = defineDriver(
       provideJournal(makeRunRecoveryProjection(runId, integrationTarget)).pipe(
         Effect.flatMap(({ readDeliveryProjection }) => readDeliveryProjection)
       )
+    const latestTrackerTaskLifecycle = () => {
+      const reduction = reduceWorkflowJournalHistory(runId, records)
+      if (reduction._tag === "InvalidWorkflowJournalHistory") return undefined
+      const graph = Option.getOrUndefined(latestReconstructedTaskGraph(reduction.runState.graphKnowledge))
+      const lifecycle = graph === undefined ? undefined : Option.getOrUndefined(graph.lifecycleOf(taskId))
+      return lifecycle?._tag
+    }
+    // This projection is intentionally read from the journaled production
+    // recovery facts. The controlled graph only supplies the authoritative
+    // tracker response; the disposition and frontier decide whether that
+    // response requests suspension or leaves a reversible lifecycle wait.
+    const lifecycleConstraintProjection = (currentRecovery: Effect.Success<ReturnType<typeof projection>>) => {
+      const facts =
+        currentRecovery.evidence._tag === "AvailableDeliveryProjectionEvidence" ? currentRecovery.evidence.facts : []
+      const executorFacts = facts.find(
+        (facts) =>
+          facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+          plannedTaskAttemptEquivalence(facts.responsibility.plannedAttempt, plannedAttempt)
+      )
+      const lifecycleClosed = latestTrackerTaskLifecycle() === "TerminalWithoutSuccess"
+      const suspendTransition = currentRecovery.frontier.transitions.some(
+        (transition) =>
+          transition._tag === "SuspendPlannedAttemptExecutorWork" &&
+          plannedTaskAttemptEquivalence(transition.plannedAttempt, plannedAttempt)
+      )
+      const suspensionRequested =
+        lifecycleClosed &&
+        executorFacts?.disposition._tag === "PlannedAttemptExecutorSuspensionRequested" &&
+        suspendTransition
+      const lifecycleWait = lifecycleClosed && executorFacts?.disposition._tag === "TaskLifecycleConstraint"
+      return {
+        constraint: suspensionRequested || lifecycleWait ? "LifecycleConstraint" : "NoConstraint",
+        factDecision: suspensionRequested ? "RequestSafeSuspension" : lifecycleWait ? "LifecycleWait" : "ContinueWork"
+      }
+    }
     // Mirrors reactive-delivery-relations: fresh decisions from the coherent
     // journal frame are combined with the authoritative recovered frontier.
     const freshDecisions = () =>
@@ -1532,6 +1590,8 @@ const taskFactReconciliationDriver = defineDriver(
           currentSpecification = plannedSpecification
           currentClaim = "Exact"
           currentOldWorktree = "Ready"
+          currentTrackerGraphSnapshot = graphSnapshot
+          trackerGraphLifecycle = "Open"
           replacementTaskFactsReadable = true
           replacementTaskEligible = true
           replacementTargetHeadReadable = true
@@ -1731,17 +1791,107 @@ const taskFactReconciliationDriver = defineDriver(
           ),
           Effect.orDie
         ),
-      observeLifecycleClosure: () => Effect.void,
+      observeLifecycleClosure: () =>
+        Effect.gen(function* () {
+          if (trackerGraphLifecycle !== "Open") return yield* Effect.die("lifecycle closure must follow an open graph")
+          currentTrackerGraphSnapshot = closedGraphSnapshot
+          trackerGraphLifecycle = "Closed"
+          const selected = yield* transition("ObservePlannedAttemptContinuationGraph")
+          if (
+            selected._tag !== "ObservePlannedAttemptContinuationGraph" ||
+            selected.operation.purpose !== "ActiveWorkAuthorityRefresh" ||
+            !plannedTaskAttemptEquivalence(selected.plannedAttempt, plannedAttempt)
+          ) {
+            return yield* Effect.die("lifecycle closure did not select the exact active graph read")
+          }
+          yield* readThrough("ObservePlannedAttemptContinuationGraph")
+          if (latestTrackerTaskLifecycle() !== "TerminalWithoutSuccess") {
+            return yield* Effect.die("lifecycle graph read did not record the exact task as closed")
+          }
+          const current = yield* projection()
+          const suspensionTransitions = current.frontier.transitions.filter(
+            (candidate) => candidate._tag === "SuspendPlannedAttemptExecutorWork"
+          )
+          const [suspensionTransition] = suspensionTransitions
+          if (
+            suspensionTransitions.length !== 1 ||
+            suspensionTransition === undefined ||
+            !plannedTaskAttemptEquivalence(suspensionTransition.plannedAttempt, plannedAttempt)
+          ) {
+            return yield* Effect.die("closed lifecycle did not project one exact suspension transition")
+          }
+        }).pipe(Effect.orDie, Effect.asVoid),
       reportSafelySuspended: () =>
         Effect.gen(function* () {
+          const selected = yield* transition("SuspendPlannedAttemptExecutorWork")
+          if (
+            selected._tag !== "SuspendPlannedAttemptExecutorWork" ||
+            !plannedTaskAttemptEquivalence(selected.plannedAttempt, plannedAttempt)
+          ) {
+            return yield* Effect.die("lifecycle suspension selected a foreign planned attempt")
+          }
+          const suspendCountBefore = records.filter(
+            ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+          ).length
           restartSuspensionBoundary = true
           restartSuspensionReport = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-          yield* provideJournal(requestPlannedAttemptExecutorSuspension(plannedAttempt))
+          const report = yield* provideJournal(requestPlannedAttemptExecutorSuspension(selected.plannedAttempt))
           restartSuspensionBoundary = false
+          if (
+            report._tag !== "SafelySuspended" ||
+            report.correlation.attemptId !== plannedAttempt.attemptId ||
+            report.correlation.runId !== plannedAttempt.runId
+          ) {
+            return yield* Effect.die("lifecycle suspension was not accepted as exact safe evidence")
+          }
+          const suspendCountAfter = records.filter(
+            ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+          ).length
+          if (suspendCountAfter !== suspendCountBefore + 1) {
+            return yield* Effect.die("lifecycle suspension did not persist one command intent")
+          }
           yield* releasePosition()
           activeLifecycleSuspensionCount += 1
         }).pipe(Effect.orDie, Effect.asVoid),
-      observeFreshLifecycleReopen: () => reactivate(false).pipe(Effect.orDie, Effect.asVoid),
+      observeFreshLifecycleReopen: () =>
+        Effect.gen(function* () {
+          if (trackerGraphLifecycle !== "Closed") return yield* Effect.die("lifecycle reopen must follow closure")
+          currentTrackerGraphSnapshot = graphSnapshot
+          trackerGraphLifecycle = "Open"
+          yield* reactivate(false)
+          const predecessorGraphRecord = records.findLast(
+            ({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" &&
+              (event.observation._tag === "CompleteTaskTrackerFacts" ||
+                event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+          )?.event
+          const predecessorOperationId =
+            predecessorGraphRecord?._tag === "TaskTrackerFactsObserved" ? predecessorGraphRecord.operationId : undefined
+          const reopenOperation = makeTrackerGraphObservationOperation(
+            OperationId.make(`task-fact-model-lifecycle-reopen-${records.length}`),
+            target,
+            predecessorOperationId === undefined ? [] : [predecessorOperationId],
+            [taskId]
+          )
+          yield* provideInterpreter(
+            Effect.gen(function* () {
+              yield* (yield* WorkflowInterpreter).readTrackerGraph(reopenOperation)
+            })
+          )
+          if (latestTrackerTaskLifecycle() !== "Open") {
+            return yield* Effect.die("lifecycle reopen did not record the exact task as open")
+          }
+          const current = yield* projection()
+          if (
+            current.frontier.transitions.some(
+              (candidate) =>
+                candidate._tag === "SuspendPlannedAttemptExecutorWork" &&
+                plannedTaskAttemptEquivalence(candidate.plannedAttempt, plannedAttempt)
+            )
+          ) {
+            return yield* Effect.die("reopened lifecycle retained a stale exact suspension transition")
+          }
+        }).pipe(Effect.orDie, Effect.asVoid),
       observeActiveRefreshGitFailures: () =>
         refreshSource === "NoRefreshSource"
           ? Effect.die("active Git failure action has no owner source")
@@ -2529,6 +2679,7 @@ const taskFactReconciliationDriver = defineDriver(
           const currentRecovery = yield* projection()
           const fullRecovery = yield* fullProjection()
           const freshWorkflow = yield* freshDecisions()
+          const lifecycleFacts = lifecycleConstraintProjection(currentRecovery)
           const choice = latestChoice()?.event
           const fresh = freshFacts()
           const report = evidenceReport()
@@ -2790,6 +2941,7 @@ const taskFactReconciliationDriver = defineDriver(
                   ? "NoReleaseAbsent"
                   : "NoReleaseForeign"
                 : "NoClaimResult",
+            constraint: lifecycleFacts.constraint,
             cleanupSelected: cleanupTransitionSelected,
             continueStage: continueStage(),
             currentFingerprint: fingerprintTag(currentSpecification.fingerprint),
@@ -2799,6 +2951,7 @@ const taskFactReconciliationDriver = defineDriver(
               report,
               choice?.choice === "RestartTaskImplementation"
             ),
+            factDecision: lifecycleFacts.factDecision,
             f2WinningChoice:
               f2Choice?._tag === "AttemptChoiceApplied"
                 ? f2Choice.choice === "ContinueExistingAttempt"
@@ -2930,42 +3083,56 @@ const taskFactReconciliationDriver = defineDriver(
   }
 )
 
+const decodeTaskFactState = (raw: unknown) =>
+  Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
+    Effect.map(({ state }) => ({
+      ...state,
+      authorityReadPurpose: tag(state.authorityReadPurpose),
+      refreshSource: tag(state.refreshSource),
+      authorizedFingerprint: tag(state.authorizedFingerprint),
+      claimObservation: tag(state.claimObservation),
+      claimResult: tag(state.claimResult),
+      constraint: tag(state.constraint),
+      continueStage: tag(state.continueStage),
+      currentFingerprint: tag(state.currentFingerprint),
+      executorEvidence: tag(state.executorEvidence),
+      factDecision: tag(state.factDecision),
+      f2WinningChoice: tag(state.f2WinningChoice),
+      f3WinningChoice: tag(state.f3WinningChoice),
+      lastControlResult: tag(state.lastControlResult),
+      oldWorktreeFacts: tag(state.oldWorktreeFacts),
+      observedOldWorktreeHead: tag(state.observedOldWorktreeHead),
+      observedReplacementTargetHead: tag(state.observedReplacementTargetHead),
+      plannedSuccessor: tag(state.plannedSuccessor),
+      replacementClaimFacts: tag(state.replacementClaimFacts),
+      replacementDisposition: tag(state.replacementDisposition),
+      replacementPhase: tag(state.replacementPhase),
+      replacementTargetHeadFacts: tag(state.replacementTargetHeadFacts),
+      replacementTaskFacts: tag(state.replacementTaskFacts),
+      resumedAttempt: tag(state.resumedAttempt),
+      successorBaseHead: tag(state.successorBaseHead),
+      successorBranchIdentity: tag(state.successorBranchIdentity),
+      successorWorktreeIdentity: tag(state.successorWorktreeIdentity),
+      stopStage: tag(state.stopStage)
+    })),
+    Effect.orDie
+  )
+
 const taskFactStateCheck = stateCheck(
-  (raw) =>
-    Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
-      Effect.map(({ state }) => ({
-        ...state,
-        authorityReadPurpose: tag(state.authorityReadPurpose),
-        refreshSource: tag(state.refreshSource),
-        authorizedFingerprint: tag(state.authorizedFingerprint),
-        claimObservation: tag(state.claimObservation),
-        claimResult: tag(state.claimResult),
-        continueStage: tag(state.continueStage),
-        currentFingerprint: tag(state.currentFingerprint),
-        executorEvidence: tag(state.executorEvidence),
-        f2WinningChoice: tag(state.f2WinningChoice),
-        f3WinningChoice: tag(state.f3WinningChoice),
-        lastControlResult: tag(state.lastControlResult),
-        oldWorktreeFacts: tag(state.oldWorktreeFacts),
-        observedOldWorktreeHead: tag(state.observedOldWorktreeHead),
-        observedReplacementTargetHead: tag(state.observedReplacementTargetHead),
-        plannedSuccessor: tag(state.plannedSuccessor),
-        replacementClaimFacts: tag(state.replacementClaimFacts),
-        replacementDisposition: tag(state.replacementDisposition),
-        replacementPhase: tag(state.replacementPhase),
-        replacementTargetHeadFacts: tag(state.replacementTargetHeadFacts),
-        replacementTaskFacts: tag(state.replacementTaskFacts),
-        resumedAttempt: tag(state.resumedAttempt),
-        successorBaseHead: tag(state.successorBaseHead),
-        successorBranchIdentity: tag(state.successorBranchIdentity),
-        successorWorktreeIdentity: tag(state.successorWorktreeIdentity),
-        stopStage: tag(state.stopStage)
-      })),
-      Effect.orDie
-    ),
+  decodeTaskFactState,
   (spec, implementation) =>
-    JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
-    JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
+    JSON.stringify(spec, (key, value) =>
+      key === "constraint" || key === "factDecision" ? undefined : typeof value === "bigint" ? value.toString() : value
+    ) ===
+    JSON.stringify(implementation, (key, value) =>
+      key === "constraint" || key === "factDecision" ? undefined : typeof value === "bigint" ? value.toString() : value
+    )
+)
+
+const taskFactLifecycleStateCheck = stateCheck(
+  decodeTaskFactState,
+  (spec, implementation) =>
+    spec.constraint === implementation.constraint && spec.factDecision === implementation.factDecision
 )
 
 quintIt(
@@ -2980,7 +3147,7 @@ quintIt(
     seed: "2815",
     spec: "specs/taskFactReconciliation.qnt",
     step: "activeRefreshLifecycleReestablishmentMbtStep",
-    stateCheck: taskFactStateCheck
+    stateCheck: taskFactLifecycleStateCheck
   },
   180_000
 )
