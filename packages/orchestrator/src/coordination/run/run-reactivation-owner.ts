@@ -82,7 +82,10 @@ export class RunReactivationOwner extends Context.Service<RunReactivationOwner, 
   "@dalph/RunReactivationOwner"
 ) {}
 
-type RunReactivationMessage = { readonly _tag: "Hint"; readonly hint: RunReactivationHint }
+type RunReactivationMessage =
+  | { readonly _tag: "Hint"; readonly hint: RunReactivationHint }
+  /** A hint that arrived while an activation was crossing its handoff boundary. */
+  | { readonly _tag: "TrailingOrdinary" }
 
 const finitePositiveDuration = (input: Duration.Input, name: string) => {
   const duration = Duration.fromInput(input)
@@ -114,6 +117,10 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const commandGate = yield* Semaphore.make(1)
       const shutdown = yield* Deferred.make<void>()
       const stopped = yield* Ref.make(false)
+      /** True from the serialized activation admission until its result is handled. */
+      const activationInFlight = yield* Ref.make(false)
+      /** Process-local coalescing marker; it is never journaled or treated as authority. */
+      const trailingOrdinary = yield* Ref.make(false)
       // Registration precedes the authoritative read below. The callback can
       // therefore capture a Pause accepted in the attach/read interval; the
       // mandatory reread then current-first replays the durable state.
@@ -183,15 +190,27 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         )
       )
 
+      /**
+       * Offers one process-local hint while holding the owner gate. A hint
+       * arriving during an activation is deliberately reduced to one
+       * ordinary trailing marker: the active handoff has already crossed its
+       * only active boundary, so a second active handoff would duplicate the
+       * refresh rather than establish a fresh current view.
+       */
+      const offerHintInsideGate = (hint: RunReactivationHint) =>
+        Effect.gen(function* () {
+          if (yield* Ref.get(stopped)) return
+          const current = yield* Ref.get(controlState)
+          if (current !== "RunUnpaused") return
+          if (yield* Ref.get(activationInFlight)) {
+            yield* Ref.set(trailingOrdinary, true)
+            return
+          }
+          yield* Queue.offer(messages, { _tag: "Hint", hint })
+        })
+
       const offerHint = Effect.fn("RunReactivationOwner.hint")(function* (hint: RunReactivationHint) {
-        yield* commandGate.withPermit(
-          Effect.gen(function* () {
-            if (yield* Ref.get(stopped)) return
-            const current = yield* Ref.get(controlState)
-            if (current !== "RunUnpaused") return
-            yield* Queue.offer(messages, { _tag: "Hint", hint })
-          })
-        )
+        yield* commandGate.withPermit(offerHintInsideGate(hint))
       })
 
       const startTrackerNotificationSource = Effect.fn("RunReactivationOwner.startTrackerNotificationSource")(() =>
@@ -205,7 +224,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
               yield* commandGate.withPermit(
                 Effect.gen(function* () {
                   if (yield* Ref.get(stopped)) return
-                  yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.TrackerNotification() })
+                  yield* offerHintInsideGate(RunReactivationHint.TrackerNotification())
                   const fiber = yield* attachment.changes.pipe(
                     Stream.runForEach(() => offerHint(RunReactivationHint.TrackerNotification())),
                     Effect.forkIn(ownerScope)
@@ -234,7 +253,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
               yield* stopTimerFiber()
             } else {
               yield* startTimerFiber()
-              yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.OperatorWake() })
+              yield* offerHintInsideGate(RunReactivationHint.OperatorWake())
             }
           })
         )
@@ -254,7 +273,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         Deferred.await(shutdown).pipe(Effect.as(Option.none()))
       )
 
-      const processHintAttempt = Effect.fn("RunReactivationOwner.processHint")(function* (hint: RunReactivationHint) {
+      const processHintAttempt = Effect.fn("RunReactivationOwner.processHint")(function* (hint?: RunReactivationHint) {
         if (yield* Ref.get(stopped)) return
         if ((yield* Ref.get(controlState)) === "RunPaused") return
         /* v8 ignore next -- @preserve Initial terminal history stops before queue consumption, and no process-local command can create RunTerminated. */
@@ -264,13 +283,13 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         }
 
         const decision = yield* (
-          hint._tag === "TrackerNotification" || hint._tag === "Timer"
+          hint !== undefined && (hint._tag === "TrackerNotification" || hint._tag === "Timer")
             ? options.activateActiveWorkAuthorityRefresh(hint._tag)
             : options.activate(RunActivationOpportunity.OrdinaryRunEntry())
         ).pipe(Effect.mapError((failure) => ({ _tag: "Activate" as const, failure })))
         if (decision._tag === "RunMayTerminate") yield* requestStop()
       })
-      const processHint = (hint: RunReactivationHint) =>
+      const processHint = (hint?: RunReactivationHint) =>
         processHintAttempt(hint).pipe(
           Effect.catchTag("Activate", ({ failure }) =>
             options.isTerminationFailure(failure)
@@ -305,20 +324,45 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           Effect.gen(function* () {
             if (yield* Ref.get(stopped)) return
             if ((yield* Ref.get(controlState)) === "RunUnpaused") {
-              yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.Startup() })
+              // A current-first tracker notification is a stronger startup
+              // ordering fact than the synthetic Startup hint. The check and
+              // offer are serialized with the source attachment so Queue's
+              // sliding capacity cannot replace that first active refresh.
+              if ((yield* Queue.size(messages)) === 0) {
+                yield* Queue.offer(messages, { _tag: "Hint", hint: RunReactivationHint.Startup() })
+              }
               yield* startTimerFiber()
             }
           })
         )
         const loop = (): Effect.Effect<void, never, R> =>
-          nextMessage.pipe(
-            Effect.flatMap((message) =>
-              Option.match(message, {
-                onNone: () => Effect.void,
-                onSome: ({ hint }) => processHint(hint).pipe(Effect.andThen(loop()))
-              })
+          Effect.gen(function* () {
+            const pendingTrailing = yield* Ref.modify(trailingOrdinary, (pending) => [pending, false] as const)
+            const message = pendingTrailing
+              ? Option.some<RunReactivationMessage>({ _tag: "TrailingOrdinary" })
+              : yield* nextMessage
+            if (Option.isNone(message)) return
+            const next = message.value
+            const hint = next._tag === "Hint" ? next.hint : undefined
+            yield* commandGate.withPermit(Ref.set(activationInFlight, true))
+            yield* processHint(hint).pipe(
+              Effect.ensuring(
+                commandGate.withPermit(
+                  Effect.gen(function* () {
+                    // A producer can win the tiny take/admission interval
+                    // before activationInFlight is set. Drain that one-slot
+                    // queue into the same trailing marker so it cannot become
+                    // a second active refresh.
+                    const queued = yield* Queue.clear(messages)
+                    const alreadyMarked = yield* Ref.get(trailingOrdinary)
+                    yield* Ref.set(activationInFlight, false)
+                    if (alreadyMarked || queued.length > 0) yield* Ref.set(trailingOrdinary, true)
+                  })
+                )
+              )
             )
-          )
+            yield* loop()
+          })
         yield* loop()
       })
 

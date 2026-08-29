@@ -1,5 +1,5 @@
 import { type AttemptId, type RunId } from "@dalph/contracts"
-import { Schema } from "effect"
+import { Chunk, Schema } from "effect"
 import { ActiveWorkAuthorityRefreshAuthority } from "../../workflow/protocols/active-work-authority-refresh/intent.js"
 import { latestPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
@@ -24,11 +24,14 @@ const immutableActiveWorkAuthorityRefreshSubject = (
   Object.freeze(ActiveWorkAuthorityRefreshAuthority.make({ attemptId: subject.attemptId, runId: subject.runId }))
 
 /**
- * The exact Running attempt pairs captured at one activation boundary. The
- * owner copies this set into the opportunity, so later executor reports or
- * caller mutations cannot grant active-read authority retroactively.
+ * The exact Running attempt pairs captured at one activation boundary. A
+ * Chunk has no mutating collection methods; the owner also freezes each
+ * authority value after schema construction, so later executor reports or
+ * caller mutations cannot grant active-read authority retroactively. The
+ * explicit uniqueness check preserves set semantics while Chunk preserves
+ * the validated responsibility order for deterministic activation traces.
  */
-const ActiveWorkAuthorityRefreshSubjects = Schema.ReadonlySet(ActiveWorkAuthorityRefreshAuthority)
+const ActiveWorkAuthorityRefreshSubjects = Schema.Chunk(ActiveWorkAuthorityRefreshAuthority)
   .check(
     Schema.makeFilter((subjects) => {
       const captured = [...subjects]
@@ -43,24 +46,35 @@ const ActiveWorkAuthorityRefreshSubjects = Schema.ReadonlySet(ActiveWorkAuthorit
   .pipe(Schema.brand("ActiveWorkAuthorityRefreshSubjects"))
 type ActiveWorkAuthorityRefreshSubjects = typeof ActiveWorkAuthorityRefreshSubjects.Type
 
+const freezeActiveWorkAuthorityRefreshSubjects = (
+  subjects: ActiveWorkAuthorityRefreshSubjects
+): ActiveWorkAuthorityRefreshSubjects => {
+  for (const subject of subjects) Object.freeze(subject)
+  return subjects
+}
+
+const makeActiveWorkAuthorityRefreshSubjects = (
+  subjects: ReadonlyArray<ActiveWorkAuthorityRefreshSubject>
+): ActiveWorkAuthorityRefreshSubjects =>
+  freezeActiveWorkAuthorityRefreshSubjects(
+    ActiveWorkAuthorityRefreshSubjects.make(
+      Chunk.fromIterable(
+        subjects
+          .filter(
+            (subject, index, candidates) =>
+              candidates.findIndex((candidate) => sameActiveWorkAuthorityRefreshSubject(candidate, subject)) === index
+          )
+          .map(immutableActiveWorkAuthorityRefreshSubject)
+      )
+    )
+  )
+
 /**
  * Captures distinct exact RunId/AttemptId pairs in a fresh set. A separate
  * constructor keeps this process-local value immutable from the caller's
  * later collection changes and canonicalizes duplicate semantic subjects.
  */
-export const activeWorkAuthorityRefreshSubjectsFor = (
-  subjects: ReadonlyArray<ActiveWorkAuthorityRefreshSubject>
-): ActiveWorkAuthorityRefreshSubjects =>
-  ActiveWorkAuthorityRefreshSubjects.make(
-    new Set(
-      subjects
-        .filter(
-          (subject, index, candidates) =>
-            candidates.findIndex((candidate) => sameActiveWorkAuthorityRefreshSubject(candidate, subject)) === index
-        )
-        .map(immutableActiveWorkAuthorityRefreshSubject)
-    )
-  )
+export const activeWorkAuthorityRefreshSubjectsFor = makeActiveWorkAuthorityRefreshSubjects
 
 /**
  * Selects every exact unfinished attempt whose latest executor evidence in a
@@ -126,12 +140,12 @@ export const RunActivationOpportunity = {
 export const activeWorkAuthorityRefreshForOwner = (
   source: ActiveWorkAuthorityRefreshSource,
   subjects: ActiveWorkAuthorityRefreshSubjects
-): ActiveWorkAuthorityRefresh =>
-  ActiveWorkAuthorityRefresh.make({
+): ActiveWorkAuthorityRefresh => {
+  const opportunity = ActiveWorkAuthorityRefresh.make({
     _tag: "ActiveWorkAuthorityRefresh",
     source,
-    // Rebuild the Set so the opportunity owns its activation-baseline copy.
-    subjects: ActiveWorkAuthorityRefreshSubjects.make(
-      new Set([...subjects].map(immutableActiveWorkAuthorityRefreshSubject))
-    )
+    subjects: makeActiveWorkAuthorityRefreshSubjects([...subjects])
   })
+  freezeActiveWorkAuthorityRefreshSubjects(opportunity.subjects)
+  return Object.freeze(opportunity)
+}

@@ -94,6 +94,24 @@ const independentSpecification = makeTaskWorkSpecification({
   title: "Independent B"
 })
 
+const secondPlannedAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("active-work-refresh-attempt-B"),
+  baseSha: GitCommitSha.make("c".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/active-work-refresh-B"),
+  executor: TaskExecutorLocator.make("executor:active-work-refresh-B"),
+  runId,
+  taskId: independentTaskId,
+  taskRevision: independentSpecification.fingerprint,
+  worktree: WorktreeLocator.make("/worktrees/active-work-refresh-B")
+})
+
+const secondExactAcquisition = {
+  operationId: OperationId.make("active-work-refresh-claim-B"),
+  owner: ClaimOwner.make("dalph"),
+  taskId: independentTaskId,
+  token: ClaimToken.make("active-work-refresh-token-B")
+} as const
+
 const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/active-work-refresh.git"),
   ref: IntegrationTargetRef.make("refs/heads/main")
@@ -319,6 +337,77 @@ const buildPrefix = (
   })
 }
 
+/** Adds a second exact Running responsibility without adding a post-baseline graph. */
+const buildTwoRunningPrefix = (): ReadonlyArray<JournalRecord> => {
+  const records = buildPrefix("Healthy")
+  const acquisition = makeTaskClaimAcquisitionOperation({
+    acquisition: secondExactAcquisition,
+    predecessorOperationIds: []
+  })
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("active-work-refresh-specification-B"),
+    target,
+    independentTaskId,
+    [OperationId.make("active-work-refresh-graph")]
+  )
+  const plan = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("active-work-refresh-plan-B"),
+    plannedAttempt: secondPlannedAttempt,
+    predecessorOperationIds: [specificationOperation.operationId]
+  })
+  return [
+    ...records,
+    record(
+      18,
+      TaskClaimAcquisitionIntendedEvent.make({ operation: acquisition, version: workflowJournalEventVersion })
+    ),
+    record(
+      19,
+      TaskClaimAcquiredEvent.make({
+        claim: { _tag: "ActiveTaskClaim", ...secondExactAcquisition },
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(20, taskTrackerReadIntent(specificationOperation)),
+    record(
+      21,
+      taskTrackerFactsObservedEvent(
+        specificationOperation.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, independentSpecification)
+      )
+    ),
+    record(22, TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })),
+    record(
+      23,
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: secondPlannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      24,
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "StartOrContinue",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+        plannedAttempt: secondPlannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      25,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+        report: PlannedAttemptExecutorReport.cases.Running.make({
+          correlation: { attemptId: secondPlannedAttempt.attemptId, runId }
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
+  ]
+}
+
 const activeGitFailureRecords = (
   kind: "worktree" | "lineage",
   position = 18,
@@ -419,6 +508,77 @@ const availableEvidenceFor = (projection: { readonly evidence: DeliveryProjectio
   }
   return projection.evidence
 }
+
+it.effect("shares one active graph read across Running attempts before their own focused reads", () =>
+  Effect.gen(function* () {
+    const records = buildTwoRunningPrefix()
+    const opportunity = activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([
+        { runId, attemptId: plannedAttempt.attemptId },
+        { runId, attemptId: secondPlannedAttempt.attemptId }
+      ])
+    )
+    const first = yield* projectionFor(records, opportunity)
+    const graphReads = first.frontier.transitions.filter(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+    )
+    expect(graphReads).toHaveLength(1)
+    const graphRead = graphReads[0]
+    if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
+      return yield* Effect.die("expected one shared active graph read")
+    }
+    expect(graphRead.operation.readShape.explicitlyCoveredTaskIds).toEqual(
+      [independentTaskId, taskId].toSorted((left, right) => left.localeCompare(right))
+    )
+    expect(graphRead.operation.predecessorOperationIds).toEqual([
+      OperationId.make("active-work-refresh-plan-A"),
+      OperationId.make("active-work-refresh-plan-B")
+    ])
+    expect(
+      first.frontier.transitions.filter(
+        ({ _tag }) =>
+          _tag === "ContinuePlannedAttemptExecutorWork" ||
+          _tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+          _tag === "ObservePlannedAttemptContinuationExecutor"
+      )
+    ).toEqual([])
+
+    const graphObservation = taskTrackerFactsObservedEvent(
+      graphRead.operation.operationId,
+      makeCompleteTaskTrackerFactsObserved(graphRead.operation, snapshotFor("active-work-refresh-shared-graph"))
+    )
+    const afterGraph = yield* projectionFor(
+      [...records, record(26, taskTrackerReadIntent(graphRead.operation)), record(27, graphObservation)],
+      opportunity
+    )
+    const specificationReads = afterGraph.frontier.transitions.filter(
+      (
+        transition
+      ): transition is Extract<
+        RunnableFrontierTransition,
+        { readonly _tag: "ObservePlannedAttemptContinuationSpecification" }
+      > => transition._tag === "ObservePlannedAttemptContinuationSpecification"
+    )
+    expect(specificationReads).toHaveLength(2)
+    expect(
+      specificationReads
+        .map((transition) => transition.plannedAttempt.attemptId)
+        .toSorted((left, right) => left.localeCompare(right))
+    ).toEqual(
+      [plannedAttempt.attemptId, secondPlannedAttempt.attemptId].toSorted((left, right) => left.localeCompare(right))
+    )
+    expect(
+      afterGraph.frontier.transitions.filter(
+        ({ _tag }) =>
+          _tag === "ObservePlannedAttemptContinuationGraph" ||
+          _tag === "ContinuePlannedAttemptExecutorWork" ||
+          _tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+          _tag === "ObservePlannedAttemptContinuationExecutor"
+      )
+    ).toEqual([])
+  })
+)
 
 type ControlledBoundaryReadCounts = {
   graph: number

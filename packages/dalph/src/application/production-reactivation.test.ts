@@ -438,7 +438,16 @@ it.effect("production composition wires current-first tracker notifications and 
         yield* Deferred.await(fourthActivation)
         expect(yield* Ref.get(activations)).toBe(4)
         expect(yield* Ref.get(opportunities)).toEqual([
-          { _tag: "OrdinaryRunEntry" },
+          {
+            _tag: "ActiveWorkAuthorityRefresh",
+            source: "TrackerNotification",
+            subjects: new Set([
+              {
+                runId: RunId.make("production-reactivation-run"),
+                attemptId: AttemptId.make("production-reactivation-attempt")
+              }
+            ])
+          },
           {
             _tag: "ActiveWorkAuthorityRefresh",
             source: "TrackerNotification",
@@ -798,7 +807,6 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const failpointConsumed = yield* Ref.make(false)
       const activeReadStarted = yield* Deferred.make<void>()
       const releaseActiveRead = yield* Deferred.make<void>()
-      const secondActiveActivation = yield* Deferred.make<void>()
       const expectedActiveSelections = [
         "ReadTrackerGraph",
         "ReadTaskWorkSpecification",
@@ -1037,8 +1045,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   : Effect.gen(function* () {
                       yield* recordActivation
                       yield* Ref.update(activeSources, (sources) => [...sources, activationOpportunity.source])
-                      const activeCount = yield* Ref.updateAndGet(activeActivationCount, (count) => count + 1)
-                      yield* activeCount === 2 ? Deferred.succeed(secondActiveActivation, undefined) : Effect.void
+                      yield* Ref.update(activeActivationCount, (count) => count + 1)
                       const concurrent = yield* Ref.updateAndGet(activeConcurrent, (count) => count + 1)
                       yield* Ref.update(maximumActiveConcurrent, (maximum) => Math.max(maximum, concurrent))
                       return yield* applicationBootstrap
@@ -1069,8 +1076,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   Effect.gen(function* () {
                     yield* recordActivation
                     yield* Ref.update(activeSources, (sources) => [...sources, source])
-                    const activeCount = yield* Ref.updateAndGet(activeActivationCount, (count) => count + 1)
-                    yield* activeCount === 2 ? Deferred.succeed(secondActiveActivation, undefined) : Effect.void
+                    yield* Ref.update(activeActivationCount, (count) => count + 1)
                     const concurrent = yield* Ref.updateAndGet(activeConcurrent, (count) => count + 1)
                     yield* Ref.update(maximumActiveConcurrent, (maximum) => Math.max(maximum, concurrent))
                     return yield* program(opportunity)
@@ -1153,7 +1159,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 yield* owner.hint(RunReactivationHint.TrackerNotification())
                 yield* owner.hint(RunReactivationHint.Timer())
                 yield* Deferred.succeed(releaseActiveRead, undefined)
-                yield* Deferred.await(secondActiveActivation)
+                yield* Deferred.await(acceptedActivation)
               } else {
                 yield* Ref.set(phase, "Active")
                 if (source === "Timer") {
@@ -1461,13 +1467,9 @@ it.effect("Operator Wake remains an ordinary entry without active authority read
 it.effect("coalesces concurrent active-work refresh hints through one production owner", () =>
   Effect.gen(function* () {
     const result = yield* runProductionRefreshHarness({ coalesce: true })
-    expect(result.activationKinds).toEqual([
-      "OrdinaryRunEntry",
-      "ActiveWorkAuthorityRefresh",
-      "ActiveWorkAuthorityRefresh"
-    ])
-    expect(result.activeActivationCount).toBe(2)
-    expect(result.activeSources).toEqual(["TrackerNotification", "Timer"])
+    expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh", "OrdinaryRunEntry"])
+    expect(result.activeActivationCount).toBe(1)
+    expect(result.activeSources).toEqual(["TrackerNotification"])
     expect(result.maximumActiveConcurrent).toBe(1)
     expect(result.executorEntries).toEqual([])
     expect(result.executorCalls).toEqual([])

@@ -157,6 +157,55 @@ it.effect("maps only tracker notifications and timers to active-work authority r
   )
 )
 
+it.effect("preserves a current-first tracker notification ahead of Startup", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const firstActivation = yield* Deferred.make<void>()
+      const opportunities = yield* Ref.make<ReadonlyArray<RunActivationOpportunity>>([])
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-current-first"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: (opportunity) =>
+            Ref.update(opportunities, (current) => [...current, opportunity]).pipe(
+              Effect.andThen(Deferred.succeed(firstActivation, undefined)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          activateActiveWorkAuthorityRefresh: (source) =>
+            Ref.update(opportunities, (current) => [
+              ...current,
+              activeWorkAuthorityRefreshForOwner(
+                source,
+                activeWorkAuthorityRefreshSubjectsFor([
+                  { runId: RunId.make("test-run-current-first"), attemptId: AttemptId.make("test-attempt") }
+                ])
+              )
+            ]).pipe(
+              Effect.andThen(Deferred.succeed(firstActivation, undefined)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void,
+          trackerNotificationSource: makeCurrentSignal(Effect.succeed({ current: undefined, changes: Stream.never }))
+        },
+        () =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstActivation)
+            yield* Effect.yieldNow
+            const [first] = yield* Ref.get(opportunities)
+            expect(first?._tag).toBe("ActiveWorkAuthorityRefresh")
+            expect(yield* Ref.get(opportunities)).toHaveLength(1)
+          })
+      )
+    })
+  )
+)
+
 it.effect("rejects non-positive timer and cooldown values at the Layer boundary", () =>
   Effect.gen(function* () {
     const shell = yield* makeTestExitShell
@@ -276,6 +325,131 @@ it.effect("coalesces concurrent hints behind one activation", () =>
             yield* Effect.yieldNow
             expect(yield* Ref.get(activationCount)).toBe(2)
             expect(yield* Ref.get(maximumConcurrent)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
+it.effect("turns hints arriving during an active refresh into one trailing ordinary activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const ordinaryStarted = yield* Deferred.make<void>()
+      const ordinaryFinished = yield* Deferred.make<void>()
+      const activeStarted = yield* Deferred.make<void>()
+      const releaseActive = yield* Deferred.make<void>()
+      const trailingOrdinaryStarted = yield* Deferred.make<void>()
+      const kinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-active-trailing"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.updateAndGet(kinds, (current) => [...current, "OrdinaryRunEntry" as const]).pipe(
+              Effect.tap((current) =>
+                current.length === 1
+                  ? Deferred.succeed(ordinaryStarted, undefined)
+                  : Deferred.succeed(trailingOrdinaryStarted, undefined)
+              ),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })),
+              Effect.tap(() => Deferred.succeed(ordinaryFinished, undefined))
+            ),
+          activateActiveWorkAuthorityRefresh: () =>
+            Ref.update(kinds, (current) => [...current, "ActiveWorkAuthorityRefresh" as const]).pipe(
+              Effect.andThen(Deferred.succeed(activeStarted, undefined)),
+              Effect.andThen(Deferred.await(releaseActive)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(ordinaryStarted)
+            yield* Deferred.await(ordinaryFinished)
+            yield* Effect.yieldNow
+            yield* Effect.yieldNow
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* Deferred.await(activeStarted)
+            yield* owner.hint(RunReactivationHint.Timer())
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* Deferred.succeed(releaseActive, undefined)
+            yield* Deferred.await(trailingOrdinaryStarted)
+            expect(yield* Ref.get(kinds)).toEqual([
+              "OrdinaryRunEntry",
+              "ActiveWorkAuthorityRefresh",
+              "OrdinaryRunEntry"
+            ])
+          })
+      )
+    })
+  )
+)
+
+it.effect("retains one trailing ordinary activation when the active handoff rejects", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const ordinaryStarted = yield* Deferred.make<void>()
+      const ordinaryFinished = yield* Deferred.make<void>()
+      const activeStarted = yield* Deferred.make<void>()
+      const releaseActive = yield* Deferred.make<void>()
+      const failureObserved = yield* Deferred.make<void>()
+      const trailingOrdinaryStarted = yield* Deferred.make<void>()
+      const kinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-active-rejected"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.updateAndGet(kinds, (current) => [...current, "OrdinaryRunEntry" as const]).pipe(
+              Effect.tap((current) =>
+                current.length === 1
+                  ? Deferred.succeed(ordinaryStarted, undefined)
+                  : Deferred.succeed(trailingOrdinaryStarted, undefined)
+              ),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })),
+              Effect.tap(() => Deferred.succeed(ordinaryFinished, undefined))
+            ),
+          activateActiveWorkAuthorityRefresh: () =>
+            Effect.gen(function* () {
+              yield* Ref.update(kinds, (current) => [...current, "ActiveWorkAuthorityRefresh" as const])
+              yield* Deferred.succeed(activeStarted, undefined)
+              yield* Deferred.await(releaseActive)
+              return yield* new TestTrackerReadFailure({ detail: "active handoff rejected" })
+            }),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Deferred.succeed(failureObserved, undefined)
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(ordinaryStarted)
+            yield* Deferred.await(ordinaryFinished)
+            yield* Effect.yieldNow
+            yield* Effect.yieldNow
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* Deferred.await(activeStarted)
+            yield* owner.hint(RunReactivationHint.Timer())
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* Deferred.succeed(releaseActive, undefined)
+            yield* Deferred.await(failureObserved)
+            expect(yield* Ref.get(kinds)).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh"])
+            yield* TestClock.adjust("1 second")
+            yield* Deferred.await(trailingOrdinaryStarted)
+            expect(yield* Ref.get(kinds)).toEqual([
+              "OrdinaryRunEntry",
+              "ActiveWorkAuthorityRefresh",
+              "OrdinaryRunEntry"
+            ])
           })
       )
     })

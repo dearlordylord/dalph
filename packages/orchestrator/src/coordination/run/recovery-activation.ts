@@ -2367,11 +2367,65 @@ const continuationTarget = (records: ReadonlyArray<JournalRecord>) => {
   /* v8 ignore stop -- @preserve */
 }
 
+type TrackerGraphObservationOperation = ReturnType<typeof makeTrackerGraphObservationOperation>
+
+/**
+ * One complete tracker-graph read selected for one active-work activation.
+ *
+ * The baseline and operation are activation-wide.  Subject identities are
+ * retained by the opportunity and are deliberately not copied into this
+ * operation as authority facts; after this read, each subject derives its own
+ * focused reads from the same accepted graph observation.
+ */
+type ActiveRefreshGraphReadSelection = {
+  readonly _tag: "ActiveRefreshGraphReadSelection"
+  readonly baseline: JournalPosition
+  readonly operation: TrackerGraphObservationOperation
+}
+
+const activeRefreshGraphReadSelectionFor = (
+  runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">,
+  activationBaselinePosition: Option.Option<JournalPosition>,
+  opportunity: RunActivationOpportunity
+): ActiveRefreshGraphReadSelection | undefined => {
+  if (opportunity._tag !== "ActiveWorkAuthorityRefresh" || Option.isNone(activationBaselinePosition)) return undefined
+  const records = runState.workflowHistory.records
+  const target = continuationTarget(records)
+  if (target === undefined) return undefined
+  const activeAttempts = runState.responsibility.entries
+    .flatMap((entry) => (entry._tag === "PlannedAttemptExecutorWorkResponsibility" ? [entry.plannedAttempt] : []))
+    .filter(
+      (plannedAttempt, index, candidates) =>
+        plannedAttempt.runId === runState.runId &&
+        activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, plannedAttempt) &&
+        latestPlannedAttemptExecutorEvidence(records, plannedAttempt)?.report._tag === "Running" &&
+        candidates.findIndex((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) === index
+    )
+    .toSorted((left, right) => left.runId.localeCompare(right.runId) || left.attemptId.localeCompare(right.attemptId))
+  if (activeAttempts.length === 0) return undefined
+  const baseline = activationBaselinePosition.value
+  const predecessorOperationIds = activeAttempts.flatMap((plannedAttempt) => {
+    const plan = recordedTaskAttemptPlanFor(records, plannedAttempt)
+    return plan === undefined ? [] : [plan.operationId]
+  })
+  return {
+    _tag: "ActiveRefreshGraphReadSelection",
+    baseline,
+    operation: makeTrackerGraphObservationOperation(
+      OperationId.make(`active-refresh:${runState.runId}:after:${baseline}:graph`),
+      target,
+      predecessorOperationIds,
+      activeAttempts.map(({ taskId }) => taskId)
+    )
+  }
+}
+
 const decisionWithoutCurrentGraph = (
   plannedAttempt: PlannedTaskAttempt,
   planOperationId: OperationId | undefined,
   records: ReadonlyArray<JournalRecord>,
-  activationBaselinePosition: Option.Option<JournalPosition>
+  activationBaselinePosition: Option.Option<JournalPosition>,
+  activeRefreshGraphOperation?: TrackerGraphObservationOperation
 ): ContinuationDecision => {
   const target = continuationTarget(records)
   /* v8 ignore start -- @preserve A valid recovered run always supplies its WorkflowRunBegan target. */
@@ -2391,13 +2445,15 @@ const decisionWithoutCurrentGraph = (
   )
   return {
     transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
-      operation: makeTrackerGraphObservationOperation(
-        OperationId.make(`continuation:${plannedAttempt.attemptId}:after:${baseline}:graph`),
-        target,
-        /* v8 ignore next -- @preserve A recovered executor responsibility always has its durable plan operation. */
-        planOperationId === undefined ? [] : [planOperationId],
-        [plannedAttempt.taskId]
-      ),
+      operation:
+        activeRefreshGraphOperation ??
+        makeTrackerGraphObservationOperation(
+          OperationId.make(`continuation:${plannedAttempt.attemptId}:after:${baseline}:graph`),
+          target,
+          /* v8 ignore next -- @preserve A recovered executor responsibility always has its durable plan operation. */
+          planOperationId === undefined ? [] : [planOperationId],
+          [plannedAttempt.taskId]
+        ),
       plannedAttempt
     })
   }
@@ -2879,6 +2935,11 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     responsibility: settlementRunState.responsibility,
     responsibilityFacts
   })
+  const activeRefreshGraphSelection = activeRefreshGraphReadSelectionFor(
+    settlementRunState,
+    activationBaselinePosition,
+    opportunity
+  )
   const pendingGitReadIntents = runState.workflowHistory.records
     .filter(
       (
@@ -2914,29 +2975,58 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           plannedAttempt: event.operation.plannedAttempt
         })
   )
-  const continuationDecisions = ordinary.transitions.map((transition) => {
-    if (transition._tag !== "ContinuePlannedAttemptExecutorWork") {
-      return continuationDecisionFor(
-        transition,
-        runState.workflowHistory.records,
-        undefined,
-        activationBaselinePosition,
-        integrationTarget,
-        opportunity
-      )
-    }
-
-    return pendingAttemptIds.has(transition.plannedAttempt.attemptId)
-      ? {}
-      : continuationDecisionFor(
-          transition,
-          runState.workflowHistory.records,
-          currentGraphObservationForAttempt(transition.plannedAttempt),
-          freshnessBaselineForAttempt(transition.plannedAttempt),
-          integrationTarget,
-          opportunity
+  /**
+   * A complete graph is one activation boundary, even when several captured
+   * Running attempts independently need that boundary.  Keep each later
+   * focused decision subject-local, but expose only the one shared graph
+   * action selected from the activation's immutable baseline.
+   */
+  const continuationDecisions = ordinary.transitions.reduce<ReadonlyArray<ContinuationDecision>>(
+    (decisions, transition) => {
+      const decision =
+        transition._tag !== "ContinuePlannedAttemptExecutorWork"
+          ? continuationDecisionFor(
+              transition,
+              runState.workflowHistory.records,
+              undefined,
+              activationBaselinePosition,
+              integrationTarget,
+              opportunity
+            )
+          : pendingAttemptIds.has(transition.plannedAttempt.attemptId)
+            ? {}
+            : continuationDecisionFor(
+                transition,
+                runState.workflowHistory.records,
+                currentGraphObservationForAttempt(transition.plannedAttempt),
+                freshnessBaselineForAttempt(transition.plannedAttempt),
+                integrationTarget,
+                opportunity
+              )
+      const selected = decision.transition
+      if (
+        selected?._tag !== "ObservePlannedAttemptContinuationGraph" ||
+        activeRefreshGraphSelection === undefined ||
+        !isActiveRefreshSubject(selected.plannedAttempt.runId, selected.plannedAttempt, opportunity)
+      ) {
+        return [...decisions, decision]
+      }
+      if (
+        decisions.some(
+          ({ transition: candidate }) =>
+            candidate?._tag === "ObservePlannedAttemptContinuationGraph" &&
+            isActiveRefreshSubject(candidate.plannedAttempt.runId, candidate.plannedAttempt, opportunity)
         )
-  })
+      ) {
+        return decisions
+      }
+      return [
+        ...decisions,
+        { ...decision, transition: { ...selected, operation: activeRefreshGraphSelection.operation } }
+      ]
+    },
+    []
+  )
   /**
    * A prior activation may have recorded a non-exact executor projection while
    * its command remained unmatched. A later ordinary Run entry is itself a
