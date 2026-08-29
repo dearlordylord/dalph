@@ -12,7 +12,7 @@ export interface ActiveRefreshPreG2Subject {
 export type DeliveryRuntimePhase =
   | { readonly _tag: "OrdinaryDeliveryRuntimePhase" }
   | { readonly _tag: "ActiveRefreshPreG2RuntimePhase"; readonly subjects: ReadonlyArray<ActiveRefreshPreG2Subject> }
-  | { readonly _tag: "ActiveRefreshPostG2RuntimePhase" }
+  | { readonly _tag: "ActiveRefreshPostG2RuntimePhase"; readonly subjects: ReadonlyArray<ActiveRefreshPreG2Subject> }
 
 export const DeliveryRuntimePhase = {
   Ordinary: { _tag: "OrdinaryDeliveryRuntimePhase" } satisfies DeliveryRuntimePhase,
@@ -20,7 +20,10 @@ export const DeliveryRuntimePhase = {
     _tag: "ActiveRefreshPreG2RuntimePhase",
     subjects
   }),
-  ActiveRefreshPostG2: { _tag: "ActiveRefreshPostG2RuntimePhase" } satisfies DeliveryRuntimePhase
+  ActiveRefreshPostG2: (subjects: ReadonlyArray<ActiveRefreshPreG2Subject>): DeliveryRuntimePhase => ({
+    _tag: "ActiveRefreshPostG2RuntimePhase",
+    subjects
+  })
 } as const
 
 type PreG2TransitionTag =
@@ -40,6 +43,17 @@ const preG2ActiveTransitionTags: ReadonlySet<string> = new Set<PreG2TransitionTa
   "ObservePlannedAttemptContinuationTargetLineage",
   "ObservePlannedAttemptContinuationWorktree",
   "SuspendPlannedAttemptExecutorWork"
+])
+
+/**
+ * Once the mandatory G2 is accepted, these transitions would reread or act
+ * on a captured Running attempt a second time. The subject set remains in the
+ * phase so a restart before G2 can still replay the exact active opportunity.
+ */
+const postG2ActiveTransitionTags: ReadonlySet<string> = new Set<string>([
+  ...preG2ActiveTransitionTags,
+  "ContinuePlannedAttemptExecutorWork",
+  "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
 ])
 
 const isActiveRefreshPreG2Subject = (value: unknown): value is ActiveRefreshPreG2Subject => {
@@ -93,13 +107,31 @@ const activeRefreshSubjectContains = (
   candidate: ActiveRefreshPreG2Subject
 ): boolean => subjects.some(({ attemptId, runId }) => attemptId === candidate.attemptId && runId === candidate.runId)
 
-/** Holds old-graph fresh work until G2 while allowing captured authority reads. */
-export const preG2EvaluationOf = (
+/** Applies the selected G2 admission boundary to one descriptive evaluation. */
+export const evaluationForPhase = (
   phase: DeliveryRuntimePhase,
   evaluation: DeliveryRuntimeEvaluation
 ): DeliveryRuntimeEvaluation => {
-  if (phase._tag !== "ActiveRefreshPreG2RuntimePhase") return evaluation
+  if (phase._tag === "OrdinaryDeliveryRuntimePhase") return evaluation
   if (evaluation.proposedActions._tag === "DeliveryProposalOwnershipConflict") return evaluation
+  if (phase._tag === "ActiveRefreshPostG2RuntimePhase") {
+    return {
+      ...evaluation,
+      proposedActions: {
+        ...evaluation.proposedActions,
+        proposals: evaluation.proposedActions.proposals.filter((proposal) => {
+          const subject = proposalPlannedAttemptOf(proposal)
+          const transition = proposalTransitionTagOf(proposal)
+          return !(
+            subject !== undefined &&
+            transition !== undefined &&
+            postG2ActiveTransitionTags.has(transition) &&
+            activeRefreshSubjectContains(phase.subjects, subject)
+          )
+        })
+      }
+    }
+  }
   return {
     ...evaluation,
     proposedActions: {

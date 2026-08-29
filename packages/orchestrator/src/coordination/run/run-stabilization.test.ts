@@ -821,13 +821,14 @@ it.effect("runs independent work revealed by G2 while the active subject remains
           { id: taskB, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
         ])
       )
-      const attemptId = AttemptId.make("active-boundary-independent-attempt")
+      const attemptId = activeVerticalAttempt.attemptId
       const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
         _tag: "ActiveRefreshRuntimeBoundary" as const,
         runId,
         reconciledAttempts: [{ runId, attemptId }]
       }
       const independentProposal = freshGraphReadProposal(g2, taskB)
+      const activePostG2Proposal = activeVerticalSuspensionProposal()
       const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
         ...withRunFacts(evaluation(base, g1, { ...emptyFrontier, proposals: [independentProposal] }), false),
         activeRefreshBoundary: boundary
@@ -843,11 +844,18 @@ it.effect("runs independent work revealed by G2 while the active subject remains
                 ...withRunFacts(
                   evaluation(base, graph(operation.operationId, 4, g2.observation.snapshot), {
                     ...emptyFrontier,
-                    proposals: [independentProposal]
+                    // G2 may leave the captured subject in the descriptive
+                    // frontier. The post-G2 phase must suppress that stale
+                    // active chain while retaining independent fresh work.
+                    proposals: [activePostG2Proposal, independentProposal]
                   }),
                   false
                 ),
-                activeRefreshBoundary: boundary
+                activeRefreshBoundary: boundary,
+                taskWork: {
+                  capacity: TaskWorkCapacity.make(2),
+                  held: [{ taskId: taskA, correlation: { runId, attemptId } }]
+                }
               })
             ),
             Effect.as(g2.observation.snapshot)

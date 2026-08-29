@@ -1,7 +1,12 @@
 import { Effect, Option, Stream } from "effect"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
-import type { DeliveryRuntimeInput, DeliveryRuntimeQuiescence } from "../delivery/run-delivery-runtime.js"
-import { DeliveryRuntimePhase, runDeliveryRuntimePhase } from "../delivery/run-delivery-runtime.js"
+import {
+  DeliveryRuntimePhase,
+  runDeliveryRuntimePhase,
+  type DeliveryRuntimeInput,
+  type DeliveryRuntimeQuiescence,
+  type ActiveRefreshPreG2Subject
+} from "../delivery/run-delivery-runtime.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import type { DeliveryRuntimeEvaluation } from "../delivery/relations.js"
 import { attachCurrentSignal, deliveryFinalityOf } from "../delivery/relations.js"
@@ -115,7 +120,8 @@ const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): 
 const proofOfAcceptedActiveRefreshG2 = <E>(
   target: TrackerTarget,
   evaluations: DeliveryRuntimeInput<E>,
-  accepted: DeliveryRuntimeEvaluation
+  accepted: DeliveryRuntimeEvaluation,
+  subjects: ReadonlyArray<ActiveRefreshPreG2Subject>
 ) =>
   Effect.gen(function* () {
     if (accepted.acceptedAt === null || accepted.current.trackerGraph._tag !== "GraphEstablished") {
@@ -125,7 +131,7 @@ const proofOfAcceptedActiveRefreshG2 = <E>(
     if (accepted.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
       return unsettledProof(accepted.acceptedAt)
     }
-    const phaseTwo = yield* runDeliveryRuntimePhase(evaluations, DeliveryRuntimePhase.ActiveRefreshPostG2)
+    const phaseTwo = yield* runDeliveryRuntimePhase(evaluations, DeliveryRuntimePhase.ActiveRefreshPostG2(subjects))
     return proofOf(target, phaseTwo)
   })
 
@@ -256,8 +262,8 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
           decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
       }
-      if (opportunity._tag === "ActiveWorkAuthorityRefresh" && firstQuiescence.activeRefreshBoundary !== undefined) {
-        return yield* proofOfAcceptedActiveRefreshG2(target, evaluations, accepted)
+      if (opportunity._tag === "ActiveWorkAuthorityRefresh") {
+        return yield* proofOfAcceptedActiveRefreshG2(target, evaluations, accepted, [...opportunity.subjects])
       }
       return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))
     })

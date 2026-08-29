@@ -1311,18 +1311,14 @@ it.effect("production owner refreshes Running work once for a TrackerNotificatio
       "ReadTaskClaim",
       "ReadTaskWorktree",
       "ReadTargetLineage",
-      "ReadTrackerGraph",
-      "ReadTaskWorkSpecification",
-      "ReadTaskClaim",
-      "ReadTaskWorktree",
-      "ReadTargetLineage"
+      "ReadTrackerGraph"
     ])
     const activeGitSelectionKeys = result.activeSelectionOperationKeys.filter(
       (key) => key.startsWith("ReadTaskWorktree:") || key.startsWith("ReadTargetLineage:")
     )
-    expect(activeGitSelectionKeys).toHaveLength(4)
+    expect(activeGitSelectionKeys).toHaveLength(2)
     expect(new Set(activeGitSelectionKeys).size).toBe(activeGitSelectionKeys.length)
-    expect(result.trackerCalls).toEqual(["graph", "specification", "claim", "graph", "specification", "claim"])
+    expect(result.trackerCalls).toEqual(["graph", "specification", "claim", "graph"])
     expect(result.executorCalls).toEqual([])
     expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh"])
     expect(result.graphTaskIds).toEqual(["A"])

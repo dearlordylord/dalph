@@ -2042,6 +2042,93 @@ it.effect("holds old-graph admission until G2 after direct safe or terminal sett
   })
 )
 
+it.effect("rejects a captured active proposal after G2 before admitting independent work", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const active = recoveredProposalFor(
+        RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+      )
+      const independent = proposal(1, independentPlannedAttempt.taskId)
+      const acceptedAt = JournalPosition.make(10)
+      const graphProjection = projectTrackerSnapshot({
+        revision: "post-g2-active-suppression",
+        tasks: [plannedAttempt.taskId, independentPlannedAttempt.taskId].map((taskId) => ({
+          id: taskId,
+          lifecycle: { _tag: "Open" as const },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }))
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("post-G2 suppression graph must be valid")
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("post-g2-active-suppression-graph"),
+          recordedAt: acceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const relation = yield* dynamicEvaluationSignal({
+        ...withProposals(
+          {
+            ...base,
+            acceptedAt,
+            current: { ...base.current, trackerGraph: graph },
+            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+          },
+          [active, independent],
+          2
+        ),
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+        activeRefreshBoundary: {
+          _tag: "ActiveRefreshRuntimeBoundary" as const,
+          runId,
+          reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+        },
+        taskWork: {
+          capacity: TaskWorkCapacity.make(2),
+          held: [{ taskId: plannedAttempt.taskId, correlation: { runId, attemptId: plannedAttempt.attemptId } }]
+        }
+      })
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          Ref.update(executed, (current) => [...current, action.id]).pipe(
+            Effect.andThen(
+              relation.publish({
+                ...withProposals(
+                  {
+                    ...base,
+                    acceptedAt: JournalPosition.make(11),
+                    current: { ...base.current, trackerGraph: graph },
+                    quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+                  },
+                  [],
+                  2
+                ),
+                quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+                activeRefreshBoundary: {
+                  _tag: "ActiveRefreshRuntimeBoundary" as const,
+                  runId,
+                  reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+                },
+                taskWork: { capacity: TaskWorkCapacity.make(2), held: [] }
+              })
+            ),
+            Effect.as({ _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult)
+          )
+      })
+      const result = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(Effect.provide(identityLayers), Effect.provideService(DeliveryActionExecutor, executor))
+
+      expect(result._tag).toBe("TrackerReconfirmationQuiescence")
+      expect(yield* Ref.get(executed)).toEqual([independent.id])
+    })
+  )
+)
+
 it.effect("quiesces after G2 when retained active capacity cannot be freed locally", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -2090,7 +2177,10 @@ it.effect("quiesces after G2 when retained active capacity cannot be freed local
       } satisfies DeliveryRuntimeEvaluation
       const relation = yield* dynamicEvaluationSignal(initial)
       const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
-      const result = yield* runDeliveryRuntimePhase(relation, DeliveryRuntimePhase.ActiveRefreshPostG2).pipe(
+      const result = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(
         Effect.provide(identityLayers),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -2192,11 +2282,10 @@ it.effect("continues waiting after G2 while an in-flight action can free retaine
             return { _tag: "ActionCompleted", proposalId: independent.id } satisfies DeliveryActionResult
           })
       })
-      const runtime = yield* runDeliveryRuntimePhase(relation, DeliveryRuntimePhase.ActiveRefreshPostG2).pipe(
-        Effect.provide(identityLayers),
-        Effect.provideService(DeliveryActionExecutor, executor),
-        Effect.forkChild
-      )
+      const runtime = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(Effect.provide(identityLayers), Effect.provideService(DeliveryActionExecutor, executor), Effect.forkChild)
 
       yield* Deferred.await(activeStarted)
       yield* Effect.yieldNow

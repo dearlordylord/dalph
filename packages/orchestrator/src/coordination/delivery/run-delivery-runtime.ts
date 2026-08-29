@@ -37,7 +37,7 @@ import { proposalIsPresent } from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import {
   DeliveryRuntimePhase,
-  preG2EvaluationOf,
+  evaluationForPhase,
   type DeliveryRuntimePhase as DeliveryRuntimePhaseType
 } from "./delivery-runtime-phase.js"
 
@@ -153,7 +153,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
       const attachment = yield* attachCurrentSignal(relation)
-      const first = preG2EvaluationOf(phase, attachment.current)
+      const first = evaluationForPhase(phase, attachment.current)
       yield* Ref.set(latest, Option.some(first))
       yield* runtimeObservation.publish(first, [])
       const admission = yield* resources.makeAdmissionController(first.taskWork)
@@ -261,7 +261,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const applyEvaluation = Effect.fn("DeliveryRuntime.applyEvaluation")(function* (
         evaluation: DeliveryRuntimeEvaluation
       ) {
-        const phaseEvaluation = preG2EvaluationOf(phase, evaluation)
+        const phaseEvaluation = evaluationForPhase(phase, evaluation)
         yield* selectionGate.withPermit(
           Effect.gen(function* () {
             const current = Option.getOrThrow(yield* Ref.get(latest))
