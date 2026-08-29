@@ -1,7 +1,7 @@
 import { Effect, Option, Stream } from "effect"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { DeliveryRuntimeInput, DeliveryRuntimeQuiescence } from "../delivery/run-delivery-runtime.js"
-import { runDeliveryRuntimePhase } from "../delivery/run-delivery-runtime.js"
+import { DeliveryRuntimePhase, runDeliveryRuntimePhase } from "../delivery/run-delivery-runtime.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import type { DeliveryRuntimeEvaluation } from "../delivery/relations.js"
 import { attachCurrentSignal, deliveryFinalityOf } from "../delivery/relations.js"
@@ -104,33 +104,26 @@ const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): 
 
 /**
  * Uses the accepted G2 graph as the proof boundary for an active refresh that
- * reconciled a persisted Suspend. The marker suppresses a second generic
- * runtime phase; it does not suppress this complete tracker read.
+ * reconciled a persisted Suspend. The active subject remains suppressed by
+ * its typed boundary, while a second ordinary runtime phase may admit work
+ * that G2 discovered for an independent subject.
  */
-const proofOfAcceptedActiveRefreshG2 = (
+const proofOfAcceptedActiveRefreshG2 = <E>(
   target: TrackerTarget,
-  accepted: DeliveryRuntimeEvaluation,
-  firstQuiescence: DeliveryRuntimeQuiescence
-): RunFinalityProof => {
-  if (accepted.acceptedAt === null || accepted.current.trackerGraph._tag !== "GraphEstablished") {
-    return unsettledProof(accepted.acceptedAt)
-  }
-  if (accepted.quiescence._tag === "QuiescencePassive") return unsettledProof(accepted.acceptedAt)
-  if (accepted.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
-    return unsettledProof(accepted.acceptedAt)
-  }
-  if (accepted.proposedActions.proposals.length > 0) return unsettledProof(accepted.acceptedAt)
-  return proofOf(target, {
-    _tag: "TrackerReconfirmationQuiescence",
-    acceptedAt: accepted.acceptedAt,
-    current: { ...accepted.current, trackerGraph: accepted.current.trackerGraph },
-    disposition: { _tag: "TrackerReconfirmationAllowed" },
-    proposedActions: { ...accepted.proposedActions, proposals: [] },
-    ...(firstQuiescence.activeRefreshBoundary === undefined
-      ? {}
-      : { activeRefreshBoundary: firstQuiescence.activeRefreshBoundary })
+  evaluations: DeliveryRuntimeInput<E>,
+  accepted: DeliveryRuntimeEvaluation
+) =>
+  Effect.gen(function* () {
+    if (accepted.acceptedAt === null || accepted.current.trackerGraph._tag !== "GraphEstablished") {
+      return unsettledProof(accepted.acceptedAt)
+    }
+    if (accepted.quiescence._tag === "QuiescencePassive") return unsettledProof(accepted.acceptedAt)
+    if (accepted.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+      return unsettledProof(accepted.acceptedAt)
+    }
+    const phaseTwo = yield* runDeliveryRuntimePhase(evaluations, DeliveryRuntimePhase.ActiveRefreshPostG2)
+    return proofOf(target, phaseTwo)
   })
-}
 
 const acceptsObservation = (
   operationId: ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"],
@@ -202,7 +195,11 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations)
+      const firstPhase =
+        opportunity._tag === "ActiveWorkAuthorityRefresh"
+          ? DeliveryRuntimePhase.ActiveRefreshPreG2
+          : DeliveryRuntimePhase.Ordinary
+      const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations, firstPhase)
       if (shouldReturnInitialProof(firstQuiescence)) {
         return proofOf(target, firstQuiescence)
       }
@@ -236,7 +233,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         }
       }
       if (opportunity._tag === "ActiveWorkAuthorityRefresh" && firstQuiescence.activeRefreshBoundary !== undefined) {
-        return proofOfAcceptedActiveRefreshG2(target, accepted, firstQuiescence)
+        return yield* proofOfAcceptedActiveRefreshG2(target, evaluations, accepted)
       }
       return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))
     })

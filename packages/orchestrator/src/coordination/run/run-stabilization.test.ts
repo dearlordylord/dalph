@@ -156,8 +156,11 @@ const support = Layer.merge(
   )
 )
 
-const freshGraphReadProposal = (trackerGraph: Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>) => {
-  const task = trackerGraph.observation.snapshot.eligibleTasks()[0]
+const freshGraphReadProposal = (
+  trackerGraph: Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>,
+  taskId?: TaskId
+) => {
+  const task = trackerGraph.observation.snapshot.eligibleTasks().find(({ id }) => taskId === undefined || id === taskId)
   if (task === undefined) throw new Error("fixture graph must contain one eligible task")
   const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
     operationId: trackerGraph.observation.operationId,
@@ -396,6 +399,88 @@ it.effect("active refresh performs mandatory G2 once after its typed completion 
       expect(yield* Ref.get(reads)).toBe(1)
       expect(yield* Ref.get(executions)).toBe(0)
       expect(proof.acceptedAt).toBe(JournalPosition.make(4))
+    })
+  )
+)
+
+it.effect("runs independent work revealed by G2 while the active subject remains held", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const taskA = TaskId.make("A")
+      const taskB = TaskId.make("B")
+      const g1 = graph(
+        "active-boundary-independent-G1",
+        1,
+        snapshot("active-boundary-independent-G1", [
+          { id: taskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ])
+      )
+      const g2 = graph(
+        "active-boundary-independent-G2",
+        4,
+        snapshot("active-boundary-independent-G2", [
+          { id: taskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+          { id: taskB, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ])
+      )
+      const attemptId = AttemptId.make("active-boundary-independent-attempt")
+      const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [{ runId, attemptId }]
+      }
+      const independentProposal = freshGraphReadProposal(g2, taskB)
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+        ...withRunFacts(evaluation(base, g1, { ...emptyFrontier, proposals: [independentProposal] }), false),
+        activeRefreshBoundary: boundary
+      })
+      const reads = yield* Ref.make(0)
+      const executions = yield* Ref.make<ReadonlyArray<string>>([])
+      const executionBeforeG2 = yield* Ref.make(false)
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+          Ref.update(reads, (count) => count + 1).pipe(
+            Effect.andThen(
+              SubscriptionRef.set(state, {
+                ...withRunFacts(
+                  evaluation(base, graph(operation.operationId, 4, g2.observation.snapshot), {
+                    ...emptyFrontier,
+                    proposals: [independentProposal]
+                  }),
+                  false
+                ),
+                activeRefreshBoundary: boundary
+              })
+            ),
+            Effect.as(g2.observation.snapshot)
+          )
+      })
+      const proof = yield* runStabilizedDelivery(
+        target,
+        signalOf(state),
+        activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
+      ).pipe(
+        Effect.provide(support),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: ({ proposal }) =>
+              Effect.gen(function* () {
+                if ((yield* Ref.get(reads)) === 0) yield* Ref.set(executionBeforeG2, true)
+                yield* Ref.update(executions, (ids) => [...ids, proposal.id])
+                yield* SubscriptionRef.update(state, (current) => ({ ...current, proposedActions: emptyFrontier }))
+                return { _tag: "ActionCompleted", proposalId: proposal.id } as const
+              })
+          })
+        ),
+        Effect.provide(interpreter)
+      )
+
+      expect(yield* Ref.get(reads)).toBe(1)
+      expect(yield* Ref.get(executions)).toEqual([independentProposal.id])
+      expect(yield* Ref.get(executionBeforeG2)).toBe(false)
+      expect(proof.decision).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
     })
   )
 )

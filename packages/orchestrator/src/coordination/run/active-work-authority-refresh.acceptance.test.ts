@@ -111,6 +111,7 @@ const secondExactAcquisition = {
   taskId: independentTaskId,
   token: ClaimToken.make("active-work-refresh-token-B")
 } as const
+const secondExactClaim = ActiveTaskClaim.make({ ...secondExactAcquisition })
 
 const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/active-work-refresh.git"),
@@ -353,7 +354,7 @@ const buildTwoRunningPrefix = (): ReadonlyArray<JournalRecord> => {
   const plan = makeTaskAttemptPlanOperation({
     operationId: OperationId.make("active-work-refresh-plan-B"),
     plannedAttempt: secondPlannedAttempt,
-    predecessorOperationIds: [specificationOperation.operationId]
+    predecessorOperationIds: [secondExactAcquisition.operationId, specificationOperation.operationId]
   })
   return [
     ...records,
@@ -406,6 +407,103 @@ const buildTwoRunningPrefix = (): ReadonlyArray<JournalRecord> => {
       })
     )
   ]
+}
+
+const appendRecord = (
+  records: ReadonlyArray<JournalRecord>,
+  event: JournalRecord["event"]
+): ReadonlyArray<JournalRecord> => [...records, record(Number(records.at(-1)?.position ?? 0) + 1, event)]
+
+const appendTaskTrackerObservation = <Operation extends Parameters<typeof taskTrackerReadIntent>[0]>(
+  records: ReadonlyArray<JournalRecord>,
+  operation: Operation,
+  observation: Parameters<typeof taskTrackerFactsObservedEvent>[1]
+): ReadonlyArray<JournalRecord> =>
+  appendRecord(
+    appendRecord(records, taskTrackerReadIntent(operation)),
+    taskTrackerFactsObservedEvent(operation.operationId, observation)
+  )
+
+const appendActiveWorktreeObservation = (
+  records: ReadonlyArray<JournalRecord>,
+  operation: Extract<
+    RunnableFrontierTransition,
+    { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
+  >["operation"]
+): ReadonlyArray<JournalRecord> => {
+  const authority = ActiveWorkAuthorityRefreshAuthority.make({
+    attemptId: operation.plannedAttempt.attemptId,
+    runId: operation.plannedAttempt.runId
+  })
+  const activeOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
+    operation,
+    authority,
+    ActiveWorkAuthorityRefreshOrdinal.make(1)
+  )
+  return appendRecord(
+    appendRecord(
+      records,
+      ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: activeOperation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    PlannedAttemptWorktreeObservedEvent.make({
+      observation: {
+        _tag: "PlannedWorktreeReady",
+        baseSha: operation.plannedAttempt.baseSha,
+        branch: operation.plannedAttempt.branch,
+        headSha: operation.plannedAttempt.baseSha,
+        worktree: operation.plannedAttempt.worktree
+      },
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: operation.operationId,
+      version: workflowJournalEventVersion
+    })
+  )
+}
+
+const appendActiveLineageObservation = (
+  records: ReadonlyArray<JournalRecord>,
+  operation: Extract<
+    RunnableFrontierTransition,
+    { readonly _tag: "ObservePlannedAttemptContinuationTargetLineage" }
+  >["operation"],
+  plannedBaseIsAncestorOfTargetHead: boolean
+): ReadonlyArray<JournalRecord> => {
+  const authority = ActiveWorkAuthorityRefreshAuthority.make({
+    attemptId: operation.plannedAttempt.attemptId,
+    runId: operation.plannedAttempt.runId
+  })
+  const activeOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
+    operation,
+    authority,
+    ActiveWorkAuthorityRefreshOrdinal.make(1)
+  )
+  return appendRecord(
+    appendRecord(
+      records,
+      ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: activeOperation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    TargetLineageObservedEvent.make({
+      observation: TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead,
+        plannedBaseSha: operation.plannedAttempt.baseSha,
+        targetHeadSha: GitCommitSha.make("b".repeat(40))
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: operation.operationId,
+      plannedAttempt: operation.plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
 }
 
 const activeGitFailureRecords = (
@@ -470,7 +568,8 @@ const activeGitFailureRecords = (
 
 const projectionFor = (
   records: ReadonlyArray<JournalRecord>,
-  opportunity: Parameters<typeof continuationDecisionFor>[5]
+  opportunity: Parameters<typeof continuationDecisionFor>[5],
+  configuredIntegrationTarget?: IntegrationTarget
 ) =>
   Effect.gen(function* () {
     // The first journal read is the activation boundary. The recovery pass
@@ -492,7 +591,7 @@ const projectionFor = (
     })
     const recovery = yield* makeRunRecoveryProjection(
       runId,
-      undefined,
+      configuredIntegrationTarget,
       undefined,
       undefined,
       false,
@@ -578,6 +677,276 @@ it.effect("shares one active graph read across Running attempts before their own
       )
     ).toEqual([])
   })
+)
+
+it.effect(
+  "refreshes two Running attempts through independent authority chains and suspends only the constrained subject",
+  () =>
+    Effect.gen(function* () {
+      const scenarios = [
+        { constraint: "MissingClaim", constrainedAttempt: plannedAttempt },
+        { constraint: "ForeignClaim", constrainedAttempt: plannedAttempt },
+        { constraint: "TargetRewrite", constrainedAttempt: plannedAttempt },
+        { constraint: "TargetRewrite", constrainedAttempt: secondPlannedAttempt }
+      ] as const
+
+      for (const { constrainedAttempt, constraint } of scenarios) {
+        const healthyAttempt =
+          constrainedAttempt.attemptId === plannedAttempt.attemptId ? secondPlannedAttempt : plannedAttempt
+        const opportunity = activeWorkAuthorityRefreshForOwner(
+          "TrackerNotification",
+          activeWorkAuthorityRefreshSubjectsFor([
+            { runId, attemptId: plannedAttempt.attemptId },
+            { runId, attemptId: secondPlannedAttempt.attemptId }
+          ])
+        )
+        let records = buildTwoRunningPrefix()
+        let projection = yield* projectionFor(records, opportunity, integrationTarget)
+        const graphReads = projection.frontier.transitions.filter(
+          ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+        )
+        expect(graphReads).toHaveLength(1)
+        const graphRead = graphReads[0]
+        if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
+          return yield* Effect.die("expected one shared active graph read")
+        }
+        expect(graphRead.operation.readShape.explicitlyCoveredTaskIds).toEqual(
+          [taskId, independentTaskId].toSorted((left, right) => left.localeCompare(right))
+        )
+        records = appendRecord(
+          appendRecord(records, taskTrackerReadIntent(graphRead.operation)),
+          taskTrackerFactsObservedEvent(
+            graphRead.operation.operationId,
+            makeCompleteTaskTrackerFactsObserved(graphRead.operation, snapshotFor(`two-running-${constraint}`))
+          )
+        )
+        projection = yield* projectionFor(records, opportunity, integrationTarget)
+
+        const specificationReads = projection.frontier.transitions.filter(
+          (
+            transition
+          ): transition is Extract<
+            RunnableFrontierTransition,
+            { readonly _tag: "ObservePlannedAttemptContinuationSpecification" }
+          > => transition._tag === "ObservePlannedAttemptContinuationSpecification"
+        )
+        expect(specificationReads).toHaveLength(2)
+        expect(
+          specificationReads
+            .map(({ plannedAttempt }) => plannedAttempt.attemptId)
+            .toSorted((left, right) => left.localeCompare(right))
+        ).toEqual(
+          [plannedAttempt.attemptId, secondPlannedAttempt.attemptId].toSorted((left, right) =>
+            left.localeCompare(right)
+          )
+        )
+        for (const transition of specificationReads.toSorted((left, right) =>
+          left.plannedAttempt.attemptId.localeCompare(right.plannedAttempt.attemptId)
+        )) {
+          const specificationForAttempt =
+            transition.plannedAttempt.attemptId === plannedAttempt.attemptId ? specification : independentSpecification
+          records = appendTaskTrackerObservation(
+            records,
+            transition.operation,
+            makeFocusedTaskWorkSpecificationFactsObserved(transition.operation, specificationForAttempt)
+          )
+        }
+        projection = yield* projectionFor(records, opportunity, integrationTarget)
+
+        const claimReads = projection.frontier.transitions.filter(
+          (
+            transition
+          ): transition is Extract<
+            RunnableFrontierTransition,
+            { readonly _tag: "ObservePlannedAttemptContinuationClaim" }
+          > => transition._tag === "ObservePlannedAttemptContinuationClaim"
+        )
+        expect(claimReads).toHaveLength(2)
+        for (const transition of claimReads.toSorted((left, right) =>
+          left.plannedAttempt.attemptId.localeCompare(right.plannedAttempt.attemptId)
+        )) {
+          const isConstrained = transition.plannedAttempt.attemptId === constrainedAttempt.attemptId
+          const claimObservation =
+            isConstrained && constraint === "MissingClaim"
+              ? { _tag: "UnclaimedTask" as const, taskId: transition.plannedAttempt.taskId }
+              : isConstrained && constraint === "ForeignClaim"
+                ? ActiveTaskClaim.make({
+                    operationId: OperationId.make(`two-running-foreign-${transition.plannedAttempt.attemptId}`),
+                    owner: ClaimOwner.make("another-dalph"),
+                    taskId: transition.plannedAttempt.taskId,
+                    token: ClaimToken.make(`two-running-foreign-token-${transition.plannedAttempt.attemptId}`)
+                  })
+                : transition.plannedAttempt.attemptId === plannedAttempt.attemptId
+                  ? exactClaim
+                  : secondExactClaim
+          records = appendTaskTrackerObservation(
+            records,
+            transition.operation,
+            makeFocusedTaskClaimFactsObserved(transition.operation, claimObservation)
+          )
+        }
+        projection = yield* projectionFor(records, opportunity, integrationTarget)
+
+        const expectedGitSubjects = constraint === "TargetRewrite" ? 2 : 1
+        const worktreeReads = projection.frontier.transitions.filter(
+          (
+            transition
+          ): transition is Extract<
+            RunnableFrontierTransition,
+            { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
+          > => transition._tag === "ObservePlannedAttemptContinuationWorktree"
+        )
+        expect(worktreeReads).toHaveLength(expectedGitSubjects)
+        expect(worktreeReads.map(({ plannedAttempt }) => plannedAttempt.attemptId)).toEqual(
+          (constraint === "TargetRewrite"
+            ? [plannedAttempt.attemptId, secondPlannedAttempt.attemptId]
+            : [healthyAttempt.attemptId]
+          ).toSorted((left, right) => left.localeCompare(right))
+        )
+        for (const transition of worktreeReads.toSorted((left, right) =>
+          left.plannedAttempt.attemptId.localeCompare(right.plannedAttempt.attemptId)
+        )) {
+          records = appendActiveWorktreeObservation(records, transition.operation)
+        }
+        projection = yield* projectionFor(records, opportunity, integrationTarget)
+
+        const lineageReads = projection.frontier.transitions.filter(
+          (
+            transition
+          ): transition is Extract<
+            RunnableFrontierTransition,
+            { readonly _tag: "ObservePlannedAttemptContinuationTargetLineage" }
+          > => transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+        expect(lineageReads).toHaveLength(expectedGitSubjects)
+        expect(lineageReads.map(({ plannedAttempt }) => plannedAttempt.attemptId)).toEqual(
+          (constraint === "TargetRewrite"
+            ? [plannedAttempt.attemptId, secondPlannedAttempt.attemptId]
+            : [healthyAttempt.attemptId]
+          ).toSorted((left, right) => left.localeCompare(right))
+        )
+        for (const transition of lineageReads.toSorted((left, right) =>
+          left.plannedAttempt.attemptId.localeCompare(right.plannedAttempt.attemptId)
+        )) {
+          records = appendActiveLineageObservation(
+            records,
+            transition.operation,
+            transition.plannedAttempt.attemptId !== constrainedAttempt.attemptId
+          )
+        }
+        projection = yield* projectionFor(records, opportunity, integrationTarget)
+
+        const executorTransitions = projection.frontier.transitions.filter(
+          ({ _tag }) =>
+            _tag === "ContinuePlannedAttemptExecutorWork" ||
+            _tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+            _tag === "ObservePlannedAttemptContinuationExecutor" ||
+            _tag === "SuspendPlannedAttemptExecutorWork"
+        )
+        expect(executorTransitions).toHaveLength(1)
+        const [executorTransition] = executorTransitions
+        expect(executorTransition).toEqual(
+          RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: constrainedAttempt })
+        )
+        expect(
+          projection.frontier.transitions.some(
+            (transition) =>
+              "plannedAttempt" in transition && transition.plannedAttempt.attemptId === healthyAttempt.attemptId
+          )
+        ).toBe(false)
+
+        const facts = availableEvidenceFor(projection).facts.filter(
+          ({ _tag, responsibility }) =>
+            _tag === "PlannedAttemptExecutorFreshFacts" &&
+            (responsibility.plannedAttempt.attemptId === constrainedAttempt.attemptId ||
+              responsibility.plannedAttempt.attemptId === healthyAttempt.attemptId)
+        )
+        expect(facts).toHaveLength(2)
+        const constrainedFacts = facts.find(
+          ({ responsibility }) =>
+            responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+            responsibility.plannedAttempt.attemptId === constrainedAttempt.attemptId
+        )
+        const healthyFacts = facts.find(
+          ({ responsibility }) =>
+            responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+            responsibility.plannedAttempt.attemptId === healthyAttempt.attemptId
+        )
+        expect(constrainedFacts).toMatchObject({
+          responsibility: {
+            beganAt:
+              constrainedAttempt.attemptId === plannedAttempt.attemptId
+                ? JournalPosition.make(5)
+                : JournalPosition.make(23)
+          },
+          disposition: { _tag: "PlannedAttemptExecutorSuspensionRequested" }
+        })
+        expect(healthyFacts).toMatchObject({
+          responsibility: {
+            beganAt:
+              healthyAttempt.attemptId === plannedAttempt.attemptId ? JournalPosition.make(5) : JournalPosition.make(23)
+          },
+          disposition: { _tag: "Ready" }
+        })
+
+        const freshFocusedFacts = records.flatMap(({ event, position }) => {
+          if (position <= JournalPosition.make(25) || event._tag !== "TaskTrackerFactsObserved") return []
+          return event.observation._tag === "FocusedTaskWorkSpecificationFacts" ||
+            event.observation._tag === "FocusedTaskClaimFacts"
+            ? [event.observation]
+            : []
+        })
+        expect(
+          freshFocusedFacts.filter(
+            (observation) =>
+              observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+              observation.factFamily.taskId === plannedAttempt.taskId
+          )
+        ).toHaveLength(1)
+        expect(
+          freshFocusedFacts.filter(
+            (observation) =>
+              observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+              observation.factFamily.taskId === secondPlannedAttempt.taskId
+          )
+        ).toHaveLength(1)
+        expect(
+          freshFocusedFacts.filter(
+            (observation) =>
+              observation._tag === "FocusedTaskClaimFacts" && observation.coverage.taskId === plannedAttempt.taskId
+          )
+        ).toHaveLength(1)
+        expect(
+          freshFocusedFacts.filter(
+            (observation) =>
+              observation._tag === "FocusedTaskClaimFacts" &&
+              observation.coverage.taskId === secondPlannedAttempt.taskId
+          )
+        ).toHaveLength(1)
+
+        const activeGitIntents = records.flatMap(({ event }) =>
+          event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ? [event] : []
+        )
+        expect(new Set(activeGitIntents.map(({ operation }) => operation.authority.attemptId))).toEqual(
+          new Set(
+            constraint === "TargetRewrite"
+              ? [plannedAttempt.attemptId, secondPlannedAttempt.attemptId]
+              : [healthyAttempt.attemptId]
+          )
+        )
+        for (const intent of activeGitIntents) {
+          expect(intent.operation.authority).toEqual({ runId, attemptId: intent.operation.plannedAttempt.attemptId })
+        }
+        expect(
+          records.filter(
+            ({ event, position }) =>
+              position > JournalPosition.make(25) &&
+              (event._tag === "PlannedAttemptExecutorWorkReported" ||
+                event._tag === "PlannedAttemptExecutorCommandIntended")
+          )
+        ).toEqual([])
+      }
+    })
 )
 
 type ControlledBoundaryReadCounts = {

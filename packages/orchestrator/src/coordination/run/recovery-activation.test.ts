@@ -2025,6 +2025,44 @@ it("removes only the exact post-baseline unreadable suspension during an active 
   ).toEqual([suspend])
 })
 
+it("keeps an independent continuation transition after the active subject reaches G2", () => {
+  const independentAttempt = PlannedTaskAttempt.make({
+    ...coverageAttempt,
+    attemptId: AttemptId.make("recovery-activation-independent-attempt"),
+    taskId: TaskId.make("recovery-activation-independent-task")
+  })
+  const independentOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("recovery-activation-independent-graph"),
+    coverageTarget,
+    [],
+    [independentAttempt.taskId]
+  )
+  const active = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+    operation: coverageGraphOperation,
+    plannedAttempt: coverageAttempt
+  })
+  const independent = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+    operation: independentOperation,
+    plannedAttempt: independentAttempt
+  })
+  const filtered = frontierForActivationOpportunity(
+    { explanations: [], transitions: [active, independent] },
+    [],
+    Option.some(JournalPosition.make(15)),
+    activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    ),
+    {
+      _tag: "ActiveRefreshRuntimeBoundary",
+      runId: coverageRunId,
+      reconciledAttempts: [{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }]
+    }
+  )
+
+  expect(filtered.transitions).toEqual([independent])
+})
+
 it("authorizes no executor command after a healthy refresh of Running work", () => {
   const ready = PlannedWorktreeReady.make({
     baseSha: coverageAttempt.baseSha,

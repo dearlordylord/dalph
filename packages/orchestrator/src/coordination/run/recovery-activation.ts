@@ -107,6 +107,7 @@ import {
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
@@ -2369,6 +2370,55 @@ const continuationTarget = (records: ReadonlyArray<JournalRecord>) => {
 
 type TrackerGraphObservationOperation = ReturnType<typeof makeTrackerGraphObservationOperation>
 
+type TrackerGraphReadIntentRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }> & {
+    readonly operation: TrackerGraphObservationOperation
+  }
+}
+
+const sameStringSequence = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
+  left.length === right.length && left.every((operationId, index) => operationId === right[index])
+
+const activeRefreshGraphOperationPrefixFor = (runId: RunId): string => `active-refresh:${runId}:after:`
+
+const trackerGraphReadHasOutcome = (records: ReadonlyArray<JournalRecord>, operationId: OperationId): boolean =>
+  records.some(({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId)
+
+/**
+ * Reuses the exact graph operation whose active-refresh intent survived a
+ * process boundary. The current journal position is not an operation
+ * identity: appending the intent necessarily moves it. The operation prefix
+ * is the existing process-local marker for the active graph boundary; the
+ * target, covered task set, and plan predecessors make the match exact for
+ * this activation's captured subjects and prevent an ordinary continuation
+ * read from being mistaken for an active refresh.
+ */
+const pendingActiveRefreshGraphReadFor = (
+  records: ReadonlyArray<JournalRecord>,
+  runId: RunId,
+  target: NonNullable<ReturnType<typeof continuationTarget>>,
+  activeAttempts: ReadonlyArray<PlannedTaskAttempt>
+): TrackerGraphObservationOperation | undefined => {
+  const expectedTaskIds = activeAttempts.map(({ taskId }) => taskId).toSorted()
+  const expectedPredecessorOperationIds = activeAttempts
+    .flatMap((plannedAttempt) => {
+      const operationId = recordedTaskAttemptPlanFor(records, plannedAttempt)?.operationId
+      return operationId === undefined ? [] : [operationId]
+    })
+    .toSorted()
+  return records.findLast((record): record is TrackerGraphReadIntentRecord => {
+    const { event } = record
+    if (event._tag !== "TaskTrackerReadIntentRecorded" || event.operation._tag !== "ReadTrackerGraph") return false
+    if (!event.operation.operationId.startsWith(activeRefreshGraphOperationPrefixFor(runId))) return false
+    if (trackerGraphReadHasOutcome(records, event.operation.operationId)) return false
+    if (taskTrackerTargetKey(event.operation.target) !== taskTrackerTargetKey(target)) return false
+    if (!sameStringSequence([...event.operation.readShape.explicitlyCoveredTaskIds].toSorted(), expectedTaskIds)) {
+      return false
+    }
+    return sameStringSequence([...event.operation.predecessorOperationIds].toSorted(), expectedPredecessorOperationIds)
+  })?.event.operation
+}
+
 /**
  * One complete tracker-graph read selected for one active-work activation.
  *
@@ -2408,15 +2458,18 @@ const activeRefreshGraphReadSelectionFor = (
     const plan = recordedTaskAttemptPlanFor(records, plannedAttempt)
     return plan === undefined ? [] : [plan.operationId]
   })
+  const pendingOperation = pendingActiveRefreshGraphReadFor(records, runState.runId, target, activeAttempts)
   return {
     _tag: "ActiveRefreshGraphReadSelection",
     baseline,
-    operation: makeTrackerGraphObservationOperation(
-      OperationId.make(`active-refresh:${runState.runId}:after:${baseline}:graph`),
-      target,
-      predecessorOperationIds,
-      activeAttempts.map(({ taskId }) => taskId)
-    )
+    operation:
+      pendingOperation ??
+      makeTrackerGraphObservationOperation(
+        OperationId.make(`active-refresh:${runState.runId}:after:${baseline}:graph`),
+        target,
+        predecessorOperationIds,
+        activeAttempts.map(({ taskId }) => taskId)
+      )
   }
 }
 
@@ -2740,6 +2793,49 @@ export type ActiveRefreshRuntimeBoundary = {
   readonly _tag: "ActiveRefreshRuntimeBoundary"
   readonly runId: RunId
   readonly reconciledAttempts: ReadonlyArray<Pick<PlannedTaskAttempt, "runId" | "attemptId">>
+}
+
+const activeRefreshBoundaryContainsAttempt = (
+  boundary: ActiveRefreshRuntimeBoundary,
+  plannedAttempt: Pick<PlannedTaskAttempt, "runId" | "attemptId">
+): boolean =>
+  boundary.runId === plannedAttempt.runId &&
+  boundary.reconciledAttempts.some(
+    (candidate) => candidate.runId === plannedAttempt.runId && candidate.attemptId === plannedAttempt.attemptId
+  )
+
+/** Returns the exact planned attempt carried by a transition, when one exists. */
+const plannedAttemptOfTransition = (transition: RunnableFrontierTransition): PlannedTaskAttempt | undefined => {
+  if ("plannedAttempt" in transition) return transition.plannedAttempt
+  if ("subject" in transition) return transition.subject.plannedAttempt
+  if ("accepted" in transition) return transition.accepted.plannedAttempt
+  if ("responsibility" in transition && "plannedAttempt" in transition.responsibility) {
+    return transition.responsibility.plannedAttempt
+  }
+  return undefined
+}
+
+/**
+ * The active-refresh boundary suppresses only its exact attempt subject. A
+ * task-only transition is matched through that subject's durable plan so the
+ * mandatory G2 may still expose independent work.
+ */
+const belongsToActiveRefreshBoundary = (
+  transition: RunnableFrontierTransition,
+  records: ReadonlyArray<JournalRecord>,
+  boundary: ActiveRefreshRuntimeBoundary
+): boolean => {
+  const plannedAttempt = plannedAttemptOfTransition(transition)
+  if (plannedAttempt !== undefined) return activeRefreshBoundaryContainsAttempt(boundary, plannedAttempt)
+  const boundaryTaskIds = new Set(
+    records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      activeRefreshBoundaryContainsAttempt(boundary, event.plannedAttempt)
+        ? [event.plannedAttempt.taskId]
+        : []
+    )
+  )
+  return boundaryTaskIds.has(runnableTransitionTaskId(transition))
 }
 
 const activeRefreshRuntimeBoundaryFor = (
@@ -3307,11 +3403,18 @@ export const frontierForActivationOpportunity = (
 
   /**
    * Once every Running subject has reconciled its persisted Suspend intent to
-   * Running, close this frontier until the enclosing stabilization performs
-   * its mandatory G2. This keeps the boundary typed and active-specific while
-   * leaving the ordinary runtime loop unaware of refresh provenance.
+   * Running, suppress only those exact subjects until the enclosing
+   * stabilization performs its mandatory G2. Independent task transitions
+   * remain visible to the ordinary runtime phase after G2.
    */
-  if (activeRefreshBoundary !== undefined) return { ...frontier, transitions: [] }
+  if (activeRefreshBoundary !== undefined) {
+    return {
+      ...frontier,
+      transitions: frontier.transitions.filter(
+        (transition) => !belongsToActiveRefreshBoundary(transition, records, activeRefreshBoundary)
+      )
+    }
+  }
 
   return {
     ...frontier,

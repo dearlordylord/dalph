@@ -65,6 +65,25 @@ type RuntimeEvent<E> =
  */
 export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvaluation, E>
 
+/**
+ * The active-refresh stabilization has one explicit pre-G2 runtime phase.
+ * Before its typed boundary, ordinary admission follows the normal proposal
+ * order; after the boundary, no proposal is admitted until stabilization has
+ * accepted the required later graph observation. The post-G2 phase reopens
+ * independent ordinary work while the active subject remains filtered by the
+ * relation.
+ */
+export type DeliveryRuntimePhase =
+  | { readonly _tag: "OrdinaryDeliveryRuntimePhase" }
+  | { readonly _tag: "ActiveRefreshPreG2RuntimePhase" }
+  | { readonly _tag: "ActiveRefreshPostG2RuntimePhase" }
+
+export const DeliveryRuntimePhase = {
+  Ordinary: { _tag: "OrdinaryDeliveryRuntimePhase" } satisfies DeliveryRuntimePhase,
+  ActiveRefreshPreG2: { _tag: "ActiveRefreshPreG2RuntimePhase" } satisfies DeliveryRuntimePhase,
+  ActiveRefreshPostG2: { _tag: "ActiveRefreshPostG2RuntimePhase" } satisfies DeliveryRuntimePhase
+} as const
+
 type AvailableProposalFrontier = Extract<DeliveryProposalFrontier, { readonly _tag: "DeliveryProposalsAvailable" }>
 type EmptyProposalFrontier = Omit<AvailableProposalFrontier, "proposals"> & { readonly proposals: readonly [] }
 type EstablishedTrackerGraph = Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>
@@ -109,7 +128,8 @@ export type DeliveryRuntimeQuiescence =
  * single highest-value model in the study.
  */
 export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
-  relation: DeliveryRuntimeInput<E>
+  relation: DeliveryRuntimeInput<E>,
+  phase: DeliveryRuntimePhase = DeliveryRuntimePhase.Ordinary
 ): Effect.fn.Return<
   DeliveryRuntimeQuiescence,
   | E
@@ -335,7 +355,9 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const everyProposalAwaitsChangedAcceptedFacts = proposedActions.proposals.every(
           ({ id }) => deferred.get(id) === current.acceptedAt
         )
-        if (live.size !== 0 || !everyProposalAwaitsChangedAcceptedFacts) {
+        const activeRefreshG2Pending =
+          phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
+        if (live.size !== 0 || (!activeRefreshG2Pending && !everyProposalAwaitsChangedAcceptedFacts)) {
           return Option.none<DeliveryRuntimeQuiescence>()
         }
         const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }
@@ -383,11 +405,16 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       })
 
       for (;;) {
-        while (yield* admissionLoop.admitPass()) yield* Effect.yieldNow
-
         const current = Option.getOrThrow(yield* Ref.get(latest))
+        const activeRefreshG2Pending =
+          phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
+        if (!activeRefreshG2Pending) {
+          while (yield* admissionLoop.admitPass()) yield* Effect.yieldNow
+        }
+
+        const currentAfterAdmission = Option.getOrThrow(yield* Ref.get(latest))
         const live = yield* Ref.get(owners)
-        const quiescence = yield* runtimeQuiescence(current, live)
+        const quiescence = yield* runtimeQuiescence(currentAfterAdmission, live)
         if (Option.isSome(quiescence)) {
           yield* publishRuntimeObservation()
           return quiescence.value

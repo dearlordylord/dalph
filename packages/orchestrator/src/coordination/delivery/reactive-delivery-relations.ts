@@ -186,10 +186,20 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const frame =
       journal.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(journal) : undefined
     const activeRefreshBoundaryReached = projection.activeRefreshBoundary !== undefined
+    const freshCandidates = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
+    /**
+     * A completed active refresh suppresses only the exact Running subjects
+     * that reached its boundary. Fresh tasks revealed by the mandatory G2
+     * remain ordinary work and must still enter the same proposal algebra.
+     */
     const fresh =
-      activeRefreshBoundaryReached || frame === undefined
-        ? []
-        : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
+      !activeRefreshBoundaryReached || opportunity._tag !== "ActiveWorkAuthorityRefresh"
+        ? freshCandidates
+        : freshCandidates.filter(
+            ({ transition }) =>
+              !transitionHasPlannedAttempt(transition) ||
+              !activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, transition.plannedAttempt)
+          )
     const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
     const currentGraphRequired = activeRefreshNeedsCurrentGraph(journal, opportunity)
     const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds).filter((transition) => {
