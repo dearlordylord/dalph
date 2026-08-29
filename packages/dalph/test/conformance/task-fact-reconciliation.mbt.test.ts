@@ -3118,21 +3118,25 @@ const decodeTaskFactState = (raw: unknown) =>
     Effect.orDie
   )
 
-const taskFactStateCheck = stateCheck(
-  decodeTaskFactState,
-  (spec, implementation) =>
-    JSON.stringify(spec, (key, value) =>
-      key === "constraint" || key === "factDecision" ? undefined : typeof value === "bigint" ? value.toString() : value
-    ) ===
-    JSON.stringify(implementation, (key, value) =>
-      key === "constraint" || key === "factDecision" ? undefined : typeof value === "bigint" ? value.toString() : value
-    )
-)
+// The general adapter comparison covers the complete task-fact projection.
+// Lifecycle decisions remain separately composed below so existing scenarios
+// can keep their established decision projection while the focused lifecycle
+// trace checks those variants explicitly.
+const taskFactStateProjectionReplacer = (_key: string, nested: unknown) =>
+  _key === "constraint" || _key === "factDecision" ? undefined : typeof nested === "bigint" ? nested.toString() : nested
+
+const taskFactStateProjectionEqual = (spec: unknown, implementation: unknown) =>
+  JSON.stringify(spec, taskFactStateProjectionReplacer) ===
+  JSON.stringify(implementation, taskFactStateProjectionReplacer)
+
+const taskFactStateCheck = stateCheck(decodeTaskFactState, taskFactStateProjectionEqual)
 
 const taskFactLifecycleStateCheck = stateCheck(
   decodeTaskFactState,
   (spec, implementation) =>
-    spec.constraint === implementation.constraint && spec.factDecision === implementation.factDecision
+    taskFactStateProjectionEqual(spec, implementation) &&
+    spec.constraint === implementation.constraint &&
+    spec.factDecision === implementation.factDecision
 )
 
 quintIt(
