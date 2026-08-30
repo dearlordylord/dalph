@@ -2035,38 +2035,109 @@ it.effect("ignores a stale accepted frontier before it can call the executor", (
   )
 )
 
-it.effect("returns passive post-G2 quiescence with its exact boundary and no proposals", () =>
+it.effect("accepts Pause during phase two and retains the exact G2 boundary without executor work", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
+      const g2AcceptedAt = JournalPosition.make(14)
+      const pauseAcceptedAt = JournalPosition.make(15)
+      const waitingTaskId = independentPlannedAttempt.taskId
+      const occupiedTaskId = TaskId.make("post-g2-pause-capacity-holder")
+      const waiting = recoveredProposalFor(
+        RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+          acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(13) },
+          plannedAttempt: independentPlannedAttempt
+        }),
+        new Set(),
+        independentPlannedAttempt
+      )
+      const graphProjection = projectTrackerSnapshot({
+        revision: "post-g2-pause",
+        tasks: [plannedAttempt.taskId, waitingTaskId, occupiedTaskId].map((id) => ({
+          id,
+          lifecycle: { _tag: "Open" as const },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }))
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("the accepted G2 graph must be valid")
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("post-g2-pause-graph"),
+          recordedAt: g2AcceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
       const boundary = {
         _tag: "ActiveRefreshRuntimeBoundary" as const,
         runId,
         reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
       }
-      const relation = yield* dynamicEvaluationSignal({
-        ...withProposals(base, []),
-        acceptedAt: JournalPosition.make(14),
-        activeRefreshBoundary: boundary
+      const acceptedG2 = {
+        ...withProposals(base, [waiting], 1),
+        acceptedAt: g2AcceptedAt,
+        activeRefreshBoundary: boundary,
+        current: { ...base.current, trackerGraph: graph },
+        pauseCoverage: {
+          _tag: "PauseCoverageGraphEstablished" as const,
+          applied: { run: { _tag: "RunUnpaused" as const }, tasks: { _tag: "NoTaskPauses" as const } },
+          observedAt: g2AcceptedAt,
+          snapshot: graphProjection.snapshot
+        },
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+        taskWork: {
+          capacity: TaskWorkCapacity.make(1),
+          held: [
+            {
+              correlation: { attemptId: AttemptId.make("post-g2-pause-capacity-attempt"), runId },
+              taskId: occupiedTaskId
+            }
+          ]
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const acceptedPause = {
+        ...acceptedG2,
+        acceptedAt: pauseAcceptedAt,
+        pauseCoverage: {
+          ...acceptedG2.pauseCoverage,
+          applied: { run: { _tag: "RunPaused" as const }, tasks: { _tag: "NoTaskPauses" as const } }
+        },
+        proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] },
+        quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(acceptedG2)
+      const waitingDeferred = yield* Deferred.make<void>()
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) =>
+          event._tag === "ProposalDeferred" && event.proposalId === waiting.id
+            ? Deferred.succeed(waitingDeferred, undefined)
+            : Effect.void
       })
       const executorCalls = yield* Ref.make(0)
-      const result = yield* runDeliveryRuntimePhase(
+      const runtime = yield* runDeliveryRuntimePhase(
         relation,
         DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
       ).pipe(
         Effect.provide(identityLayers),
+        Effect.provideService(DeliverySemanticTrace, trace),
         Effect.provideService(
           DeliveryActionExecutor,
           DeliveryActionExecutor.of({
             execute: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("unused")))
           })
-        )
+        ),
+        Effect.forkChild
       )
+      yield* Deferred.await(waitingDeferred)
+      yield* relation.publish(acceptedPause)
+      const result = yield* Fiber.join(runtime)
 
       expect(result).toMatchObject({
         _tag: "PassiveRuntimeQuiescence",
-        acceptedAt: JournalPosition.make(14),
+        acceptedAt: pauseAcceptedAt,
         activeRefreshBoundary: boundary,
+        current: { trackerGraph: graph },
+        disposition: { _tag: "QuiescencePassive", reason: "RunPaused" },
         proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
       })
       expect(yield* Ref.get(executorCalls)).toBe(0)
