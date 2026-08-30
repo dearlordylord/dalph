@@ -1627,6 +1627,68 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
   })
 })
 
+it("records the exact projection witness used to prove cancellation quiescence", () => {
+  const cancellation = coverageRecord(
+    6,
+    RunCancellationAppliedEvent.make({
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    })
+  )
+  const safeReport = PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
+  const suspendIntent = coverageRecord(
+    7,
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Suspend",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const commandProjection = coverageRecord(
+    8,
+    PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+        report: safeReport
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt: coverageAttempt,
+      projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+      version: workflowJournalEventVersion
+    })
+  )
+  const stateProjection = coverageRecord(
+    7,
+    PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: safeReport }),
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+
+  expect(
+    deriveJournalResponsibilityFacts(
+      coverageRunState(
+        [...coveragePlanRecords(), cancellation, suspendIntent, commandProjection],
+        [coverageResponsibility]
+      )
+    )[0]
+  ).toMatchObject({ disposition: { proof: { _tag: "CommandProjection", commandOrdinal: 1, projectionOrdinal: 1 } } })
+  expect(
+    deriveJournalResponsibilityFacts(
+      coverageRunState([...coveragePlanRecords(), cancellation, stateProjection], [coverageResponsibility])
+    )[0]
+  ).toMatchObject({ disposition: { proof: { _tag: "StateProjection", observationOrdinal: 1 } } })
+})
+
 it("does not suspend an attempt that began after a historical Run Pause or was already safely reported", () => {
   const historicalPause = coverageRecord(2, runPause(1))
   const beganAfterPause = deriveJournalResponsibilityFacts(
@@ -1716,6 +1778,14 @@ it("uses the latest completed run pause as an attempt baseline and returns none 
   expect(continuationFreshnessBaselineForAttempt(pausedHistory, Option.none(), coverageAttempt, undefined)).toEqual(
     Option.some(JournalPosition.make(2))
   )
+  expect(
+    continuationFreshnessBaselineForAttempt(
+      pausedHistory,
+      Option.some(JournalPosition.make(3)),
+      coverageAttempt,
+      undefined
+    )
+  ).toEqual(Option.some(JournalPosition.make(3)))
   expect(
     continuationFreshnessBaselineForAttempt(coverageRunState([]), Option.none(), coverageAttempt, undefined)
   ).toEqual(Option.none())
@@ -2066,6 +2136,38 @@ it("keeps an independent continuation transition after the active subject reache
   expect(filtered.transitions).toEqual([independent])
 })
 
+it("suppresses every transition shape that still names the captured active attempt after G2", () => {
+  const responsibility = pausedIntegrationScenario("post-g2-transition-shapes", 8).responsibility
+  const transitions = [
+    RunnableFrontierTransition.ObserveAttemptStoppageExecutor({
+      requestId: AttemptChoiceRequestId.make({ nonce: "post-g2-stop", runId: coverageRunId }),
+      subject: { observedTaskRevision: TaskRevision.make("post-g2-observed-revision"), plannedAttempt: coverageAttempt }
+    }),
+    RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility }),
+    RunnableFrontierTransition.ReconcileTaskClaim({
+      operationId: OperationId.make("post-g2-reconcile-claim"),
+      taskId: coverageAttempt.taskId
+    })
+  ]
+  const boundary = {
+    _tag: "ActiveRefreshRuntimeBoundary" as const,
+    runId: coverageRunId,
+    reconciledAttempts: [{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }]
+  }
+  const filtered = frontierForActivationOpportunity(
+    { explanations: [], transitions },
+    coveragePlanRecords(),
+    Option.some(JournalPosition.make(5)),
+    activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageRunId, attemptId: coverageAttempt.attemptId }])
+    ),
+    boundary
+  )
+
+  expect(filtered.transitions).toEqual([])
+})
+
 it("authorizes no executor command after a healthy refresh of Running work", () => {
   const ready = PlannedWorktreeReady.make({
     baseSha: coverageAttempt.baseSha,
@@ -2216,6 +2318,50 @@ it("requires typed current-run provenance before replaying an active G1", () => 
   )
 })
 
+it("replays G1 only when its exact run target subjects predecessors and missing outcome still agree", () => {
+  const activeG1 = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    OperationId.make(`active-refresh:${coverageRunId}:after:18:graph-exact-replay`),
+    coverageTarget,
+    [coveragePlanOperation.operationId],
+    [coverageAttempt.taskId]
+  )
+  const intent = coverageRecord(10, taskTrackerReadIntent(activeG1))
+  const otherTarget = FixtureTarget.make("recovery-activation-other-target")
+  const wrongTarget = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    activeG1.operationId,
+    otherTarget,
+    activeG1.predecessorOperationIds,
+    activeG1.readShape.explicitlyCoveredTaskIds
+  )
+  const wrongSubjects = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    activeG1.operationId,
+    coverageTarget,
+    activeG1.predecessorOperationIds,
+    [TaskId.make("recovery-activation-other-task")]
+  )
+  const wrongPredecessors = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    activeG1.operationId,
+    coverageTarget,
+    [OperationId.make("recovery-activation-other-plan")],
+    activeG1.readShape.explicitlyCoveredTaskIds
+  )
+  const observed = coverageRecord(11, { ...coverageGraphEvent, operationId: activeG1.operationId })
+
+  expect(
+    pendingActiveRefreshGraphReadFor([...coveragePlanRecords(), intent], coverageRunId, coverageTarget, [
+      coverageAttempt
+    ])
+  ).toEqual(activeG1)
+  for (const records of [
+    [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(wrongTarget))],
+    [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(wrongSubjects))],
+    [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(wrongPredecessors))],
+    [...coveragePlanRecords(), intent, observed]
+  ]) {
+    expect(pendingActiveRefreshGraphReadFor(records, coverageRunId, coverageTarget, [coverageAttempt])).toBeUndefined()
+  }
+})
+
 it("does not reuse an ordinary intent-only G2 as active refresh recovery after a crash", () => {
   const ordinaryG2 = makeTrackerGraphObservationOperation(OperationId.make("ordinary-pending-g2"), coverageTarget, [
     coverageGraphOperation.operationId
@@ -2241,6 +2387,79 @@ it("does not reuse an ordinary intent-only G2 as active refresh recovery after a
       currentGraph
     )
   ).toEqual(activeG2)
+})
+
+it("replays G2 only for the exact later empty-coverage read with the complete predecessor graph", () => {
+  const earlierGraph = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    OperationId.make("active-g2-earlier-graph"),
+    coverageTarget,
+    [],
+    [coverageAttempt.taskId]
+  )
+  const currentGraph = { operationId: coverageGraphOperation.operationId, recordedAt: JournalPosition.make(20) }
+  const expectedPredecessors = [earlierGraph.operationId, currentGraph.operationId]
+  const activeG2 = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    OperationId.make("active-g2-exact-replay"),
+    coverageTarget,
+    expectedPredecessors
+  )
+  const prefix = [
+    coverageRecord(10, taskTrackerReadIntent(earlierGraph)),
+    coverageRecord(21, taskTrackerReadIntent(activeG2))
+  ]
+  expect(pendingActiveRefreshG2OperationFor(prefix, coverageRunId, coverageTarget, currentGraph)).toEqual(activeG2)
+
+  const variants = [
+    coverageRecord(21, taskTrackerReadIntent(activeG2), RunId.make("active-g2-foreign-run")),
+    coverageRecord(20, taskTrackerReadIntent(activeG2)),
+    coverageRecord(
+      21,
+      taskTrackerReadIntent(
+        makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+          activeG2.operationId,
+          FixtureTarget.make("active-g2-foreign-target"),
+          expectedPredecessors
+        )
+      )
+    ),
+    coverageRecord(
+      21,
+      taskTrackerReadIntent(
+        makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+          activeG2.operationId,
+          coverageTarget,
+          expectedPredecessors,
+          [coverageAttempt.taskId]
+        )
+      )
+    ),
+    coverageRecord(
+      21,
+      taskTrackerReadIntent(
+        makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(activeG2.operationId, coverageTarget, [
+          currentGraph.operationId
+        ])
+      )
+    )
+  ]
+  for (const candidate of variants) {
+    expect(
+      pendingActiveRefreshG2OperationFor(
+        [coverageRecord(10, taskTrackerReadIntent(earlierGraph)), candidate],
+        coverageRunId,
+        coverageTarget,
+        currentGraph
+      )
+    ).toBeUndefined()
+  }
+  expect(
+    pendingActiveRefreshG2OperationFor(
+      [...prefix, coverageRecord(22, { ...coverageGraphEvent, operationId: activeG2.operationId })],
+      coverageRunId,
+      coverageTarget,
+      currentGraph
+    )
+  ).toBeUndefined()
 })
 
 it("requires each active refresh to reread authorities after its own activation baseline", () => {

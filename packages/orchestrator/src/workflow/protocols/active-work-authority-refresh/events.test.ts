@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
+  IntegrationTarget,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -15,6 +16,7 @@ import {
 } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { GitWorktreeReadFailure } from "../../../authorities/git/worktree.js"
+import { GitTargetLineageReadFailure } from "../../../authorities/git/target-lineage.js"
 import { describeJournalEvent } from "../../registry/event-descriptor.js"
 import { WorkflowOperation, makeTaskAttemptPlanOperation } from "../../registry/operation.js"
 import { OperationId } from "../../identity.js"
@@ -22,6 +24,8 @@ import {
   ActiveWorkAuthorityRefreshAuthority,
   ActiveWorkAuthorityRefreshGitReadFailedEvent,
   ActiveWorkAuthorityRefreshOrdinal,
+  activeWorkAuthorityRefreshGitReadOperationMatchesBoundary,
+  activeWorkAuthorityRefreshGitReadOperationMatchesIntent,
   makeActiveWorkAuthorityRefreshGitReadOperation
 } from "./events.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -105,6 +109,94 @@ it("rejects an active-refresh Git failure whose resource does not match its oper
         detail: "wrong worktree",
         worktree: WorktreeLocator.make("/worktrees/other")
       })
+    })
+  ).toThrow()
+})
+
+it("pairs crash-replayed Git outcomes only with the exact active-refresh intent and boundary read", () => {
+  const anotherOperationId = OperationId.make("another-active-refresh-read")
+  const anotherAttempt = PlannedTaskAttempt.make({
+    ...plannedAttempt,
+    attemptId: AttemptId.make("another-active-refresh-attempt")
+  })
+  const anotherAuthority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: anotherAttempt.attemptId, runId })
+  const variants = [
+    makeActiveWorkAuthorityRefreshGitReadOperation(
+      WorkflowOperation.cases.ReadTaskWorktree.make({ ...rawOperation, operationId: anotherOperationId }),
+      authority,
+      ordinal
+    ),
+    makeActiveWorkAuthorityRefreshGitReadOperation(
+      WorkflowOperation.cases.ReadTaskWorktree.make({ ...rawOperation, plannedAttempt: anotherAttempt }),
+      anotherAuthority,
+      ordinal
+    ),
+    makeActiveWorkAuthorityRefreshGitReadOperation(
+      WorkflowOperation.cases.ReadTaskWorktree.make({ ...rawOperation, predecessorOperationIds: [anotherOperationId] }),
+      authority,
+      ordinal
+    ),
+    makeActiveWorkAuthorityRefreshGitReadOperation(
+      WorkflowOperation.cases.ReadTargetLineage.make({
+        integrationTarget: IntegrationTarget.make({
+          ref: "refs/heads/main",
+          repository: "git@example.invalid:team/project.git"
+        }),
+        operationId: rawOperation.operationId,
+        plannedAttempt,
+        predecessorOperationIds: []
+      }),
+      authority,
+      ordinal
+    ),
+    makeActiveWorkAuthorityRefreshGitReadOperation(rawOperation, authority, ActiveWorkAuthorityRefreshOrdinal.make(2))
+  ]
+
+  expect(activeWorkAuthorityRefreshGitReadOperationMatchesIntent(operation, operation)).toBe(true)
+  expect(activeWorkAuthorityRefreshGitReadOperationMatchesBoundary(operation, rawOperation)).toBe(true)
+  for (const [index, variant] of variants.entries()) {
+    expect(activeWorkAuthorityRefreshGitReadOperationMatchesIntent(operation, variant)).toBe(false)
+    expect(activeWorkAuthorityRefreshGitReadOperationMatchesBoundary(operation, variant)).toBe(index === 4)
+  }
+})
+
+it("rejects a target-lineage failure unless its target and planned Base SHA are exact", () => {
+  const target = IntegrationTarget.make({ ref: "refs/heads/main", repository: "git@example.invalid:team/project.git" })
+  const lineageOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
+    WorkflowOperation.cases.ReadTargetLineage.make({
+      integrationTarget: target,
+      operationId: OperationId.make("active-refresh-target-lineage-read"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    }),
+    authority,
+    ordinal
+  )
+  const lineageFailure = new GitTargetLineageReadFailure({
+    detail: "controlled target-lineage failure",
+    plannedBaseSha: plannedAttempt.baseSha,
+    target
+  })
+  const lineageEvent = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
+    ...event,
+    failure: lineageFailure,
+    operation: lineageOperation
+  })
+  expect(lineageEvent.operation._tag).toBe("ReadTargetLineage")
+  expect(() =>
+    Schema.decodeUnknownSync(ActiveWorkAuthorityRefreshGitReadFailedEvent)({
+      ...lineageEvent,
+      failure: new GitTargetLineageReadFailure({
+        detail: lineageFailure.detail,
+        plannedBaseSha: GitCommitSha.make("2".repeat(40)),
+        target: lineageFailure.target
+      })
+    })
+  ).toThrow()
+  expect(() =>
+    Schema.decodeUnknownSync(ActiveWorkAuthorityRefreshGitReadFailedEvent)({
+      ...lineageEvent,
+      failure: new GitWorktreeReadFailure({ detail: "wrong failure kind", worktree: plannedAttempt.worktree })
     })
   ).toThrow()
 })

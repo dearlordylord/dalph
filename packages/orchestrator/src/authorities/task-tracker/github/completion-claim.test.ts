@@ -486,10 +486,15 @@ it.effect("maps task-identity and digest failures before any unsafe completion m
     const invalid = prepareForTaskId(TaskId.make("not-a-github-task"))
     const inertClient = (_request: GithubGraphqlRequest) => Effect.die("invalid local evidence must not call GitHub")
     const invalidLayer = adapterLayer(inertClient)
-    const [readIdentityFailure, replacementIdentityFailure] = yield* Effect.all([
+    const [readIdentityFailure, markerIdentityFailure, replacementIdentityFailure] = yield* Effect.all([
       Effect.gen(function* () {
         return yield* (yield* CompletionClaimBoundary)
           .readTaskClaim(completionClaimReadRequestFor(invalid.claim))
+          .pipe(Effect.flip)
+      }).pipe(Effect.provide(invalidLayer)),
+      Effect.gen(function* () {
+        return yield* (yield* CompletionClaimBoundary)
+          .readCompletionClaimMarker(completionClaimReadRequestFor(invalid.claim))
           .pipe(Effect.flip)
       }).pipe(Effect.provide(invalidLayer)),
       Effect.gen(function* () {
@@ -499,6 +504,7 @@ it.effect("maps task-identity and digest failures before any unsafe completion m
       }).pipe(Effect.provide(invalidLayer))
     ])
     expect(readIdentityFailure).toBeInstanceOf(CompletionClaimReadFailure)
+    expect(markerIdentityFailure).toBeInstanceOf(CompletionClaimReadFailure)
     expect(replacementIdentityFailure).toBeInstanceOf(CompletionClaimReplacementFailure)
     if (replacementIdentityFailure instanceof CompletionClaimReplacementFailure) {
       expect(replacementIdentityFailure.outcome).toBe("DefinitelyNotApplied")
@@ -628,6 +634,70 @@ it.effect("classifies ambiguous create acknowledgements and refuses deletion whe
       expect(deletionFailure.outcome).toBe("DefinitelyNotApplied")
     }
   })
+)
+
+it.effect("deletes no completion marker when local evidence or GitHub acknowledgement is not exact", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const observationFor = (preparedClaim: CompletionTaskClaim) =>
+      FocusedCompletedTaskObservation.make({
+        ...integrationFinalityFixture.successObservation,
+        claim: preparedClaim,
+        taskId: preparedClaim.plannedAttempt.taskId,
+        taskRevision: preparedClaim.plannedAttempt.taskRevision
+      })
+    const invalid = prepareForTaskId(TaskId.make("not-a-github-completion-task"))
+    const invalidDeletion = completionClaimDeletionRequestFor(invalid.claim, observationFor(invalid.claim))
+    const noBoundaryCalls = (_request: GithubGraphqlRequest) =>
+      Effect.die("invalid local evidence must not call GitHub")
+    const invalidIdentity = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(invalidDeletion).pipe(Effect.flip)
+    }).pipe(Effect.provide(adapterLayer(noBoundaryCalls)))
+    expect(invalidIdentity).toMatchObject({ outcome: "DefinitelyNotApplied", request: invalidDeletion })
+
+    const observation = observationFor(prepared.claim)
+    const deletion = completionClaimDeletionRequestFor(prepared.claim, observation)
+    const fingerprint = yield* githubCompletionClaimFingerprintFor(crypto, prepared.claim)
+    const readThen = (
+      response: (request: Extract<GithubGraphqlRequest, { readonly _tag: "DeleteClaimLabel" }>) => GithubGraphqlResponse
+    ) =>
+      adapterLayer((request) =>
+        request._tag === "FindClaimLabel"
+          ? Effect.succeed(completionFindResponse(request, `1|sha256|${fingerprint}`))
+          : request._tag === "DeleteClaimLabel"
+            ? Effect.succeed(response(request))
+            : Effect.die("unexpected completion deletion request")
+      )
+
+    const digestFailure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(deletion).pipe(Effect.flip)
+    }).pipe(
+      Effect.provide(
+        adapterLayer(
+          (request) =>
+            request._tag === "FindClaimLabel"
+              ? Effect.succeed(completionFindResponse(request, `1|sha256|${fingerprint}`))
+              : Effect.die("digest failure must happen before completion deletion"),
+          Layer.succeed(Crypto.Crypto, cryptoFailingAt(crypto, 1))
+        )
+      )
+    )
+    expect(digestFailure).toMatchObject({ outcome: "DefinitelyNotApplied", request: deletion })
+
+    for (const [name, layer] of [
+      ["malformed", readThen(() => ({ body: "not-an-envelope" }))],
+      ["rejected", readThen(() => ({ body: { errors: [{ message: "delete denied" }] } }))],
+      [
+        "mismatched",
+        readThen(() => ({ body: { data: { deleteLabel: { clientMutationId: "another-completion-deletion" } } } }))
+      ]
+    ] as const) {
+      const failure = yield* Effect.gen(function* () {
+        return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(deletion).pipe(Effect.flip)
+      }).pipe(Effect.provide(layer))
+      expect(failure, name).toMatchObject({ outcome: "Unknown", request: deletion })
+    }
+  }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("stops after one throttled completion-claim create and preserves its operation identity", () =>

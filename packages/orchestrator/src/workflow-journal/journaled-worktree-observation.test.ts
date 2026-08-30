@@ -695,20 +695,23 @@ it.effect("derives ordinal two after a successful active read in a fresh interpr
       plannedAttempt,
       predecessorOperationIds: []
     })
+    const firstReadCalls = yield* Ref.make(0)
     const firstLayer = journaledWorkflowInterpreterLayer(
       runId,
       Layer.succeed(
         WorkflowInterpreter,
         testInterpreter(() =>
-          Effect.succeed(
-            AuthoritativePlannedAttemptWorktreeObserved.make({
-              observation: PlannedWorktreeReady.make({
-                baseSha: plannedAttempt.baseSha,
-                branch: plannedAttempt.branch,
-                headSha: plannedAttempt.baseSha,
-                worktree: plannedAttempt.worktree
+          Ref.update(firstReadCalls, (count) => count + 1).pipe(
+            Effect.as(
+              AuthoritativePlannedAttemptWorktreeObserved.make({
+                observation: PlannedWorktreeReady.make({
+                  baseSha: plannedAttempt.baseSha,
+                  branch: plannedAttempt.branch,
+                  headSha: plannedAttempt.baseSha,
+                  worktree: plannedAttempt.worktree
+                })
               })
-            })
+            )
           )
         )
       ),
@@ -716,6 +719,10 @@ it.effect("derives ordinal two after a successful active read in a fresh interpr
     )
     const firstInterpreter = yield* WorkflowInterpreter.pipe(Effect.provide(firstLayer))
     yield* firstInterpreter.readTaskWorktree(firstOperation)
+    expect((yield* firstInterpreter.readTaskWorktree(firstOperation))._tag).toBe(
+      "AuthoritativePlannedAttemptWorktreeObserved"
+    )
+    expect(yield* Ref.get(firstReadCalls)).toBe(1)
 
     const secondOperation = makeTargetLineageObservationOperation({
       integrationTarget,
