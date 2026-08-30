@@ -619,6 +619,58 @@ it.effect("retains one trailing ordinary activation when the active handoff reje
   )
 )
 
+it.effect("a later timer retries an unreadable active-work refresh as a fresh authority check", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const ordinaryStarted = yield* Deferred.make<void>()
+      const firstFailureObserved = yield* Deferred.make<void>()
+      const secondRefreshFinished = yield* Deferred.make<void>()
+      const sources = yield* Ref.make<ReadonlyArray<"TrackerNotification" | "Timer">>([])
+      const ordinaryCalls = yield* Ref.make(0)
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-unreadable-active-refresh"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.updateAndGet(ordinaryCalls, (current) => current + 1).pipe(
+              Effect.tap(() => Deferred.succeed(ordinaryStarted, undefined)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          activateActiveWorkAuthorityRefresh: (source) =>
+            Effect.gen(function* () {
+              const attempted = yield* Ref.updateAndGet(sources, (current) => [...current, source])
+              if (attempted.length === 1) {
+                return yield* new TestGitReadFailure({ detail: "active authority is unreadable" })
+              }
+              yield* Deferred.succeed(secondRefreshFinished, undefined)
+              return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+            }),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Deferred.succeed(firstFailureObserved, undefined)
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(ordinaryStarted)
+            yield* Effect.yieldNow
+            yield* Effect.yieldNow
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* Deferred.await(firstFailureObserved)
+            yield* TestClock.adjust("1 second")
+            yield* owner.hint(RunReactivationHint.Timer())
+            yield* Deferred.await(secondRefreshFinished)
+            expect(yield* Ref.get(sources)).toEqual(["TrackerNotification", "Timer"])
+            expect(yield* Ref.get(ordinaryCalls)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
 it.effect("observes one typed activation failure, cools down, and waits for a later hint", () =>
   Effect.scoped(
     Effect.gen(function* () {
