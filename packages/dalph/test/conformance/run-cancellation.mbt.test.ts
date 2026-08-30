@@ -64,6 +64,7 @@ import {
 import { journaledCurrentDeliveryFrameOf } from "../../../orchestrator/src/coordination/run/current-delivery-frame.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
@@ -968,6 +969,9 @@ const makeCancellationDriverImplementation = () => {
       Layer.succeed(RunLifecycleJournal, Context.get(journalContext, RunLifecycleJournal)),
       Layer.succeed(CoordinatorOwnership, ownership)
     )
+    const executorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
+      Layer.succeed(PlannedAttemptExecutor, executorForSettlement)
+    )
     const exitShell = yield* makeExitShell(ownership, { requestEnd: () => Effect.void }).pipe(
       Effect.provideService(Scope.Scope, scope)
     )
@@ -977,7 +981,7 @@ const makeCancellationDriverImplementation = () => {
         ({ runId: activeRunId }) => runtimeLayer(activeRunId, executorForSettlement, workflowInterpreterForSettlement),
         exitShell,
         noopJournalMaintenanceObservation
-      ).pipe(Layer.provide(dependencies))
+      ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
     ).pipe(Effect.provideService(Scope.Scope, scope))
     applicationExit = exitShell
     return Context.get(context, JournaledRunBootstrap)

@@ -2908,10 +2908,12 @@ it.effect("observes safe suspension only after exact suspend intent and releases
         taskRevision: specification.fingerprint,
         worktree: WorktreeLocator.make("/worktrees/journaled-bootstrap-passive-safe")
       })
+      const independentAttempt = captureTestAttempt(runId, "passive-safe-independent", "passive-safe-independent")
+      const independentCorrelation = plannedAttemptExecutorCorrelation(independentAttempt)
       yield* storage.beginRun(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
       )
       const specificationOperation = makeTaskWorkSpecificationObservationOperation(
         OperationId.make("journaled-bootstrap-passive-safe-specification"),
@@ -2988,19 +2990,25 @@ it.effect("observes safe suspension only after exact suspend intent and releases
       expect(
         yield* bootstrap.activate(
           target,
-          Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })),
+          Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })),
           runId,
           Effect.gen(function* () {
             const resources = yield* DeliveryRuntimeResources
             const observer = yield* PassivePlannedAttemptObserver
-            const admission = yield* resources.makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [] })
+            const admission = yield* resources.makeAdmissionController({ capacity: TaskWorkCapacity.make(2), held: [] })
             const protocol = yield* PlannedAttemptProtocolController
             const publication = yield* PassivePlannedAttemptProjectionPublication
             yield* protocol.withPermit(correlation, (permit) =>
               Effect.gen(function* () {
                 yield* beginPlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, specification)
                 yield* requestPlannedAttemptExecutorSuspensionWithPermit(permit, plannedAttempt)
-                yield* admission.synchronize({ capacity: TaskWorkCapacity.make(1), held: [{ correlation, taskId }] })
+                yield* admission.synchronize({
+                  capacity: TaskWorkCapacity.make(2),
+                  held: [
+                    { correlation, taskId },
+                    { correlation: independentCorrelation, taskId: independentAttempt.taskId }
+                  ]
+                })
                 yield* observer.attach({
                   plannedAttempt,
                   publishCurrent: (projection) => publication.publishWithPermit(permit, plannedAttempt, projection),
@@ -3037,12 +3045,15 @@ it.effect("observes safe suspension only after exact suspend intent and releases
         [1, "ExecutorWorkExecuting"],
         [2, "ExecutorWorkSafelySuspended"]
       ])
-      expect((yield* admission.snapshot).positions.size).toBe(0)
+      const snapshot = yield* admission.snapshot
+      expect(snapshot.positions.size).toBe(1)
+      expect(snapshot.positions.get(taskId)).toBeUndefined()
+      expect(snapshot.positions.get(independentAttempt.taskId)).toMatchObject({ correlation: independentCorrelation })
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("restart reprojects the exact executing attempt once then reattaches without Begin", () =>
+it.effect("bootstrap composition can reconstruct and manually attach the exact executing attempt", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-passive-restart-executing")
@@ -3205,13 +3216,14 @@ it.effect("recovers process death before terminal publication by reprojecting an
           })
           const protocol = yield* PlannedAttemptProtocolController
           const publication = yield* PassivePlannedAttemptProjectionPublication
-          yield* protocol.withPermit(correlation, (permit) =>
+          const observed = yield* protocol.withPermit(correlation, (permit) =>
             observer.attach({
               plannedAttempt,
               publishCurrent: (projection) => publication.publishWithPermit(permit, plannedAttempt, projection),
               publishChange: () => Effect.die("Terminal current projection must end the attachment")
             })
           )
+          expect(observed.report._tag).toBe("ExecutorWorkTerminal")
           yield* Deferred.succeed(admissionCapture, admission)
           return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
         })
@@ -3219,7 +3231,7 @@ it.effect("recovers process death before terminal publication by reprojecting an
 
       expect(yield* Ref.get(attachments)).toBe(1)
       expect(yield* Ref.get(beginCalls)).toBe(0)
-      expect((yield* (yield* Deferred.await(admissionCapture)).snapshot).positions.size).toBe(0)
+      expect((yield* (yield* Deferred.await(admissionCapture)).snapshot).positions.size).toBe(1)
       expect(
         (yield* storage.read(runId)).flatMap(({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" ? [[event.ordinal, event.report._tag] as const] : []
@@ -3372,7 +3384,12 @@ it.effect(
         yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running")
         const trackerReads = yield* Ref.make(0)
         const hints = yield* Ref.make(0)
+        const positionPresentAtHint = yield* Ref.make<ReadonlyArray<boolean>>([])
         const publicationCapture = yield* Deferred.make<PassivePlannedAttemptProjectionPublicationService>()
+        const admissionCapture =
+          yield* Deferred.make<
+            Effect.Success<ReturnType<DeliveryRuntimeResources["Service"]["makeAdmissionController"]>>
+          >()
         const bootstrap = yield* buildBootstrap(
           runId,
           storage,
@@ -3389,29 +3406,47 @@ it.effect(
         )
         yield* bootstrap.registerAcceptedRunReactivationObservers({
           control: () => Effect.void,
-          acceptedFactPublication: () => Ref.update(hints, (count) => count + 1)
+          acceptedFactPublication: () =>
+            Effect.gen(function* () {
+              const admission = yield* Deferred.await(admissionCapture)
+              const snapshot = yield* admission.snapshot
+              yield* Ref.update(positionPresentAtHint, (current) => [
+                ...current,
+                snapshot.positions.has(plannedAttempt.taskId)
+              ])
+              yield* Ref.update(hints, (count) => count + 1)
+            })
         })
         yield* bootstrap.activate(
           target,
           Effect.succeed(initialPolicy),
           runId,
-          Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          Effect.gen(function* () {
+            const resources = yield* DeliveryRuntimeResources
+            const admission = yield* resources.makeAdmissionController({
+              capacity: TaskWorkCapacity.make(1),
+              held: [{ correlation: plannedAttemptExecutorCorrelation(plannedAttempt), taskId: plannedAttempt.taskId }]
+            })
+            yield* Deferred.succeed(admissionCapture, admission)
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
         )
 
         const publication = yield* Deferred.await(publicationCapture)
         const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-        yield* publication.publish(
-          plannedAttempt,
-          PlannedAttemptExecutorProjection.cases.Exact.make({
-            report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-              correlation,
-              result: { _tag: "Completed" }
-            })
+        const terminal = PlannedAttemptExecutorProjection.cases.Exact.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+            correlation,
+            result: { _tag: "Completed" }
           })
-        )
+        })
+        const first = yield* publication.publish(plannedAttempt, terminal)
+        const repeated = yield* publication.publish(plannedAttempt, terminal)
 
         expect(yield* Ref.get(trackerReads)).toBe(0)
         expect(yield* Ref.get(hints)).toBe(1)
+        expect(yield* Ref.get(positionPresentAtHint)).toEqual([false])
+        expect([first.acceptedFacts, repeated.acceptedFacts]).toEqual(["Changed", "UnchangedPassiveObservation"])
         expect(
           (yield* storage.read(runId)).filter(
             ({ event }) =>

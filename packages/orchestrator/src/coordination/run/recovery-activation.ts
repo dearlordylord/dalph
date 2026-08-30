@@ -3737,31 +3737,27 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     []
   )
   /**
-   * A prior activation may have recorded a non-exact executor projection while
-   * its command remained unmatched. A later ordinary Run entry is itself a
-   * bounded reread boundary, so ask the opaque executor again before declaring
-   * the responsibility a permanent wait. The position gate prevents a fresh
-   * temporary/unreadable result from immediately retrying in the same entry.
+   * A non-exact projection recorded while a command is still unsettled is
+   * ambiguous command evidence and must be reconciled on a later Run entry.
+   * Passive projection evidence has no such retry authority.
    */
-  const projectionRetryDecisions = responsibilityFacts.flatMap((facts) => {
+  const commandProjectionRetryDecisions = responsibilityFacts.flatMap((facts) => {
     if (
       facts._tag !== "PlannedAttemptExecutorFreshFacts" ||
       facts.disposition._tag !== "PlannedAttemptExecutorProjectionWait"
     ) {
       return []
     }
-    const issue = latestPlannedAttemptExecutorProjectionIssue(
+    const plannedAttempt = facts.responsibility.plannedAttempt
+    const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(
       runState.workflowHistory.records,
-      facts.responsibility.plannedAttempt
+      plannedAttempt
     )
-    return issue !== undefined && !positionIsAfter(issue.observedAt, activationBaselinePosition)
-      ? [
-          {
-            transition: RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({
-              plannedAttempt: facts.responsibility.plannedAttempt
-            })
-          }
-        ]
+    const issue = latestPlannedAttemptExecutorProjectionIssue(runState.workflowHistory.records, plannedAttempt)
+    return unsettledCommand !== undefined &&
+      issue !== undefined &&
+      !positionIsAfter(issue.observedAt, activationBaselinePosition)
+      ? [RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })]
       : []
   })
   const integrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
@@ -3996,7 +3992,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       ...pendingGitReadTransitions,
       ...claimObservationTransitions,
       ...continuationDecisions.flatMap(({ transition }) => (transition === undefined ? [] : [transition])),
-      ...projectionRetryDecisions.map(({ transition }) => transition),
+      ...commandProjectionRetryDecisions,
       ...integrationLineageTransitions,
       ...integration.transitions
     ]

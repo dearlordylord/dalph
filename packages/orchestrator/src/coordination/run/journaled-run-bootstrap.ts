@@ -366,9 +366,11 @@ export const journaledRunBootstrapLayer = (
                 )
               )
               .pipe(
-                Effect.tap(releaseAcceptedPlannedAttemptPosition),
-                Effect.tap(() =>
-                  publishStoredFactHint
+                Effect.tap((result) =>
+                  result.acceptedFacts === "Changed" ? releaseAcceptedPlannedAttemptPosition(result) : Effect.void
+                ),
+                Effect.tap((result) =>
+                  publishStoredFactHint && result.acceptedFacts === "Changed"
                     ? Ref.get(acceptedRunReactivationObservers).pipe(
                         Effect.flatMap((observers) =>
                           Option.match(observers, {
@@ -384,8 +386,7 @@ export const journaledRunBootstrapLayer = (
         publishWithPermit: (permit, plannedAttempt, projection) =>
           withActivePassivePublicationJournal((journal) =>
             publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, projection).pipe(
-              Effect.provideService(InRunJournal, journal),
-              Effect.tap(releaseAcceptedPlannedAttemptPosition)
+              Effect.provideService(InRunJournal, journal)
             )
           )
       }

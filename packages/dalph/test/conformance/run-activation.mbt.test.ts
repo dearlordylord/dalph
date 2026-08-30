@@ -67,6 +67,7 @@ import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordina
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { validatedRunActivationLayer } from "../../../orchestrator/src/coordination/run/startup-recovery.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../../orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.js"
@@ -642,6 +643,9 @@ const makeRunActivationDriverImplementation = () => {
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
+        const executorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
+          Layer.succeed(PlannedAttemptExecutor, executor)
+        )
         const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
         const dependencies = Layer.mergeAll(
           Layer.succeed(JournalStore, journal),
@@ -678,7 +682,7 @@ const makeRunActivationDriverImplementation = () => {
                 worktreeRoot: WorktreeLocator.make("/worktrees/run-activation-planner")
               })
             ),
-            Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
+            Layer.provide(executorLayer),
             Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
           )
         }
@@ -688,7 +692,7 @@ const makeRunActivationDriverImplementation = () => {
             runtimeLayer,
             yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void }),
             noopJournalMaintenanceObservation
-          ).pipe(Layer.provide(dependencies))
+          ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
         )
         return yield* use(Context.get(context, JournaledRunBootstrap))
       })

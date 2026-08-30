@@ -29,12 +29,13 @@ import {
   EvidenceStoreFailure,
   GitCommand,
   GitCommandInvocationFailure,
+  makePassivePlannedAttemptObserver,
   memoryEvidenceStoreLayer,
   OperationId,
   type GitCommandService
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
-import { Crypto, Effect, FileSystem, Layer, Option, PlatformError, Ref, Schema, Stream } from "effect"
+import { Crypto, Deferred, Effect, FileSystem, Layer, Option, PlatformError, PubSub, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
@@ -196,6 +197,8 @@ const makeHarness = (
     readonly dieAfterReplacementTurnStartOnce?: boolean
     readonly dieAfterFirstTurnStartOnce?: boolean
     readonly lifecycleHintCount?: number
+    readonly lifecycleHints?: CodexAppServerService["attachTurnCompletedHints"]
+    readonly beforeAttemptRead?: () => Effect.Effect<void>
   } = {}
 ): Harness => {
   const threadId = CodexThreadId.make("codex-thread-issue-58")
@@ -249,9 +252,9 @@ const makeHarness = (
 
   const app: CodexAppServerService = {
     incarnation: CodexServerIncarnation.make("controlled-issue-58"),
-    attachTurnCompletedHints: Effect.succeed(
-      Stream.fromIterable(Array.from({ length: options.lifecycleHintCount ?? 0 }, () => undefined))
-    ),
+    attachTurnCompletedHints:
+      options.lifecycleHints ??
+      Effect.succeed(Stream.fromIterable(Array.from({ length: options.lifecycleHintCount ?? 0 }, () => undefined))),
     startThread: (cwd) =>
       Effect.sync(() => {
         threadStartCount += 1
@@ -378,12 +381,16 @@ const makeHarness = (
   const store: CodexAttemptStoreService = {
     readAttempt: (runId, attemptId) => {
       attemptReadCount += 1
-      return readFailure
-        ? Effect.fail(new CodexAttemptStoreFailure({ detail: "read failed", operation: "readAttempt" }))
-        : Effect.sync(() => {
-            const record = readOverride ?? records.get(keyOf(runId, attemptId))
-            return record === undefined ? Option.none() : Option.some(record)
-          })
+      return (options.beforeAttemptRead?.() ?? Effect.void).pipe(
+        Effect.andThen(
+          readFailure
+            ? Effect.fail(new CodexAttemptStoreFailure({ detail: "read failed", operation: "readAttempt" }))
+            : Effect.sync(() => {
+                const record = readOverride ?? records.get(keyOf(runId, attemptId))
+                return record === undefined ? Option.none() : Option.some(record)
+              })
+        )
+      )
     },
     writeAttempt: (record) => {
       if (record._tag === "AssociatedPreTurn" && options.failAssociatedWriteOnce === true && !associatedWriteFailure) {
@@ -851,6 +858,132 @@ it.effect("uses one coalesced provider wake to reproject a later terminal state 
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
 })
+
+it.effect("keeps equal executing provider wakes inside one passive owner without Journal or command progress", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerHints = yield* PubSub.unbounded<void>()
+      const barrierProjectionEntered = yield* Deferred.make<void>()
+      const releaseBarrierProjection = yield* Deferred.make<void>()
+      const terminalPublished = yield* Deferred.make<void>()
+      let observerReadCount = 0
+      let observerActive = false
+      const harness = makeHarness({
+        beforeAttemptRead: () =>
+          Effect.sync(() => {
+            if (!observerActive) return observerReadCount
+            observerReadCount += 1
+            return observerReadCount
+          }).pipe(
+            Effect.flatMap((readCount) =>
+              readCount === 3
+                ? Deferred.succeed(barrierProjectionEntered, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseBarrierProjection))
+                  )
+                : Effect.void
+            )
+          ),
+        lifecycleHints: PubSub.subscribe(providerHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const observer = yield* makePassivePlannedAttemptObserver()
+        yield* executor.begin(request)
+        const currentPublications = yield* Ref.make(0)
+        const changedPublications = yield* Ref.make(0)
+        const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+        const input = {
+          plannedAttempt: attempt,
+          publishCurrent: (projection: PlannedAttemptExecutorProjection) => {
+            if (projection._tag !== "Exact") return Effect.die("the controlled current projection must be exact")
+            return Ref.update(currentPublications, (count) => count + 1).pipe(
+              Effect.as({ acceptedFacts: "UnchangedPassiveObservation" as const, report: projection.report })
+            )
+          },
+          publishChange: (projection: PlannedAttemptExecutorProjection) =>
+            Ref.update(changedPublications, (count) => count + 1).pipe(
+              Effect.andThen(
+                projection._tag === "Exact" && projection.report._tag === "ExecutorWorkTerminal"
+                  ? Deferred.succeed(terminalPublished, undefined)
+                  : Effect.die("only the later Terminal projection may leave the passive owner")
+              ),
+              Effect.asVoid
+            )
+        }
+
+        observerActive = true
+        const observed = yield* observer.attach(input)
+        yield* PubSub.publish(providerHints, undefined)
+        yield* PubSub.publish(providerHints, undefined)
+        yield* Deferred.await(barrierProjectionEntered)
+        const duplicate = yield* observer.attach(input)
+        expect(duplicate).toEqual(observed)
+        expect({
+          changedPublications: yield* Ref.get(changedPublications),
+          currentPublications: yield* Ref.get(currentPublications),
+          observerReadCount
+        }).toEqual({ changedPublications: 0, currentPublications: 1, observerReadCount: 3 })
+
+        harness.complete(finalResponse(head))
+        yield* Deferred.succeed(releaseBarrierProjection, undefined)
+        yield* Deferred.await(terminalPublished)
+        expect(yield* Ref.get(changedPublications)).toBe(1)
+        expect(observerReadCount).toBe(3)
+        expect(observed).toMatchObject({ acceptedFacts: "UnchangedPassiveObservation", report: executing })
+        expect(harness.turnCount()).toBe(1)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("current-first attachment cannot miss a terminal change between projection and await", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerHints = yield* PubSub.unbounded<void>()
+      const subscriptionAttached = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(providerHints).pipe(
+          Effect.tap(() => Deferred.succeed(subscriptionAttached, undefined)),
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+
+      const attachment = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request)
+        const attached = yield* lifecycle.attach(correlation)
+        yield* Deferred.await(subscriptionAttached)
+        expect(attached.current).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+        harness.complete(finalResponse(head))
+        yield* PubSub.publish(providerHints, undefined)
+        const changed = yield* Stream.runHead(attached.changes)
+        return { attached, changed }
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      expect(attachment.changed).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } } }
+      })
+      expect(harness.turnCount()).toBe(1)
+      yield* attachment.attached.close
+    })
+  )
+)
 
 it.effect("persists the exact association before the first turn and seals Accepted from reread evidence", () => {
   const harness = makeHarness()

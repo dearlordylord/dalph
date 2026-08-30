@@ -3882,7 +3882,7 @@ const completionConflictStory = (() => {
           correlation: {
             ...correlation,
             candidateResource: correlation.candidateResource.replace(oldPositions, newPositions),
-            queuedAt: 40,
+            queuedAt: 42,
             sessionId: correlation.sessionId.replace(oldPositions, newPositions),
             startedAt: 43,
             targetLineageObservedAt: 47
@@ -4020,12 +4020,12 @@ const completionConflictStory = (() => {
                             attemptId: "attempt:C:1",
                             report: "ExecutorWorkExecuting" as const
                           },
-                          evidence,
                           {
                             _tag: "PlannedAttemptExecutorWorkReported" as const,
                             attemptId: "attempt:C:1",
                             report: "ExecutorWorkTerminalCompleted" as const
-                          }
+                          },
+                          evidence
                         ]
                       : [evidence]
                 ),
@@ -4230,10 +4230,10 @@ const defaultDiamondIntegrationPositions = {
 
 const fiveTaskDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 111, startedAt: 119, targetLineageObservedAt: 134 },
-  C: { queuedAt: 116, startedAt: 166, targetLineageObservedAt: 168 },
+  B: { queuedAt: 111, startedAt: 120, targetLineageObservedAt: 134 },
+  C: { queuedAt: 118, startedAt: 166, targetLineageObservedAt: 168 },
   D: { queuedAt: 253, startedAt: 254, targetLineageObservedAt: 264 },
-  E: { queuedAt: 120, startedAt: 200, targetLineageObservedAt: 202 },
+  E: { queuedAt: 119, startedAt: 200, targetLineageObservedAt: 202 },
   F: defaultDiamondIntegrationPositions,
   G: defaultDiamondIntegrationPositions,
   H: defaultDiamondIntegrationPositions,

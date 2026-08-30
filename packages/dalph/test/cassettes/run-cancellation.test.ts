@@ -48,6 +48,7 @@ import {
   runningAttemptRunCancellationForeignClaimAuthoredCassette,
   runningAttemptRunCancellationAuthoredCassette
 } from "../../src/cassettes/index.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 
 const cancellationInitialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const projectedCancellationGraph = TaskDagSnapshot.project(
@@ -92,13 +93,16 @@ const expectCancellationTerminationFailsClosedForDamagedPrefixes = (records: Rea
 }
 
 const cancellationOwnership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+const cancellationExecutorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
+  Layer.mock(PlannedAttemptExecutor, {})
+)
 
 const cancellationRuntimeLayer = (runId: RunId) =>
   Layer.mergeAll(
     Layer.effect(InRunJournal, InRunJournal),
     attemptChoiceControlLayer,
     controlDirectionApplicationLayer,
-    Layer.mock(PlannedAttemptExecutor, {}),
+    cancellationExecutorLayer,
     Layer.mock(RunRecoveryProjection, {
       _tag: "AuthoritativeRunRecoveryProjection",
       runId: RunId.make("run-cancellation-terminal-recovery-fixture"),
@@ -151,7 +155,7 @@ const buildCancellationBootstrap = Effect.fn("RunCancellationTest.buildBootstrap
       ({ runId }) => cancellationRuntimeLayer(runId),
       applicationExit,
       noopJournalMaintenanceObservation
-    ).pipe(Layer.provide(dependencies))
+    ).pipe(Layer.provide(dependencies), Layer.provide(cancellationExecutorLayer))
   )
   return Context.get(context, JournaledRunBootstrap)
 })

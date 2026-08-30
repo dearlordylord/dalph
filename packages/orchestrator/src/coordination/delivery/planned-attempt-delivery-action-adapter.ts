@@ -404,7 +404,9 @@ export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.execute
     Effect.map((result) => ({ _tag: "ExecutorReport" as const, result })),
     Effect.catchTag("PlannedAttemptContinuationAuthorizationRejected", (rejection) =>
       rejection.reason === "StaleWitness"
-        ? Effect.succeed({ _tag: "ContinuationAuthorizationStale" as const })
+        ? lease
+            .releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(transition.plannedAttempt))
+            .pipe(Effect.as({ _tag: "ContinuationAuthorizationStale" as const }))
         : Effect.fail(rejection)
     )
   )

@@ -10,9 +10,9 @@ import { Effect, Layer, Stream } from "effect"
  * changes only while one of its command effects is running. Such a fixture has
  * no outside process capable of publishing a later lifecycle notification.
  */
-export const controlledSynchronousPlannedAttemptExecutorLayer = (
-  executorLayer: Layer.Layer<PlannedAttemptExecutor>
-): Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation> =>
+export const controlledSynchronousPlannedAttemptExecutorLayer = <E, R>(
+  executorLayer: Layer.Layer<PlannedAttemptExecutor, E, R>
+): Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation, E, R> =>
   Layer.effect(
     PlannedAttemptExecutorLifecycleObservation,
     Effect.gen(function* () {

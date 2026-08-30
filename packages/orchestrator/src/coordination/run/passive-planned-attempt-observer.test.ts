@@ -136,31 +136,6 @@ it.effect("coalesces duplicate attachment requests for the same exact correlatio
   )
 )
 
-it.effect("current-first attachment cannot miss a terminal change between projection and await", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const published: Array<typeof terminal> = []
-      let closes = 0
-      const observer = yield* makePassivePlannedAttemptObserver().pipe(
-        Effect.provideService(PlannedAttemptExecutorLifecycleObservation, {
-          attach: () =>
-            Effect.succeed({ changes: Stream.never, close: Effect.sync(() => (closes += 1)), current: terminal })
-        })
-      )
-      yield* observer.attach({
-        plannedAttempt,
-        publishCurrent: (projection) =>
-          Effect.sync(() => published.push(projection as typeof terminal)).pipe(
-            Effect.as({ acceptedFacts: "Changed" as const, report: terminal.report })
-          ),
-        publishChange: () => Effect.die("terminal current projection must end attachment")
-      })
-      expect(published).toEqual([terminal])
-      expect(closes).toBe(1)
-    })
-  )
-)
-
 it.effect("a fresh process observer reattaches once to an executing attempt", () => {
   let attachments = 0
   let currentPublications = 0
@@ -241,12 +216,31 @@ it.effect("reattaches after process death during suspension without repeating th
 it.effect("passive lifecycle owner has only current projection await and publication capabilities", () =>
   Effect.scoped(
     Effect.gen(function* () {
+      const changes = yield* Queue.unbounded<typeof terminal>()
+      const terminalPublished = yield* Deferred.make<void>()
+      const published: Array<PlannedAttemptExecutorProjectionType> = []
       const boundary = PlannedAttemptExecutorLifecycleObservation.of({
-        attach: () => Effect.succeed({ changes: Stream.never, close: Effect.void, current: terminal })
+        attach: () => Effect.succeed({ changes: Stream.fromQueue(changes), close: Effect.void, current: executing })
       })
       const observer = yield* makePassivePlannedAttemptObserver().pipe(
         Effect.provideService(PlannedAttemptExecutorLifecycleObservation, boundary)
       )
+      const observed = yield* observer.attach({
+        plannedAttempt,
+        publishCurrent: (projection) =>
+          Effect.sync(() => published.push(projection)).pipe(
+            Effect.as({ acceptedFacts: "UnchangedPassiveObservation" as const, report: executing.report })
+          ),
+        publishChange: (projection) =>
+          Effect.sync(() => published.push(projection)).pipe(
+            Effect.andThen(Deferred.succeed(terminalPublished, undefined)),
+            Effect.asVoid
+          )
+      })
+      yield* Queue.offer(changes, terminal)
+      yield* Deferred.await(terminalPublished)
+      expect(observed).toMatchObject({ acceptedFacts: "UnchangedPassiveObservation", report: executing.report })
+      expect(published).toEqual([executing, terminal])
       expectTypeOf<keyof typeof boundary>().toEqualTypeOf<"attach">()
       expectTypeOf<keyof typeof observer>().toEqualTypeOf<keyof PassivePlannedAttemptObserverService>()
       expectTypeOf<keyof PassivePlannedAttemptObserverService>().toEqualTypeOf<"attach">()

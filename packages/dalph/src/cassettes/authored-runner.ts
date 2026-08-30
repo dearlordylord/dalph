@@ -1953,20 +1953,20 @@ const runAuthoredScenarioCassetteWith = (request: {
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
       const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
+      const executorLayer = controlledExecutorLayer(
+        cursor,
+        runId,
+        applyNextControlDirection,
+        survivingExecutorReports,
+        unresolvedLostExecutorResponses,
+        prepareExecutorReport
+      )
       const runtimeLayerFor = (
         activationOrdinal: AuthoredRunActivationOrdinalType,
         opportunity: RunActivationOpportunityValue
       ) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer, opportunity)
         const planning = planningLayer(activationOrdinal)
-        const executorLayer = controlledExecutorLayer(
-          cursor,
-          runId,
-          applyNextControlDirection,
-          survivingExecutorReports,
-          unresolvedLostExecutorResponses,
-          prepareExecutorReport
-        ).pipe(Layer.provide(controlPolicyLayer))
         const activationLayer = validatedRunActivationLayer(
           runId,
           command.integrationTarget,
@@ -2021,7 +2021,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         applicationExit,
         noopJournalMaintenanceObservation,
         operatorControlGraphReadBoundary
-      ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer))
+      ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer), Layer.provide(executorLayer))
 
       const withAuthoredOperatorDriver = <A, E, R>(program: Effect.Effect<A, E, R>) =>
         Effect.scoped(

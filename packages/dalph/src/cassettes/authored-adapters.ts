@@ -1,13 +1,15 @@
-import { Deferred, Effect, Layer, Match, Option, Ref, Schema } from "effect"
+import { Deferred, Effect, Layer, Match, Option, Ref, Schema, Stream } from "effect"
 import {
   PlannedAttemptExecutorCommandFailure,
   EvidenceDigest,
   EvidenceReference,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   type PlannedAttemptExecutorRequest,
   PlannedAttemptExecutorResult,
+  passiveLifecycleObservationPurpose,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   samePlannedAttemptExecutorCorrelation,
@@ -352,48 +354,70 @@ export const controlledExecutorLayer = (
       return report
     }).pipe(Effect.ensuring(cursor.endExecutorReportRequest(request, plannedAttempt.attemptId)))
   })
-  return Layer.succeed(
-    PlannedAttemptExecutor,
-    PlannedAttemptExecutor.of({
-      observe: (correlation) =>
-        Effect.gen(function* () {
-          const projection = yield* cursor.consumeExecutorProjection
-          if (Option.isNone(projection)) {
-            const unresolved = yield* Ref.get(unresolvedLostResponses)
-            if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
-              return yield* Effect.die(
-                new Error(
-                  `authored executor projection for unresolved ${correlation.attemptId} requires an explicit return`
-                )
+  const executor = PlannedAttemptExecutor.of({
+    observe: (correlation) =>
+      Effect.gen(function* () {
+        const projection = yield* cursor.consumeExecutorProjection
+        if (Option.isNone(projection)) {
+          const unresolved = yield* Ref.get(unresolvedLostResponses)
+          if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
+            return yield* Effect.die(
+              new Error(
+                `authored executor projection for unresolved ${correlation.attemptId} requires an explicit return`
               )
-            }
-            const report = (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
-            return report === undefined
-              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
-              : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+            )
           }
-          const projectedReport = yield* prepareReport(executorReport(projection.value, runId))
-          if (!samePlannedAttemptExecutorCorrelation(projectedReport.correlation, correlation)) {
-            return PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
-              expected: correlation,
-              observed: projectedReport
-            })
-          }
-          yield* Ref.update(
-            reports,
-            (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
-          )
-          yield* Ref.update(unresolvedLostResponses, (current) => {
-            const next = new Set(current)
-            next.delete(plannedAttemptExecutorCorrelationKey(correlation))
-            return next
+          const report = (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
+          return report === undefined
+            ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+            : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+        }
+        const projectedReport = yield* prepareReport(executorReport(projection.value, runId))
+        if (!samePlannedAttemptExecutorCorrelation(projectedReport.correlation, correlation)) {
+          return PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+            expected: correlation,
+            observed: projectedReport
           })
-          return PlannedAttemptExecutorProjection.cases.Exact.make({ report: projectedReport })
-        }),
-      /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
-      requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
-      begin: (request: PlannedAttemptExecutorRequest) => consume("Begin", request.plannedAttempt),
-      resume: (request: PlannedAttemptExecutorRequest) => consume("Resume", request.plannedAttempt)
-    })
+        }
+        yield* Ref.update(
+          reports,
+          (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
+        )
+        yield* Ref.update(unresolvedLostResponses, (current) => {
+          const next = new Set(current)
+          next.delete(plannedAttemptExecutorCorrelationKey(correlation))
+          return next
+        })
+        return PlannedAttemptExecutorProjection.cases.Exact.make({ report: projectedReport })
+      }),
+    /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
+    requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
+    begin: (request: PlannedAttemptExecutorRequest) => consume("Begin", request.plannedAttempt),
+    resume: (request: PlannedAttemptExecutorRequest) => consume("Resume", request.plannedAttempt)
+  })
+  return Layer.merge(
+    Layer.succeed(PlannedAttemptExecutor, executor),
+    Layer.succeed(
+      PlannedAttemptExecutorLifecycleObservation,
+      PlannedAttemptExecutorLifecycleObservation.of({
+        attach: (correlation) =>
+          Effect.gen(function* () {
+            const item = yield* cursor.currentStoryItem
+            const current =
+              item?._tag === "PlannedAttemptExecutorProjectionReturned" &&
+              item.report.attemptId === correlation.attemptId
+                ? yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+                : yield* Ref.get(reports).pipe(
+                    Effect.map((current) => current.get(plannedAttemptExecutorCorrelationKey(correlation))),
+                    Effect.map((report) =>
+                      report === undefined
+                        ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+                        : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+                    )
+                  )
+            return { changes: Stream.empty, close: Effect.void, current }
+          })
+      })
+    )
   )
 }

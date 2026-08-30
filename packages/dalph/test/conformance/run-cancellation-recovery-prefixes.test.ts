@@ -11,6 +11,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { idleRunCancellationRecoveryAuthoredCassette, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
@@ -78,7 +79,21 @@ const tagOf = (value: unknown): string =>
     ? value._tag
     : "UnknownFailure"
 
-const productionRuntimeLayer = (runId: RunId, graph: TaskDagSnapshot) => {
+const cancellationRecoveryExecutorLayer = () => {
+  const executor = PlannedAttemptExecutor.of({
+    observe: (correlation) => Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })),
+    requestSuspension: () => Effect.die("cancellation recovery has no executor responsibility"),
+    resume: () => Effect.die("cancellation recovery has no executor responsibility"),
+    begin: () => Effect.die("cancellation recovery has no executor responsibility")
+  })
+  return controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor))
+}
+
+const productionRuntimeLayer = (
+  runId: RunId,
+  graph: TaskDagSnapshot,
+  executorLayer: ReturnType<typeof cancellationRecoveryExecutorLayer>
+) => {
   const interpreter = WorkflowInterpreter.of({
     acquireTaskClaim: () => Effect.die("cancellation recovery does not acquire a task claim"),
     readTaskClaim: () => Effect.die("cancellation recovery does not read a task claim"),
@@ -89,12 +104,6 @@ const productionRuntimeLayer = (runId: RunId, graph: TaskDagSnapshot) => {
     reconcileTaskWorktree: () => Effect.die("cancellation recovery does not reconcile Git worktrees"),
     recordTaskAttemptPlan: () => Effect.die("cancellation recovery does not plan task work"),
     releaseTaskClaim: () => Effect.die("cancellation recovery does not release task claims")
-  })
-  const executor = PlannedAttemptExecutor.of({
-    observe: (correlation) => Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })),
-    requestSuspension: () => Effect.die("cancellation recovery has no executor responsibility"),
-    resume: () => Effect.die("cancellation recovery has no executor responsibility"),
-    begin: () => Effect.die("cancellation recovery has no executor responsibility")
   })
   const controls = Layer.mergeAll(
     attemptChoiceControlLayer,
@@ -114,7 +123,7 @@ const productionRuntimeLayer = (runId: RunId, graph: TaskDagSnapshot) => {
         worktreeRoot: WorktreeLocator.make("/worktrees/cancellation-recovery")
       })
     ),
-    Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
+    Layer.provide(executorLayer),
     Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
   )
 }
@@ -129,6 +138,7 @@ const runProductionRecovery = (prefix: RecoveryPrefix, lane: "memory" | "sqlite"
       const runId = first.runId
       const target = first.event.target
       const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+      const executorLayer = cancellationRecoveryExecutorLayer()
       const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
       const dependencies = Layer.mergeAll(
         Layer.succeed(JournalStore, storage),
@@ -139,10 +149,10 @@ const runProductionRecovery = (prefix: RecoveryPrefix, lane: "memory" | "sqlite"
       const bootstrapContext = yield* Layer.build(
         journaledRunBootstrapLayer(
           runId,
-          ({ runId: activeRunId }) => productionRuntimeLayer(activeRunId, graph),
+          ({ runId: activeRunId }) => productionRuntimeLayer(activeRunId, graph, executorLayer),
           applicationExit,
           noopJournalMaintenanceObservation
-        ).pipe(Layer.provide(dependencies))
+        ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
       )
       const bootstrap = Context.get(bootstrapContext, JournaledRunBootstrap)
       const program = Effect.gen(function* () {

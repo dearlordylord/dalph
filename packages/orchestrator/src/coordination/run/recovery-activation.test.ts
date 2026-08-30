@@ -27,7 +27,7 @@ import {
 import { validSnapshot } from "../../../test/task-dag.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
-import { InitialControlPolicy } from "../../control/policy.js"
+import { InitialControlPolicy, initialRunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { UntrackedWorktreePath, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
@@ -1648,6 +1648,100 @@ it("waits on a passive lifecycle contradiction without classifying it as a corre
     disposition: { _tag: "PlannedAttemptExecutorProjectionWait", reason: "LifecycleTransitionContradiction" }
   })
 })
+
+it.each([
+  { name: "absent", observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateNoCurrentReport.make({}) },
+  {
+    name: "temporarily unavailable",
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({})
+  },
+  { name: "unreadable", observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({}) },
+  {
+    name: "foreign",
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorReportContradiction.make({
+      observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: { attemptId: AttemptId.make("recovery-activation-passive-foreign-attempt"), runId: coverageRunId }
+      })
+    })
+  }
+] as const)("does not schedule another passive executor read after an unresolved $name projection", ({ observation }) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+      })
+      const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      const began = makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy)
+      const records = [
+        began,
+        ...coveragePlanRecords().map((record) => ({
+          ...record,
+          position: JournalPosition.make(Number(record.position) + 1)
+        })),
+        coverageRecord(
+          6,
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "Begin",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: beginOrdinal,
+            plannedAttempt: coverageAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        coverageRecord(
+          7,
+          PlannedAttemptExecutorCommandResponseObservedEvent.make({
+            commandOrdinal: beginOrdinal,
+            occurrenceClassification: "NonActionOccurrence",
+            plannedAttempt: coverageAttempt,
+            report: executing,
+            version: workflowJournalEventVersion
+          })
+        ),
+        executorReport(8, executing, 1),
+        executorStateObservation(9, observation)
+      ]
+      const reconstructed: ReconstructedRunState = {
+        ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
+        controlPolicy: Option.some({ ...coveragePolicy, revision: initialRunPolicyRevision })
+      }
+      const resources = yield* makeIntegrationTargetResourceController()
+      const restartedJournal = Object.assign(
+        InRunJournal.of({
+          append: () => Effect.die("passive failure restart must not append during projection"),
+          read: () => Effect.succeed(records)
+        }),
+        { state: { get: Effect.succeed({ reconstructed }) } }
+      )
+      const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
+        Effect.provideService(InRunJournal, restartedJournal)
+      )
+
+      const projection = yield* recovery.readDeliveryProjection
+
+      expect(projection.evidence).toMatchObject({
+        _tag: "AvailableDeliveryProjectionEvidence",
+        facts: [
+          {
+            _tag: "PlannedAttemptExecutorFreshFacts",
+            disposition: { _tag: "PlannedAttemptExecutorProjectionWait" },
+            responsibility: { plannedAttempt: coverageAttempt }
+          }
+        ]
+      })
+      expect(
+        projection.frontier.transitions.filter(
+          (transition) =>
+            transition._tag === "ObservePlannedAttemptExecutorWork" ||
+            transition._tag === "ReconcilePlannedAttemptExecutorWork" ||
+            transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+            transition._tag === "SuspendPlannedAttemptExecutorWork"
+        )
+      ).toEqual([])
+    })
+  )
+)
 
 it.each([
   {

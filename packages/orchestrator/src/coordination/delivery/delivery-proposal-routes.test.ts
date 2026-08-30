@@ -12,6 +12,7 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  type PlannedAttemptExecutorCorrelation,
   passiveLifecycleObservationPurpose,
   plannedAttemptExecutorCorrelation,
   RunId,
@@ -3238,6 +3239,7 @@ describe("delivery proposal route matrix", () => {
         return yield* Effect.die("missing passive executor proposal")
       }
       const releases = yield* Ref.make(0)
+      const releaseDispositions = yield* Ref.make<ReadonlyArray<"Released" | "AlreadyAbsent">>([])
       const appends = yield* Ref.make(0)
       const initialRecords = [...acceptedExecutingExecutorRecords()]
       if (testCase.report._tag === "ExecutorWorkSafelySuspended") {
@@ -3270,12 +3272,22 @@ describe("delivery proposal route matrix", () => {
       }
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
       const protocolController = yield* makePlannedAttemptProtocolController()
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: TaskWorkCapacity.make(1), held: [{ correlation, taskId: plannedAttempt.taskId }] },
+        yield* makeIntegrationTargetResourceController(),
+        (yield* makeApplicationExitLifecycle()).admission
+      ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
       const result = yield* executePlannedAttemptTransition(
         { _tag: "IdentityFreeAction", proposal },
         testCase.transition,
         {
           ...inertLease,
-          releasePlannedAttemptPosition: () => Ref.update(releases, (count) => count + 1),
+          releasePlannedAttemptPosition: (subject) =>
+            Ref.update(releases, (count) => count + 1).pipe(
+              Effect.andThen(admission.releasePlannedAttemptPosition(subject)),
+              Effect.tap((disposition) => Ref.update(releaseDispositions, (current) => [...current, disposition])),
+              Effect.asVoid
+            ),
           withPlannedAttemptProtocol: (subject, effect) => protocolController.withPermit(subject, effect)
         }
       ).pipe(
@@ -3312,6 +3324,8 @@ describe("delivery proposal route matrix", () => {
       })
       expect(yield* Ref.get(appends)).toBe(2)
       expect(yield* Ref.get(releases)).toBe(1)
+      expect(yield* Ref.get(releaseDispositions)).toEqual(["Released"])
+      expect((yield* admission.snapshot).positions.size).toBe(0)
     })
 
   effectIt.effect("observes live terminal executor change once and releases the exact position", () =>
@@ -4375,6 +4389,7 @@ describe("delivery proposal route matrix", () => {
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(fixture.records)
       const reads = yield* Ref.make(0)
       const appends = yield* Ref.make(0)
+      const releasedPositions = yield* Ref.make<ReadonlyArray<PlannedAttemptExecutorCorrelation>>([])
       const resumeContacts = yield* Ref.make(0)
       const firstReadEntered = yield* Deferred.make<void>()
       const allowFirstRead = yield* Deferred.make<void>()
@@ -4427,6 +4442,7 @@ describe("delivery proposal route matrix", () => {
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
       const execution = yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, {
         ...inertLease,
+        releasePlannedAttemptPosition: (released) => Ref.update(releasedPositions, (current) => [...current, released]),
         withPlannedAttemptProtocol: (exactCorrelation, effect) => controller.withPermit(exactCorrelation, effect)
       }).pipe(
         Effect.provideService(InRunJournal, journal),
@@ -4469,6 +4485,7 @@ describe("delivery proposal route matrix", () => {
 
       expect(result).toMatchObject({ _tag: "ActionDeferred", reason: "ContinuationAuthorizationStale" })
       expect(yield* Ref.get(appends)).toBe(0)
+      expect(yield* Ref.get(releasedPositions)).toEqual([correlation])
       expect(yield* Ref.get(resumeContacts)).toBe(0)
       expect(
         (yield* Ref.get(records)).some(
