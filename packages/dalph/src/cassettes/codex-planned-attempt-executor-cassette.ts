@@ -26,7 +26,7 @@ import {
   OperationId,
   type GitCommandService
 } from "@dalph/orchestrator"
-import { Effect, Layer, Option, Ref, Schema, type Crypto } from "effect"
+import { Effect, Layer, Option, Ref, Schema, Stream, type Crypto } from "effect"
 import {
   CodexAppServerFailure,
   controlledCodexAppServerLayer,
@@ -351,6 +351,9 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
 
   const app: CodexAppServerService = {
     incarnation: CodexServerIncarnation.make("codex-cassette-incarnation"),
+    // Cassette turns advance only through the scripted fixture actions; the
+    // controlled provider has no autonomous notification boundary.
+    attachTurnCompletedHints: Effect.succeed(Stream.empty),
     startThread: (cwd) =>
       Ref.updateAndGet(thread, (current) => ({ ...current, cwd })).pipe(
         Effect.tap(() => Ref.update(threadStartCount, (count) => count + 1))

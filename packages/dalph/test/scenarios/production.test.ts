@@ -129,6 +129,11 @@ import {
 } from "../../../orchestrator/test/task-tracker-facts.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
+
+const productionControlledFakePlannedAttemptExecutorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
+  controlledFakePlannedAttemptExecutorLayer
+)
 
 const productionIntegrationTarget = (repository: string): IntegrationTarget =>
   IntegrationTarget.make({
@@ -292,7 +297,7 @@ const runFreshGithubInstructionVertical = (scenario: string, focusedBody: unknow
       GitCommonDirectoryTarget.make(`${directory}/.git`),
       productionIntegrationTarget(`${directory}/.git`),
       controlledTrackerMutationLayer,
-      executorLayer,
+      controlledSynchronousPlannedAttemptExecutorLayer(executorLayer),
       unavailableIntegratorCandidateProviderAuthority
     ).pipe(
       Layer.provide(githubTrackerGraphReaderLayer.pipe(Layer.provide(githubClientLayer))),
@@ -643,7 +648,9 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
-        Layer.succeed(PlannedAttemptExecutor, executorForApplication(applicationOrdinal)),
+        controlledSynchronousPlannedAttemptExecutorLayer(
+          Layer.succeed(PlannedAttemptExecutor, executorForApplication(applicationOrdinal))
+        ),
         integratorCandidateProviderAuthority,
         acceptedResultEvidenceStore === undefined ? {} : { acceptedResultEvidenceStore }
       ).pipe(
@@ -1793,7 +1800,7 @@ it.effect(absentHistoryApplicationScenario, () =>
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(trackerReaderLayer),
@@ -1918,7 +1925,7 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
@@ -2095,7 +2102,7 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
@@ -2196,7 +2203,7 @@ it.effect("records an Operator capacity change through the production compositio
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(trackerReaderLayer),
@@ -2302,7 +2309,7 @@ it.effect("terminates once only after G2 proves the target complete and responsi
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(trackerReaderLayer),
@@ -2390,7 +2397,7 @@ it.effect("rejects re-entry after fresh tracker facts conclusively block the Run
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(trackerReaderLayer),
@@ -2657,7 +2664,7 @@ it.effect("publishes a changed terminal observation before continuing", () =>
         GitCommonDirectoryTarget.make(`${directory}/.git`),
         continuationTarget,
         trackerLayer,
-        terminalExecutorLayer,
+        controlledSynchronousPlannedAttemptExecutorLayer(terminalExecutorLayer),
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
@@ -2785,7 +2792,7 @@ it.effect("blocks Run establishment before activation when preserved history has
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
@@ -2859,7 +2866,7 @@ it.effect(
           GitCommonDirectoryTarget.make(directory),
           productionIntegrationTarget(directory),
           controlledTrackerMutationLayer,
-          controlledFakePlannedAttemptExecutorLayer,
+          productionControlledFakePlannedAttemptExecutorLayer,
           unavailableIntegratorCandidateProviderAuthority
         ).pipe(
           Layer.provide(
@@ -2918,7 +2925,7 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(
@@ -2999,7 +3006,7 @@ it.effect("establishes a Run when another Run's responsibility is completed", ()
         GitCommonDirectoryTarget.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
-        controlledFakePlannedAttemptExecutorLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority
       ).pipe(
         Layer.provide(

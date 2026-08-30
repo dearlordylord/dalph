@@ -827,8 +827,8 @@ const observeExactReport = Effect.fn("CodexPlannedAttemptExecutorTest.observeExa
   return yield* Effect.die(`expected exact executor report, received ${projection._tag}`)
 })
 
-it.effect("coalesces unrelated executor wakes without durable or command progress", () => {
-  const harness = makeHarness({ lifecycleHintCount: 3 })
+it.effect("uses one coalesced provider wake to reproject a later terminal state without command progress", () => {
+  const harness = makeHarness({ lifecycleHintCount: 1 })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
@@ -836,6 +836,7 @@ it.effect("coalesces unrelated executor wakes without durable or command progres
     const readsBeforeAttachment = harness.attemptReadCount()
 
     const attachment = yield* lifecycle.attach(correlation)
+    harness.complete(finalResponse(head))
     const changed = yield* Stream.runCollect(attachment.changes)
 
     expect(attachment.current).toEqual(
@@ -843,8 +844,10 @@ it.effect("coalesces unrelated executor wakes without durable or command progres
         report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
       })
     )
-    expect(Array.from(changed)).toEqual([])
-    expect(harness.attemptReadCount() - readsBeforeAttachment).toBe(4)
+    expect(Array.from(changed)).toMatchObject([
+      { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } } }
+    ])
+    expect(harness.attemptReadCount() - readsBeforeAttachment).toBe(2)
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
 })

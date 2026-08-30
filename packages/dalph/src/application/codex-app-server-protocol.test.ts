@@ -16,6 +16,7 @@ const protocolFixture = String.raw`#!/usr/bin/env node
 const path = require("node:path")
 let buffer = ""
 let requestNumber = 0
+let threadReadNumber = 0
 const mode = path.basename(process.argv[1])
 const validThread = {
   id: "protocol-thread",
@@ -184,6 +185,7 @@ const responseFor = (method) => {
 const onMessage = (message) => {
   if (message.method === "initialized") return
   requestNumber += 1
+  if (message.method === "thread/read") threadReadNumber += 1
   if (mode === "stderr-noise" && requestNumber === 1) process.stderr.write("diagnostic-only\n")
   if (mode === "blank-line" && requestNumber === 1) process.stdout.write("\n")
   if (mode === "non-number-response-id" && requestNumber === 1) {
@@ -198,6 +200,20 @@ const onMessage = (message) => {
   }
   if (mode === "turn-completed-hint" && message.method === "thread/start") {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { opaque: true } }) + "\n")
+  }
+  if (mode === "turn-completed-burst" && message.method === "thread/start") {
+    for (let index = 0; index < 64; index += 1) {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "thread/status/changed", params: { index } }) + "\n")
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { index } }) + "\n")
+    }
+  }
+  if (mode === "turn-completed-burst" && message.method === "thread/read" && threadReadNumber === 1) {
+    for (let index = 0; index < 64; index += 1) {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "thread/status/changed", params: { index } }) + "\n")
+    }
+  }
+  if (mode === "turn-completed-burst" && message.method === "thread/read" && threadReadNumber === 2) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { terminal: true } }) + "\n")
   }
   if (mode === "non-object-message" && requestNumber === 1) {
     process.stdout.write(JSON.stringify("not-an-object") + "\n")
@@ -507,11 +523,36 @@ it.effect("forwards only the qualified turn/completed method as a non-authoritat
   withFixture("turn-completed-hint", (app) =>
     Effect.scoped(
       Effect.gen(function* () {
-        if (app.attachTurnCompletedHints === undefined) return yield* Effect.die("live transport omitted hints")
         const hints = yield* app.attachTurnCompletedHints
         const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
         yield* app.startThread("/fixture/worktree")
         expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
+      })
+    )
+  )
+)
+
+it.effect("coalesces a provider burst while retaining a later terminal wake", () =>
+  withFixture("turn-completed-burst", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Subscribe before the current read, then let the provider publish a burst before consumption.
+        const hints = yield* app.attachTurnCompletedHints
+        const thread = yield* app.startThread("/fixture/worktree")
+
+        expect(yield* Stream.runHead(hints)).toEqual(Option.some(undefined))
+        const next = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        yield* Effect.yieldNow
+        expect(next.pollUnsafe()).toBeUndefined()
+
+        // Unrelated notifications remain ignored rather than creating a busy loop.
+        yield* app.readThread(thread.id)
+        yield* Effect.yieldNow
+        expect(next.pollUnsafe()).toBeUndefined()
+
+        // A later qualified notification must still wake the attached reader exactly once.
+        yield* app.readThread(thread.id)
+        expect(yield* Fiber.join(next)).toEqual(Option.some(undefined))
       })
     )
   )
@@ -530,9 +571,13 @@ it.effect("rejects a request after the transport closes and joins repeated close
 
 it.effect("maps an initialization RPC error to unavailable app-server behavior", () =>
   withFixture("initialize-rpc-error", (app) =>
-    Effect.gen(function* () {
-      const result = yield* Effect.exit(app.startThread("/fixture/worktree"))
-      expectAppFailure(result, "initialize")
-    })
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* app.attachTurnCompletedHints
+        expect(Array.from(yield* Stream.runCollect(hints))).toEqual([])
+        const result = yield* Effect.exit(app.startThread("/fixture/worktree"))
+        expectAppFailure(result, "initialize")
+      })
+    )
   )
 )

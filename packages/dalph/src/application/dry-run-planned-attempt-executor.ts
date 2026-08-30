@@ -70,7 +70,9 @@ export const dryRunPlannedAttemptExecutorLayer = Layer.effectContext(
       attach: (correlation) =>
         Ref.get(reports).pipe(
           Effect.map((current) => ({
-            changes: Stream.never,
+            // Dry-run commands complete synchronously and own no autonomous
+            // provider process, so no later lifecycle notification can occur.
+            changes: Stream.empty,
             close: Effect.void,
             current: projectionFor(correlation, current)
           }))

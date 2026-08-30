@@ -1,5 +1,10 @@
 import { NodeServices } from "@effect/platform-node"
-import { type IntegrationTarget, PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
+import {
+  type IntegrationTarget,
+  PlannedAttemptExecutor,
+  type PlannedAttemptExecutorLifecycleObservation,
+  type RunId
+} from "@dalph/contracts"
 import {
   AllocatedWorkflowRunId,
   JournaledRunBootstrap,
@@ -53,7 +58,7 @@ import {
   WorkflowRunAlreadyTerminated,
   defaultJournalMaintenanceObservation,
   PassivePlannedAttemptObserver,
-  optionalPassivePlannedAttemptObserverLayer
+  passivePlannedAttemptObserverLayer
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Duration, Effect, Layer, Schema } from "effect"
@@ -177,7 +182,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   target: GitCommonDirectoryTarget,
   integrationTarget: IntegrationTarget,
   trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>,
-  plannedAttemptExecutorLayer: Layer.Layer<PlannedAttemptExecutor>,
+  plannedAttemptExecutorLayer: Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation>,
   /**
    * Provider-owned Integrator candidate authority. Production cannot infer
    * predecessor ownership or writer quiescence from a Git locator. Callers
@@ -232,7 +237,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     })
   )
   const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))
-  const executorWithPassiveObservation = optionalPassivePlannedAttemptObserverLayer.pipe(
+  const executorWithPassiveObservation = passivePlannedAttemptObserverLayer.pipe(
     Layer.provideMerge(executorWithApplicationExit)
   )
   const integratorLayer = integrator === undefined ? Layer.empty : Layer.succeed(Integrator, Integrator.of(integrator))

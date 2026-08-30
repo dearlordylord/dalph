@@ -3,7 +3,7 @@ import nodeProcess from "node:process"
 import { spawn } from "node:child_process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Cause, Effect, Exit, FileSystem, Layer, Option, Path } from "effect"
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Path, Stream } from "effect"
 import { expect } from "vitest"
 import {
   CodexAppServer,
@@ -288,6 +288,7 @@ it.effect("keeps controlled app-server and owned-activity substitutions at their
   Effect.gen(function* () {
     const service: CodexAppServerService = {
       incarnation: CodexServerIncarnation.make("controlled-incarnation"),
+      attachTurnCompletedHints: Effect.succeed(Stream.empty),
       startThread: (cwd: string) =>
         Effect.succeed(thread("idle", [] as const) as CodexThreadSnapshot).pipe(
           Effect.map((value) => ({ ...value, cwd }))

@@ -75,6 +75,7 @@ import {
   IntegrationTargetRef,
   makeTaskWorkSpecification,
   PlannedAttemptExecutor,
+  type PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorCommandFailure,
   type PlannedAttemptExecutorRequest,
   PlannedAttemptExecutorProjection,
@@ -113,6 +114,19 @@ import {
   taskTrackerGraphFactsObserved,
   taskTrackerWorkSpecificationFactsObserved
 } from "../../../orchestrator/test/task-tracker-facts.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
+
+type IsExactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type Assert<T extends true> = T
+type ProductionExecutorCapabilitiesAreMandatory = Assert<
+  IsExactly<
+    Layer.Success<Parameters<typeof productionWorkflowInterpreterLayer>[4]>,
+    PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation
+  >
+>
+
+const productionExecutorCapabilitiesAreMandatory: ProductionExecutorCapabilitiesAreMandatory = true
+void productionExecutorCapabilitiesAreMandatory
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 
@@ -1031,7 +1045,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               GitCommonDirectoryTarget.make(`${directory}/.git`),
               integrationTarget,
               Layer.succeed(TrackerMutation, trackerMutation),
-              Layer.succeed(PlannedAttemptExecutor, executor),
+              controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
               unavailableIntegratorCandidateProviderAuthority,
               runtimeBoundaries
             ).pipe(

@@ -211,7 +211,7 @@ export interface CodexAppServerService {
    * Opens a broadcast subscription for provider `turn/completed` hints. The
    * payload is deliberately not authority; callers must reread exact state.
    */
-  readonly attachTurnCompletedHints?: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly startThread: (cwd: string) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
@@ -1331,7 +1331,9 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const writes = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
   const pending = yield* Ref.make<ReadonlyMap<number, PendingJsonRpcRequest>>(new Map())
-  const turnCompletedHints = yield* PubSub.unbounded<void>()
+  // Provider notifications are non-authoritative wake hints. One pending wake
+  // is sufficient because every consumer rereads exact provider state.
+  const turnCompletedHints = yield* PubSub.sliding<void>(1)
   yield* Effect.addFinalizer(() => PubSub.shutdown(turnCompletedHints))
   const encoder = new TextEncoder()
   const failPending = (failure: CodexAppServerFailure) =>
@@ -1550,6 +1552,9 @@ const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerSer
     )
   return {
     incarnation: newIncarnation(),
+    // Initialization failed before a provider process existed, so there can
+    // be no later provider notification for this explicit unavailable value.
+    attachTurnCompletedHints: Effect.succeed(Stream.empty),
     startThread: () => fail("thread/start"),
     readThread: () => fail("thread/read"),
     resumeThread: () => fail("thread/resume"),
