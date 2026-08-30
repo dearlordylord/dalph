@@ -514,7 +514,7 @@ it.effect("reuses the successful projection for one unchanged immutable record a
   })
 )
 
-it.effect("projects an operator task-work capacity change as an applied policy occurrence", () =>
+it.effect("shows that the operator changed task execution capacity to two", () =>
   Effect.gen(function* () {
     const projection = yield* projectWorkflowOccurrences([
       record(
@@ -543,7 +543,8 @@ it.effect("projects an operator task-work capacity change as an applied policy o
     ])
     const occurrence = projection.occurrences[0]
     if (occurrence === undefined) return yield* Effect.die("capacity occurrence is missing")
-    expect(describeWorkflowOccurrence(occurrence).text).toBe("Operator initiated applied task work capacity")
+    expect(describeWorkflowOccurrence(occurrence).text).toContain("task work capacity")
+    expect(occurrence).toMatchObject({ capacity: 2, initiatedBy: { _tag: "Operator" } })
   })
 )
 
@@ -959,18 +960,25 @@ it.effect("projects active-refresh Git failures as non-action trace occurrences"
       presentation: { classification: "NonActionOccurrence" },
       text: "active-work authority refresh Git read failed; no actor is proven"
     })
+    const encodedOccurrence = Schema.encodeUnknownSync(WorkflowOccurrence)(occurrence)
+    if (encodedOccurrence._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
+      return yield* Effect.die("encoded active-refresh occurrence changed variants")
+    }
     const malformed = yield* decodeWorkflowOccurrence({
-      ...occurrence,
-      failure: new GitWorktreeReadFailure({
+      ...encodedOccurrence,
+      failure: {
+        _tag: "GitWorktreeReadFailure",
         detail: "the decoded occurrence names another worktree",
         worktree: WorktreeLocator.make("/worktrees/another-active-refresh-worktree")
-      })
+      }
     }).pipe(Effect.flip)
-    expect(malformed._tag).toBe("SchemaError")
+    expect(String(malformed)).toContain(
+      "active-refresh worktree failure occurrence must name the exact planned worktree"
+    )
   })
 )
 
-it.effect("rejects every contradictory active-refresh identity after decoding the shared occurrence schema", () =>
+it.effect("rejects a coordinator's active-refresh failure when its Run, authority, or Git subject changes", () =>
   Effect.gen(function* () {
     const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
     const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
@@ -1021,24 +1029,41 @@ it.effect("rejects every contradictory active-refresh identity after decoding th
     })
     const foreignRunAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: foreignRunId })
     const foreignAuthority = { attemptId: foreignAttempt.attemptId, runId }
-    const contradictoryWorktreeOccurrences: ReadonlyArray<unknown> = [
-      { ...encodedWorktreeOccurrence, authority: foreignAuthority },
+    const contradictoryWorktreeIdentities: ReadonlyArray<{ readonly detail: string; readonly value: unknown }> = [
       {
-        ...encodedWorktreeOccurrence,
-        operation: {
-          ...encodedWorktreeOccurrence.operation,
-          authority: { attemptId: authority.attemptId, runId: foreignRunId }
+        detail: "active-refresh Git failure occurrence must bind one exact attempt, authority, run, and ordinal",
+        value: { ...encodedWorktreeOccurrence, authority: foreignAuthority }
+      },
+      {
+        detail: "an active-refresh Git intent must bind its exact planned attempt",
+        value: {
+          ...encodedWorktreeOccurrence,
+          operation: {
+            ...encodedWorktreeOccurrence.operation,
+            authority: { attemptId: authority.attemptId, runId: foreignRunId }
+          }
         }
       },
-      { ...encodedWorktreeOccurrence, ordinal: ActiveWorkAuthorityRefreshOrdinal.make(2) },
       {
-        ...encodedWorktreeOccurrence,
-        operation: { ...encodedWorktreeOccurrence.operation, plannedAttempt: foreignAttempt }
+        detail: "active-refresh Git failure occurrence must bind one exact attempt, authority, run, and ordinal",
+        value: { ...encodedWorktreeOccurrence, ordinal: ActiveWorkAuthorityRefreshOrdinal.make(2) }
       },
       {
-        ...encodedWorktreeOccurrence,
-        operation: { ...encodedWorktreeOccurrence.operation, plannedAttempt: foreignRunAttempt }
+        detail: "an active-refresh Git intent must bind its exact planned attempt",
+        value: {
+          ...encodedWorktreeOccurrence,
+          operation: { ...encodedWorktreeOccurrence.operation, plannedAttempt: foreignAttempt }
+        }
       },
+      {
+        detail: "an active-refresh Git intent must bind its exact planned attempt",
+        value: {
+          ...encodedWorktreeOccurrence,
+          operation: { ...encodedWorktreeOccurrence.operation, plannedAttempt: foreignRunAttempt }
+        }
+      }
+    ]
+    const contradictoryWorktreeSubjects: ReadonlyArray<unknown> = [
       {
         ...encodedWorktreeOccurrence,
         failure: {
@@ -1059,14 +1084,20 @@ it.effect("rejects every contradictory active-refresh identity after decoding th
     )
 
     const encodedWorktreeRead = Schema.encodeUnknownSync(ActiveWorkAuthorityRefreshGitReadOperation)(worktreeRead)
-    for (const contradictoryOperation of [
-      { ...encodedWorktreeRead, predecessorOperationIds: [encodedWorktreeRead.operationId] },
-      { ...encodedWorktreeRead, authority: foreignAuthority }
+    for (const { detail, value } of [
+      {
+        detail: "an operation cannot causally precede itself",
+        value: { ...encodedWorktreeRead, predecessorOperationIds: [encodedWorktreeRead.operationId] }
+      },
+      {
+        detail: "an active-refresh Git intent must bind its exact planned attempt",
+        value: { ...encodedWorktreeRead, authority: foreignAuthority }
+      }
     ]) {
-      const failure = yield* Schema.decodeUnknownEffect(ActiveWorkAuthorityRefreshGitReadOperation)(
-        contradictoryOperation
-      ).pipe(Effect.flip)
-      expect(failure._tag).toBe("SchemaError")
+      const failure = yield* Schema.decodeUnknownEffect(ActiveWorkAuthorityRefreshGitReadOperation)(value).pipe(
+        Effect.flip
+      )
+      expect(String(failure)).toContain(detail)
     }
     const encodedFailureEvent = Schema.encodeUnknownSync(WorkflowJournalEvent)(worktreeFailure)
     if (encodedFailureEvent._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
@@ -1076,7 +1107,9 @@ it.effect("rejects every contradictory active-refresh identity after decoding th
       ...encodedFailureEvent,
       authority: foreignAuthority
     }).pipe(Effect.flip)
-    expect(eventFailure._tag).toBe("SchemaError")
+    expect(String(eventFailure)).toContain(
+      "active-refresh Git failure must bind one exact attempt, authority, and ordinal"
+    )
 
     const targetRead = makeActiveWorkAuthorityRefreshGitReadOperation(
       makeTargetLineageObservationOperation({
@@ -1141,14 +1174,26 @@ it.effect("rejects every contradictory active-refresh identity after decoding th
       }
     ]
 
-    for (const contradictory of [...contradictoryWorktreeOccurrences, ...contradictoryTargetOccurrences]) {
+    for (const { detail, value } of contradictoryWorktreeIdentities) {
+      const failure = yield* decodeWorkflowOccurrence(value).pipe(Effect.flip)
+      expect(String(failure)).toContain(detail)
+    }
+    for (const contradictory of contradictoryWorktreeSubjects) {
       const failure = yield* decodeWorkflowOccurrence(contradictory).pipe(Effect.flip)
-      expect(failure._tag).toBe("SchemaError")
+      expect(String(failure)).toContain(
+        "active-refresh worktree failure occurrence must name the exact planned worktree"
+      )
+    }
+    for (const contradictory of contradictoryTargetOccurrences) {
+      const failure = yield* decodeWorkflowOccurrence(contradictory).pipe(Effect.flip)
+      expect(String(failure)).toContain(
+        "active-refresh target-lineage failure occurrence must name the exact target and planned Base SHA"
+      )
     }
   })
 )
 
-it.effect("rejects an active-refresh Git failure with a missing or mismatched earlier intent", () =>
+it.effect("rejects a coordinator's active-refresh failure when its exact Git intent is absent", () =>
   Effect.gen(function* () {
     const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
     const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)

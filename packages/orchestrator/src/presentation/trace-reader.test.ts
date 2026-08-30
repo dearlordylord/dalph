@@ -822,66 +822,69 @@ it.effect("indexes completion lookup and candidate ancestry roles in the public 
   })
 )
 
-it.effect("maps a missing active-refresh Git intent through complete, history, and cursor reads", () =>
-  Effect.gen(function* () {
-    const authority = ActiveWorkAuthorityRefreshAuthority.make({
-      attemptId: integrationPlannedAttempt.attemptId,
-      runId
-    })
-    const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-    const operation = makeActiveWorkAuthorityRefreshGitReadOperation(
-      makeTaskWorktreeObservationOperation({
-        operationId: OperationId.make("trace-reader-active-refresh-without-intent"),
-        plannedAttempt: integrationPlannedAttempt,
-        predecessorOperationIds: []
-      }),
-      authority,
-      ordinal
-    )
-    const failureEvent = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-      authority,
-      failure: new GitWorktreeReadFailure({
-        detail: "the committed prefix omitted the Git intent",
-        worktree: integrationPlannedAttempt.worktree
-      }),
-      occurrenceClassification: "NonActionOccurrence",
-      operation,
-      ordinal,
-      source: "Timer",
-      version: workflowJournalEventVersion
-    })
-    const beginningEvent = WorkflowRunBeganEvent.make({
-      initialControlPolicy: initialPolicy,
-      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-      occurrenceClassification: "InitiatedAction",
-      target,
-      version: workflowJournalEventVersion
-    })
-    const records: ReadonlyArray<JournalRecord> = [
-      {
-        event: beginningEvent,
-        key: describeJournalEvent(beginningEvent).expectedKey,
-        position: JournalPosition.make(1),
+it.effect(
+  "returns the same projection failure when a coordinator records a Git failure without its refresh intent",
+  () =>
+    Effect.gen(function* () {
+      const authority = ActiveWorkAuthorityRefreshAuthority.make({
+        attemptId: integrationPlannedAttempt.attemptId,
         runId
-      },
-      {
-        event: failureEvent,
-        key: describeJournalEvent(failureEvent).expectedKey,
-        position: JournalPosition.make(2),
-        runId
-      }
-    ]
-    const reader = readerFromRecords(records)
-    const historyFailure = yield* reader.read(runId).pipe(Effect.flip)
-    expect(historyFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
-    const cursorFailure = yield* reader
-      .readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
-      .pipe(Effect.flip)
-    expect(cursorFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
-  })
+      })
+      const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
+      const operation = makeActiveWorkAuthorityRefreshGitReadOperation(
+        makeTaskWorktreeObservationOperation({
+          operationId: OperationId.make("trace-reader-active-refresh-without-intent"),
+          plannedAttempt: integrationPlannedAttempt,
+          predecessorOperationIds: []
+        }),
+        authority,
+        ordinal
+      )
+      const failureEvent = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
+        authority,
+        failure: new GitWorktreeReadFailure({
+          detail: "the committed prefix omitted the Git intent",
+          worktree: integrationPlannedAttempt.worktree
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operation,
+        ordinal,
+        source: "Timer",
+        version: workflowJournalEventVersion
+      })
+      const beginningEvent = WorkflowRunBeganEvent.make({
+        initialControlPolicy: initialPolicy,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        target,
+        version: workflowJournalEventVersion
+      })
+      const records: ReadonlyArray<JournalRecord> = [
+        {
+          event: beginningEvent,
+          key: describeJournalEvent(beginningEvent).expectedKey,
+          position: JournalPosition.make(1),
+          runId
+        },
+        {
+          event: failureEvent,
+          key: describeJournalEvent(failureEvent).expectedKey,
+          position: JournalPosition.make(2),
+          runId
+        }
+      ]
+      const reader = readerFromRecords(records)
+      const historyFailure = yield* reader.read(runId).pipe(Effect.flip)
+      expect(historyFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+      expect(historyFailure.detail).toContain("GitOutcomeWithoutReadIntent")
+      const cursorFailure = yield* reader
+        .readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
+        .pipe(Effect.flip)
+      expect(cursorFailure).toEqual(historyFailure)
+    })
 )
 
-it.effect("rejects a finality acknowledgement whose nested request identity contradicts its request", () =>
+it.effect("rejects the coordinator's acknowledgement when it names a different completion request", () =>
   Effect.gen(function* () {
     const records = historicalLookupRecords()
     const lost = records.find(({ event }) => event._tag === "CompletionTaskResponseLost")
@@ -897,17 +900,25 @@ it.effect("rejects a finality acknowledgement whose nested request identity cont
       request: lost.event.request,
       version: workflowJournalEventVersion
     })
-    const malformed = records.map((item) =>
-      item === lost ? { ...item, event: acknowledgement, key: describeJournalEvent(acknowledgement).expectedKey } : item
-    )
+    const malformed = records
+      .filter(({ position }) => position <= lost.position)
+      .map((item) =>
+        item === lost
+          ? { ...item, event: acknowledgement, key: describeJournalEvent(acknowledgement).expectedKey }
+          : item
+      )
     const failure = yield* readerFromRecords(malformed)
-      .readAt(TraceCursor.make({ position: JournalPosition.make(32), runId: integrationFinalityFixture.runId }))
+      .readAt(TraceCursor.make({ position: lost.position, runId: integrationFinalityFixture.runId }))
       .pipe(Effect.flip)
-    expect(failure).toMatchObject({ _tag: "TraceProjectionInvalid", runId: integrationFinalityFixture.runId })
+    expect(failure).toMatchObject({
+      _tag: "TraceProjectionInvalid",
+      detail: "completion acknowledgement names another task or request",
+      runId: integrationFinalityFixture.runId
+    })
   })
 )
 
-it.effect("rejects a later top-level read that reuses a nested finality operation identity", () =>
+it.effect("rejects a tracker read when its operation ID already identifies the completion lookup", () =>
   Effect.gen(function* () {
     const records = historicalLookupRecords()
     const lookup = records.find(({ event }) => event._tag === "CompletionTaskRequestLookupIntended")
