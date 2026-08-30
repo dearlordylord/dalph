@@ -491,9 +491,16 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
         makeFocusedTaskClaimFactsObserved(observationOperation, activeClaim)
       )
     }
+    const mismatchedReadKind: JournalRecord = {
+      event: taskTrackerReadIntent(makeTrackerGraphObservationOperation(observationOperation.operationId, target)),
+      key: JournalRecordKey.make("route-matrix-cancelled-claim-mismatched-read-kind"),
+      position: JournalPosition.make(3),
+      runId
+    }
     const cases: ReadonlyArray<ReadonlyArray<JournalRecord>> = [
       [cancellation, readIntent, observation],
       [cancellation, relinquished, readIntent],
+      [cancellation, relinquished, mismatchedReadKind, observation],
       [cancellation, relinquished, noPredecessorRead, noPredecessorObservation],
       [cancellation, relinquished, readIntent, exactObservation],
       yield* Ref.get(records)

@@ -483,6 +483,73 @@ it.effect("active refresh performs mandatory G2 once after its typed completion 
   )
 )
 
+it.effect("keeps a new active-refresh G2 nonterminal when its accepted publication is incomplete", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cases = ["MissingAcceptedPosition", "Passive", "OwnershipConflict"] as const
+      yield* Effect.forEach(cases, (kind) =>
+        Effect.gen(function* () {
+          const base = yield* baseEvaluation
+          const currentSnapshot = snapshot(`active-G2-contract-${kind}`, [
+            { id: TaskId.make("A"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+          ])
+          const g1 = graph(`active-G2-contract-${kind}-G1`, 1, currentSnapshot)
+          const attemptId = AttemptId.make(`active-G2-contract-${kind}-attempt`)
+          const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
+            _tag: "ActiveRefreshRuntimeBoundary",
+            runId,
+            reconciledAttempts: [{ runId, attemptId }]
+          }
+          const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+            ...withRunFacts(evaluation(base, g1), false),
+            activeRefreshBoundary: boundary
+          })
+          const interpreter = Layer.mock(WorkflowInterpreter, {
+            readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) => {
+              const g2 = graph(operation.operationId, 4, currentSnapshot)
+              const proposal = freshGraphReadProposal(g2)
+              const accepted = { ...withRunFacts(evaluation(base, g2), false), activeRefreshBoundary: boundary }
+              const next: DeliveryRuntimeEvaluation =
+                kind === "MissingAcceptedPosition"
+                  ? { ...accepted, acceptedAt: null }
+                  : kind === "Passive"
+                    ? { ...accepted, quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" } }
+                    : {
+                        ...accepted,
+                        proposedActions: {
+                          _tag: "DeliveryProposalOwnershipConflict",
+                          conflicts: [
+                            { id: proposal.id, order: proposal.order, owners: ["TrackerGraph", "TicketDelivery"] }
+                          ]
+                        }
+                      }
+              return SubscriptionRef.set(state, next).pipe(Effect.as(currentSnapshot))
+            }
+          })
+
+          const proof = yield* runStabilizedDelivery(
+            target,
+            signalOf(state),
+            activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
+          ).pipe(
+            Effect.provide(support),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({ execute: () => Effect.die("incomplete G2 must not execute an action") })
+            ),
+            Effect.provide(interpreter)
+          )
+
+          expect(proof).toEqual({
+            acceptedAt: kind === "MissingAcceptedPosition" ? null : JournalPosition.make(4),
+            decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+          })
+        })
+      )
+    })
+  )
+)
+
 it.effect("replays an intent-only G2 after a crash and allocates a fresh identity after its outcome", () =>
   Effect.scoped(
     Effect.gen(function* () {
