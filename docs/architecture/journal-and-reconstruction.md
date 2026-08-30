@@ -15,21 +15,30 @@ The task tracker and Git remain the owners of their current facts. The Dalph
 executor owns complete planned-attempt work and its normalized reports; its
 execution substrate owns agent-session and process observations. The Journal
 may contain observations exposed by those seams and exact workflow intents,
-but a continuation consults the owning seam whenever its protocol requires
+but a later action consults the owning seam whenever its protocol requires
 current evidence.
 
-The current controlled executor shares Dalph's process lifetime. A Dalph crash
-therefore stops that executor too. This milestone does not prove discovery,
-adoption, or safe classification of an independently surviving production
-executor session.
+The current controlled executor normally shares Dalph's process lifetime.
+Whole-host loss therefore destroys its projection and retains the exact
+responsibility fail-closed; Journal history cannot manufacture safe suspension
+or authorize another begin. The maintained coordinator-loss story uses an
+explicit controlled substrate that survives the coordinator cut so restart can
+project and reattach to the same exact executing attempt. This distinction does
+not prove discovery or adoption of an arbitrary production session.
 
 When a retained planned-attempt responsibility is reconstructed after an
-activation boundary, the Journal-backed recovery composition obtains fresh
-tracker and Git observations before continuing executor work. It records one
-generic continuation-authorization fact that witnesses those operation
-identities; the fact is durable history for validation but is deliberately not
-an occurrence projection or a recovery event. A cassette-only coordinator
-death control is scoped lifecycle input and is never journaled or reconstructed.
+activation boundary, the Journal-backed recovery composition projects the
+executor's current state for the exact Run and Attempt identities. Executing
+work is observed without another begin or resume command. Safely suspended work
+may resume only after the existing current tracker, claim, Git, control, and
+capacity rules select it. Terminal work follows its ordinary result protocol.
+An unavailable, unreadable, absent, or foreign projection retains the exact
+responsibility. Journal history preserves begin/resume/suspension intents and
+distinct accepted report transitions. Before Resume, it records one generic
+continuation-authorization fact that witnesses the exact current observation
+identities; that fact is durable validation history, not a recovery event or
+permission to allocate another attempt. A cassette-only coordinator-death
+control is scoped lifecycle input and is never journaled or reconstructed.
 
 ## Journal state and publication
 

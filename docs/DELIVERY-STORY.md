@@ -42,10 +42,13 @@ begin work. Three positions are held.
 **3.** Alice edits B's instructions in the tracker. The tracker derives a new
 instruction fingerprint for B; the graph is now `G₁`.
 
-**4.** Before next asking B's executor to continue, Dalph re-reads the graph and
+**4.** While B continues autonomously, the tracker's notification—or the
+existing bounded timer if that notification is lost—selects one ordinary
+refresh through the single Run freshness owner. Dalph re-reads the graph and
 B's instructions. B is still open, still in the target closure, still exactly
 claimed by Dalph, and its fingerprint has moved. Dalph asks B's executor to
-safely suspend. B keeps its position meanwhile.
+safely suspend. B keeps its position meanwhile. Executor reports do not trigger
+or define coverage for this read.
 
 **5.** B's executor reports its work resumable with nothing still running.
 Dalph releases B's position, preserves B's worktree and work in progress, and
@@ -59,14 +62,18 @@ its executor begins.
 keep working. The new ceiling binds the next admission, not the current
 holders.
 
-**8.** Dalph dies.
+**8.** The Dalph coordinator dies while the controlled executor substrate
+retains exact observable A, C and D work.
 
 **9.** Dalph restarts. It reconstructs A, C and D as held positions from
-journal history, continuing those same three attempts rather than planning
-replacements. B is still retained and still awaiting Alice. Capacity is two and
-three positions are held, so nothing new is admitted.
+journal history, read-only projects those same three executing attempts, and
+reattaches observers without another begin or resume command. B is still
+retained and still awaiting Alice. Capacity is two and three positions are
+held, so nothing new is admitted. Whole-host loss that destroys the executor
+projection is a separate fail-closed case, not this coordinator-loss beat.
 
-**10.** Alice closes C in the tracker without success. `G₂`. Dalph records the
+**10.** Alice closes C in the tracker without success. `G₂`. A notification or
+bounded timer selects the ordinary complete refresh; Dalph records the
 observation and asks C's executor to safely suspend.
 
 **11.** C safely suspends. Dalph releases its position and preserves the claim,
@@ -111,8 +118,10 @@ must independently authorize resumption. C needs a position and none is free.
 original attempt.
 
 **20.** Alice adds two tasks, F and G, to the tracker, both inside the target
-closure. `G₅`. Dalph's next complete read finds them eligible, and they wait for
-capacity behind the three tasks already running.
+closure. `G₅`. The next notification/timer-selected ordinary complete refresh
+finds them eligible, and they wait for capacity behind the three tasks already
+running. B, C, and D's executor reports prove only that their positions remain
+held.
 
 **21.** B, C and D report accepted results in turn. Each task releases its
 task-work position, passes through the same outer Integrator, Git qualification,
@@ -122,10 +131,10 @@ E, F, G in graph order.
 
 **22.** E, F and G report accepted results and each passes through that same
 production integration and completion-finality protocol. A later complete
-tracker read reports all seven tasks in `G₅` successfully complete with no
-claim left to clean up. No action is executable and no obligation is
-outstanding, so the coordinator returns `RunMayTerminate` and the Run may
-record normal termination.
+tracker read reports all seven tasks successfully complete. Separate focused
+claim evidence proves that no exact claim remains to clean up. No action is
+executable and no obligation is outstanding, so the coordinator returns
+`RunMayTerminate` and the Run may record normal termination.
 
 ## The state table
 
@@ -138,7 +147,7 @@ record normal termination.
 | 5 | B safely suspended | G₁ | 3 | A C | B | B | D10 D12 D16 |
 | 6 | D admitted | G₁ | 3 | A C D | B | B | D6 D13 D15 |
 | 7 | capacity 3 → 2 | G₁ | 2 | A C D | B | B | **D13** |
-| 8 | process loss | G₁ | 2 | — | — | — | D29 D30 |
+| 8 | coordinator loss; executor substrate remains observable | G₁ | 2 | — | — | — | D29 D30 |
 | 9 | restart | G₁ | 2 | A C D | B | B | **D31 D1 D3** |
 | 10 | C closed, asked to suspend | G₂ | 2 | A C D | B | B | D18 D24 |
 | 11 | C safely suspended | G₂ | 2 | A D | B C | B | D10 D12 D16 |

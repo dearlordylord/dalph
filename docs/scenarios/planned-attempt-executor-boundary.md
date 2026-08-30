@@ -26,11 +26,12 @@ executor-work responsibility began for run R, attempt `attempt-A-3`. It then
 records one Begin intent before calling the fake executor's Begin boundary.
 This
 initiated action belongs to `DalphCoordinator`; it does not claim that the
-executor accepted or started work. Dalph then passes that exact planned attempt
-to the controlled fake executor.
+executor accepted or started work. Dalph records one exact begin intent and
+passes that exact planned attempt to the controlled fake executor once.
 
 The fake executor first reports the attempt executing. Dalph records that
-first distinct non-action occurrence for the same pair. Later passive
+first distinct non-action occurrence for the same pair. The report proves the
+returned condition, not an executor-internal initiating action. Later passive
 observations do not issue another work command, and unchanged executing facts
 do not append an observation event or another lifecycle report and leave the
 accepted journal position unchanged. When the fake returns one terminal
@@ -57,7 +58,8 @@ executor response survives to retry.
 ### Acceptance-test mapping
 
 - `drives one planned attempt through the generic executor boundary` proves
-  Begin, executing, passive observation, and terminal projections using
+  Begin-once, executing, unchanged passive observation, and terminal
+  projections using
   `RunId` plus `AttemptId`.
 - `classifies Dalph beginning executor-work responsibility separately from
   executor reports` proves the coordinator action and non-action reports
@@ -128,9 +130,11 @@ The process dies, so the fake executor dies with Dalph. On restart, Dalph folds
 the journal and reconstructs the same planned-attempt responsibility. A fake
 executor report cannot survive that shared-process crash. This milestone does
 not use the recreated fake as proof that the old work continued and does not
-send another Begin command. Production executors with independently surviving
-state reconcile the exact command or passively observe the exact attempt as
-specified by issue 264.
+send another Begin command. Absence of executor state authorizes neither Begin
+nor Resume; the responsibility and position remain held until exact safe or
+terminal evidence is accepted. Production executors with independently
+surviving state reconcile the exact command or passively observe the exact
+attempt as specified by issue 264.
 
 ### Visible and forbidden result
 
@@ -148,6 +152,8 @@ do not apply here.
 - `reconciles a lost begin response and never repeats the once-only begin`
   proves the generic restart rule; the controlled fake has no independent
   post-crash state to recover.
+- `retains the exact responsibility when whole-host loss leaves no executor projection`
+  proves whole-host loss fails closed rather than manufacturing resumability.
 
 ## A stage-name-free fake drives generic orchestration
 

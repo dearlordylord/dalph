@@ -91,14 +91,17 @@ second tracker lifecycle and no durable wake/frontier/UI record.
 
 The tracker notification, accepted-fact publication, and Alice's Wake arrive
 close together. Each calls the owner's hint boundary with a different
-non-authoritative hint kind. The owner atomically coalesces them into one
-activation request, invokes fresh Run establishment and activation once, and
-keeps the activation fiber as the one process-local owner for R. If another
-hint arrives while the activation is in a tracker or Git boundary, the owner
-sets one trailing-check marker. It does not start a concurrent activation.
-After the current activation returns, the owner performs no more than one
-later establishment/activation for all hints in that interval; duplicate
-hints after the marker is consumed form the next coalesced request.
+non-authoritative hint kind. The owner atomically coalesces them. If no
+activation is live, it invokes fresh Run establishment and activation once and
+keeps that fiber as the one process-local owner for R. If an activation is
+live, it offers at most one coalesced refresh opportunity to that activation's
+bridge: the existing tracker-observation coordinator serializes the read, the
+existing graph traversal performs it, and normalized facts enter the existing
+graph relation. This is not a second activation and this owner does not
+implement the tracker-read protocol. If the activation cannot accept the
+opportunity or finishes during handoff, the owner retains at most one trailing
+establishment/activation. Duplicate hints after that marker is consumed form
+the next coalesced request.
 
 If Alice sends Wake while the application Exit cutoff is closed, the owner
 does not acquire a new forward-progress owner. If Alice Pauses R, the owner
@@ -115,8 +118,10 @@ authorize work, continue polling while paused, or reactivate a terminated Run.
 ### Acceptance-test mapping
 
 - `coalesces concurrent hints behind one activation` proves the
-  tracker/publication/Operator hints coalesce, never overlap, and produce only
-  one trailing current check.
+  tracker/publication/Operator hints coalesce and never overlap.
+- `routes a hint into one serialized refresh while the activation remains live`
+  proves the in-activation bridge uses the existing read stack and starts no
+  second activation.
 - `publishes an accepted delivery fact through the bootstrap's attached Run
   observer` proves the repository's accepted-fact publication adapter invokes
   the attached owner hint after the runtime publication boundary.
@@ -138,6 +143,48 @@ authorize work, continue polling while paused, or reactivate a terminated Run.
 - `treats terminated history as closure and never schedules a fresh
   activation` proves that already-terminated history is not endlessly
   observed as a retryable failure.
+
+## Alice edits instructions while executor work remains active
+
+### Starting situation, trigger, and ordered boundary calls
+
+Alice maintains Task B. B's exact planned attempt is autonomously executing
+from fingerprint F1 and holds one task-work position. One activation of Run R
+is live. Alice edits B's title or body, so the tracker derives F2.
+
+The tracker notification, or the configured bounded timer if that notification
+is lost, gives this owner one non-authoritative refresh opportunity. The owner
+coalesces it and uses the live activation bridge. The existing tracker-read
+stack records and performs one complete refresh; linked focused reads for the
+bounded active-attempt set prove whether any authored fingerprint changed.
+Only B's focused F2 result selects the existing exact suspension protocol.
+Executor reports prove executor state and may use the generic publication hint
+stream as a latency optimization, but they neither trigger the graph read nor
+define its coverage.
+
+If the refresh is incomplete, contradictory, failed, or unreadable, Dalph
+exposes the typed result, starts no work from it, and does not suspend healthy
+executing B from uncertainty. A later independent notification or timer reads
+freshly after the existing cooldown. The explicit cost is that obsolete work
+may continue until a later successful ordinary refresh.
+
+Pause suppresses later Run polling and refresh opportunities under its existing
+contract. Exit admits no new owner; an already-admitted interruptible tracker
+boundary follows the existing cutoff and ambiguity rules.
+
+### Visible and forbidden result
+
+Alice eventually sees B safely suspended with F1/F2 preserved, or sees the
+typed refresh failure while B continues. Dalph must not start a second
+activation, create one poller per executor, derive freshness from report
+frequency, hot-loop a failed read, or replace the later post-quiescence read.
+
+### Acceptance-test mapping
+
+- `coalesces notification timer and publication without a second activation`
+- `does not make executor reports graph authority`
+- `failed live refresh neither starts nor suspends work`
+- `suspends only the exact active attempt whose focused fingerprint changed`
 
 ## A transient tracker or Git read failure backs off without a hot loop
 

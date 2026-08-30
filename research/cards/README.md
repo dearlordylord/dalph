@@ -48,3 +48,4 @@ comparison. The main research thread owns synthesis.
 | [Kandev](./kandev-reliability-architecture.md) | Complete | Not run |
 | [Warren](./warren-reliability-architecture.md) | Complete | Not run |
 | [Burrow](./burrow-reliability-architecture.md) | Complete | Not run |
+| [Swarm Forge](./swarm-forge-reliability-architecture.md) | Complete | Not run |

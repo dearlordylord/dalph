@@ -277,14 +277,16 @@ be inferred from another obligation on the same ticket.
 _Avoid_: Generic draining reason, ticket-level blocker, progress percentage
 
 **Planned-attempt executor work**:
-The injected executor implementation's complete course of work for one planned task attempt.
-Dalph begins it once, may passively observe it or ask it to suspend, and may
-resume the same attempt only after an accepted safe-suspension rule selects
-that resume. In v1, the planned task attempt identifies this work at the
-generic executor boundary; Dalph does not allocate a second outer-invocation
-identity. The injected implementation's agents, reviewers, sessions, provider
-calls, commits, retries, and other private stages are not part of this outer
-contract.
+The injected executor implementation's complete course of work for one planned
+task attempt.
+Dalph begins a new attempt once. It may observe the current report, ask to
+suspend, or receive the outcome without commanding executing work again. It
+may resume only the same safely suspended attempt after an accepted rule
+selects it. None of these boundaries reveals an internal stage. In v1, the
+planned task attempt identifies this work at the generic executor boundary;
+Dalph does not allocate a second outer-invocation identity. The injected
+implementation's agents, reviewers, sessions, provider calls, commits, retries,
+and other private stages are not part of this outer contract.
 _Avoid_: Executor outer invocation, review stage, worker process, workflow
 operation, repeated continuation command
 
@@ -319,7 +321,8 @@ _Avoid_: Accepted lifecycle transition, report ordinal, continuation permission
 
 **Planned-attempt executor-work correlation**:
 The exact `RunId` and `AttemptId` of the planned task attempt that Dalph uses
-across executor begin, observation, resume, safe suspension, and terminal outcome. An
+across executor begin, passive report observation, safe suspension, accepted
+same-attempt resume, and terminal outcome. An
 internal `OperationId`, coding-agent invocation, reviewer invocation, provider
 request, session, or worker process cannot replace or supplement this generic
 correlation.
@@ -1236,6 +1239,15 @@ It is distinct from the fingerprint of the complete task-graph observation.
 _Avoid_: Task version, version number, tracker revision, Git commit, journal
 position
 
+**Active-work tracker refresh opportunity**:
+A non-authoritative tracker notification or configured bounded timer occurrence
+selected and coalesced by the one Run reactivation owner while executor work is
+active. It enters the existing tracker-observation coordination and graph-read
+stack without starting a concurrent activation. Executor reports, caches, and
+the later post-quiescence finality read do not create or replace it.
+_Avoid_: Executor-progress read requirement, report coverage, per-executor poll,
+second scheduler
+
 **Active-task continuation read**:
 A task-tracker read covering the authored task-work specification, lifecycle,
 exact claim, target-closure membership, and complete blockers needed before
@@ -1252,6 +1264,15 @@ it does not allocate an attempt, create a recovery occurrence, or turn an
 unaccepted projection into lifecycle authority.
 _Avoid_: Recovery event, replacement-attempt permission, executor invocation,
 volatile restart flag
+
+**Executor work begin intent**:
+The durable exact intent recorded before Dalph asks an executor to begin one
+new planned attempt. While that attempt is executing, passive observation of
+the same report creates no later begin or resume intent. A separate resume
+intent is valid only for the same safely suspended attempt after its accepted
+resume rule and current facts permit it.
+_Avoid_: Continuation authorization, progress permission, observation request,
+command budget
 
 ## Executor-internal policy
 
