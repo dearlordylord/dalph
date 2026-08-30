@@ -52,6 +52,7 @@ import {
 import {
   IntegratorCandidateCleanupMutationResult,
   IntegratorCandidateCleanupObservation,
+  TestIntegratorCandidateCleanupBoundary,
   integratorCandidateCleanupTestLayer,
   runIntegratorCandidateCleanup
 } from "./integrator-candidate.js"
@@ -1297,7 +1298,8 @@ it.effect("rejects foreign, duplicate, and reordered FullRerun candidate provena
   )
 )
 
-it.effect("rejects a foreign FullRerun relation sharing the predecessor session after memory and SQLite reads", () => {
+it.effect("preserves a foreign FullRerun relation without boundary calls after memory and SQLite reads", () => {
+  const preservationReason = "multiple FullRerun successors describe one Integrator predecessor"
   const validateForeignHistory = (target: string) =>
     Effect.gen(function* () {
       const journal = yield* begin(target)
@@ -1309,7 +1311,9 @@ it.effect("rejects a foreign FullRerun relation sharing the predecessor session 
       const records = yield* journal.read(runId)
       const successorRecord = records.find(tag("IntegratorSuccessorSessionFixed"))
       expect(successorRecord).toBeDefined()
-      if (successorRecord === undefined) return "fixture is incomplete"
+      if (successorRecord === undefined) {
+        return { calls: undefined, outcome: undefined, validation: undefined }
+      }
 
       const foreignPredecessor = IntegratorSessionCorrelation.make({
         ...candidatePredecessor,
@@ -1336,20 +1340,35 @@ it.effect("rejects a foreign FullRerun relation sharing the predecessor session 
         foreignSuccessorEvent
       )
 
-      return validateIntegratorCandidateCleanupProvenance(yield* journal.read(runId), candidateAuthorization).detail
+      const foreignHistory = yield* journal.read(runId)
+      const validation = validateIntegratorCandidateCleanupProvenance(foreignHistory, candidateAuthorization)
+      const outcome = yield* runIntegratorCandidateCleanup(candidateAuthorization)
+      const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
+      return { calls, outcome, validation }
     })
 
   return Effect.gen(function* () {
-    const [memoryDetail, sqliteDetail] = yield* Effect.all(
+    const [memoryResult, sqliteResult] = yield* Effect.all(
       [
-        validateForeignHistory("issue-69-foreign-full-rerun-memory").pipe(Effect.provide(memoryJournalTestLayer)),
+        validateForeignHistory("issue-69-foreign-full-rerun-memory").pipe(
+          Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+          Effect.provide(memoryJournalTestLayer)
+        ),
         validateForeignHistory("issue-69-foreign-full-rerun-sqlite").pipe(
+          Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
           Effect.provide(sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))
         )
       ],
       { concurrency: 1 }
     )
-    expect(memoryDetail).toBe("multiple FullRerun successors describe one Integrator predecessor")
-    expect(sqliteDetail).toBe(memoryDetail)
+    for (const result of [memoryResult, sqliteResult]) {
+      expect(result.validation).toEqual({ _tag: "Invalid", detail: preservationReason })
+      expect(result.outcome).toEqual({
+        _tag: "Preserved",
+        authorization: candidateAuthorization,
+        reason: preservationReason
+      })
+      expect(result.calls).toEqual([])
+    }
   })
 })
