@@ -2091,6 +2091,98 @@ it.effect("#82 rejects a bare settlement and duplicate nested finality operation
   })
 )
 
+it.effect("#83 rejects a coordinator's cleanup or ancestry read when committed finality facts contradict it", () =>
+  Effect.gen(function* () {
+    const records = finalityRecords()
+    const releaseIntentRecord = records.find(
+      ({ position }) => position === JournalPosition.make(finalityPosition.originalReleaseIntent)
+    )
+    const deletionIntentRecord = records.find(
+      ({ position }) => position === JournalPosition.make(finalityPosition.deletionIntent)
+    )
+    const settlementRecord = records.find(({ position }) => position === JournalPosition.make(finalityPosition.settled))
+    if (
+      releaseIntentRecord?.event._tag !== "TaskClaimReleaseIntended" ||
+      deletionIntentRecord?.event._tag !== "CompletionClaimDeletionIntended" ||
+      settlementRecord?.event._tag !== "IntegrationFinalitySettled"
+    ) {
+      return yield* Effect.die("finality chronology fixture is incomplete")
+    }
+
+    const releaseIntent = releaseIntentRecord.event
+    const wrongClaimRelease = makeTaskClaimReleaseOperation({
+      authority: releaseIntent.operation.authority,
+      predecessorOperationIds: releaseIntent.operation.predecessorOperationIds,
+      release: {
+        ...releaseIntent.operation.release,
+        claim: ActiveTaskClaim.make({
+          ...releaseIntent.operation.release.claim,
+          token: ClaimToken.make("historical-wrong-original-claim-token")
+        })
+      }
+    })
+    const missingPredecessorRelease = makeTaskClaimReleaseOperation({
+      authority: releaseIntent.operation.authority,
+      predecessorOperationIds: releaseIntent.operation.predecessorOperationIds.filter(
+        (operationId) => operationId !== deletionIntentRecord.event.successObservation.operationId
+      ),
+      release: releaseIntent.operation.release
+    })
+    for (const { detail, operation } of [
+      {
+        detail: "completion cleanup release intent contradicts its exact original claim",
+        operation: wrongClaimRelease
+      },
+      {
+        detail: "completion cleanup release intent requires its exact claim and focused-success predecessors",
+        operation: missingPredecessorRelease
+      }
+    ]) {
+      const prefix = records
+        .slice(0, finalityPosition.originalReleaseIntent)
+        .map((item) =>
+          item.position === JournalPosition.make(finalityPosition.originalReleaseIntent)
+            ? withEvent(item, TaskClaimReleaseIntendedEvent.make({ operation, version: workflowJournalEventVersion }))
+            : item
+        )
+      const failure = yield* Effect.flip(
+        makeTraceReader({ read: () => Effect.succeed(prefix) }).readAt(
+          TraceCursor.make({
+            position: JournalPosition.make(finalityPosition.originalReleaseIntent),
+            runId: integrationFinalityFixture.runId
+          })
+        )
+      )
+      vitestExpect(failure).toMatchObject({ _tag: "TraceProjectionInvalid", detail })
+    }
+
+    const ancestryPosition = finalityPosition.graphObserved + 1
+    const authorization = PostPromotionBlockerClearAuthorization.make({
+      blockerClearedAt: JournalPosition.make(finalityPosition.graphObserved),
+      blockerObservedAt: JournalPosition.make(finalityPosition.graphReadIntent),
+      claim: settlementRecord.event.claim
+    })
+    const operationId = postPromotionBlockerAncestryOperationIdFor(authorization)
+    const ancestryIntent = PostPromotionBlockerCandidateAncestryReadIntendedEvent.make({
+      authorization,
+      operationId,
+      version: workflowJournalEventVersion
+    })
+    const ancestryFailure = yield* Effect.flip(
+      makeTraceReader({
+        read: () =>
+          Effect.succeed([...records, record(ancestryPosition, ancestryIntent, integrationFinalityFixture.runId)])
+      }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(ancestryPosition), runId: integrationFinalityFixture.runId })
+      )
+    )
+    vitestExpect(ancestryFailure).toMatchObject({
+      _tag: "TraceProjectionInvalid",
+      detail: "post-promotion blocker ancestry read lacks its exact promotion, blocker, and later-clear chronology"
+    })
+  })
+)
+
 it.effect("#82 retains the cleanup claim reread's deletion, replacement, and focused-read identities", () =>
   Effect.gen(function* () {
     const records = finalityRecords()
