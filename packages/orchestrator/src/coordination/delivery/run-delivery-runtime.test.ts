@@ -13,7 +13,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { Deferred, Effect, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
@@ -34,13 +35,29 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
 import {
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent
+} from "../../workflow/registry/event.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
+import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
@@ -97,6 +114,11 @@ import {
   plannedAttemptProtocolControllerLayer
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { ReconstructedRunState } from "../reconstruction/state.js"
+import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
+import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 
 const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
   integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
@@ -2043,9 +2065,103 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
       const pauseAcceptedAt = JournalPosition.make(15)
       const waitingTaskId = independentPlannedAttempt.taskId
       const occupiedTaskId = TaskId.make("post-g2-pause-capacity-holder")
+      const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
+      const safelySuspended = PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+        correlation: plannedAttemptExecutorCorrelation(independentPlannedAttempt)
+      })
+      const acquisition = {
+        operationId: OperationId.make("post-g2-pause-independent-acquisition"),
+        owner: ClaimOwner.make("dalph"),
+        taskId: waitingTaskId,
+        token: ClaimToken.make("post-g2-pause-independent-token")
+      }
+      const claimAcquisition = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+      const attemptPlan = makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("post-g2-pause-independent-plan"),
+        plannedAttempt: independentPlannedAttempt,
+        predecessorOperationIds: [acquisition.operationId]
+      })
+      const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: JournalPosition.make(position),
+        runId
+      })
+      const executorChronology = [
+        record(
+          7,
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimAcquisition, version: workflowJournalEventVersion })
+        ),
+        record(
+          8,
+          TaskClaimAcquiredEvent.make({
+            claim: ActiveTaskClaim.make(acquisition),
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(9, TaskAttemptPlannedEvent.make({ operation: attemptPlan, version: workflowJournalEventVersion })),
+        record(
+          10,
+          PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt: independentPlannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(
+          12,
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "Suspend",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: commandOrdinal,
+            plannedAttempt: independentPlannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(
+          13,
+          PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+            commandOrdinal,
+            observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+              report: safelySuspended
+            }),
+            occurrenceClassification: "NonActionOccurrence",
+            plannedAttempt: independentPlannedAttempt,
+            projectionOrdinal,
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+      const reconstructedB: ReconstructedRunState = {
+        appliedThrough: JournalPosition.make(13),
+        cancellation: { _tag: "RunCancellationNotApplied" },
+        controlPolicy: Option.none(),
+        graphKnowledge: { taskTrackerFacts: [] },
+        pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+        responsibility: {
+          entries: [
+            {
+              _tag: "PlannedAttemptExecutorWorkResponsibility",
+              beganAt: JournalPosition.make(10),
+              plannedAttempt: independentPlannedAttempt
+            }
+          ]
+        },
+        runId,
+        workflowHistory: { records: executorChronology }
+      }
+      const [bFacts] = deriveJournalResponsibilityFacts(reconstructedB)
+      if (
+        bFacts?._tag !== "PlannedAttemptExecutorFreshFacts" ||
+        bFacts.disposition._tag !== "Ready" ||
+        bFacts.disposition.acceptedProgress._tag !== "ExecutorProjectionAccepted"
+      ) {
+        return yield* Effect.die("B must be ready from its accepted safely suspended command projection")
+      }
       const waiting = recoveredProposalFor(
         RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
-          acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(13) },
+          acceptedProgress: bFacts.disposition.acceptedProgress,
           plannedAttempt: independentPlannedAttempt
         }),
         new Set(),
@@ -2095,6 +2211,14 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
           ]
         }
       } satisfies DeliveryRuntimeEvaluation
+      expect(requiredPlannedAttemptPositionsOf(reconstructedB)).toEqual([])
+      expect(acceptedG2.taskWork.held.map(({ taskId }) => taskId)).toEqual([occupiedTaskId])
+      expect(waiting.route).toMatchObject({
+        transition: {
+          acceptedProgress: { _tag: "ExecutorProjectionAccepted", observedAt: JournalPosition.make(13) },
+          plannedAttempt: independentPlannedAttempt
+        }
+      })
       const acceptedPause = {
         ...acceptedG2,
         acceptedAt: pauseAcceptedAt,
