@@ -3,7 +3,13 @@ import { Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import { outcomeRecordKey, targetPromotionObservedSuccessRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  taskClaimReacquisitionDirectedRecordKey,
+  targetPromotionObservedSuccessRecordKey
+} from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import {
@@ -52,6 +58,7 @@ import {
 import { integrationFinalityFixture as fixture, prerequisiteRecordEvents } from "./fixtures.js"
 import {
   makeCompletionTaskFactsObservationOperation,
+  makeTaskClaimAcquisitionOperation,
   makeTaskAttemptPlanOperation,
   makeTaskClaimReleaseOperation,
   TaskClaimReleaseAuthority
@@ -59,6 +66,8 @@ import {
 import {
   taskTrackerReadIntent,
   TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
   TaskClaimReleasedEvent,
   TaskClaimReleaseIntendedEvent
 } from "../../registry/event.js"
@@ -68,6 +77,13 @@ import {
   makeFocusedTaskCompletionFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../task-tracker-facts/observation.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ClaimToken } from "../../../authorities/task-tracker/claim.js"
+import {
+  TaskClaimReacquisitionDirectedEvent,
+  TaskClaimReacquisitionRequestId
+} from "../task-claim-reacquisition/events.js"
+import { taskClaimReacquisitionOperationId } from "../task-claim-reacquisition/plan.js"
 
 const replacementOperationId = OperationId.make("history-replacement-operation")
 const deletionOperationId = OperationId.make("history-deletion-operation")
@@ -402,6 +418,115 @@ it("rejects cleanup release or marker deletion when either exact cleanup read is
       )
     )
   ).toContainEqual(expect.stringContaining("completion-claim deletion attempt"))
+})
+
+it("rejects deletion proof when every active-record confirmation is absent", () => {
+  const records = validFinalityRecords().filter(
+    ({ event }) =>
+      event._tag !== "CompletionClaimDeletionReadObserved" ||
+      (event.purpose._tag !== "ConfirmOriginalClaimReleased" &&
+        event.purpose._tag !== "ConfirmNoActiveClaimAfterMarkerAbsent")
+  )
+  expect(completeValidationErrors(records)).toContainEqual(expect.stringContaining("completion-claim deletion outcome"))
+})
+
+it("rejects cleanup release intent with a different release or missing causal predecessor", () => {
+  const records = validFinalityRecords()
+  const releaseIntent = records.find(({ event }) => event._tag === "TaskClaimReleaseIntended")
+  expect(releaseIntent?.event._tag).toBe("TaskClaimReleaseIntended")
+  if (releaseIntent === undefined || releaseIntent.event._tag !== "TaskClaimReleaseIntended") return
+
+  const wrongRelease = TaskClaimReleaseIntendedEvent.make({
+    operation: makeTaskClaimReleaseOperation({
+      ...cleanupReleaseOperation,
+      release: {
+        ...cleanupReleaseOperation.release,
+        claim: ActiveTaskClaim.make({
+          ...cleanupReleaseOperation.release.claim,
+          token: ClaimToken.make("history-wrong-completion-cleanup-token")
+        })
+      }
+    }),
+    version: workflowJournalEventVersion
+  })
+  const missingPredecessor = TaskClaimReleaseIntendedEvent.make({
+    operation: makeTaskClaimReleaseOperation({
+      ...cleanupReleaseOperation,
+      predecessorOperationIds: [fixture.activeClaim.operationId]
+    }),
+    version: workflowJournalEventVersion
+  })
+
+  const errorsFor = (event: JournalRecord["event"]) =>
+    completeValidationErrors(
+      records.map((candidate) => (candidate === releaseIntent ? { ...candidate, event } : candidate))
+    )
+
+  expect(errorsFor(wrongRelease)).toContain("completion cleanup release intent contradicts its exact original claim")
+  expect(errorsFor(missingPredecessor)).toContain(
+    "completion cleanup release intent requires its exact claim and focused-success predecessors"
+  )
+})
+
+it("accepts a completion claim authorized by the exact post-plan reacquisition", () => {
+  const requestId = TaskClaimReacquisitionRequestId.make("history-completion-claim-reacquisition")
+  const reacquiredClaim = ActiveTaskClaim.make({
+    ...fixture.activeClaim,
+    operationId: taskClaimReacquisitionOperationId(requestId),
+    token: ClaimToken.make("history-completion-claim-reacquired-token")
+  })
+  const reacquisition = makeTaskClaimAcquisitionOperation({
+    acquisition: reacquiredClaim,
+    authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId },
+    predecessorOperationIds: [fixture.activeClaim.operationId]
+  })
+  const claim = CompletionTaskClaim.make({ ...fixture.claim, originalClaim: reacquiredClaim })
+  const replacementIntent = CompletionClaimReplacementIntendedEvent.make({
+    claim,
+    operationId: replacementOperationId,
+    version: workflowJournalEventVersion
+  })
+  const records = [
+    record(
+      1,
+      TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion }),
+      outcomeRecordKey(fixture.activeClaim.operationId)
+    ),
+    record(
+      2,
+      TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion }),
+      attemptPlanRecordKey(fixture.plannedAttempt.attemptId)
+    ),
+    record(
+      3,
+      TaskClaimReacquisitionDirectedEvent.make({
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId,
+        subject: { runId: fixture.runId, taskId: fixture.taskId },
+        version: workflowJournalEventVersion
+      }),
+      taskClaimReacquisitionDirectedRecordKey(requestId)
+    ),
+    record(
+      4,
+      TaskClaimAcquisitionIntendedEvent.make({ operation: reacquisition, version: workflowJournalEventVersion }),
+      intentRecordKey(reacquiredClaim.operationId)
+    ),
+    record(
+      5,
+      TaskClaimAcquiredEvent.make({ claim: reacquiredClaim, version: workflowJournalEventVersion }),
+      outcomeRecordKey(reacquiredClaim.operationId)
+    ),
+    record(
+      6,
+      fixture.promotionSuccess,
+      targetPromotionObservedSuccessRecordKey(fixture.promotionCorrelation.requestId)
+    ),
+    record(7, replacementIntent)
+  ]
+
+  expect(validationErrors(records)).toEqual([])
 })
 
 it("rejects marker deletion when the current active-record read predates the exact marker reread", () => {

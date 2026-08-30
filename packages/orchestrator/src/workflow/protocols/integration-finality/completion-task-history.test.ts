@@ -35,8 +35,11 @@ import {
   CompletionTaskRequestOrdinal,
   CompletionTaskRejectedEvent,
   CompletionTaskResponseLostEvent,
+  PostPromotionBlockerCandidateAncestryReadIntendedEvent,
+  PostPromotionBlockerClearAuthorization,
   completionClaimReplacementOperationIdFor,
-  completionTaskRequestFor
+  completionTaskRequestFor,
+  postPromotionBlockerAncestryOperationIdFor
 } from "./events.js"
 
 const request = completionTaskRequestFor(fixture.claim)
@@ -247,6 +250,25 @@ const lostResponseReconciliationRecords = (
 it("accepts the exact completion authorization and lost-response reconciliation chronology", () => {
   const records = chronology()
   expect(records.flatMap((current) => invalidCompletionTaskHistory(current, records, fixture.runId) ?? [])).toEqual([])
+})
+
+it("rejects malformed post-promotion ancestry before dispatching completion history", () => {
+  const authorization = PostPromotionBlockerClearAuthorization.make({
+    blockerClearedAt: JournalPosition.make(3),
+    blockerObservedAt: JournalPosition.make(2),
+    claim: fixture.claim
+  })
+  const operationId = postPromotionBlockerAncestryOperationIdFor(authorization)
+  const malformed = record(
+    1,
+    PostPromotionBlockerCandidateAncestryReadIntendedEvent.make({
+      authorization,
+      operationId,
+      version: workflowJournalEventVersion
+    })
+  )
+
+  expect(invalidCompletionTaskHistory(malformed, [malformed], fixture.runId)).toMatchObject({ kind: "Semantic" })
 })
 
 it("dispatches a rejected numbered completion response through history validation", () => {

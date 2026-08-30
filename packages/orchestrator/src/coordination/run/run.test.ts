@@ -50,6 +50,7 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
         setTaskWorkCapacity: () => Effect.die("unused")
       },
       readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
+      activateActiveWorkAuthorityRefresh: () => Effect.die("unused"),
       registerAcceptedRunReactivationObservers: () => Effect.void
     })
 

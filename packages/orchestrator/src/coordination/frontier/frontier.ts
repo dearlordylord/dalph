@@ -507,6 +507,13 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
     readonly wakeCondition: "GitFactsObserved"
   }
+  /** A planned-attempt boundary was unreadable; retain the exact responsibility until a later reread. */
+  PlannedAttemptUnreadableFactWait: {
+    readonly boundary: "Executor" | "Git" | "TaskTracker"
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly taskId: TaskId
+    readonly wakeCondition: "BoundaryRereadSucceeded"
+  }
   PlannedAttemptTaskExternalSuccessConstraint: {
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly taskId: TaskId
@@ -784,6 +791,14 @@ const executorDecisionFor = (
           gitState,
           taskId: facts.responsibility.plannedAttempt.taskId,
           wakeCondition: "GitFactsObserved"
+        })
+      }),
+      UnreadableFactWait: ({ boundary }) => ({
+        explanation: FrontierExplanation.PlannedAttemptUnreadableFactWait({
+          boundary,
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "BoundaryRereadSucceeded"
         })
       }),
       TaskExternalSuccessConstraint: () => ({

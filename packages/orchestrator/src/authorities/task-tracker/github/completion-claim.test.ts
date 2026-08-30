@@ -486,10 +486,15 @@ it.effect("maps task-identity and digest failures before any unsafe completion m
     const invalid = prepareForTaskId(TaskId.make("not-a-github-task"))
     const inertClient = (_request: GithubGraphqlRequest) => Effect.die("invalid local evidence must not call GitHub")
     const invalidLayer = adapterLayer(inertClient)
-    const [readIdentityFailure, replacementIdentityFailure] = yield* Effect.all([
+    const [readIdentityFailure, markerIdentityFailure, replacementIdentityFailure] = yield* Effect.all([
       Effect.gen(function* () {
         return yield* (yield* CompletionClaimBoundary)
           .readTaskClaim(completionClaimReadRequestFor(invalid.claim))
+          .pipe(Effect.flip)
+      }).pipe(Effect.provide(invalidLayer)),
+      Effect.gen(function* () {
+        return yield* (yield* CompletionClaimBoundary)
+          .readCompletionClaimMarker(completionClaimReadRequestFor(invalid.claim))
           .pipe(Effect.flip)
       }).pipe(Effect.provide(invalidLayer)),
       Effect.gen(function* () {
@@ -499,6 +504,7 @@ it.effect("maps task-identity and digest failures before any unsafe completion m
       }).pipe(Effect.provide(invalidLayer))
     ])
     expect(readIdentityFailure).toBeInstanceOf(CompletionClaimReadFailure)
+    expect(markerIdentityFailure).toBeInstanceOf(CompletionClaimReadFailure)
     expect(replacementIdentityFailure).toBeInstanceOf(CompletionClaimReplacementFailure)
     if (replacementIdentityFailure instanceof CompletionClaimReplacementFailure) {
       expect(replacementIdentityFailure.outcome).toBe("DefinitelyNotApplied")
@@ -628,6 +634,89 @@ it.effect("classifies ambiguous create acknowledgements and refuses deletion whe
       expect(deletionFailure.outcome).toBe("DefinitelyNotApplied")
     }
   })
+)
+
+it.effect("deletes no completion marker when local identity or digest evidence cannot be proven", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const observationFor = (preparedClaim: CompletionTaskClaim) =>
+      FocusedCompletedTaskObservation.make({
+        ...integrationFinalityFixture.successObservation,
+        claim: preparedClaim,
+        taskId: preparedClaim.plannedAttempt.taskId,
+        taskRevision: preparedClaim.plannedAttempt.taskRevision
+      })
+    const invalid = prepareForTaskId(TaskId.make("not-a-github-completion-task"))
+    const invalidDeletion = completionClaimDeletionRequestFor(invalid.claim, observationFor(invalid.claim))
+    const noBoundaryCalls = (_request: GithubGraphqlRequest) =>
+      Effect.die("invalid local evidence must not call GitHub")
+    const invalidIdentity = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(invalidDeletion).pipe(Effect.flip)
+    }).pipe(Effect.provide(adapterLayer(noBoundaryCalls)))
+    expect(invalidIdentity).toMatchObject({ outcome: "DefinitelyNotApplied", request: invalidDeletion })
+
+    const observation = observationFor(prepared.claim)
+    const deletion = completionClaimDeletionRequestFor(prepared.claim, observation)
+    const fingerprint = yield* githubCompletionClaimFingerprintFor(crypto, prepared.claim)
+    const digestFailure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(deletion).pipe(Effect.flip)
+    }).pipe(
+      Effect.provide(
+        adapterLayer(
+          (request) =>
+            request._tag === "FindClaimLabel"
+              ? Effect.succeed(completionFindResponse(request, `1|sha256|${fingerprint}`))
+              : Effect.die("digest failure must happen before completion deletion"),
+          Layer.succeed(Crypto.Crypto, cryptoFailingAt(crypto, 1))
+        )
+      )
+    )
+    expect(digestFailure).toMatchObject({ outcome: "DefinitelyNotApplied", request: deletion })
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reports Unknown after one delete request when GitHub acknowledgement is not exact", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const observation = FocusedCompletedTaskObservation.make({
+      ...integrationFinalityFixture.successObservation,
+      claim: prepared.claim,
+      taskId: prepared.claim.plannedAttempt.taskId,
+      taskRevision: prepared.claim.plannedAttempt.taskRevision
+    })
+    const deletion = completionClaimDeletionRequestFor(prepared.claim, observation)
+    const fingerprint = yield* githubCompletionClaimFingerprintFor(crypto, prepared.claim)
+
+    for (const [name, response] of [
+      ["malformed", () => ({ body: "not-an-envelope" })],
+      ["rejected", () => ({ body: { errors: [{ message: "delete denied" }] } })],
+      ["mismatched", () => ({ body: { data: { deleteLabel: { clientMutationId: "another-completion-deletion" } } } })]
+    ] as const) {
+      const calls = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest>>([])
+      const layer = adapterLayer((request) =>
+        Ref.update(calls, (current) => [...current, request]).pipe(
+          Effect.andThen(
+            request._tag === "FindClaimLabel"
+              ? Effect.succeed(completionFindResponse(request, `1|sha256|${fingerprint}`))
+              : request._tag === "DeleteClaimLabel"
+                ? Effect.succeed(response())
+                : Effect.die("unexpected completion deletion request")
+          )
+        )
+      )
+      const failure = yield* Effect.gen(function* () {
+        return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(deletion).pipe(Effect.flip)
+      }).pipe(Effect.provide(layer))
+      expect(failure, name).toMatchObject({ outcome: "Unknown", request: deletion })
+      expect(
+        (yield* Ref.get(calls)).filter(
+          (request): request is Extract<GithubGraphqlRequest, { readonly _tag: "DeleteClaimLabel" }> =>
+            request._tag === "DeleteClaimLabel"
+        ),
+        name
+      ).toEqual([expect.objectContaining({ _tag: "DeleteClaimLabel", operationId: deletion.operationId })])
+    }
+  }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("stops after one throttled completion-claim create and preserves its operation identity", () =>

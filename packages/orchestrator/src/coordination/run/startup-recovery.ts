@@ -57,6 +57,7 @@ import {
 } from "../../workflow/protocols/disposition-cleanup/loop.js"
 import type { DispositionCleanupBoundaryServices } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
+import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -173,6 +174,7 @@ interface RunActivationContextInput {
   readonly completionTask: CompletionTaskBoundaryService | undefined
   readonly acceptedResultEvidenceStore: EvidenceStoreService | undefined
   readonly cleanupActivation: boolean
+  readonly opportunity: RunActivationOpportunity
 }
 
 const noCleanupActivation = (): DispositionCleanupActivationService => ({
@@ -194,6 +196,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   completionTask,
   integrationFinality,
   integrationTarget,
+  opportunity,
   runId,
   targetPromotion
 }: RunActivationContextInput) {
@@ -230,7 +233,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     integrationResources,
     targetPromotion,
     integrationFinality !== undefined,
-    completionTask !== undefined
+    completionTask !== undefined,
+    opportunity
   )
   // Ordinary activation reconstructs cleanup authority from the exact Run
   // journal before the caller receives its workflow context.  No caller-made
@@ -289,7 +293,8 @@ export const validatedRunActivationLayer = (
     CoordinatorOwnership
   > = preservingDispositionCleanupBoundaryLayer,
   acceptedResultEvidenceStore?: EvidenceStoreService,
-  cleanupActivation = true
+  cleanupActivation = true,
+  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ) =>
   Layer.effectContext(
     makeRunActivationContext({
@@ -299,6 +304,7 @@ export const validatedRunActivationLayer = (
       integrationFinality,
       completionTask,
       acceptedResultEvidenceStore,
-      cleanupActivation
+      cleanupActivation,
+      opportunity
     })
   ).pipe(Layer.provide(cleanupBoundaryLayer))

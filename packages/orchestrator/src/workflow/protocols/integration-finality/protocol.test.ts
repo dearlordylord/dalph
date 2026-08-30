@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { TaskId } from "@dalph/contracts"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -45,6 +45,7 @@ import {
   FocusedCompletedTaskObservation,
   ForeignCompletionClaim,
   completionClaimDeletionRequestFor,
+  completionOriginalTaskClaimReleaseFor,
   completionClaimDeletionOperationIdFor,
   completionClaimReplacementRequestFor,
   completionClaimReplacementOperationIdFor,
@@ -70,6 +71,7 @@ import { deriveIntegrationFinalityStateFor } from "./state.js"
 import { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/mutation-throttling.js"
 import {
   ActiveTaskClaim,
+  TaskClaimRelease,
   TaskClaimReadFailure,
   TaskClaimReleaseFailure
 } from "../../../authorities/task-tracker/claim-mutation.js"
@@ -81,6 +83,11 @@ const replacementOperationFor = completionClaimReplacementOperationIdFor
 const firstCleanupReadOrdinal = CompletionClaimCleanupReadOrdinal.make(1)
 
 type MutationOutcome = "Applied" | "DefinitelyNotApplied" | "Throttled" | "Unknown" | "UnknownApplied"
+
+class DecodedTaskClaimReleaseFailure extends Schema.TaggedError<DecodedTaskClaimReleaseFailure>()(
+  "TrackerMutation.TaskClaimReleaseFailure",
+  { detail: Schema.String, release: TaskClaimRelease }
+) {}
 
 const appendJournalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
   Layer.succeed(
@@ -351,10 +358,7 @@ const makeBoundary = (input: {
             : []
       )
     )
-    let completionClaims = new Map<
-      string,
-      Extract<CompletionClaimObservation, { readonly _tag: "CompletionTaskClaim" | "ForeignCompletionClaim" }>
-    >(
+    let completionClaims = new Map<string, CompletionTaskClaim | ForeignCompletionClaim>(
       input.initial.flatMap((claim) =>
         claim._tag === "CompletionTaskClaim" || claim._tag === "ForeignCompletionClaim"
           ? [[String(taskIdOf(claim)), claim] as const]
@@ -862,6 +866,52 @@ it.effect("fails closed on a foreign claim without attempting replacement", () =
   })
 )
 
+it.effect("rejects a foreign completion claim on ordinary and exhausted replacement rereads", () =>
+  Effect.gen(function* () {
+    const request = completionClaimReplacementRequestFor(fixture.claim)
+    const foreignCompletion = CompletionTaskClaim.make({
+      ...fixture.claim,
+      originalClaim: { ...fixture.activeClaim, operationId: OperationId.make("replacement-reread-foreign-completion") }
+    })
+    const replacementCalls = yield* Ref.make(0)
+    const deletionCalls = yield* Ref.make(0)
+    const readCalls = yield* Ref.make(0)
+    const directCompletionBoundary = (initial: CompletionClaimObservation) => {
+      const base = makeBoundary({ initial: [initial], replacementCalls, deletionCalls, readCalls })
+      return CompletionClaimBoundary.of({ ...base, readTaskClaim: () => Effect.succeed(initial) })
+    }
+
+    const ordinaryRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const ordinaryFailure = yield* runWith(
+      runCompletionClaimReplacementProtocol(directCompletionBoundary(foreignCompletion), request).pipe(Effect.flip),
+      ordinaryRecords
+    )
+    expect(ordinaryFailure).toBeInstanceOf(CompletionClaimOwnershipConflict)
+    expect(yield* Ref.get(replacementCalls)).toBe(0)
+
+    const exhaustedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    yield* runWith(
+      runCompletionClaimReplacementProtocol(
+        makeBoundary({
+          deletionCalls,
+          initial: [fixture.activeClaim],
+          readCalls,
+          replacement: ["Unknown", "Unknown", "Unknown"],
+          replacementCalls
+        }),
+        request
+      ).pipe(Effect.flip),
+      exhaustedRecords
+    )
+    const exhaustedFailure = yield* runWith(
+      runCompletionClaimReplacementProtocol(directCompletionBoundary(foreignCompletion), request).pipe(Effect.flip),
+      exhaustedRecords
+    )
+    expect(exhaustedFailure).toBeInstanceOf(CompletionClaimOwnershipConflict)
+    expect(yield* Ref.get(replacementCalls)).toBe(3)
+  })
+)
+
 it.effect("does not delete a different completion claim", () =>
   Effect.gen(function* () {
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
@@ -886,6 +936,116 @@ it.effect("does not delete a different completion claim", () =>
     )
     expect(failure).toBeInstanceOf(CompletionClaimOwnershipConflict)
     expect(yield* Ref.get(deletionCalls)).toBe(0)
+  })
+)
+
+it.effect("does not delete when the completion marker disappears or changes before the first delete", () =>
+  Effect.gen(function* () {
+    const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
+    const replacementOperationId = replacementOperationFor(fixture.claim)
+    const foreignMarker = ForeignCompletionClaim.make({
+      fingerprint: CompletionClaimFingerprint.make("e".repeat(64)),
+      taskId: fixture.taskId
+    })
+
+    for (const changedMarker of [CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId }), foreignMarker]) {
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        promotionRecord,
+        replacementRecord(),
+        ...focusedSuccessRecords
+      ])
+      const replacementCalls = yield* Ref.make(0)
+      const deletionCalls = yield* Ref.make(0)
+      const readCalls = yield* Ref.make(0)
+      const markerReads = yield* Ref.make(0)
+      const base = makeBoundary({ deletionCalls, initial: [fixture.claim], readCalls, replacementCalls })
+      const boundary = CompletionClaimBoundary.of({
+        ...base,
+        readCompletionClaimMarker: () =>
+          Ref.updateAndGet(markerReads, (count) => count + 1).pipe(
+            Effect.map((count) => (count === 1 ? fixture.claim : changedMarker))
+          )
+      })
+
+      const failure = yield* runWith(
+        runCompletionClaimDeletionProtocol(boundary, request, replacementOperationId).pipe(Effect.flip),
+        records
+      )
+      expect(failure).toBeInstanceOf(CompletionClaimOwnershipConflict)
+      expect(yield* Ref.get(deletionCalls)).toBe(0)
+      expect(tags(yield* Ref.get(records))).not.toContain("CompletionClaimDeletionAttemptIntended")
+      expect(tags(yield* Ref.get(records))).not.toContain("IntegrationFinalitySettled")
+    }
+  })
+)
+
+it.effect("maps original-claim release exhaustion, unreadable state, and rejection without marker deletion", () =>
+  Effect.gen(function* () {
+    const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
+    const replacementOperationId = replacementOperationFor(fixture.claim)
+    const initialRecords = [promotionRecord, replacementRecord(), ...focusedSuccessRecords]
+
+    const exhaustionRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const exhaustionReplacementCalls = yield* Ref.make(0)
+    const exhaustionDeletionCalls = yield* Ref.make(0)
+    const exhaustionReadCalls = yield* Ref.make(0)
+    const exhausted = yield* runWith(
+      runCompletionClaimDeletionProtocol(
+        makeBoundary({
+          deletionCalls: exhaustionDeletionCalls,
+          initial: [fixture.claim],
+          originalRelease: ["Unknown", "Unknown", "Unknown"],
+          readCalls: exhaustionReadCalls,
+          replacementCalls: exhaustionReplacementCalls
+        }),
+        request,
+        replacementOperationId
+      ).pipe(Effect.flip),
+      exhaustionRecords
+    )
+    expect(exhausted).toBeInstanceOf(CompletionClaimDidNotConverge)
+    expect(exhausted).toMatchObject({ attempts: 3, phase: "OriginalClaimRelease" })
+    expect(yield* Ref.get(exhaustionDeletionCalls)).toBe(0)
+
+    const unreadableRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const unreadableDeletionCalls = yield* Ref.make(0)
+    const unreadableBoundary = CompletionClaimBoundary.of({
+      deleteTaskClaim: () => Ref.update(unreadableDeletionCalls, (count) => count + 1),
+      readCompletionClaimMarker: () => Effect.succeed(fixture.claim),
+      readOriginalTaskClaim: () =>
+        Effect.fail(new TaskClaimReadFailure({ detail: "original claim is unreadable", taskId: fixture.taskId })),
+      readTaskClaim: () => Effect.succeed(fixture.claim),
+      releaseOriginalTaskClaim: () => Effect.die("unreadable original claim must stop before release"),
+      replaceTaskClaim: () => Effect.die("completion cleanup must not replace a claim")
+    })
+    const unreadable = yield* runWith(
+      runCompletionClaimDeletionProtocol(unreadableBoundary, request, replacementOperationId).pipe(Effect.flip),
+      unreadableRecords
+    )
+    expect(unreadable).toBeInstanceOf(CompletionClaimReadFailure)
+    expect(yield* Ref.get(unreadableDeletionCalls)).toBe(0)
+
+    const rejectedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const rejectedDeletionCalls = yield* Ref.make(0)
+    const decodedReleaseFailure = new DecodedTaskClaimReleaseFailure({
+      detail: "tracker decoded an exact typed release rejection",
+      release: completionOriginalTaskClaimReleaseFor(fixture.claim)
+    })
+    const rejectedBoundary = CompletionClaimBoundary.of({
+      deleteTaskClaim: () => Ref.update(rejectedDeletionCalls, (count) => count + 1),
+      readCompletionClaimMarker: () => Effect.succeed(fixture.claim),
+      readOriginalTaskClaim: () => Effect.succeed(fixture.activeClaim),
+      readTaskClaim: () => Effect.succeed(fixture.claim),
+      releaseOriginalTaskClaim: () => Effect.fail(decodedReleaseFailure),
+      replaceTaskClaim: () => Effect.die("completion cleanup must not replace a claim")
+    })
+    const rejected = yield* runWith(
+      runCompletionClaimDeletionProtocol(rejectedBoundary, request, replacementOperationId).pipe(Effect.flip),
+      rejectedRecords
+    )
+    expect(rejected).toBeInstanceOf(CompletionClaimDeletionFailure)
+    expect(rejected).toMatchObject({ outcome: "Unknown" })
+    expect(yield* Ref.get(rejectedDeletionCalls)).toBe(0)
   })
 )
 

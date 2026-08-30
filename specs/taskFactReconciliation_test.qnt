@@ -16,6 +16,23 @@ module taskFactReconciliationTest {
       .expect(state.factDecision == ContinueWork and changedFactsPreserveWip)
   }
 
+  run lifecycleReopenReestablishmentResetsRefreshProvenanceTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTimer)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(establishRunningAttemptForActiveRefresh)
+      .expect(and {
+        activeWorkRunningEstablishmentRetainsAuthority,
+        state.authorityReadPurpose == OrdinaryContinuationRead,
+        state.refreshSource == NoRefreshSource,
+        state.executorEvidence == ExactExecuting,
+        state.positionHeld,
+      })
+  }
+
   run membershipLossWaitsAfterSafeSuspensionTest = {
     init
       .then(observeMembershipLoss)
@@ -86,6 +103,57 @@ module taskFactReconciliationTest {
         unreadableClaimCannotAuthorizeReplacement,
         state.exactClaimHeld,
         state.independentTaskSelected,
+      })
+  }
+
+  run activeRefreshUnreadableDoesNotSuspendOrContinueTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTrackerNotification)
+      .then(observeUnreadableClaimDuringActiveRefresh)
+      .expect(and {
+        activeRefreshUnreadableAuthorizesNoExecutorAction,
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.constraint == NoConstraint,
+        state.executorEvidence == ExactExecuting,
+        state.positionHeld,
+        state.implementationResponsibilityRetained,
+      })
+      .then(selectIndependentTaskB)
+      .expect(and {
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.independentTaskSelected,
+    })
+  }
+
+  run activeRefreshHealthyDoesNotAuthorizeAnotherExecutorActionTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .expect(activeWorkRunningEstablishmentRetainsAuthority)
+      .then(offerActiveWorkAuthorityRefreshFromTimer)
+      .then(observeHealthyActiveWorkRefresh)
+      .expect(and {
+        healthyActiveRefreshAuthorizesNoExecutorAction,
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.constraint == NoConstraint,
+        state.executorEvidence == ExactExecuting,
+        state.positionHeld,
+        state.implementationResponsibilityRetained,
+    })
+  }
+
+  run activeRefreshGitFailuresRemainUnreadableAndNoActionTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTrackerNotification)
+      .then(observeActiveRefreshGitFailures)
+      .expect(and {
+        activeRefreshGitFailuresAuthorizeNoExecutorAction,
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.constraint == NoConstraint,
+        state.executorEvidence == ExactExecuting,
+        state.positionHeld,
+        state.implementationResponsibilityRetained,
       })
   }
 

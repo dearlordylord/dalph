@@ -6,6 +6,10 @@ import type {
   IntegrationResponsibility,
   StartedIntegrationResponsibility
 } from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  activeWorkAuthorityRefreshGitReadOperationMatchesBoundary,
+  type ActiveWorkAuthorityRefreshGitReadOperation
+} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "../activation/selected-transition.js"
 import {
   runnableTransitionOperationId,
@@ -357,13 +361,18 @@ const recoveredRouteProposalOf = (
   context: ProposalContext,
   newAction: NewRecoveredWorkflowAction | undefined,
   operationId: OperationId | undefined,
-  transition: RunnableFrontierTransition
+  transition: RunnableFrontierTransition,
+  preservePreselectedOperationId = false
 ): DerivedProposal => {
   if (newAction !== undefined) {
     const route: FreshOperationRoute = { _tag: "RecoveredNewActionRoute", action: newAction }
     return {
       _tag: "ProposalDerived",
-      proposal: { ...proposalBase(context, route), actionIdentity: recoveredIdentityFor(newAction), route }
+      proposal: {
+        ...proposalBase(context, route),
+        actionIdentity: recoveredIdentityFor(newAction, operationId, preservePreselectedOperationId),
+        route
+      }
     }
   }
   if (operationId !== undefined) {
@@ -390,10 +399,26 @@ const recoveredRouteProposalOf = (
   }
 }
 
+const activeRefreshPendingGitReadOperationFor = (
+  transition: RunnableFrontierTransition,
+  pendingOperations: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
+): ActiveWorkAuthorityRefreshGitReadOperation | undefined => {
+  if (
+    transition._tag !== "ObservePlannedAttemptContinuationWorktree" &&
+    transition._tag !== "ObservePlannedAttemptContinuationTargetLineage"
+  ) {
+    return undefined
+  }
+  return pendingOperations.find((activeOperation) =>
+    activeWorkAuthorityRefreshGitReadOperationMatchesBoundary(activeOperation, transition.operation)
+  )
+}
+
 const recoveredProposalOf = (
   acceptedOperationIds: ReadonlySet<OperationId>,
   context: ProposalContext,
-  transition: RunnableFrontierTransition
+  transition: RunnableFrontierTransition,
+  activeRefreshPendingGitReadOperations: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
 ): DerivedProposal => {
   if (isFreshProvenanceTransition(transition)) return missingProvenance(transition)
   if (isAcceptedOperationTransition(transition)) {
@@ -406,6 +431,19 @@ const recoveredProposalOf = (
       : missingAcceptedOperation(operationId, transition)
   }
   const operationId = operationIdOf(transition)
+  const activeRefreshPendingGitReadOperation = activeRefreshPendingGitReadOperationFor(
+    transition,
+    activeRefreshPendingGitReadOperations
+  )
+  if (activeRefreshPendingGitReadOperation !== undefined) {
+    return recoveredRouteProposalOf(
+      context,
+      newRecoveredActionOf(transition),
+      activeRefreshPendingGitReadOperation.operationId,
+      transition,
+      true
+    )
+  }
   const isAcceptedOperation = operationId !== undefined && acceptedOperationIds.has(operationId)
   const newAction = isAcceptedOperation ? undefined : newRecoveredActionOf(transition)
   return recoveredRouteProposalOf(context, newAction, operationId, transition)
@@ -429,6 +467,7 @@ const appendDerived = (contributions: MutableDeliveryProposalContributions, deri
 interface DeliveryProposalDerivationFrame {
   readonly acceptedAt: DeliveryProposalsInput["acceptedAt"]
   readonly acceptedOperationIds: DeliveryProposalsInput["acceptedOperationIds"]
+  readonly activeRefreshPendingGitReadOperations: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
   readonly freshByTransition: ReadonlyMap<string, FreshDecision>
   readonly integrationResponsibilities: ReadonlyArray<IntegrationResponsibility>
   readonly responsibilities: ReadonlyArray<WorkflowResponsibilityEntry>
@@ -470,7 +509,12 @@ const appendContributionForTransition = (
   appendDerived(
     contributions,
     fresh === undefined
-      ? recoveredProposalOf(frame.acceptedOperationIds, context, transition)
+      ? recoveredProposalOf(
+          frame.acceptedOperationIds,
+          context,
+          transition,
+          frame.activeRefreshPendingGitReadOperations
+        )
       : freshProposalOf(context, fresh)
   )
 }
@@ -480,6 +524,7 @@ export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProp
   const frame: DeliveryProposalDerivationFrame = {
     acceptedAt: input.acceptedAt,
     acceptedOperationIds: input.acceptedOperationIds,
+    activeRefreshPendingGitReadOperations: input.activeRefreshPendingGitReadOperations ?? [],
     freshByTransition: new Map(input.fresh.map((decision) => [freshDecisionKey(input.runId, decision), decision])),
     integrationResponsibilities: input.integrationResponsibilities ?? [],
     responsibilities: input.responsibilities ?? [],

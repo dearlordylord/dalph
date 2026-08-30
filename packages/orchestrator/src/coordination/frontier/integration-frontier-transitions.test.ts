@@ -90,11 +90,13 @@ import { deriveIntegrationFrontier } from "./integration-frontier.js"
 import { deriveStartedIntegrationFrontier } from "./integration-frontier-transitions.js"
 import { RunnableFrontierTransition } from "./frontier.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
+import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 
 const runId = RunId.make("integration-frontier-retry-run")
 const notAppliedCancellation = { _tag: "RunCancellationNotApplied" as const }
+const exactClaimAuthority: CurrentTaskClaimAuthority = { _tag: "Exact" }
 const taskId = TaskId.make("integration-frontier-retry-task")
 const attemptId = AttemptId.make("integration-frontier-retry-attempt")
 const target = IntegrationTarget.make({
@@ -409,7 +411,7 @@ const transitionsFor = (scenario: ReturnType<typeof retryHistory>) =>
       targetLineageByAttemptId: new Map([[attemptId, scenario.currentLineage]]),
       targetLineageRefreshRequiredAttemptIds: new Set(),
       targetPromotionConfigured: true,
-      taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+      taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]])
     },
     [responsibility]
   ).transitions()
@@ -477,6 +479,147 @@ it("releases the target before an initial Integrator run when fresh lineage is i
       [responsibility]
     ).transitions()
   ).toEqual([RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })])
+})
+
+it("keeps unobserved claims and absent durable lineage waiting without starting Integrator", () => {
+  const records = firstStartedResponsibilityRecords()
+  const runState: ReconstructedRunState = {
+    appliedThrough: JournalPosition.make(2),
+    controlPolicy: Option.none(),
+    graphKnowledge: { taskTrackerFacts: [] },
+    pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    cancellation: notAppliedCancellation,
+    responsibility: { entries: [] },
+    runId,
+    workflowHistory: { records }
+  }
+  const baseFacts = {
+    activeResponsibilityPositions: new Set<JournalPosition>(),
+    currentTrackerTaskIds: new Set([taskId]),
+    heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+    integrationTarget: Option.some(target),
+    targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>()
+  }
+
+  const unobserved = deriveStartedIntegrationFrontier(
+    runState,
+    {
+      ...baseFacts,
+      targetLineageByAttemptId: new Map([[attemptId, lineage(fixedHead)]]),
+      taskClaimAuthorityByAttemptId: new Map()
+    },
+    [responsibility]
+  )
+  expect(unobserved.claimConstraintFor(responsibility)).toEqual({ _tag: "Unobserved" })
+  expect(unobserved.transitions()).toEqual([])
+
+  const noCurrentLineage = deriveStartedIntegrationFrontier(
+    runState,
+    { ...baseFacts, taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]]) },
+    [responsibility]
+  )
+  expect(noCurrentLineage.transitions()).toEqual([])
+
+  const noDurableLineage = deriveStartedIntegrationFrontier(
+    runState,
+    {
+      ...baseFacts,
+      targetLineageByAttemptId: new Map([[attemptId, lineage(fixedHead)]]),
+      taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]])
+    },
+    [responsibility]
+  )
+  expect(noDurableLineage.transitions()).toEqual([])
+})
+
+it("explains incompatible lineage as a target rewrite after the fixed session", () => {
+  const scenario = unfinishedFirstSessionHistory()
+  const incompatibleLineage = TargetLineageObservation.make({
+    plannedBaseIsAncestorOfTargetHead: false,
+    plannedBaseSha: baseSha,
+    targetHeadSha: fixedHead
+  })
+  const analysis = deriveStartedIntegrationFrontier(
+    scenario.runState,
+    {
+      activeResponsibilityPositions: new Set(),
+      currentTrackerTaskIds: new Set([taskId]),
+      heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+      integrationTarget: Option.some(target),
+      targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
+      targetLineageRefreshRequiredAttemptIds: new Set(),
+      taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]])
+    },
+    [responsibility]
+  )
+
+  expect(analysis.explanationForStarted(responsibility)).toMatchObject({
+    _tag: "PlannedAttemptGitConstraint",
+    gitState: "TargetRewrite",
+    taskId
+  })
+})
+
+it("records CandidateRejected quarantine from the exact run result and candidate observation", () => {
+  const scenario = unfinishedFirstSessionHistory()
+  const result = IntegratorResult.cases.PreparedCandidate.make({
+    candidateText: preparedCandidateText,
+    correlation: scenario.session
+  })
+  const records = [
+    ...scenario.records,
+    record(
+      7,
+      IntegratorRunResultRecordedEvent.make({ result, run: scenario.run, version: workflowJournalEventVersion }),
+      integratorRunResultRecordedRecordKey(scenario.run)
+    ),
+    record(
+      8,
+      IntegratorRunCandidateGitReadIntendedEvent.make({
+        candidateText: preparedCandidateText,
+        run: scenario.run,
+        version: workflowJournalEventVersion
+      }),
+      integratorRunCandidateGitReadIntendedRecordKey(scenario.run, preparedCandidateText)
+    ),
+    record(
+      9,
+      IntegratorRunCandidateGitObservedEvent.make({
+        candidateText: preparedCandidateText,
+        observation: IntegratorGitObservation.cases.Missing.make({ candidateText: preparedCandidateText }),
+        run: scenario.run,
+        version: workflowJournalEventVersion
+      }),
+      integratorRunCandidateGitObservedRecordKey(scenario.run, preparedCandidateText)
+    )
+  ]
+  const runState = { ...scenario.runState, appliedThrough: JournalPosition.make(9), workflowHistory: { records } }
+  const transitions = deriveStartedIntegrationFrontier(
+    runState,
+    {
+      activeResponsibilityPositions: new Set(),
+      currentTrackerTaskIds: new Set(),
+      heldResponsibilityPositions: new Set(),
+      integrationTarget: Option.some(target),
+      targetLineageByAttemptId: new Map(),
+      targetLineageRefreshRequiredAttemptIds: new Set(),
+      taskClaimAuthorityByAttemptId: new Map()
+    },
+    [responsibility]
+  ).transitions()
+
+  expect(transitions).toEqual([
+    expect.objectContaining({
+      _tag: "RecordInitialConclusiveIntegrationQuarantine",
+      responsibility,
+      result: expect.objectContaining({
+        _tag: "CandidateRejected",
+        candidateText: preparedCandidateText,
+        observation: { _tag: "Missing", candidateText: preparedCandidateText },
+        run: scenario.run
+      })
+    })
+  ])
 })
 
 it("does not authorize Retry when the fresh fixed-head lineage is incompatible", () => {

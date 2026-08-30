@@ -328,7 +328,10 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
                 pauseCoverage: facts.pauseCoverage,
                 proposedActions,
                 quiescence: facts.quiescence,
-                taskWork: facts.taskWork
+                taskWork: facts.taskWork,
+                ...(facts.activeRefreshBoundary === undefined
+                  ? {}
+                  : { activeRefreshBoundary: facts.activeRefreshBoundary })
               })
             )
           )

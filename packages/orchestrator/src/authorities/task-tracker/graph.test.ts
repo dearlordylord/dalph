@@ -68,6 +68,16 @@ it("accumulates structural issues from every duplicate task record", () => {
   })
 })
 
+it("rejects a selected root that is absent from the complete tracker graph", () => {
+  expect(
+    projectTrackerSnapshot({
+      revision: "missing-root-v1",
+      rootTaskId: "missing-root",
+      tasks: [{ id: "present-task", lifecycle: open, parentTaskId: null, prerequisiteIds: [] }]
+    })
+  ).toEqual({ _tag: "Invalid", issues: [{ _tag: "MissingRootTask", taskId: "missing-root" }] })
+})
+
 it("keeps grouping independent while traversing and deriving diamond eligibility", () => {
   const wire = {
     revision: "diamond-v1",

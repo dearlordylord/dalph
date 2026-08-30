@@ -40,6 +40,7 @@ import {
   WorkflowOperation
 } from "../index.js"
 import { classifyJournalStorageFailure } from "./adapters/sqlite-store.js"
+import { makeSqliteJournalQueries } from "./adapters/sqlite-store-queries.js"
 import { completedRunFinalityFixture } from "../../test/run-finality.js"
 import { validSnapshot } from "../../test/task-dag.js"
 import {
@@ -1671,6 +1672,131 @@ durableJournalStoreContract(
             expect(scan.runs).toEqual([])
           })
         )
+      )
+    )
+
+    it.effect("maps corrupted SQLite query rows to exact Run-local history failures after reopen", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* withTemporaryDatabase((filename) =>
+            Effect.gen(function* () {
+              const rowRun = RunId.make("query-row-corruption")
+              const existingRowRun = RunId.make("query-existing-row-corruption")
+              const payloadRun = RunId.make("query-existing-payload-corruption")
+              const positionRun = RunId.make("query-next-position-corruption")
+              const rows = [
+                [rowRun, "row", "row-task"],
+                [existingRowRun, "existing", "existing-task"],
+                [payloadRun, "payload", "payload-task"],
+                [positionRun, "position", "position-task"]
+              ] as const
+              yield* Effect.gen(function* () {
+                const journal = yield* JournalStore
+                yield* Effect.forEach(rows, ([currentRunId, operation, currentTaskId]) =>
+                  journal.append(
+                    currentRunId,
+                    JournalRecordKey.make(`operation:${operation}:intent`),
+                    intent(operation, currentTaskId)
+                  )
+                )
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+
+              yield* withSqliteClient(filename, (sql) =>
+                Effect.gen(function* () {
+                  yield* sql`PRAGMA ignore_check_constraints = ON`
+                  yield* sql`UPDATE journal_records SET record_key = '' WHERE run_id = ${rowRun}`
+                  yield* sql`UPDATE journal_records SET event_version = 0 WHERE run_id = ${existingRowRun}`
+                  yield* sql`UPDATE journal_records SET payload_json = '{' WHERE run_id = ${payloadRun}`
+                  yield* sql`UPDATE journal_records SET position = -2 WHERE run_id = ${positionRun}`
+                })
+              )
+
+              yield* withSqliteClient(filename, (sql) =>
+                Effect.gen(function* () {
+                  const queries = makeSqliteJournalQueries(sql, undefined)
+                  const rowFailure = yield* queries
+                    .loadPartitionRecords("Hot", rowRun, "JournalStore.read")
+                    .pipe(Effect.flip)
+                  const existingRowFailure = yield* queries
+                    .findExistingRecord(existingRowRun, JournalRecordKey.make("operation:existing:intent"))
+                    .pipe(Effect.flip)
+                  const payloadFailure = yield* queries
+                    .findExistingRecord(payloadRun, JournalRecordKey.make("operation:payload:intent"))
+                    .pipe(Effect.flip)
+                  const positionFailure = yield* queries.nextPosition(positionRun).pipe(Effect.flip)
+
+                  expect(rowFailure).toMatchObject({
+                    _tag: "JournalHistoryCorruption",
+                    operation: "JournalStore.read",
+                    partition: "Hot",
+                    runId: rowRun
+                  })
+                  expect(existingRowFailure).toMatchObject({
+                    _tag: "JournalHistoryCorruption",
+                    operation: "JournalStore.append",
+                    partition: "Hot",
+                    runId: existingRowRun
+                  })
+                  expect(payloadFailure).toMatchObject({
+                    _tag: "JournalHistoryCorruption",
+                    operation: "JournalStore.append",
+                    partition: "Hot",
+                    runId: payloadRun
+                  })
+                  expect(positionFailure).toMatchObject({
+                    _tag: "JournalHistoryCorruption",
+                    operation: "JournalStore.append",
+                    partition: "Hot",
+                    runId: positionRun
+                  })
+                })
+              )
+            })
+          )
+
+          yield* withTemporaryDatabase((filename) =>
+            Effect.gen(function* () {
+              yield* Effect.gen(function* () {
+                yield* JournalStore
+              }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+              const encoded = encodeJournalEvent(intent("numeric-run", "numeric-run-task"))
+              yield* withSqliteClient(filename, (sql) =>
+                Effect.gen(function* () {
+                  yield* sql`DROP TABLE journal_records`
+                  yield* sql`
+                    CREATE TABLE journal_records (
+                      run_id INTEGER NOT NULL,
+                      position INTEGER NOT NULL,
+                      record_key TEXT NOT NULL,
+                      event_kind TEXT NOT NULL,
+                      event_version INTEGER NOT NULL,
+                      payload_json TEXT NOT NULL
+                    )
+                  `
+                  yield* sql`
+                    INSERT INTO journal_records
+                      (run_id, position, record_key, event_kind, event_version, payload_json)
+                    VALUES (1, 1, 'numeric-run-key', ${encoded.kind}, ${encoded.version}, ${encoded.payloadJson})
+                  `
+                })
+              )
+              yield* withSqliteClient(filename, (sql) =>
+                Effect.gen(function* () {
+                  const runId = RunId.make("1")
+                  const failure = yield* makeSqliteJournalQueries(sql, undefined)
+                    .hasPartitionRows("Hot", runId, "JournalStore.read")
+                    .pipe(Effect.flip)
+                  expect(failure).toMatchObject({
+                    _tag: "JournalHistoryCorruption",
+                    operation: "JournalStore.read",
+                    partition: "Hot",
+                    runId
+                  })
+                })
+              )
+            })
+          )
+        })
       )
     )
 

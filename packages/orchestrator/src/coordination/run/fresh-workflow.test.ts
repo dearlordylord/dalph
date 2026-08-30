@@ -76,3 +76,49 @@ it.each([
     )
   ).toBe(true)
 })
+
+it("lets later exact executor evidence supersede an earlier unreadable projection", () => {
+  const responsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+    beganAt: JournalPosition.make(1),
+    plannedAttempt
+  })
+  const unreadable = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({}),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const exact = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId }
+      })
+    }),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(2),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+
+  expect(
+    responsibilityStillOwnsTask(
+      responsibility,
+      [
+        {
+          event: unreadable,
+          key: JournalRecordKey.make("fresh-workflow-unreadable-projection"),
+          position: JournalPosition.make(2),
+          runId
+        },
+        {
+          event: exact,
+          key: JournalRecordKey.make("fresh-workflow-exact-projection"),
+          position: JournalPosition.make(3),
+          runId
+        }
+      ],
+      new Set()
+    )
+  ).toBe(false)
+})

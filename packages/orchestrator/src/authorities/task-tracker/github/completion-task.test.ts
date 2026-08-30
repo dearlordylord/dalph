@@ -1,8 +1,9 @@
 import { NodeCrypto } from "@effect/platform-node"
-import { makeTaskWorkSpecification, PlannedTaskAttempt } from "@dalph/contracts"
+import { makeTaskWorkSpecification, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
 import { expect, it } from "@effect/vitest"
 import { Crypto, Effect, Layer, Ref } from "effect"
 import { ActiveTaskClaim } from "../claim-mutation.js"
+import { FixtureTarget } from "../fixture/target.js"
 import { ClaimOwner, ClaimToken } from "../claim.js"
 import { TaskTrackerMutationThrottled } from "../mutation-throttling.js"
 import { completionBoundaryContract } from "../../../../test/contracts/completion-boundary-contract.js"
@@ -22,7 +23,7 @@ import { githubCompletionClaimBoundaryLayer, githubCompletionClaimFingerprintFor
 import { githubCompletionTaskBoundaryLayer } from "./completion-task.js"
 import {
   GithubGraphqlClient,
-  type GithubGraphqlRequest,
+  GithubGraphqlRequest,
   GithubGraphqlRequestError,
   type GithubGraphqlResponse,
   GithubGraphqlThrottled,
@@ -79,13 +80,27 @@ const activeDescription = ["1", activeClaim.operationId, activeClaim.owner, acti
 
 interface CompletionHarnessOptions {
   readonly applyCloseBeforeLosingResponse?: boolean
+  readonly closeResponseFault?: "GraphqlError" | "Malformed" | "MismatchedAcknowledgement"
   readonly focusedReadFault?:
+    | "BlockedByPageLimit"
+    | "CompletionClaimUnreadable"
+    | "ContradictoryClosureParent"
+    | "GraphqlError"
     | "ForeignTaskRepository"
     | "InaccessibleBlockedBy"
+    | "InaccessibleSubIssues"
+    | "InaccessibleTarget"
     | "MalformedBlockedBy"
+    | "MalformedEnvelope"
+    | "MalformedResolve"
+    | "MismatchedSpecification"
     | "MismatchedTaskIdentity"
     | "MissingTask"
+    | "MissingTaskSpecification"
     | "PartialBlockedBy"
+    | "SelfPrerequisite"
+    | "TargetClosureLimit"
+    | "UnsupportedPrerequisiteLifecycle"
     | "UnsupportedTaskLifecycle"
   readonly initialClosed?: boolean
   readonly loseCloseResponse?: boolean
@@ -129,21 +144,48 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
             retry: GithubGraphqlThrottleEvidence.cases.Unavailable.make({})
           })
         }
+        if (options.focusedReadFault === "MalformedResolve") return { body: {} }
+        if (options.focusedReadFault === "MalformedEnvelope") return { body: "not-a-GraphQL-envelope" }
+        if (options.focusedReadFault === "GraphqlError") {
+          return { body: { errors: [{ message: "focused completion denied" }] } }
+        }
+        if (options.focusedReadFault === "InaccessibleTarget") {
+          return { body: { data: { repository: null } } }
+        }
         return {
           body: {
-            data: { repository: { id: repositoryNodeId, issue: { id: options.targetRootNodeId ?? issueNodeId } } }
+            data: {
+              repository: {
+                id: repositoryNodeId,
+                issue: {
+                  id:
+                    options.targetRootNodeId ??
+                    (options.focusedReadFault === "ContradictoryClosureParent" ||
+                    options.focusedReadFault === "InaccessibleSubIssues" ||
+                    options.focusedReadFault === "TargetClosureLimit"
+                      ? rootNodeId
+                      : issueNodeId)
+                }
+              }
+            }
           }
         }
       }
       if (request._tag === "ReadTaskWorkSpecification") {
+        if (options.focusedReadFault === "MissingTaskSpecification") {
+          return { body: { data: { node: null } } }
+        }
         return {
           body: {
             data: {
               node: {
                 __typename: "Issue",
                 body: specification.body,
-                id: request.issueNodeId,
-                repository: { id: repositoryNodeId },
+                id: options.focusedReadFault === "MismatchedSpecification" ? rootNodeId : request.issueNodeId,
+                repository: {
+                  id:
+                    options.focusedReadFault === "MismatchedSpecification" ? foreignRepositoryNodeId : repositoryNodeId
+                },
                 title: specification.title
               }
             }
@@ -158,7 +200,8 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
           request.issueNodeId === prerequisiteNodeId || request.issueNodeId === secondPrerequisiteNodeId
         const isClosed = isPrerequisite ? options.openPrerequisite !== true : yield* Ref.get(closed)
         const unsupportedLifecycle =
-          options.focusedReadFault === "UnsupportedTaskLifecycle" && request.issueNodeId === issueNodeId
+          (options.focusedReadFault === "UnsupportedTaskLifecycle" && request.issueNodeId === issueNodeId) ||
+          (options.focusedReadFault === "UnsupportedPrerequisiteLifecycle" && isPrerequisite)
         return {
           body: {
             data: {
@@ -179,7 +222,14 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
                       : repositoryNodeId
                 },
                 state: isClosed ? "CLOSED" : "OPEN",
-                stateReason: unsupportedLifecycle ? "COMPLETED" : isClosed ? "COMPLETED" : null
+                stateReason:
+                  options.focusedReadFault === "UnsupportedPrerequisiteLifecycle" && isPrerequisite
+                    ? null
+                    : unsupportedLifecycle
+                      ? "COMPLETED"
+                      : isClosed
+                        ? "COMPLETED"
+                        : null
               }
             }
           }
@@ -205,6 +255,12 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
             }
           }
         }
+        if (options.focusedReadFault === "BlockedByPageLimit" && request.issueNodeId === issueNodeId) {
+          return connectionBody("blockedBy", request.issueNodeId, [], {
+            endCursor: GithubCursor.make(`${request.cursor ?? "completion-task-page"}:next`),
+            hasNextPage: true
+          })
+        }
         if (options.paginatedPrerequisites === true && request.issueNodeId === issueNodeId) {
           return request.cursor === null
             ? connectionBody("blockedBy", request.issueNodeId, [secondPrerequisiteNodeId], {
@@ -216,10 +272,28 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
         return connectionBody(
           "blockedBy",
           request.issueNodeId,
-          request.issueNodeId === issueNodeId && options.openPrerequisite === true ? [prerequisiteNodeId] : []
+          request.issueNodeId === issueNodeId && options.focusedReadFault === "SelfPrerequisite"
+            ? [issueNodeId]
+            : request.issueNodeId === issueNodeId &&
+                (options.openPrerequisite === true || options.focusedReadFault === "UnsupportedPrerequisiteLifecycle")
+              ? [prerequisiteNodeId]
+              : []
         )
       }
       if (request._tag === "ReadSubIssues") {
+        if (options.focusedReadFault === "InaccessibleSubIssues") {
+          return { body: { data: { node: null } } }
+        }
+        if (options.focusedReadFault === "ContradictoryClosureParent" && request.issueNodeId === rootNodeId) {
+          return connectionBody("subIssues", request.issueNodeId, [prerequisiteNodeId])
+        }
+        if (options.focusedReadFault === "TargetClosureLimit" && request.issueNodeId === rootNodeId) {
+          return connectionBody(
+            "subIssues",
+            request.issueNodeId,
+            Array.from({ length: 1_001 }, (_, index) => GithubIssueNodeId.make(`completion-limit-${index}`))
+          )
+        }
         const childNodeIds =
           request.issueNodeId === (options.targetRootNodeId ?? rootNodeId) && options.taskAsChild === true
             ? [issueNodeId]
@@ -227,6 +301,9 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
         return connectionBody("subIssues", request.issueNodeId, childNodeIds)
       }
       if (request._tag === "FindClaimLabel") {
+        if (options.focusedReadFault === "CompletionClaimUnreadable") {
+          return { body: { errors: [{ message: "completion claim cannot be read" }] } }
+        }
         const completion = request.labelName.startsWith("dalph-completion-")
         return {
           body: {
@@ -258,11 +335,18 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
         if (options.loseCloseResponse === true) {
           return yield* new GithubGraphqlRequestError({ detail: "close response lost", operation: "CloseIssue" })
         }
+        if (options.closeResponseFault === "Malformed") return { body: {} }
+        if (options.closeResponseFault === "GraphqlError") {
+          return { body: { errors: [{ message: "close denied" }] } }
+        }
         return {
           body: {
             data: {
               closeIssue: {
-                clientMutationId: request.operationId,
+                clientMutationId:
+                  options.closeResponseFault === "MismatchedAcknowledgement"
+                    ? "another-completion-operation"
+                    : request.operationId,
                 // The mutation response is acknowledgement only; this deliberately stale
                 // lifecycle must not substitute for the focused confirmation read.
                 issue: { id: request.issueNodeId, state: "OPEN", stateReason: null }
@@ -456,11 +540,23 @@ it.effect("proves focused target membership without publishing a complete Run gr
 it.effect("fails every incomplete focused GitHub read without publishing facts or closing the task", () =>
   Effect.gen(function* () {
     const cases = [
+      "BlockedByPageLimit",
+      "CompletionClaimUnreadable",
+      "ContradictoryClosureParent",
+      "GraphqlError",
       "ForeignTaskRepository",
       "InaccessibleBlockedBy",
+      "InaccessibleTarget",
       "MismatchedTaskIdentity",
+      "MismatchedSpecification",
+      "MalformedEnvelope",
+      "MalformedResolve",
       "MissingTask",
+      "MissingTaskSpecification",
       "PartialBlockedBy",
+      "SelfPrerequisite",
+      "TargetClosureLimit",
+      "UnsupportedPrerequisiteLifecycle",
       "UnsupportedTaskLifecycle"
     ] as const
     for (const focusedReadFault of cases) {
@@ -472,6 +568,127 @@ it.effect("fails every incomplete focused GitHub read without publishing facts o
       }).pipe(Effect.provide(harness.layer))
       expect(failure).toBeInstanceOf(FocusedTaskCompletionReadFailure)
       expect((yield* Ref.get(harness.calls)).some(({ _tag }) => _tag === "CloseIssue")).toBe(false)
+    }
+  })
+)
+
+it.effect("fails closed when GitHub cannot expose the target subissue connection", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({ focusedReadFault: "InaccessibleSubIssues" })
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionTaskBoundary)
+        .readFocusedTaskCompletion(focusedRequest("inaccessible-subissues"))
+        .pipe(Effect.flip)
+    }).pipe(Effect.provide(harness.layer))
+
+    expect(failure).toEqual(
+      new FocusedTaskCompletionReadFailure({ detail: `GitHub issue ${rootNodeId} is inaccessible`, taskId })
+    )
+    expect(yield* Ref.get(harness.calls)).toEqual([
+      GithubGraphqlRequest.cases.ResolveIssue.make({ target }),
+      GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId }),
+      GithubGraphqlRequest.cases.ReadTaskWorkSpecification.make({ issueNodeId }),
+      GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId: rootNodeId }),
+      GithubGraphqlRequest.cases.ReadBlockedBy.make({ cursor: null, issueNodeId: rootNodeId }),
+      GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor: null, issueNodeId: rootNodeId })
+    ])
+  })
+)
+
+it.effect("rejects a fixture target before reading GitHub task facts", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness()
+    const request = FocusedTaskCompletionReadRequest.make({
+      expectedClaim: claim,
+      operationId: OperationId.make("completion-task-fixture-target"),
+      target: FixtureTarget.make("completion-task-fixture-target"),
+      taskId
+    })
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionTaskBoundary).readFocusedTaskCompletion(request).pipe(Effect.flip)
+    }).pipe(Effect.provide(harness.layer))
+    expect(failure).toBeInstanceOf(FocusedTaskCompletionReadFailure)
+    expect(yield* Ref.get(harness.calls)).toEqual([])
+  })
+)
+
+it.effect("rejects a legacy task identity before sending a focused GitHub read", () =>
+  Effect.gen(function* () {
+    const legacyTaskId = TaskId.make("legacy-task-without-github-coordinates")
+    const legacyPlannedAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, taskId: legacyTaskId })
+    const legacyQualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+      ...qualifiedCandidate,
+      run: {
+        ...qualifiedCandidate.run,
+        session: { ...qualifiedCandidate.run.session, plannedAttempt: legacyPlannedAttempt }
+      }
+    })
+    const legacyClaim = CompletionTaskClaim.make({
+      originalClaim: ActiveTaskClaim.make({ ...activeClaim, taskId: legacyTaskId }),
+      plannedAttempt: legacyPlannedAttempt,
+      promotionCorrelation: targetPromotionCorrelationFor(legacyQualifiedCandidate)
+    })
+    const request = FocusedTaskCompletionReadRequest.make({
+      expectedClaim: legacyClaim,
+      operationId: OperationId.make("completion-task-legacy-task-id"),
+      target,
+      taskId: legacyTaskId
+    })
+    const harness = yield* makeHarness()
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionTaskBoundary).readFocusedTaskCompletion(request).pipe(Effect.flip)
+    }).pipe(Effect.provide(harness.layer))
+    expect(failure).toBeInstanceOf(FocusedTaskCompletionReadFailure)
+    expect(yield* Ref.get(harness.calls)).toEqual([expect.objectContaining({ _tag: "ResolveIssue" })])
+  })
+)
+
+it.effect("rejects a task identity from another repository before reading task facts", () =>
+  Effect.gen(function* () {
+    const foreignTaskId = githubTaskIdFor(foreignRepositoryNodeId, issueNodeId)
+    const foreignPlannedAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, taskId: foreignTaskId })
+    const foreignQualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+      ...qualifiedCandidate,
+      run: {
+        ...qualifiedCandidate.run,
+        session: { ...qualifiedCandidate.run.session, plannedAttempt: foreignPlannedAttempt }
+      }
+    })
+    const foreignClaim = CompletionTaskClaim.make({
+      originalClaim: ActiveTaskClaim.make({ ...activeClaim, taskId: foreignTaskId }),
+      plannedAttempt: foreignPlannedAttempt,
+      promotionCorrelation: targetPromotionCorrelationFor(foreignQualifiedCandidate)
+    })
+    const request = FocusedTaskCompletionReadRequest.make({
+      expectedClaim: foreignClaim,
+      operationId: OperationId.make("completion-task-foreign-task-id"),
+      target,
+      taskId: foreignTaskId
+    })
+    const harness = yield* makeHarness()
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionTaskBoundary).readFocusedTaskCompletion(request).pipe(Effect.flip)
+    }).pipe(Effect.provide(harness.layer))
+    expect(failure).toEqual(
+      new FocusedTaskCompletionReadFailure({
+        detail: "GitHub task identity belongs to another repository",
+        taskId: foreignTaskId
+      })
+    )
+    expect(yield* Ref.get(harness.calls)).toEqual([GithubGraphqlRequest.cases.ResolveIssue.make({ target })])
+  })
+)
+
+it.effect("treats malformed rejected and mismatched close acknowledgements as unknown without a retry", () =>
+  Effect.gen(function* () {
+    for (const closeResponseFault of ["Malformed", "GraphqlError", "MismatchedAcknowledgement"] as const) {
+      const harness = yield* makeHarness({ closeResponseFault })
+      const failure = yield* Effect.gen(function* () {
+        return yield* (yield* CompletionTaskBoundary).completeTask(completionRequest).pipe(Effect.flip)
+      }).pipe(Effect.provide(harness.layer))
+
+      expect(failure).toMatchObject({ outcome: "Unknown", request: completionRequest })
+      expect((yield* Ref.get(harness.calls)).filter(({ _tag }) => _tag === "CloseIssue")).toHaveLength(1)
     }
   })
 )
