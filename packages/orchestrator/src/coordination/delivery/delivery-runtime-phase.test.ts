@@ -17,7 +17,10 @@ import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
-import { makeTaskWorktreeObservationOperation } from "../../workflow/registry/operation.js"
+import {
+  makeTaskClaimObservationOperation,
+  makeTaskWorktreeObservationOperation
+} from "../../workflow/registry/operation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
@@ -314,5 +317,39 @@ it.effect("after G2 preserves a non-refresh transition for the captured attempt"
     )
 
     expect(phased.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [attemptChoiceRead] })
+  })
+)
+
+it.effect("after G2 preserves an independent recovered tracker read with no planned attempt", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
+    const independentTaskId = TaskId.make("delivery-runtime-phase-independent-claim")
+    const transition = RunnableFrontierTransition.ObserveResponsibleTaskClaim({
+      operation: makeTaskClaimObservationOperation(
+        OperationId.make("delivery-runtime-phase-independent-claim-read"),
+        target,
+        independentTaskId
+      ),
+      taskId: independentTaskId
+    })
+    const [independentRead] = deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: [],
+      runId,
+      transitions: [transition]
+    }).ticketDelivery
+    if (independentRead === undefined) return expect.fail("the independent tracker read must derive a proposal")
+
+    expect(independentRead.route).toMatchObject({
+      _tag: "RecoveredNewActionRoute",
+      action: { _tag: "ReadTaskClaim", plannedAttempt: null, taskId: independentTaskId }
+    })
+
+    const phased = evaluationForPhase(
+      DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+      withProposals(base, [independentRead])
+    )
+
+    expect(phased.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [independentRead] })
   })
 )

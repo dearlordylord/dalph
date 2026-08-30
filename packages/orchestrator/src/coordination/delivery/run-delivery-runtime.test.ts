@@ -87,7 +87,10 @@ import {
   deliveryRuntimeResourcesLayer
 } from "./delivery-runtime-resources.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
-import type { DeliveryRuntimeObservationState } from "./delivery-runtime-observation.js"
+import {
+  DeliveryRuntimeObservationObserver,
+  type DeliveryRuntimeObservationState
+} from "./delivery-runtime-observation.js"
 import {
   makePlannedAttemptProtocolController,
   PlannedAttemptProtocolController,
@@ -1976,6 +1979,97 @@ it.effect("processes a changed frontier without a caller-supplied runtime bounda
         return yield* Effect.die("the current evaluation must retain its descriptive proposal frontier")
       }
       expect(latest.proposedActions.proposals).toEqual([])
+    })
+  )
+)
+
+it.effect("ignores a stale accepted frontier before it can call the executor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const holder = proposal(0, TaskId.make("accepted-runtime-holder"))
+      const stale = proposal(1, TaskId.make("stale-runtime-task"))
+      const relation = yield* dynamicEvaluationSignal({
+        ...withProposals(base, [holder]),
+        acceptedAt: JournalPosition.make(10)
+      })
+      const executorCalls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const holderStarted = yield* Deferred.make<void>()
+      const releaseHolder = yield* Deferred.make<void>()
+      const acceptedThirteenObserved = yield* Deferred.make<void>()
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal }) =>
+          Effect.gen(function* () {
+            yield* Ref.update(executorCalls, (calls) => [...calls, proposal.id])
+            if (proposal.id !== holder.id) return yield* Effect.die("a stale proposal must never reach the executor")
+            yield* Deferred.succeed(holderStarted, undefined)
+            yield* Deferred.await(releaseHolder)
+            return { _tag: "ActionCompleted", proposalId: proposal.id } satisfies DeliveryActionResult
+          })
+      })
+      const observer = DeliveryRuntimeObservationObserver.of({
+        observe: ({ evaluation }) =>
+          evaluation.acceptedAt === JournalPosition.make(13)
+            ? Deferred.succeed(acceptedThirteenObserved, undefined)
+            : Effect.void
+      })
+      const runtime = yield* runDeliveryRuntimePhase(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliveryRuntimeObservationObserver, observer),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(holderStarted)
+      yield* relation.publish({ ...withProposals(base, []), acceptedAt: JournalPosition.make(12) })
+      yield* relation.publish({ ...withProposals(base, [stale]), acceptedAt: JournalPosition.make(11) })
+      yield* relation.publish({ ...withProposals(base, []), acceptedAt: JournalPosition.make(13) })
+      yield* Deferred.await(acceptedThirteenObserved)
+      yield* Deferred.succeed(releaseHolder, undefined)
+
+      const quiescence = yield* Fiber.join(runtime)
+      expect(quiescence).toMatchObject({ _tag: "PassiveRuntimeQuiescence", acceptedAt: JournalPosition.make(13) })
+      expect(yield* Ref.get(executorCalls)).toEqual([holder.id])
+      expect(yield* Ref.get(executorCalls)).not.toContain(stale.id)
+    })
+  )
+)
+
+it.effect("returns passive post-G2 quiescence with its exact boundary and no proposals", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const boundary = {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+      }
+      const relation = yield* dynamicEvaluationSignal({
+        ...withProposals(base, []),
+        acceptedAt: JournalPosition.make(14),
+        activeRefreshBoundary: boundary
+      })
+      const executorCalls = yield* Ref.make(0)
+      const result = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("unused")))
+          })
+        )
+      )
+
+      expect(result).toMatchObject({
+        _tag: "PassiveRuntimeQuiescence",
+        acceptedAt: JournalPosition.make(14),
+        activeRefreshBoundary: boundary,
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+      })
+      expect(yield* Ref.get(executorCalls)).toBe(0)
     })
   )
 )
