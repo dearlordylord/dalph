@@ -106,6 +106,9 @@ const terminalTurnIdMismatch = (exact: CodexThreadSnapshot["turns"][number], exp
 const isConclusiveTerminalStatus = (status: CodexThreadSnapshot["turns"][number]["status"]): boolean =>
   status === "completed" || status === "failed"
 
+const providerTerminalStatusFor = (run: SealedTerminalRun): "completed" | "failed" =>
+  run._tag === "FailedTurnSealed" ? "failed" : "completed"
+
 const terminalTurnObservation = (
   authorization: IntegratorCandidateCleanupAuthorization,
   predecessor: IntegratorSessionCorrelation,
@@ -127,8 +130,7 @@ const terminalTurnObservation = (
   if (!isConclusiveTerminalStatus(exact.status)) {
     return cleanupUnreadable(authorization, "candidate terminal turn status is not conclusive")
   }
-  const expectedStatus = expected._tag === "FailedTurnSealed" ? "failed" : "completed"
-  return exact.status !== expectedStatus
+  return exact.status !== providerTerminalStatusFor(expected)
     ? cleanupUnreadable(authorization, "candidate terminal turn status contradicts the private sealed result")
     : undefined
 }
