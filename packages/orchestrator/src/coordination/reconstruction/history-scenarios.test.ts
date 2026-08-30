@@ -366,16 +366,18 @@ it("accepts every chronological workflow-journal-history boundary prefix", () =>
   expect(hasUnfinishedRunResponsibility(final.runState)).toBe(false)
 })
 
-it("retains an exact Running active-refresh failure and rejects mismatched retained authority history", () => {
+it("accepts exact Running active-refresh failure chronology and rejects mismatched authority chronology", () => {
   const runningRows = eventRows.slice(0, 12)
   const exactFailureRows = activeWorktreeFailureRows(
     plannedAttempt,
     OperationId.make("active-refresh-exact-running-failure"),
     1
   )
-  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...runningRows, ...exactFailureRows]))._tag).toBe(
-    "ValidWorkflowJournalHistory"
-  )
+  const exactReduction = reduceWorkflowJournalHistory(runId, recordsFrom([...runningRows, ...exactFailureRows]))
+  expect(exactReduction).toMatchObject({
+    _tag: "ValidWorkflowJournalHistory",
+    runState: { appliedThrough: runningRows.length + exactFailureRows.length }
+  })
 
   const foreignRunAttempt = PlannedTaskAttempt.make({
     ...plannedAttempt,

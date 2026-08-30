@@ -17,10 +17,7 @@ import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
-import {
-  makeTaskClaimObservationOperation,
-  makeTaskWorktreeObservationOperation
-} from "../../workflow/registry/operation.js"
+import { makeTaskWorktreeObservationOperation } from "../../workflow/registry/operation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
@@ -52,9 +49,14 @@ const plannedAttempt = PlannedTaskAttempt.make({
 })
 
 const independentAttempt = PlannedTaskAttempt.make({
-  ...plannedAttempt,
   attemptId: AttemptId.make("delivery-runtime-phase-independent-attempt"),
-  taskId: TaskId.make("delivery-runtime-phase-independent-task")
+  baseSha: GitCommitSha.make("2".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/dalph/delivery-runtime-phase-independent"),
+  executor: TaskExecutorLocator.make("executor:delivery-runtime-phase-independent"),
+  runId,
+  taskId: TaskId.make("delivery-runtime-phase-independent-task"),
+  taskRevision: TaskRevision.make("delivery-runtime-phase-independent-revision"),
+  worktree: WorktreeLocator.make("/worktrees/delivery-runtime-phase-independent")
 })
 
 const proposalFor = (
@@ -122,18 +124,87 @@ const activeWorktreeTransition = RunnableFrontierTransition.ObservePlannedAttemp
   plannedAttempt
 })
 
-it.effect("before G2 admits only the graph and exact active-attempt authority work", () =>
+it.effect("before G2 admits the tracker graph read", () =>
   Effect.gen(function* () {
     const base = yield* baseEvaluation
     const graph = trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
+
+    const phased = evaluationForPhase(
+      DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+      withProposals(base, [graph])
+    )
+
+    expect(phased.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [graph] })
+  })
+)
+
+it.effect("before G2 admits a fresh active-attempt authority read and defers independent work", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
     const freshActiveRead = proposalFor(activeWorktreeTransition, plannedAttempt)
+    const independentContinuation = proposalFor(
+      RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
+        plannedAttempt: independentAttempt
+      }),
+      independentAttempt
+    )
+
+    const phased = evaluationForPhase(
+      DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+      withProposals(base, [freshActiveRead, independentContinuation])
+    )
+
+    expect(phased.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [freshActiveRead] })
+  })
+)
+
+it.effect("before G2 admits replay of an accepted active-attempt authority read", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
     const acceptedActiveRead = proposalFor(
       activeWorktreeTransition,
       plannedAttempt,
       new Set([worktreeOperation.operationId])
     )
+
+    const phased = evaluationForPhase(
+      DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+      withProposals(base, [acceptedActiveRead])
+    )
+
+    expect(phased.proposedActions).toMatchObject({
+      _tag: "DeliveryProposalsAvailable",
+      proposals: [acceptedActiveRead]
+    })
+  })
+)
+
+it.effect("before G2 admits the active attempt's executor read", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
     const activeExecutorRead = proposalFor(
       RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt }),
+      plannedAttempt
+    )
+
+    const phased = evaluationForPhase(
+      DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+      withProposals(base, [activeExecutorRead])
+    )
+
+    expect(phased.proposedActions).toMatchObject({
+      _tag: "DeliveryProposalsAvailable",
+      proposals: [activeExecutorRead]
+    })
+  })
+)
+
+it.effect("after G2 suppresses captured A suspension and preserves independent B continuation", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
+    const activeSuspension = proposalFor(
+      RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt }),
       plannedAttempt
     )
     const independentContinuation = proposalFor(
@@ -143,45 +214,22 @@ it.effect("before G2 admits only the graph and exact active-attempt authority wo
       }),
       independentAttempt
     )
-    const responsibleClaimOperation = makeTaskClaimObservationOperation(
-      OperationId.make("delivery-runtime-phase-independent-claim"),
-      target,
-      independentAttempt.taskId
-    )
-    const independentClaimRead = proposalFor(
-      RunnableFrontierTransition.ObserveResponsibleTaskClaim({
-        operation: responsibleClaimOperation,
-        taskId: independentAttempt.taskId
-      }),
-      independentAttempt
-    )
 
     const phased = evaluationForPhase(
-      DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }]),
-      withProposals(base, [
-        graph,
-        freshActiveRead,
-        acceptedActiveRead,
-        activeExecutorRead,
-        independentContinuation,
-        independentClaimRead
-      ])
+      DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+      withProposals(base, [activeSuspension, independentContinuation])
     )
 
     expect(phased.proposedActions).toMatchObject({
       _tag: "DeliveryProposalsAvailable",
-      proposals: [graph, freshActiveRead, acceptedActiveRead, activeExecutorRead]
+      proposals: [independentContinuation]
     })
   })
 )
 
-it.effect("after G2 suppresses only the captured attempt and preserves independent continuation", () =>
+it.effect("after G2 suppresses the captured attempt's continuation", () =>
   Effect.gen(function* () {
     const base = yield* baseEvaluation
-    const activeSuspension = proposalFor(
-      RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt }),
-      plannedAttempt
-    )
     const activeContinuation = proposalFor(
       RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
         acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
@@ -189,17 +237,33 @@ it.effect("after G2 suppresses only the captured attempt and preserves independe
       }),
       plannedAttempt
     )
-    const independentContinuation = proposalFor(
-      RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
-        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
-        plannedAttempt: independentAttempt
-      }),
-      independentAttempt
+
+    const phased = evaluationForPhase(
+      DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+      withProposals(base, [activeContinuation])
     )
-    const independentExecutorRead = proposalFor(
-      RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt: independentAttempt }),
-      independentAttempt
+
+    expect(phased.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [] })
+  })
+)
+
+it.effect("after G2 suppresses a fresh authority read for the captured attempt", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
+    const freshActiveRead = proposalFor(activeWorktreeTransition, plannedAttempt)
+
+    const phased = evaluationForPhase(
+      DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+      withProposals(base, [freshActiveRead])
     )
+
+    expect(phased.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [] })
+  })
+)
+
+it.effect("after G2 preserves a non-refresh transition for the captured attempt", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
     const attemptChoiceRead = proposalFor(
       RunnableFrontierTransition.ObserveAttemptStoppageExecutor({
         requestId: AttemptChoiceRequestId.make({ nonce: "delivery-runtime-phase-stop", runId }),
@@ -207,23 +271,12 @@ it.effect("after G2 suppresses only the captured attempt and preserves independe
       }),
       plannedAttempt
     )
-    const freshActiveRead = proposalFor(activeWorktreeTransition, plannedAttempt)
 
     const phased = evaluationForPhase(
       DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }]),
-      withProposals(base, [
-        activeSuspension,
-        activeContinuation,
-        independentContinuation,
-        independentExecutorRead,
-        attemptChoiceRead,
-        freshActiveRead
-      ])
+      withProposals(base, [attemptChoiceRead])
     )
 
-    expect(phased.proposedActions).toMatchObject({
-      _tag: "DeliveryProposalsAvailable",
-      proposals: [independentContinuation, independentExecutorRead, attemptChoiceRead]
-    })
+    expect(phased.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [attemptChoiceRead] })
   })
 )
