@@ -385,6 +385,7 @@ const recordFor = (
     appServerIncarnation: CodexServerIncarnation.make("cleanup-incarnation"),
     candidatePath: IntegratorCandidateWorktreePath.make(candidatePath),
     correlation,
+    initialRun: run,
     revision: revision(overrides.revision ?? 1),
     threadToken: CodexThreadOwnershipToken.make("cleanup-thread-token")
   }

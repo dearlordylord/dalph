@@ -28,6 +28,7 @@ import {
   sameSession,
   updateRun
 } from "./codex-integrator-private-store.js"
+import { newPrivateRecordRunError, providerPreparationError } from "./codex-integrator-private-lifecycle.js"
 import {
   boundary,
   type CodexIntegratorProviderFailure,
@@ -338,9 +339,8 @@ const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord
   if (!sameSession(found.correlation, run.session) || found.candidatePath !== candidatePath) {
     return yield* Effect.fail(providerFailure("private record belongs to another session or candidate path"))
   }
-  if (found._tag === "Removed") {
-    return yield* Effect.fail(providerFailure("private candidate record is tombstoned"))
-  }
+  const preparationError = providerPreparationError(found, run)
+  if (preparationError !== undefined) return yield* Effect.fail(providerFailure(preparationError))
   const current =
     found.appServerIncarnation === app.incarnation ? found : bump(found, { appServerIncarnation: app.incarnation })
   if (current !== found) yield* boundary(store.write(current))
@@ -352,6 +352,8 @@ const createPrivateRecord = Effect.fn("CodexIntegrator.createPrivateRecord")(fun
   app: CodexAppServer["Service"],
   store: CodexIntegratorPrivateStoreService
 ) {
+  const initialRunError = newPrivateRecordRunError(run)
+  if (initialRunError !== undefined) return yield* Effect.fail(providerFailure(initialRunError))
   const occupied = yield* boundary(store.findByCandidatePath(candidatePath))
   if (Option.isSome(occupied)) {
     return yield* Effect.fail(providerFailure("candidate path is already owned by another integration session"))
@@ -360,6 +362,7 @@ const createPrivateRecord = Effect.fn("CodexIntegrator.createPrivateRecord")(fun
     appServerIncarnation: app.incarnation,
     candidatePath,
     correlation: run.session,
+    initialRun: run,
     revision: revision(1),
     threadToken: CodexThreadOwnershipToken.make(`dalph-integrator-thread-${randomUUID()}`)
   })

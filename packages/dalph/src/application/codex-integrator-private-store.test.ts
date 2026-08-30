@@ -84,6 +84,7 @@ const record = (
     appServerIncarnation: CodexServerIncarnation.make("private-store-incarnation"),
     candidatePath: IntegratorCandidateWorktreePath.make(path),
     correlation,
+    initialRun: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation }),
     revision: revision(1),
     threadToken: CodexThreadOwnershipToken.make("private-store-thread")
   })
@@ -280,6 +281,8 @@ describe("Codex Integrator private store", () => {
       sessionId: IntegratorSessionId.make("private-store-foreign-session")
     })
     const invalidRecords: ReadonlyArray<unknown> = [
+      { ...record(), initialRun: runCorrelation(2) },
+      { ...record(), initialRun: runCorrelation(1, foreignSession) },
       threadRecordInput([validRun(1), validRun(1)]),
       threadRecordInput([validRun(1), validRun(2), validRun(3)]),
       threadRecordInput([validRun(2)]),

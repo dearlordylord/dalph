@@ -96,12 +96,15 @@ const privateRecordFields = {
   appServerIncarnation: CodexServerIncarnation,
   candidatePath: IntegratorCandidateWorktreePath,
   correlation: IntegratorSessionCorrelation,
+  /** Exact initial provider run bound before the candidate-worktree boundary is crossed. */
+  initialRun: IntegratorRunCorrelation,
   revision: CodexIntegratorPrivateRevision,
   threadToken: CodexThreadOwnershipToken
 }
 
 type CodexIntegratorPrivateRecordShape = {
   readonly correlation: IntegratorSessionCorrelation
+  readonly initialRun: IntegratorRunCorrelation
   readonly revision: CodexIntegratorPrivateRevision
   readonly runs?: ReadonlyArray<CodexIntegratorPrivateRun>
 }
@@ -144,9 +147,15 @@ const validatePrivateRunTokens = (record: CodexIntegratorPrivateRecordShape): st
 }
 
 const validatePrivateRecordCorrelations = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
+  if (!sameSessionValue(record.correlation, record.initialRun.session) || Number(record.initialRun.ordinal) !== 1) {
+    return "private record must bind exact initial run one for its Integrator session"
+  }
   const runs = validatedRuns(record)
   const sessions = runs.filter((run) => !sameSessionValue(record.correlation, run.correlation.session))
   if (sessions.length > 0) return "private run correlation belongs to another Integrator session"
+  if (runs[0] !== undefined && !sameRunValue(runs[0].correlation, record.initialRun)) {
+    return "private run history does not begin with the durably bound initial run"
+  }
   return runs.some(
     (run) =>
       (run._tag === "CompletedTurnSealed" || run._tag === "FailedTurnSealed") &&
@@ -173,7 +182,7 @@ export const CodexIntegratorPrivateRecord = Schema.TaggedUnion({
   WorktreeMaterializationIntentRecorded: privateRecordFields,
   CandidateReady: privateRecordFields,
   ThreadStartIntentRecorded: privateRecordFields,
-  /** Codex returned the owned thread, but no provider-run intent is durable yet. */
+  /** Codex returned the owned thread; the initial run is bound, but no turn token or intent exists yet. */
   ThreadReady: { ...privateRecordFields, threadId: CodexThreadId },
   /** At least one provider-run intent is durable for the exact owned thread. */
   ThreadWithRuns: { ...privateRecordFields, runs: privateRunHistory, threadId: CodexThreadId },
@@ -237,7 +246,8 @@ const decodeRecords = (
 
 /** Controlled private store used by provider contract and prefix-recovery tests. */
 export const memoryCodexIntegratorPrivateStoreLayer = (
-  initial: ReadonlyArray<CodexIntegratorPrivateRecord> = []
+  initial: ReadonlyArray<CodexIntegratorPrivateRecord> = [],
+  observeWrite?: (record: CodexIntegratorPrivateRecord) => void
 ): Layer.Layer<CodexIntegratorPrivateStore> =>
   Layer.effect(
     CodexIntegratorPrivateStore,
@@ -271,6 +281,7 @@ export const memoryCodexIntegratorPrivateStoreLayer = (
               ]
               yield* decodeRecords(next)
               yield* Ref.set(records, next)
+              if (observeWrite !== undefined) yield* Effect.sync(() => observeWrite(record))
             })
           )
       })
@@ -381,6 +392,7 @@ export const nextPrivateRecordFields = (record: CodexIntegratorPrivateRecord) =>
   appServerIncarnation: record.appServerIncarnation,
   candidatePath: record.candidatePath,
   correlation: record.correlation,
+  initialRun: record.initialRun,
   revision: revision(Number(record.revision) + 1),
   threadToken: record.threadToken
 })
@@ -389,6 +401,7 @@ export const preservedPrivateRecordFields = (record: CodexIntegratorPrivateRecor
   appServerIncarnation: record.appServerIncarnation,
   candidatePath: record.candidatePath,
   correlation: record.correlation,
+  initialRun: record.initialRun,
   revision: record.revision,
   threadToken: record.threadToken
 })

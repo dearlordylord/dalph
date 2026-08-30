@@ -33,6 +33,7 @@ import {
   preservedPrivateRecordFields,
   privateRuns,
   removedRecordFor,
+  revision,
   updateRun
 } from "./codex-integrator-private-store.js"
 import {
@@ -65,6 +66,8 @@ import {
   IntegratorCandidateProviderAuthority,
   IntegratorCandidateResourceLocator,
   IntegratorRequest,
+  IntegratorNotPreparedDetail,
+  IntegratorResult,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorSessionCorrelation,
@@ -203,6 +206,9 @@ type FixtureOptions = {
   readonly worktreeRemoves?: { value: number }
   readonly ownershipCalls?: Array<"enter" | "exit">
   readonly appIncarnation?: { value: CodexServerIncarnation }
+  readonly initialRecords?: ReadonlyArray<CodexIntegratorPrivateRecord>
+  readonly privateWrites?: Array<CodexIntegratorPrivateRecord>
+  readonly boundaryEvents?: Array<string>
 }
 
 const fixtureLayer = (
@@ -479,6 +485,7 @@ const fixtureLayer = (
         run: (_directory, args) =>
           Effect.gen(function* () {
             options.gitCalls?.push(args)
+            options.boundaryEvents?.push(`git:${args.join(" ")}`)
             if (args[0] === "worktree" && args[1] === "list") {
               const present = yield* Ref.get(registered)
               const state = options.worktreeRegistrationState?.value
@@ -566,7 +573,10 @@ const providerLayer = (config: CodexIntegratorConfiguration, options: FixtureOpt
     Layer.provideMerge(
       Layer.mergeAll(
         NodeFileSystem.layer,
-        memoryCodexIntegratorPrivateStoreLayer(),
+        memoryCodexIntegratorPrivateStoreLayer(options.initialRecords, (record) => {
+          options.privateWrites?.push(record)
+          options.boundaryEvents?.push(`store:${record._tag}`)
+        }),
         fixtureLayer(options).pipe(Layer.provide(NodeFileSystem.layer)),
         options.activitySequence === undefined
           ? controlledCodexOwnedActivityCensusLayer({
@@ -619,6 +629,124 @@ describe("Codex Integrator", () => {
     expect(result._tag).toBe("PreparedCandidate")
     expect(result.correlation.ordinal).toBe(1)
     expect(result._tag === "PreparedCandidate" ? result.candidateText : "").toBe("M")
+  })
+
+  it("records exact run one before asking Git to materialize the candidate", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/run-binding-store.json"),
+      repository
+    })
+    const gitCalls: Array<ReadonlyArray<string>> = []
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const boundaryEvents: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        return yield* integrator.prepare(requestFor(1))
+      }).pipe(Effect.provide(providerLayer(config, { boundaryEvents, gitCalls, privateWrites })))
+    )
+    const first = privateWrites[0]
+    expect(result._tag).toBe("PreparedCandidate")
+    expect(first?._tag).toBe("CandidateUnmaterialized")
+    expect(first?.initialRun).toEqual(requestFor(1).correlation)
+    expect(first === undefined ? [] : privateRuns(first)).toEqual([])
+    expect(boundaryEvents[0]).toBe("store:CandidateUnmaterialized")
+    expect(boundaryEvents.findIndex((event) => event.startsWith("git:"))).toBeGreaterThan(0)
+    expect(gitCalls.length).toBeGreaterThan(0)
+  })
+
+  it("rejects a mismatched recovery run before another provider or Git boundary call", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/mismatched-run-store.json"),
+      repository
+    })
+    const initial = CodexIntegratorPrivateRecord.cases.CandidateUnmaterialized.make({
+      appServerIncarnation: CodexServerIncarnation.make("fixture-incarnation"),
+      candidatePath,
+      correlation: session,
+      initialRun: requestFor(1).correlation,
+      revision: revision(1),
+      threadToken: CodexThreadOwnershipToken.make("mismatched-run-thread")
+    })
+    const gitCalls: Array<ReadonlyArray<string>> = []
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const failure = yield* Effect.flip(integrator.prepare(requestFor(2)))
+        const store = yield* CodexIntegratorPrivateStore
+        return { failure, stored: yield* store.read(session.sessionId) }
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, { gitCalls, initialRecords: [initial], privateWrites, threadStarts, turnStarts })
+        )
+      )
+    )
+    expect(result.failure.detail).toContain("durably bound")
+    expect(gitCalls).toEqual([])
+    expect(threadStarts.value).toBe(0)
+    expect(turnStarts.value).toBe(0)
+    expect(privateWrites).toEqual([])
+    expect(Option.isSome(result.stored) ? result.stored.value : undefined).toEqual(initial)
+  })
+
+  it("preserves cleanup disposition and performs no provider or Git mutation during prepare", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/removal-intent-store.json"),
+      repository
+    })
+    const run = requestFor(1).correlation
+    const sealedResult = IntegratorResult.cases.NotPrepared.make({
+      correlation: run,
+      detail: IntegratorNotPreparedDetail.make("cleanup disposition is already selected")
+    })
+    const removal = CodexIntegratorPrivateRecord.cases.RemovalIntentRecorded.make({
+      appServerIncarnation: CodexServerIncarnation.make("fixture-incarnation"),
+      candidatePath,
+      correlation: session,
+      initialRun: run,
+      revision: revision(8),
+      runs: [
+        CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+          correlation: run,
+          result: sealedResult,
+          token: CodexOwnedTurnToken.make("removal-intent-turn"),
+          turnId: CodexTurnId.make("removal-intent-turn-id")
+        })
+      ],
+      threadId: CodexThreadId.make("removal-intent-thread"),
+      threadToken: CodexThreadOwnershipToken.make("removal-intent-thread-token")
+    })
+    const gitCalls: Array<ReadonlyArray<string>> = []
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const failure = yield* Effect.flip(integrator.prepare(requestFor(1)))
+        const store = yield* CodexIntegratorPrivateStore
+        return { failure, stored: yield* store.read(session.sessionId) }
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, { gitCalls, initialRecords: [removal], privateWrites, threadStarts, turnStarts })
+        )
+      )
+    )
+    expect(result.failure.detail).toContain("cleanup disposition")
+    expect(gitCalls).toEqual([])
+    expect(threadStarts.value).toBe(0)
+    expect(turnStarts.value).toBe(0)
+    expect(privateWrites).toEqual([])
+    expect(Option.isSome(result.stored) ? result.stored.value : undefined).toEqual(removal)
   })
 
   it("keeps thread, turn, prompt, and private phases out of the public result", async () => {

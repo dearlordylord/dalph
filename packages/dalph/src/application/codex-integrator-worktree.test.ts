@@ -21,6 +21,8 @@ import {
   CoordinatorOwnershipLost,
   GitCommandInvocationFailure,
   IntegratorCandidateResourceLocator,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorSessionCorrelation,
   IntegratorSessionId,
   JournalPosition,
@@ -86,6 +88,7 @@ const privateRecordFor = (
     appServerIncarnation: CodexServerIncarnation.make("worktree-incarnation"),
     candidatePath,
     correlation: worktreeSession,
+    initialRun: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: worktreeSession }),
     revision: revision(1),
     threadToken: CodexThreadOwnershipToken.make("worktree-thread")
   })

@@ -142,6 +142,7 @@ const privateRecordFields = {
   appServerIncarnation: CodexServerIncarnation.make("property-incarnation"),
   candidatePath: IntegratorCandidateWorktreePath.make("/tmp/property-candidate"),
   correlation: baseSession,
+  initialRun: roundtripRun,
   revision: revision(1),
   threadToken: CodexThreadOwnershipToken.make("property-thread-token")
 }
