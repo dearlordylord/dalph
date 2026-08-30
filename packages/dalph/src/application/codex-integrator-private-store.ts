@@ -18,11 +18,17 @@ import {
   IntegratorRunCorrelation,
   IntegratorSessionCorrelation
 } from "@dalph/orchestrator"
+import {
+  codexIntegratorProviderRunOrdinals,
+  expectedProviderRunOrdinalAt,
+  isInitialProviderRun,
+  isRetryProviderRun,
+  isSupportedProviderRun,
+  providerRunAdmissionError
+} from "./codex-integrator-private-lifecycle.js"
 
 const sameSessionValue = Schema.toEquivalence(IntegratorSessionCorrelation)
 const sameRunValue = Schema.toEquivalence(IntegratorRunCorrelation)
-const firstPrivateRunOrdinal = 1
-const maximumPrivateRunOrdinal = 2
 
 /** A canonical absolute root under which provider worktrees may be materialized. */
 export const IntegratorCandidateWorktreeRoot = Schema.String.check(
@@ -116,20 +122,14 @@ const validatePrivateRunOrdinals = (record: CodexIntegratorPrivateRecordShape): 
   const runs = validatedRuns(record)
   const runOrdinals = runs.map((run) => run.correlation.ordinal)
   if (new Set(runOrdinals).size !== runOrdinals.length) return "private record repeats a provider run ordinal"
-  if (runs.length > maximumPrivateRunOrdinal) {
+  if (runs.length > codexIntegratorProviderRunOrdinals.length) {
     return "private record contains more than the initial and retry provider runs"
   }
   /* v8 ignore next -- @preserve CodexIntegratorPrivateRun validates every ordinal before this record-level defensive check. */
-  if (
-    runs.some(
-      (run) =>
-        Number(run.correlation.ordinal) < firstPrivateRunOrdinal ||
-        Number(run.correlation.ordinal) > maximumPrivateRunOrdinal
-    )
-  ) {
+  if (runs.some((run) => !isSupportedProviderRun(run.correlation))) {
     return "private record contains an unsupported provider run ordinal"
   }
-  return runOrdinals.some((ordinal, index) => Number(ordinal) !== index + firstPrivateRunOrdinal)
+  return runOrdinals.some((ordinal, index) => Number(ordinal) !== expectedProviderRunOrdinalAt(index))
     ? "private record provider runs must be contiguous from initial run one"
     : undefined
 }
@@ -138,16 +138,16 @@ const validatePrivateRunTokens = (record: CodexIntegratorPrivateRecordShape): st
   const runs = validatedRuns(record)
   const runTokens = runs.map((run) => run.token)
   if (new Set(runTokens).size !== runTokens.length) return "private record repeats a provider turn token"
-  const retry = runs.find((run) => Number(run.correlation.ordinal) === maximumPrivateRunOrdinal)
-  const initial = runs.find((run) => Number(run.correlation.ordinal) === firstPrivateRunOrdinal)
-  return retry !== undefined &&
-    (initial === undefined || (initial._tag !== "CompletedTurnSealed" && initial._tag !== "FailedTurnSealed"))
+  const retry = runs.find((run) => isRetryProviderRun(run.correlation))
+  const initial = runs.find((run) => isInitialProviderRun(run.correlation))
+  const hasSealedInitialRun = initial?._tag === "CompletedTurnSealed" || initial?._tag === "FailedTurnSealed"
+  return retry !== undefined && providerRunAdmissionError(retry.correlation, hasSealedInitialRun) !== undefined
     ? "private retry run requires a sealed initial run"
     : undefined
 }
 
 const validatePrivateRecordCorrelations = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
-  if (!sameSessionValue(record.correlation, record.initialRun.session) || Number(record.initialRun.ordinal) !== 1) {
+  if (!sameSessionValue(record.correlation, record.initialRun.session) || !isInitialProviderRun(record.initialRun)) {
     return "private record must bind exact initial run one for its Integrator session"
   }
   const runs = validatedRuns(record)

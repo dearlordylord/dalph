@@ -1,45 +1,41 @@
 import type { IntegratorRunCorrelation } from "@dalph/orchestrator"
-import {
-  type CodexIntegratorPrivateRecord,
-  privateRuns,
-  runCorrelationEquals
-} from "./codex-integrator-private-store.js"
 
-const maximumProviderRunOrdinal = 2
+/** The provider run ordinal accepted for initial Integrator work. */
+const initialProviderRunOrdinal = 1
 
-const cleanupDispositionError = (record: CodexIntegratorPrivateRecord): string | undefined => {
-  if (record._tag === "Removed") return "private candidate record is tombstoned"
-  return record._tag === "RemovalIntentRecorded"
-    ? "private candidate cleanup disposition forbids provider preparation"
-    : undefined
-}
+/** The only provider run ordinal accepted for an Operator-authorized Retry. */
+const retryProviderRunOrdinal = 2
 
-const sealedInitialRunAllowsRetry = (
-  record: CodexIntegratorPrivateRecord,
-  requestedRun: IntegratorRunCorrelation
-): boolean => {
-  if (Number(requestedRun.ordinal) !== maximumProviderRunOrdinal) return false
-  const first = privateRuns(record)[0]
-  return first?._tag === "CompletedTurnSealed" || first?._tag === "FailedTurnSealed"
-}
+/** The complete ordered provider-run lifecycle: initial work, then one Operator-authorized Retry. */
+export const codexIntegratorProviderRunOrdinals = [initialProviderRunOrdinal, retryProviderRunOrdinal] as const
+type CodexIntegratorProviderRunOrdinal = (typeof codexIntegratorProviderRunOrdinals)[number]
 
-/** Rejects preparation that would rewind cleanup or cross into a different, unauthorized provider run. */
-export const providerPreparationError = (
-  record: CodexIntegratorPrivateRecord,
-  requestedRun: IntegratorRunCorrelation
+const ordinalOf = (run: IntegratorRunCorrelation): number => Number(run.ordinal)
+
+export const isInitialProviderRun = (run: IntegratorRunCorrelation): boolean =>
+  ordinalOf(run) === codexIntegratorProviderRunOrdinals[0]
+
+export const isRetryProviderRun = (run: IntegratorRunCorrelation): boolean =>
+  ordinalOf(run) === codexIntegratorProviderRunOrdinals[1]
+
+export const isSupportedProviderRun = (run: IntegratorRunCorrelation): boolean =>
+  codexIntegratorProviderRunOrdinals.some((ordinal) => ordinal === ordinalOf(run))
+
+export const expectedProviderRunOrdinalAt = (index: number): CodexIntegratorProviderRunOrdinal | undefined =>
+  codexIntegratorProviderRunOrdinals[index]
+
+export const providerRunAdmissionError = (
+  run: IntegratorRunCorrelation,
+  hasSealedInitialRun: boolean
 ): string | undefined => {
-  const cleanupError = cleanupDispositionError(record)
-  if (cleanupError !== undefined) return cleanupError
-  if (privateRuns(record).some((run) => runCorrelationEquals(run.correlation, requestedRun))) return undefined
-  return runCorrelationEquals(record.initialRun, requestedRun) || sealedInitialRunAllowsRetry(record, requestedRun)
-    ? undefined
-    : "private candidate is durably bound to another provider run"
+  if (!isSupportedProviderRun(run)) return "provider run ordinal exceeds Retry"
+  return isRetryProviderRun(run) && !hasSealedInitialRun ? "Retry run two has no sealed run-one result" : undefined
 }
 
 /** A new candidate may bind only run one; Retry needs a sealed predecessor record. */
-export const newPrivateRecordRunError = (run: IntegratorRunCorrelation): string | undefined =>
-  Number(run.ordinal) > maximumProviderRunOrdinal
-    ? "provider run ordinal exceeds Retry"
-    : Number(run.ordinal) === 1
-      ? undefined
-      : "Retry run two has no sealed run-one result"
+export const newPrivateRecordRunError = (run: IntegratorRunCorrelation): string | undefined => {
+  const admissionError = providerRunAdmissionError(run, false)
+  return admissionError === undefined && !isInitialProviderRun(run)
+    ? "Retry run two has no sealed run-one result"
+    : admissionError
+}

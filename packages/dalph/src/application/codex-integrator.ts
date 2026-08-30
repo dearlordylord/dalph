@@ -28,7 +28,12 @@ import {
   sameSession,
   updateRun
 } from "./codex-integrator-private-store.js"
-import { newPrivateRecordRunError, providerPreparationError } from "./codex-integrator-private-lifecycle.js"
+import {
+  isInitialProviderRun,
+  newPrivateRecordRunError,
+  providerRunAdmissionError
+} from "./codex-integrator-private-lifecycle.js"
+import { providerPreparationError } from "./codex-integrator-private-preparation.js"
 import {
   boundary,
   type CodexIntegratorProviderFailure,
@@ -52,7 +57,6 @@ import {
   type GitCommandService,
   CoordinatorOwnership
 } from "@dalph/orchestrator"
-const maximumProviderRunOrdinal = 2
 const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandidateWorktreePath): string =>
   [
     "You are the Dalph integration provider.",
@@ -104,16 +108,9 @@ const ensureRunPreconditionError = (
   record: CodexIntegratorPrivateRecord,
   run: IntegratorRunCorrelation
 ): string | undefined => {
-  if (Number(run.ordinal) < 1 || Number(run.ordinal) > maximumProviderRunOrdinal) {
-    return "provider run ordinal exceeds Retry"
-  }
-  if (run.ordinal === maximumProviderRunOrdinal) {
-    const first = privateRuns(record).find((item) => Number(item.correlation.ordinal) === 1)
-    if (first === undefined || (first._tag !== "CompletedTurnSealed" && first._tag !== "FailedTurnSealed")) {
-      return "Retry run two has no sealed run-one result"
-    }
-  }
-  return undefined
+  const first = privateRuns(record).find((item) => isInitialProviderRun(item.correlation))
+  const hasSealedInitialRun = first?._tag === "CompletedTurnSealed" || first?._tag === "FailedTurnSealed"
+  return providerRunAdmissionError(run, hasSealedInitialRun)
 }
 
 const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
