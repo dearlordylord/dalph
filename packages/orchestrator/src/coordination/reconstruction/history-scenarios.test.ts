@@ -24,10 +24,15 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { ConflictingWorktreeRegistration, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import {
+  ConflictingWorktreeRegistration,
+  GitWorktreeReadFailure,
+  PlannedWorktreeReady
+} from "../../authorities/git/worktree.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
+  activeWorkAuthorityRefreshGitReadFailedRecordKey,
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
   controlDirectionAppliedRecordKey,
@@ -43,6 +48,7 @@ import {
 } from "../../workflow-journal/record-key.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
 import {
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TaskAttemptPlannedEvent,
@@ -112,6 +118,12 @@ import {
   makeFocusedTaskClaimFactsUnreadable,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
+import {
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshGitReadFailedEvent,
+  ActiveWorkAuthorityRefreshOrdinal,
+  makeActiveWorkAuthorityRefreshGitReadOperation
+} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 
 const runId = RunId.make("workflow-journal-history")
 const taskId = TaskId.make("task-A")
@@ -297,6 +309,46 @@ const firstCommandRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[10]))
 const firstReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[11]))
 const terminalReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[15]))
 
+const activeWorktreeFailureRows = (
+  attempt: PlannedTaskAttempt,
+  operationId: OperationId,
+  ordinal: number
+): ReadonlyArray<{ readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] }> => {
+  const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: attempt.attemptId, runId: attempt.runId })
+  const activeOrdinal = ActiveWorkAuthorityRefreshOrdinal.make(ordinal)
+  const operation = makeActiveWorkAuthorityRefreshGitReadOperation(
+    makeTaskWorktreeObservationOperation({ operationId, plannedAttempt: attempt, predecessorOperationIds: [] }),
+    authority,
+    activeOrdinal
+  )
+  return [
+    {
+      event: ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(operationId)
+    },
+    {
+      event: ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
+        authority,
+        failure: new GitWorktreeReadFailure({
+          detail: "controlled active-refresh worktree read failure",
+          worktree: attempt.worktree
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operation,
+        ordinal: activeOrdinal,
+        source: "TrackerNotification",
+        version: workflowJournalEventVersion
+      }),
+      key: activeWorkAuthorityRefreshGitReadFailedRecordKey(operationId, activeOrdinal)
+    }
+  ]
+}
+
 it("accepts every chronological workflow-journal-history boundary prefix", () => {
   for (let length = 0; length <= records.length; length += 1) {
     const reduction = reduceWorkflowJournalHistory(runId, records.slice(0, length))
@@ -312,6 +364,56 @@ it("accepts every chronological workflow-journal-history boundary prefix", () =>
   if (running._tag !== "ValidReconstructedRun") return
   expect(hasUnfinishedRunResponsibility(running.state)).toBe(true)
   expect(hasUnfinishedRunResponsibility(final.runState)).toBe(false)
+})
+
+it("retains an exact Running active-refresh failure and rejects mismatched retained authority history", () => {
+  const runningRows = eventRows.slice(0, 12)
+  const exactFailureRows = activeWorktreeFailureRows(
+    plannedAttempt,
+    OperationId.make("active-refresh-exact-running-failure"),
+    1
+  )
+  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...runningRows, ...exactFailureRows]))._tag).toBe(
+    "ValidWorkflowJournalHistory"
+  )
+
+  const foreignRunAttempt = PlannedTaskAttempt.make({
+    ...plannedAttempt,
+    attemptId: AttemptId.make("active-refresh-foreign-run-attempt"),
+    runId: RunId.make("active-refresh-foreign-run")
+  })
+  const histories = [
+    {
+      detail: "binds another Run",
+      rows: [
+        ...runningRows,
+        ...activeWorktreeFailureRows(foreignRunAttempt, OperationId.make("active-refresh-foreign-run-failure"), 1)
+      ]
+    },
+    {
+      detail: "requires the latest exact Running executor report",
+      rows: [
+        ...eventRows.slice(0, 10),
+        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-without-running-report"), 1)
+      ]
+    },
+    {
+      detail: "must exceed prior durable ordinal 1, found 1",
+      rows: [
+        ...runningRows,
+        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-first-durable-ordinal"), 1),
+        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-reused-durable-ordinal"), 1)
+      ]
+    }
+  ] as const
+
+  for (const history of histories) {
+    const reduction = reduceWorkflowJournalHistory(runId, recordsFrom(history.rows))
+    expect(reduction).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining(history.detail) })])
+    })
+  }
 })
 
 it("rejects Git outcomes that do not match the exact read intent and planned attempt", () => {
