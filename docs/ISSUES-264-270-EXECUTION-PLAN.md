@@ -14,12 +14,16 @@ review. It changes no Dalph runtime behavior.
   model-based tests, and one final `pnpm check:quint` run. Repeated unchanged
   `ExecutorWorkExecuting` observations create no additional executor command,
   accepted report, proposal identity, report ordinal, or command-budget entry.
-- Issue #265 has an implementation candidate under focused review. It attaches
-  one process-local passive lifecycle owner, publishes a later Safe or Terminal
-  change through the ordinary serialized report protocol, reconstructs the
-  owner from durable history after same-host restart, and fails closed on
-  unresolved non-exact evidence. It is not integrated until the scenario and
-  focused review gates below are green.
+- Issue #265 is integrated on `integrate/issues-264-268` through commit
+  `acdf5a715`. It attaches one process-local passive lifecycle owner, publishes
+  a later Safe or Terminal change through the ordinary serialized report
+  protocol, reconstructs the owner from durable history after same-host
+  restart, and fails closed on unresolved non-exact evidence. Independent
+  standards, specification, and Codex hint/census reviews are clean.
+- The integrated #265 stack passed `pnpm check:all` with 2,718 tests passed,
+  39 skipped, 35 MBT tests passed, and 100% changed production and maintained-
+  evaluation coverage. The final `pnpm check:quint` gate also passed, including
+  deterministic, sampled, exhaustive, temporal, and negative-control checks.
 - Issue #266 behavior was already present in the integration baseline before
   #264 was merged. Its notification/timer owner and task-local consequences are
   useful, but its private Git-read history protocol contradicts #266's accepted
@@ -93,6 +97,9 @@ Scenario-to-test mapping:
   scenarios in the issue-264 scenario and planned-attempt executor model.
 
 ### 2. Review and integrate #265: passive lifecycle observation through restart
+
+Status: completed on `integrate/issues-264-268` at `acdf5a715`; issue closure
+evidence recorded after clean independent review and full verification.
 
 The accepted chronological scenario is
 `docs/scenarios/issue-265-passive-executor-observation-through-restart.md`.
