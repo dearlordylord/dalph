@@ -245,18 +245,20 @@ conformance evidence for the required forbidden outcomes:
 - omitted, foreign, duplicate, or out-of-order FullRerun chronology: `accepts only one exact FullRerun successor and rejects absent, duplicate, or foreign successors` and `rejects duplicate, foreign, and out-of-order exact run facts` in `packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts`;
 - reused predecessor session or resource: `rejects a FullRerun successor that reuses predecessor identities` in `packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts`;
 - foreign completion claim: `rejects every cleanup and settlement occurrence whose success binds a different same-task claim` in `packages/orchestrator/src/workflow/protocols/integration-finality/history.test.ts`;
-- restart from only the recorded direction: `restarts from only Alice's FullRerun direction, reads fresh Git once, and fixes one successor in both stores` in `packages/dalph/test/conformance/restart-prefix-acceptance-matrix.test.ts` reconstructs memory and SQLite prefixes, waits for current tracker and claim facts, records Git intent before one fresh read and its observation, fixes one exact `(S, Q, D, L)` successor, and performs no Integrator delivery;
+- restart from only the recorded direction: `restarts from only Alice's FullRerun direction, reads fresh Git once, and fixes one successor in both stores` in `packages/dalph/test/conformance/restart-prefix-acceptance-matrix.test.ts` reconstructs memory and SQLite prefixes, performs the production tracker read, exact-claim read, and post-claim tracker reconfirmation, records Git intent before one fresh read and its observation, fixes one exact `(S, Q, D, L)` successor, and performs no Integrator delivery;
 - restart after successor fixation: `delivers the already-recorded FullRerun successor after restart` and `accepts a deterministic FullRerun successor only after its quarantine, direction, and fresh lineage` in `packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts` and `packages/orchestrator/src/workflow/protocols/integrator/reconstruction.test.ts`.
 
 The accepted-result conformance adapter also exercises `observeWrongParentCandidateOne`,
 `redeliverFullRerunOne`, `rejectConflictingFullRerunOne`, and
 `startFullRerunOne` against the collected `acceptedResultIntegration.qnt`
-laws. Its directed exact-head scenario additionally executes
-`reconcilePromotionReadOnlyOne` and `resumePromotionRetryWithAuthorityOne`,
-preserving the durable deferral through restart and unrelated history while
-another compare-and-set remains forbidden. These are negative and
-restart-prefix evidence, not substitutes for the maintained DS-14–DS-17
-cassette chronology.
+laws. Its directed exact-head scenario additionally executes the production
+promotion protocol in `reconcilePromotionReadOnlyOne` and
+`resumePromotionRetryWithAuthorityOne`: the controls record both permitted
+read-only deferrals, prove stable redelivery makes no Git call, and prove the
+exact-head authority resume performs only attempt two's compare-and-set. Quint
+selects the modeled current-authority transition separately from those
+production-effect assertions. These are negative and restart-prefix evidence,
+not substitutes for the maintained DS-14–DS-17 cassette chronology.
 
 <!-- DELIVERY-STORY-MANIFEST:START -->
 cassette|authored:deliveryInvariantStoryCapstone

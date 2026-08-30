@@ -72,6 +72,7 @@ import {
   integratorRunCorrelationForSession,
   prepareIntegrationCandidateRun
 } from "../../../orchestrator/src/workflow/protocols/integrator/protocol.js"
+import { integratorRunQualifiedCandidateFromState } from "../../../orchestrator/src/workflow/protocols/integrator/state.js"
 import {
   appendIntegratorSuccessorSessionIfNeeded,
   type IntegratorSuccessorSessionFixedRecord
@@ -90,12 +91,27 @@ import {
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
   IntegratorSessionFixedEvent,
+  type IntegratorRunQualifiedCandidate,
   type IntegratorSessionCorrelation,
   type IntegratorRunProtocolResult,
   type IntegratorRunState
 } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 import { IntegratorSuccessorPreparationInput } from "../../../orchestrator/src/workflow/protocols/integrator/session.js"
 import { evaluateIntegratorRetryAuthorization } from "../../../orchestrator/src/workflow/protocols/integrator/retry-authorization.js"
+import {
+  TargetPromotionCompareAndSetFailure,
+  TargetPromotionCompareAndSetResult,
+  TargetPromotionGit,
+  TargetPromotionGitReadFailure,
+  TargetPromotionGitReadObservation,
+  TargetPromotionReconciliationDeferral,
+  targetPromotionCorrelationFor,
+  targetPromotionGitRequestFor
+} from "../../../orchestrator/src/workflow/protocols/target-promotion/events.js"
+import {
+  reconcileTargetPromotionAttempt,
+  runTargetPromotion
+} from "../../../orchestrator/src/workflow/protocols/target-promotion/protocol.js"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
@@ -495,9 +511,44 @@ type RuntimeState = {
   readonly setGitMode: (mode: GitMode) => void
   readonly failNextGitRead: () => void
   readonly failNextIntegratorCall: () => void
+  readonly reconcilePromotionReadOnly: (candidate: IntegratorRunQualifiedCandidate) => Effect.Effect<void, unknown>
+  readonly resumePromotionRetryWithAuthority: (
+    candidate: IntegratorRunQualifiedCandidate
+  ) => Effect.Effect<void, unknown>
   readonly reset: () => void
   readonly updateTargetLineageTarget: (id: bigint, integrationTarget: IntegrationTarget) => void
   readonly integratorCallCount: () => number
+}
+
+interface PromotionJournalLane {
+  readonly calls: Array<string>
+  readonly journal: InRunJournal["Service"]
+  readonly readRecords: () => ReadonlyArray<JournalRecord>
+}
+
+const makePromotionJournalLane = (initialRecords: ReadonlyArray<JournalRecord>): PromotionJournalLane => {
+  let laneRecords = initialRecords
+  return {
+    calls: [],
+    journal: InRunJournal.of({
+      append: (requestedRunId, key, event) =>
+        Effect.sync(() => {
+          const existing = laneRecords.find((record) => record.key === key)
+          if (existing !== undefined) return existing
+          const lastPosition = laneRecords.reduce((maximum, record) => Math.max(maximum, record.position), 0)
+          const record: JournalRecord = {
+            event,
+            key,
+            position: JournalPosition.make(lastPosition + 1),
+            runId: requestedRunId
+          }
+          laneRecords = [...laneRecords, record]
+          return record
+        }),
+      read: (requestedRunId) => Effect.succeed(laneRecords.filter((record) => record.runId === requestedRunId))
+    }),
+    readRecords: () => laneRecords
+  }
 }
 
 const rejectImpossibleTransition = (detail: string): never => Effect.runSync(Effect.die(new Error(detail)))
@@ -763,6 +814,178 @@ const makeRuntime = (
   let failNextGit = false
   let integratorCalls = 0
   let failNextIntegrator = false
+  let exactPromotionLane: PromotionJournalLane | undefined
+
+  const runReadOnlyPromotionLane = Effect.fn("AcceptedResultIntegration.runReadOnlyPromotionLane")(function* (
+    candidate: IntegratorRunQualifiedCandidate,
+    mode: "ExpectedHead" | "Unreadable"
+  ) {
+    const lane = makePromotionJournalLane(records)
+    const correlation = targetPromotionCorrelationFor(candidate)
+    const expectedRequest = targetPromotionGitRequestFor(correlation)
+    const git = TargetPromotionGit.of({
+      compareAndSet: (request) =>
+        Effect.sync(() => {
+          lane.calls.push("compareAndSet:initial")
+          expect(request).toEqual(expectedRequest)
+          return new TargetPromotionCompareAndSetFailure({
+            candidateCommit: request.candidateCommit,
+            detail: "controlled promotion response lost",
+            expectedHead: request.expectedTargetHead,
+            target: request.integrationTarget
+          })
+        }).pipe(Effect.flatMap(Effect.fail)),
+      read: (request) =>
+        Effect.sync(() => {
+          expect(request).toEqual(expectedRequest)
+          const readCount = lane.calls.filter((call) => call.startsWith("read:")).length
+          lane.calls.push(readCount === 0 ? "read:initial" : "read:reconciliation")
+          return readCount === 0 || mode === "ExpectedHead"
+            ? TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+                currentHeadSha: candidate.run.session.expectedTargetHead
+              })
+            : new TargetPromotionGitReadFailure({
+                candidateCommit: request.candidateCommit,
+                detail: "controlled promotion destination unavailable",
+                target: request.integrationTarget
+              })
+        }).pipe(
+          Effect.flatMap((result) =>
+            result instanceof TargetPromotionGitReadFailure ? Effect.fail(result) : Effect.succeed(result)
+          )
+        )
+    })
+    const provideLane = <A, E>(effect: Effect.Effect<A, E, InRunJournal | TargetPromotionGit>) =>
+      effect.pipe(Effect.provideService(InRunJournal, lane.journal), Effect.provideService(TargetPromotionGit, git))
+
+    const pending = yield* provideLane(runTargetPromotion(candidate))
+    expect(pending._tag).toBe("PromotionPending")
+    expect(lane.calls).toEqual(["read:initial", "compareAndSet:initial"])
+
+    const deferred = yield* provideLane(reconcileTargetPromotionAttempt(candidate))
+    const expectedDeferral =
+      mode === "ExpectedHead"
+        ? TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
+            observedHeadSha: candidate.run.session.expectedTargetHead
+          })
+        : TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({
+            detail: "controlled promotion destination unavailable"
+          })
+    expect(deferred).toEqual({
+      _tag: "PromotionReconciliationDeferred",
+      afterAttemptOrdinal: 1,
+      correlation,
+      deferral: expectedDeferral
+    })
+    expect(lane.calls).toEqual(["read:initial", "compareAndSet:initial", "read:reconciliation"])
+    const recordsAfterDeferral = lane.readRecords()
+    expect(recordsAfterDeferral.slice(records.length).map(({ event }) => event._tag)).toEqual([
+      "TargetPromotionIntended",
+      "TargetPromotionAttemptIntended",
+      "TargetPromotionReconciliationDeferred"
+    ])
+    const initialAttempts = recordsAfterDeferral.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+    expect(initialAttempts).toHaveLength(1)
+    expect(initialAttempts[0]?.event).toMatchObject({
+      _tag: "TargetPromotionAttemptIntended",
+      attemptOrdinal: 1,
+      correlation,
+      reason: { _tag: "Initial", observedHeadSha: candidate.run.session.expectedTargetHead },
+      version: workflowJournalEventVersion
+    })
+    const durableDeferral = recordsAfterDeferral.at(-1)
+    expect(durableDeferral?.event).toMatchObject({
+      _tag: "TargetPromotionReconciliationDeferred",
+      afterAttemptOrdinal: 1,
+      correlation,
+      deferral: expectedDeferral,
+      version: workflowJournalEventVersion
+    })
+
+    const callCountAfterDeferral = lane.calls.length
+    expect((yield* provideLane(reconcileTargetPromotionAttempt(candidate)))._tag).toBe(
+      "PromotionReconciliationDeferred"
+    )
+    expect(lane.calls).toHaveLength(callCountAfterDeferral)
+    expect(lane.readRecords()).toEqual(recordsAfterDeferral)
+    return lane
+  })
+
+  const reconcilePromotionReadOnly = Effect.fn("AcceptedResultIntegration.reconcilePromotionReadOnly")(function* (
+    candidate: IntegratorRunQualifiedCandidate
+  ) {
+    // Quint selects the Git observation in a later action, while the production
+    // protocol observes Git and records the deferral atomically. Exercise both
+    // permitted production outcomes here; the driver's later observation action
+    // selects only the shadow-model branch and cannot substitute for these checks.
+    exactPromotionLane = yield* runReadOnlyPromotionLane(candidate, "ExpectedHead")
+    yield* runReadOnlyPromotionLane(candidate, "Unreadable")
+  })
+
+  const resumePromotionRetryWithAuthority = Effect.fn("AcceptedResultIntegration.resumePromotionRetryWithAuthority")(
+    function* (candidate: IntegratorRunQualifiedCandidate) {
+      const lane = exactPromotionLane
+      if (lane === undefined) return yield* Effect.die("promotion retry authority resumed without a durable deferral")
+      const expectedRequest = targetPromotionGitRequestFor(targetPromotionCorrelationFor(candidate))
+      const callsBeforeResume = lane.calls.length
+      const recordsBeforeResume = lane.readRecords()
+      const git = TargetPromotionGit.of({
+        compareAndSet: (request) =>
+          Effect.sync(() => {
+            lane.calls.push("compareAndSet:authorized")
+            expect(request).toEqual(expectedRequest)
+            return TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidate.candidateCommit })
+          }),
+        read: (request) =>
+          Effect.sync(() => {
+            lane.calls.push("read:forbidden-after-exact-deferral")
+            return new TargetPromotionGitReadFailure({
+              candidateCommit: request.candidateCommit,
+              detail: "exact-head authority resume must not reread Git",
+              target: request.integrationTarget
+            })
+          }).pipe(Effect.flatMap(Effect.fail))
+      })
+      const run = <A, E>(effect: Effect.Effect<A, E, InRunJournal | TargetPromotionGit>) =>
+        effect.pipe(Effect.provideService(InRunJournal, lane.journal), Effect.provideService(TargetPromotionGit, git))
+
+      const promoted = yield* run(runTargetPromotion(candidate))
+      expect(promoted._tag).toBe("PromotionSucceeded")
+      expect(lane.calls.slice(callsBeforeResume)).toEqual(["compareAndSet:authorized"])
+      const recordsAfterPromotion = lane.readRecords()
+      expect(recordsAfterPromotion.slice(recordsBeforeResume.length).map(({ event }) => event._tag)).toEqual([
+        "TargetPromotionAttemptIntended",
+        "TargetPromotionObservedSuccess"
+      ])
+      const attempts = recordsAfterPromotion.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+      expect(attempts).toHaveLength(2)
+      const resumedAttempt = attempts[1]
+      if (resumedAttempt?.event._tag !== "TargetPromotionAttemptIntended") {
+        return yield* Effect.die("authority-resumed promotion did not record its exact second attempt")
+      }
+      expect(resumedAttempt.event).toMatchObject({
+        attemptOrdinal: 2,
+        correlation: targetPromotionCorrelationFor(candidate),
+        reason: {
+          _tag: "ReconciledExpectedHead",
+          observedHeadSha: candidate.run.session.expectedTargetHead,
+          previousAttemptOrdinal: 1
+        }
+      })
+      expect(recordsAfterPromotion.at(-1)?.event).toMatchObject({
+        _tag: "TargetPromotionObservedSuccess",
+        basis: { _tag: "AfterAttempt", attemptOrdinal: 2 },
+        correlation: targetPromotionCorrelationFor(candidate),
+        observation: { _tag: "CompareAndSetApplied" },
+        version: workflowJournalEventVersion
+      })
+      const callsAfterPromotion = lane.calls.length
+      const durableSuccessRecords = lane.readRecords()
+      expect((yield* run(runTargetPromotion(candidate)))._tag).toBe("PromotionSucceeded")
+      expect(lane.calls).toHaveLength(callsAfterPromotion)
+      expect(lane.readRecords()).toEqual(durableSuccessRecords)
+    }
+  )
 
   const appendRecord = (requestedRunId: RunId, key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
     Effect.sync(() => {
@@ -878,6 +1101,7 @@ const makeRuntime = (
     failNextGit = false
     integratorCalls = 0
     failNextIntegrator = false
+    exactPromotionLane = undefined
   }
 
   return {
@@ -895,6 +1119,8 @@ const makeRuntime = (
     failNextIntegratorCall: () => {
       failNextIntegrator = true
     },
+    reconcilePromotionReadOnly,
+    resumePromotionRetryWithAuthority,
     reset,
     updateTargetLineageTarget,
     integratorCallCount: () => integratorCalls
@@ -1035,6 +1261,14 @@ const acceptedResultIntegrationDriver = defineDriver(
 
     const responsibilityFor = (id: bigint): StartedIntegrationResponsibility =>
       makeResponsibility(id, modelResults, runtime.readRecords())
+
+    const promotionCandidateFor = (id: bigint): IntegratorRunQualifiedCandidate => {
+      const state = deriveIntegratorRunState(runtime.readRecords(), responsibilityFor(id), currentRunFor(id))
+      if (state._tag !== "GitQualifiedPrepared") {
+        return rejectImpossibleTransition(`promotion control lacks a Git-qualified candidate: ${state._tag}`)
+      }
+      return integratorRunQualifiedCandidateFromState(state)
+    }
 
     const appendSession = (id: bigint) => {
       const input = makeInput(id, modelResults, runtime.readRecords())
@@ -2359,9 +2593,17 @@ const acceptedResultIntegrationDriver = defineDriver(
       recordPromotionIntentOne: () => Effect.sync(() => modelPromotionIntent(1n)),
       readCandidateGitOne: () => Effect.sync(() => modelReadGit(1n)),
       reconcileCandidateGitOne: () => Effect.sync(() => modelReconcileGit(1n)),
-      reconcilePromotionReadOnlyOne: () => Effect.sync(() => modelReconcilePromotionReadOnly(1n)),
+      reconcilePromotionReadOnlyOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.reconcilePromotionReadOnly(promotionCandidateFor(1n))
+          modelReconcilePromotionReadOnly(1n)
+        }),
       reconcilePromotionOne: () => Effect.sync(() => modelReconcilePromotion(1n)),
-      resumePromotionRetryWithAuthorityOne: () => Effect.sync(() => modelResumePromotionRetryWithAuthority(1n)),
+      resumePromotionRetryWithAuthorityOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.resumePromotionRetryWithAuthority(promotionCandidateFor(1n))
+          modelResumePromotionRetryWithAuthority(1n)
+        }),
       resumeIntegratorOne: () =>
         Effect.gen(function* () {
           const request = IntegratorRequest.make({ correlation: runFor(1n) })

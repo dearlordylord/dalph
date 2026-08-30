@@ -48,7 +48,6 @@ import {
   TargetPromotionReconciliationDeferral,
   TargetPromotionRuntime,
   intentRecordKey,
-  outcomeRecordKey,
   integrationQuarantinedRecordKey,
   makeTrackerGraphObservationOperation,
   memoryJournalStoreLayer,
@@ -64,7 +63,6 @@ import {
   makeIntegrationTargetResourceController,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
-  makeTaskClaimObservationOperation,
   makeTargetLineageObservationOperation,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -78,14 +76,11 @@ import {
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
+import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
+import { TaskLifecycle } from "../../../orchestrator/src/authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
-import {
-  makeCompleteTaskTrackerFactsObserved,
-  makeFocusedTaskClaimFactsObserved,
-  taskTrackerFactsObservedEvent
-} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import {
   IntegratorRunCandidateGitObservedEvent,
   IntegratorRunCandidateGitReadIntendedEvent,
@@ -109,19 +104,23 @@ import {
   type RunRecoveryProjectionSnapshot
 } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { deliveryProposalsOf } from "../../../orchestrator/src/coordination/delivery/delivery-proposal-derivation.js"
+import { executeFreshTrackerGraphRead } from "../../../orchestrator/src/coordination/delivery/delivery-action-adapter-common.js"
 import { executeIntegrationAction } from "../../../orchestrator/src/coordination/delivery/integration-delivery-action-adapter.js"
 import { executeAcceptedWorkflowAction } from "../../../orchestrator/src/coordination/delivery/recovered-delivery-action-adapter.js"
 import {
+  type DeliveryActionProposal,
+  type IdentityFreeDeliveryProposal,
+  type TrackerGraphActionProposal,
+  trackerGraphReadProposalOf
+} from "../../../orchestrator/src/coordination/delivery/delivery-action-proposal.js"
+import {
+  AuthoritativeTaskClaimObserved,
   AuthoritativeTargetLineageObserved,
   WorkflowInterpreter,
   WorkflowTrace
 } from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
 import type { DeliveryActionExecutionLease } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
-import type {
-  DeliveryActionProposal,
-  IdentityFreeDeliveryProposal
-} from "../../../orchestrator/src/coordination/delivery/delivery-action-proposal.js"
 import type { RunnableFrontierTransition } from "../../../orchestrator/src/coordination/frontier/frontier.js"
 import type { TargetPromotionRuntimeInput } from "../../../orchestrator/src/workflow/protocols/target-promotion/runtime.js"
 
@@ -456,6 +455,17 @@ interface ProductionRestartProjection {
 
 const isIdentityFreeProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>
   proposal.actionIdentity._tag === "NoWorkflowOperationIdentity"
+
+type FreshTrackerGraphProposal = Extract<
+  TrackerGraphActionProposal,
+  {
+    readonly actionIdentity: { readonly _tag: "FreshOperationIdRequired" }
+    readonly route: { readonly _tag: "TrackerGraphReadRoute" }
+  }
+>
+
+const isFreshTrackerGraphProposal = (proposal: TrackerGraphActionProposal): proposal is FreshTrackerGraphProposal =>
+  proposal.actionIdentity._tag === "FreshOperationIdRequired"
 
 const identityFreeActionFor = (
   runId: JournalRecord["runId"],
@@ -999,6 +1009,7 @@ it.effect(
               ) {
                 return yield* Effect.die("direction-only restart prefix failed exact event narrowing")
               }
+              const workflowTarget = began.event.target
               const predecessor = predecessorFixed.event.correlation
               const chronology: Array<string> = []
               const journal = InRunJournal.of({
@@ -1013,6 +1024,16 @@ it.effect(
                 read: storage.read
               })
               const decodedRecords = yield* storage.read(began.runId)
+              const predecessorLineage = exactlyOne(
+                decodedRecords.filter(
+                  ({ event, position }) =>
+                    event._tag === "TargetLineageObserved" && position === predecessor.targetLineageObservedAt
+                ),
+                lane + " predecessor target-lineage authority"
+              )
+              if (predecessorLineage.event._tag !== "TargetLineageObserved") {
+                return yield* Effect.die("direction-only restart lost its predecessor target-lineage authority")
+              }
               const replay: RecoveryStoreReplay = {
                 decodedRecords,
                 historyTag: reduceWorkflowJournalHistory(began.runId, decodedRecords)._tag,
@@ -1044,49 +1065,176 @@ it.effect(
                 lane
               ).toEqual([])
 
-              const claimOperation = makeTaskClaimObservationOperation(
-                OperationId.make(`restart-prefix-full-rerun-current-claim:${lane}`),
-                began.event.target,
-                predecessor.plannedAttempt.taskId,
-                [integrationFinalityFixture.activeClaim.operationId]
+              const freshHead = GitCommitSha.make("4".repeat(40))
+              const freshLineage = TargetLineageObservation.make({
+                plannedBaseIsAncestorOfTargetHead: true,
+                plannedBaseSha: predecessor.plannedAttempt.baseSha,
+                targetHeadSha: freshHead
+              })
+              const initialGraphOperationId = OperationId.make(`restart-prefix-full-rerun-current-graph:${lane}`)
+              const reconfirmedGraphOperationId = OperationId.make(
+                `restart-prefix-full-rerun-reconfirmed-graph:${lane}`
               )
-              yield* storage.append(
+              const graphOperationIds = [initialGraphOperationId, reconfirmedGraphOperationId]
+              let graphReadOrdinal = 0
+              const projectedCurrentGraph = projectTrackerSnapshot({
+                revision: `restart-prefix-full-rerun-current-graph:${lane}`,
+                tasks: [
+                  {
+                    id: predecessor.plannedAttempt.taskId,
+                    lifecycle: TaskLifecycle.cases.Open.make({}),
+                    parentTaskId: null,
+                    prerequisiteIds: []
+                  }
+                ]
+              })
+              if (projectedCurrentGraph._tag !== "Valid") {
+                return yield* Effect.die("direction-only restart current tracker graph was invalid")
+              }
+              const currentGraph = projectedCurrentGraph.snapshot
+              const boundaryInterpreter = WorkflowInterpreter.of({
+                acquireTaskClaim: () => Effect.die("direction-only restart must not acquire a claim"),
+                readTaskClaim: (operation) =>
+                  Effect.sync(() => {
+                    chronology.push("read:task-claim:" + operation.operationId)
+                    expect(operation).toMatchObject({
+                      _tag: "ReadTaskClaim",
+                      predecessorOperationIds: [initialGraphOperationId],
+                      target: workflowTarget,
+                      taskId: predecessor.plannedAttempt.taskId
+                    })
+                    return AuthoritativeTaskClaimObserved.make({ observation: integrationFinalityFixture.activeClaim })
+                  }),
+                readTaskWorktree: () => Effect.die("direction-only restart must not read a worktree"),
+                readTargetLineage: (operation) =>
+                  Effect.sync(() => {
+                    chronology.push("read:target-lineage:" + operation.operationId)
+                    expect(operation).toMatchObject({
+                      _tag: "ReadTargetLineage",
+                      integrationTarget: predecessor.integrationTarget,
+                      plannedAttempt: predecessor.plannedAttempt
+                    })
+                    return AuthoritativeTargetLineageObserved.make({ observation: freshLineage })
+                  }),
+                readTrackerGraph: (operation) =>
+                  Effect.sync(() => {
+                    chronology.push("read:tracker-graph:" + operation.operationId)
+                    const expectedOperationId = graphOperationIds[graphReadOrdinal]
+                    graphReadOrdinal += 1
+                    expect(operation).toMatchObject({
+                      _tag: "ReadTrackerGraph",
+                      operationId: expectedOperationId,
+                      predecessorOperationIds: [],
+                      target: workflowTarget
+                    })
+                    return currentGraph
+                  }),
+                readTaskWorkSpecification: () =>
+                  Effect.die("direction-only restart must not read task-work specification"),
+                reconcileTaskWorktree: () => Effect.die("direction-only restart must not reconcile a worktree"),
+                recordTaskAttemptPlan: () => Effect.die("direction-only restart must not record another plan"),
+                releaseTaskClaim: () => Effect.die("direction-only restart must not release a claim")
+              })
+              const journaledInterpreter = journaledWorkflowInterpreterLayer(
                 began.runId,
-                intentRecordKey(claimOperation.operationId),
-                TaskTrackerReadIntentRecordedEvent.make({
-                  operation: claimOperation,
-                  version: workflowJournalEventVersion
+                Layer.succeed(WorkflowInterpreter, boundaryInterpreter)
+              ).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+              const journaledInterpreterContext = yield* Effect.scoped(Layer.build(journaledInterpreter))
+              const persistedBoundaryInterpreter = Context.get(journaledInterpreterContext, WorkflowInterpreter)
+              const lease: DeliveryActionExecutionLease = {
+                ...executionLeaseFor(resources),
+                forwardBoundary: {
+                  _tag: "InterruptibleBoundary",
+                  execution: { run: (_intent, call, recordResult) => call.pipe(Effect.flatMap(recordResult)) }
+                },
+                recordIntent: (operationId) =>
+                  Effect.sync(() => {
+                    chronology.push("intent:" + operationId)
+                  })
+              }
+              const trace = WorkflowTrace.of({
+                emit: (item) =>
+                  Effect.sync(() => {
+                    chronology.push("trace:" + item._tag)
+                  })
+              })
+
+              const executeGraphRead = (operationId: OperationId, acceptedAt: JournalPosition) => {
+                const proposal = trackerGraphReadProposalOf({
+                  acceptedAt,
+                  purpose: "EstablishCurrentGraph",
+                  runId: began.runId,
+                  target: workflowTarget
                 })
-              )
-              yield* storage.append(
-                began.runId,
-                outcomeRecordKey(claimOperation.operationId),
-                taskTrackerFactsObservedEvent(
-                  claimOperation.operationId,
-                  makeFocusedTaskClaimFactsObserved(claimOperation, integrationFinalityFixture.activeClaim)
+                if (!isFreshTrackerGraphProposal(proposal)) {
+                  return Effect.die("current tracker graph proposal lacked its fresh-operation identity")
+                }
+                return executeFreshTrackerGraphRead(
+                  { _tag: "FreshOperationAction", operationId, proposal },
+                  proposal.route,
+                  lease
+                ).pipe(
+                  Effect.provideService(WorkflowTrace, trace),
+                  Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter),
+                  Effect.map((result) => ({ proposal, result }))
                 )
+              }
+              const initialGraphRead = yield* executeGraphRead(initialGraphOperationId, authored.direction.position)
+              expect(initialGraphRead.result).toMatchObject({
+                _tag: "TrackerGraphObservationPublished",
+                operationId: initialGraphOperationId,
+                proposalId: initialGraphRead.proposal.id,
+                snapshot: currentGraph
+              })
+
+              const afterGraph = yield* recovery.readDeliveryProjection
+              assertNoSuccessorTransition(afterGraph)
+              const claimTransition = exactlyOne(
+                afterGraph.frontier.transitions.filter(({ _tag }) => _tag === "ObserveResponsibleTaskClaim"),
+                lane + " current exact-claim observation"
               )
-              const graphOperation = makeTrackerGraphObservationOperation(
-                OperationId.make(`restart-prefix-full-rerun-current-graph:${lane}`),
-                began.event.target,
-                [claimOperation.operationId],
-                [predecessor.plannedAttempt.taskId]
+              if (claimTransition._tag !== "ObserveResponsibleTaskClaim") {
+                return yield* Effect.die("direction-only restart did not check its current exact claim")
+              }
+              expect(claimTransition).toMatchObject({
+                operation: {
+                  _tag: "ReadTaskClaim",
+                  predecessorOperationIds: [initialGraphOperationId],
+                  target: workflowTarget,
+                  taskId: predecessor.plannedAttempt.taskId
+                },
+                taskId: predecessor.plannedAttempt.taskId
+              })
+              const claimResult = yield* executeAcceptedWorkflowAction(began.runId, claimTransition, lease).pipe(
+                Effect.provideService(WorkflowTrace, trace),
+                Effect.provideService(InRunJournal, journal),
+                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
               )
-              yield* storage.append(
-                began.runId,
-                intentRecordKey(graphOperation.operationId),
-                TaskTrackerReadIntentRecordedEvent.make({
-                  operation: graphOperation,
-                  version: workflowJournalEventVersion
-                })
+              expect(claimResult).toEqual(
+                AuthoritativeTaskClaimObserved.make({ observation: integrationFinalityFixture.activeClaim })
               )
-              yield* storage.append(
-                began.runId,
-                outcomeRecordKey(graphOperation.operationId),
-                taskTrackerFactsObservedEvent(
-                  graphOperation.operationId,
-                  makeCompleteTaskTrackerFactsObserved(graphOperation, integrationFinalityFixture.graphSnapshot)
-                )
+
+              const afterClaim = yield* recovery.readDeliveryProjection
+              assertNoSuccessorTransition(afterClaim)
+              const recordsAfterClaim = yield* storage.read(began.runId)
+              const afterClaimPosition = recordsAfterClaim.at(-1)?.position
+              if (afterClaimPosition === undefined) {
+                return yield* Effect.die("exact claim observation did not establish a journal position")
+              }
+              const reconfirmedGraphRead = yield* executeGraphRead(reconfirmedGraphOperationId, afterClaimPosition)
+              expect(reconfirmedGraphRead.result).toMatchObject({
+                _tag: "TrackerGraphObservationPublished",
+                operationId: reconfirmedGraphOperationId,
+                proposalId: reconfirmedGraphRead.proposal.id,
+                snapshot: currentGraph
+              })
+              const recordsAfterGraphReconfirmation = yield* storage.read(began.runId)
+              const reconfirmedGraphRecord = exactlyOne(
+                recordsAfterGraphReconfirmation.filter(
+                  ({ event }) =>
+                    event._tag === "TaskTrackerFactsObserved" && event.operationId === reconfirmedGraphOperationId
+                ),
+                lane + " reconfirmed current graph"
               )
 
               const beforeAcquire = yield* recovery.readDeliveryProjection
@@ -1125,63 +1273,19 @@ it.effect(
               if (lineageTransition._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
                 return yield* Effect.die("direction-only restart did not select its fresh Git lineage read")
               }
-              expect(lineageTransition.operation).toMatchObject({
+              const expectedLineageOperationId = OperationId.make(
+                `integration-quarantine-direction:${encodeURIComponent(authored.direction.event.requestId.nonce)}:${predecessor.plannedAttempt.attemptId}:q:${authored.quarantine.position}:d:${authored.direction.position}:g:${reconfirmedGraphRecord.position}:target-lineage`
+              )
+              expect(lineageTransition.operation).toEqual({
                 _tag: "ReadTargetLineage",
                 integrationTarget: predecessor.integrationTarget,
-                plannedAttempt: predecessor.plannedAttempt
+                operationId: expectedLineageOperationId,
+                plannedAttempt: predecessor.plannedAttempt,
+                predecessorOperationIds: [predecessorLineage.event.operationId]
               })
 
-              const freshHead = GitCommitSha.make("4".repeat(40))
-              const freshLineage = TargetLineageObservation.make({
-                plannedBaseIsAncestorOfTargetHead: true,
-                plannedBaseSha: predecessor.plannedAttempt.baseSha,
-                targetHeadSha: freshHead
-              })
-              const boundaryInterpreter = WorkflowInterpreter.of({
-                acquireTaskClaim: () => Effect.die("direction-only restart must not acquire a claim"),
-                readTaskClaim: () => Effect.die("direction-only restart must not read a claim"),
-                readTaskWorktree: () => Effect.die("direction-only restart must not read a worktree"),
-                readTargetLineage: (operation) =>
-                  Effect.sync(() => {
-                    chronology.push("read:" + operation.operationId)
-                    expect(operation).toEqual(lineageTransition.operation)
-                    return AuthoritativeTargetLineageObserved.make({ observation: freshLineage })
-                  }),
-                readTrackerGraph: () => Effect.die("direction-only restart must not read the tracker graph"),
-                readTaskWorkSpecification: () =>
-                  Effect.die("direction-only restart must not read task-work specification"),
-                reconcileTaskWorktree: () => Effect.die("direction-only restart must not reconcile a worktree"),
-                recordTaskAttemptPlan: () => Effect.die("direction-only restart must not record another plan"),
-                releaseTaskClaim: () => Effect.die("direction-only restart must not release a claim")
-              })
-              const boundaryInterpreterLayer = Layer.effect(WorkflowInterpreter, Effect.succeed(boundaryInterpreter))
-              const journaledInterpreter = journaledWorkflowInterpreterLayer(
-                began.runId,
-                boundaryInterpreterLayer
-              ).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
-              const journaledInterpreterContext = yield* Effect.scoped(Layer.build(journaledInterpreter))
-              const persistedBoundaryInterpreter = Context.get(journaledInterpreterContext, WorkflowInterpreter)
-              const lease: DeliveryActionExecutionLease = {
-                ...executionLeaseFor(resources),
-                forwardBoundary: {
-                  _tag: "InterruptibleBoundary",
-                  execution: { run: (_intent, call, recordResult) => call.pipe(Effect.flatMap(recordResult)) }
-                },
-                recordIntent: (operationId) =>
-                  Effect.sync(() => {
-                    chronology.push("intent:" + operationId)
-                  })
-              }
               const observeLineage = executeAcceptedWorkflowAction(began.runId, lineageTransition, lease).pipe(
-                Effect.provideService(
-                  WorkflowTrace,
-                  WorkflowTrace.of({
-                    emit: (item) =>
-                      Effect.sync(() => {
-                        chronology.push("trace:" + item._tag)
-                      })
-                  })
-                ),
+                Effect.provideService(WorkflowTrace, trace),
                 Effect.provideService(InRunJournal, journal),
                 Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
               ) satisfies Effect.Effect<unknown, unknown, never>
@@ -1220,9 +1324,26 @@ it.effect(
               expect(freshIntent.position < freshObservation.position, lane).toBe(true)
               expect(chronology, lane).toEqual([
                 "trace:OperationSelected",
+                "append:TaskTrackerReadIntentRecorded",
+                "intent:" + initialGraphOperationId,
+                "read:tracker-graph:" + initialGraphOperationId,
+                "append:TaskTrackerFactsObserved",
+                "trace:TaskTrackerFactsObserved",
+                "trace:OperationSelected",
+                "append:TaskTrackerReadIntentRecorded",
+                "intent:" + claimTransition.operation.operationId,
+                "read:task-claim:" + claimTransition.operation.operationId,
+                "append:TaskTrackerFactsObserved",
+                "trace:OperationSelected",
+                "append:TaskTrackerReadIntentRecorded",
+                "intent:" + reconfirmedGraphOperationId,
+                "read:tracker-graph:" + reconfirmedGraphOperationId,
+                "append:TaskTrackerFactsObserved",
+                "trace:TaskTrackerFactsObserved",
+                "trace:OperationSelected",
                 "append:GitReadIntentRecorded",
                 "intent:" + lineageTransition.operation.operationId,
-                "read:" + lineageTransition.operation.operationId,
+                "read:target-lineage:" + lineageTransition.operation.operationId,
                 "append:TargetLineageObserved"
               ])
 
@@ -1256,7 +1377,7 @@ it.effect(
               ).toEqual([])
 
               const action = identityFreeActionFor(began.runId, afterLineageRecords, fixSuccessor)
-              const fix = executeIntegrationAction(action, fixSuccessor, lease, began.event.target).pipe(
+              const fix = executeIntegrationAction(action, fixSuccessor, lease, workflowTarget).pipe(
                 Effect.provideService(InRunJournal, journal),
                 Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
               ) satisfies Effect.Effect<unknown, unknown, never>
@@ -1291,7 +1412,13 @@ it.effect(
               expect(
                 chronology.filter((entry) => entry.startsWith("read:")),
                 lane
-              ).toHaveLength(1)
+              ).toEqual([
+                "read:tracker-graph:" + initialGraphOperationId,
+                "read:task-claim:" + claimTransition.operation.operationId,
+                "read:tracker-graph:" + reconfirmedGraphOperationId,
+                "read:target-lineage:" + lineageTransition.operation.operationId
+              ])
+              expect(graphReadOrdinal, lane).toBe(2)
 
               const restartedResources = yield* makeIntegrationTargetResourceController()
               const restartedRecovery = yield* makeRunRecoveryProjection(

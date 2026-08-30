@@ -203,13 +203,15 @@ per activation, and keeps post-limit recovery read-only; its finite projections
 completely enumerate those rules. `integrationFinality` separately models lost
 replacement/deletion responses and requires a fresh claim read before a second
 request. `acceptedResultIntegration.promotionRetryAuthorityDeferralIsStable`
-and the production-backed conformance actions `reconcilePromotionReadOnlyOne`
-and `resumePromotionRetryWithAuthorityOne` preserve an exact-head read across
-restart without permitting another compare-and-set until tracker, claim, and
-target authority are current. The dual-store restart matrix records the same
-wait as `TargetPromotionReconciliationDeferred`, including exact-head and
-unreadable-target outcomes, and proves that reconstruction does not retry the
-Git mutation.
+admits the resume action only after tracker, claim, and target authority are
+current. Its production-backed controls separately record exact-head and
+unreadable-target `TargetPromotionReconciliationDeferred` outcomes, prove that
+repeated read-only reconciliation performs no Git call, and prove that the
+authorized exact-head resume records attempt two and performs one
+compare-and-set without rereading Git. The model selects the permitted
+authority transition; the production control asserts the complete effect of
+the promotion protocol. The dual-store restart matrix proves that
+reconstruction does not retry the Git mutation.
 
 **D23 Incomplete and unreadable never prove absence.** Missing coverage,
 pagination, a timeout, or a partial response cannot prove a task, blocker, or
@@ -257,9 +259,10 @@ freshly qualified head.
 `changedHeadMakesPromotionStaleAndPreservesCandidateTest`, and
 `ambiguousPromotionRequiresFreshGitBeforeRetryTest`. The collected
 `authorityFreeExpectedHeadWaitsDurablyForRetryAuthorityTest` plus its directed
-production-backed conformance sequence prove that rereading exact `H` records
-an authority deferral rather than forcing or immediately retrying. The
-dual-store restart matrix also covers `TargetReadFailed` and exact
+conformance sequence prove that the production promotion protocol records an
+authority deferral after rereading exact `H`, while the model keeps retry
+authority unavailable until its current-facts guards pass. The dual-store
+restart matrix also covers `TargetReadFailed` and exact
 `RetryAuthorityRequired` deferrals.
 
 **D28 A prepared candidate is Git-qualified before promotion.** Dalph may offer
@@ -497,9 +500,10 @@ rather than guessed or inferred from a worktree tip.
 → `acceptedResultIntegration.noAutomaticIntegratorSuccessor`,
 `fullRerunPreservesPredecessorAndQueuePosition`, `successorAllocationIsBounded`,
 and `successorStartsAtFreshOrdinalOne`. The dual-store direction-only restart
-test reconstructs exact `(S, Q, FullRerun)`, records one fresh Git intent and
-observation, fixes exactly one correlated successor, and performs no premature
-Integrator delivery.
+test reconstructs exact `(S, Q, FullRerun)`, performs the current tracker and
+exact-claim boundary reads (including the required post-claim graph
+reconfirmation), records one fresh Git intent and observation, fixes exactly
+one correlated successor, and performs no premature Integrator delivery.
 
 **D45 Conflict work is isolated from the planned worktree.** Integration and
 conflict resolution never apply edits to the planned task worktree.
