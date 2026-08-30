@@ -347,12 +347,12 @@ const authorityFixtureLayer = (
                 ? {
                     exitCode: 0,
                     stderr: "",
-                    stdout: `worktree ${options.candidatePath}\nHEAD ${"c".repeat(40)}\nbranch refs/heads/foreign\n\n`
+                    stdout: `worktree ${options.candidatePath}\0HEAD ${"c".repeat(40)}\0branch refs/heads/foreign\0\0`
                   }
                 : {
                     exitCode: 0,
                     stderr: "",
-                    stdout: `worktree ${options.candidatePath}\nHEAD ${"a".repeat(40)}\ndetached\n\n`
+                    stdout: `worktree ${options.candidatePath}\0HEAD ${"a".repeat(40)}\0detached\0\0`
                   }
             }
             if (args[0] === "worktree" && args[1] === "add") {

@@ -56,6 +56,12 @@ const responseFor = (method, params = {}) => {
   if (mode === "thread-list-invalid-status" && method === "thread/list") {
     return { data: [{ ...validThread, status: "unknown" }] }
   }
+  if (mode === "thread-list-invalid-correlation" && method === "thread/list") {
+    return { data: [{ ...validThread, correlation: { runId: "run" } }] }
+  }
+  if (mode === "thread-list-invalid-token" && method === "thread/list") {
+    return { data: [{ ...validThread, ownedThreadToken: 42 }] }
+  }
   if (mode === "thread-list-valid" && method === "thread/list") return { data: [validThread] }
   if (mode === "thread-list-threads-key" && method === "thread/list") return { threads: [validThread] }
   if (mode === "thread-list-missing-status" && method === "thread/list") {
@@ -91,6 +97,18 @@ const responseFor = (method, params = {}) => {
   }
   if (mode === "thread-start-invalid-metadata-token" && method === "thread/start") {
     return { thread: { ...validThread, metadata: { dalphOwnedThreadToken: 42 } } }
+  }
+  if (mode === "thread-start-invalid-direct-token" && method === "thread/start") {
+    return { thread: { ...validThread, ownedThreadToken: 42 } }
+  }
+  if (mode === "thread-start-contradictory-tokens" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        ownedThreadToken: "direct-token",
+        metadata: { dalphOwnedThreadToken: "metadata-token" }
+      }
+    }
   }
   if (mode === "turn-response-not-object" && method === "turn/start") return "not-an-object"
   if (mode === "background-response-not-object" && method === "thread/backgroundTerminals/list") return "not-an-object"
@@ -170,6 +188,12 @@ const responseFor = (method, params = {}) => {
   }
   if (mode === "invalid-thread-correlation" && method === "thread/start") {
     return { thread: { ...validThread, correlation: { runId: "run" } } }
+  }
+  if (mode === "invalid-thread-correlation-shape" && method === "thread/start") {
+    return { thread: { ...validThread, correlation: "not-an-object" } }
+  }
+  if (mode === "invalid-thread-correlation-empty" && method === "thread/start") {
+    return { thread: { ...validThread, correlation: { runId: "", attemptId: "" } } }
   }
   if (mode === "thread-correlation" && method === "thread/start") {
     return { thread: { ...validThread, correlation: { runId: "run:protocol", attemptId: "attempt:protocol" } } }
@@ -323,9 +347,13 @@ it.effect("maps malformed thread and turn state to typed protocol failures", () 
       ["invalid-turn-token", "thread/start"],
       ["invalid-turn-token-empty", "thread/start"],
       ["thread-start-invalid-metadata-token", "thread/start"],
+      ["thread-start-invalid-direct-token", "thread/start"],
+      ["thread-start-contradictory-tokens", "thread/start"],
       ["duplicate-turn-marker", "thread/start"],
       ["contradictory-turn-token", "thread/start"],
-      ["invalid-thread-correlation", "thread/start"]
+      ["invalid-thread-correlation", "thread/start"],
+      ["invalid-thread-correlation-shape", "thread/start"],
+      ["invalid-thread-correlation-empty", "thread/start"]
     ] as const,
     ([mode, operation]) =>
       withFixture(mode, (app) =>
@@ -467,6 +495,8 @@ it.effect("reads a complete persistent thread list and preserves malformed-list 
       "thread-list-invalid-item",
       "thread-list-invalid-fields",
       "thread-list-invalid-status",
+      "thread-list-invalid-correlation",
+      "thread-list-invalid-token",
       "thread-list-rpc-error"
     ] as const) {
       const result = yield* withFixture(mode, (app) => {

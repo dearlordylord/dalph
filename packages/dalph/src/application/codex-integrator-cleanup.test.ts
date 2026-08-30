@@ -288,8 +288,8 @@ const runCase = <A>(
                   value === "none"
                     ? ""
                     : value === "foreign"
-                      ? `worktree ${candidatePath}\nHEAD ${"c".repeat(40)}\nbranch refs/heads/foreign\n\n`
-                      : `worktree ${candidatePath}\nHEAD ${head}\ndetached\n\n`
+                      ? `worktree ${candidatePath}\0HEAD ${"c".repeat(40)}\0branch refs/heads/foreign\0\0`
+                      : `worktree ${candidatePath}\0HEAD ${head}\0detached\0\0`
                 return { exitCode: 0, stderr: "", stdout }
               }
               if (args[0] === "worktree" && args[1] === "remove") {

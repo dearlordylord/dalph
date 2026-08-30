@@ -39,20 +39,30 @@ const GitWorktreePorcelainRecord = Schema.Struct({
   )
 )
 
+/** Git's `--porcelain -z` leaves path text unquoted and terminates every field and record with NUL. */
+const gitPorcelainFieldTerminator = "\0"
+const gitPorcelainRecordTerminator = `${gitPorcelainFieldTerminator}${gitPorcelainFieldTerminator}`
+
+const gitPorcelainFieldEntry = (field: {
+  readonly name: string
+  readonly value: string
+}): readonly [string, string] => [field.name, field.value]
+
 const parseWorktreeFields = (block: string): Map<string, string> | undefined => {
-  const fields = block.split("\n").map((line) => {
-    const separator = line.indexOf(" ")
-    const name = separator < 0 ? line : line.slice(0, separator)
-    const value = separator < 0 ? "" : line.slice(separator + 1)
-    return [name, value] as const
+  const fields = block.split(gitPorcelainFieldTerminator).map((field) => {
+    const separator = field.indexOf(" ")
+    return {
+      name: separator < 0 ? field : field.slice(0, separator),
+      value: separator < 0 ? "" : field.slice(separator + 1)
+    }
   })
-  const names = fields.map(([name]) => name)
+  const names = fields.map(({ name }) => name)
   if (
     names.some((name) => !["worktree", "HEAD", "branch", "bare", "detached", "locked", "prunable"].includes(name)) ||
     new Set(names).size !== names.length
   )
     return undefined
-  return new Map(fields)
+  return new Map(fields.map(gitPorcelainFieldEntry))
 }
 
 const worktreeRecordFromFields = (values: ReadonlyMap<string, string>): GitWorktreeRecord | undefined => {
@@ -84,10 +94,11 @@ const parseWorktreeList = (
 ):
   | { readonly _tag: "Valid"; readonly records: ReadonlyArray<GitWorktreeRecord> }
   | { readonly _tag: "Malformed"; readonly detail: string } => {
-  const blocks = stdout
-    .split(/\n\s*\n/u)
-    .map((block) => block.trim())
-    .filter((block) => block.length > 0)
+  if (stdout.length === 0) return { _tag: "Valid", records: [] }
+  if (!stdout.endsWith(gitPorcelainRecordTerminator)) {
+    return { _tag: "Malformed", detail: "git worktree list contained an unterminated porcelain record" }
+  }
+  const blocks = stdout.slice(0, -gitPorcelainRecordTerminator.length).split(gitPorcelainRecordTerminator)
   const records = blocks.map(parseWorktreeBlock)
   if (records.some((record) => record === undefined)) {
     return { _tag: "Malformed", detail: "git worktree list contained a malformed porcelain block" }
@@ -103,7 +114,7 @@ export const readWorktrees = (
   commands: GitCommandService,
   config: CodexIntegratorConfiguration
 ): Effect.Effect<ReadonlyArray<GitWorktreeRecord>, CodexIntegratorProviderFailure> =>
-  boundary(commands.run(config.commonDirectory, ["worktree", "list", "--porcelain"])).pipe(
+  boundary(commands.run(config.commonDirectory, ["worktree", "list", "--porcelain", "-z"])).pipe(
     Effect.flatMap((result) => {
       if (result.exitCode !== 0)
         return Effect.fail(providerFailure(`git worktree list failed: ${result.stderr.trim()}`))

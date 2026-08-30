@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import nodePath from "node:path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
-import { AttemptId, PlannedAttemptExecutorCorrelation, RunId } from "@dalph/contracts"
+import { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { Context, Deferred, Duration, Effect, Layer, Option, Ref, Result, Schema, Semaphore, Stream } from "effect"
 import {
   ApplicationExitDiagnostic,
@@ -48,15 +48,36 @@ type CodexThreadListCursor = typeof CodexThreadListCursor.Type
 
 const CodexTurnStatus = Schema.Literals(["completed", "interrupted", "failed", "inProgress"])
 
-const CodexTurnBoundaryIdentity = Schema.Struct({ id: CodexTurnId, status: CodexTurnStatus })
-
 const CodexTurnItems = Schema.Array(Schema.Unknown)
-
-const CodexThreadBoundaryIdentity = Schema.Struct({ cwd: CodexThreadWorkingDirectory, id: CodexThreadId })
 
 const CodexThreadStatusBoundary = Schema.Union([CodexThreadStatus, Schema.Struct({ type: CodexThreadStatus })])
 
-const CodexThreadListValues = Schema.Array(Schema.Unknown)
+const CodexTurnBoundary = Schema.Struct({
+  correlation: Schema.optionalKey(Schema.NullOr(PlannedAttemptExecutorCorrelation)),
+  id: CodexTurnId,
+  input: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  items: Schema.optionalKey(CodexTurnItems),
+  ownedTurnToken: Schema.optionalKey(Schema.NullOr(CodexOwnedTurnToken)),
+  status: CodexTurnStatus
+})
+type CodexTurnBoundary = typeof CodexTurnBoundary.Type
+
+const CodexThreadBoundaryMetadata = Schema.Struct({
+  dalphOwnedThreadToken: Schema.optionalKey(Schema.NullOr(CodexThreadOwnershipToken))
+})
+
+const CodexThreadBoundary = Schema.Struct({
+  correlation: Schema.optionalKey(Schema.NullOr(PlannedAttemptExecutorCorrelation)),
+  cwd: CodexThreadWorkingDirectory,
+  id: CodexThreadId,
+  metadata: Schema.optionalKey(CodexThreadBoundaryMetadata),
+  ownedThreadToken: Schema.optionalKey(Schema.NullOr(CodexThreadOwnershipToken)),
+  status: Schema.optionalKey(CodexThreadStatusBoundary),
+  turns: Schema.optionalKey(Schema.Array(CodexTurnBoundary))
+})
+type CodexThreadBoundary = typeof CodexThreadBoundary.Type
+
+const CodexThreadListValues = Schema.Array(CodexThreadBoundary)
 
 /** One persisted Codex turn. Items remain opaque except for private input identity and correlation. */
 export interface CodexTurnSnapshot {
@@ -1118,41 +1139,15 @@ const inputTextValues = (
   return [...text, ...content, ...input]
 }
 
-const normalizeCorrelation = (
-  value: unknown,
-  operation: CodexAppServerOperation,
-  subject: "turn" | "thread"
-): PlannedAttemptExecutorCorrelation | CodexAppServerFailure | undefined => {
-  if (value === undefined || value === null) return undefined
-  if (!isJsonObject(value)) return operationFailure(operation, "Malformed", `${subject} correlation is invalid`)
-  const candidate = value
-  if (typeof candidate["runId"] !== "string" || typeof candidate["attemptId"] !== "string") {
-    return operationFailure(operation, "Malformed", `${subject} correlation is incomplete`)
-  }
-  try {
-    return Schema.decodeUnknownSync(PlannedAttemptExecutorCorrelation)({
-      runId: RunId.make(candidate["runId"]),
-      attemptId: AttemptId.make(candidate["attemptId"])
-    })
-  } catch (error) {
-    return operationFailure(operation, "Malformed", `${subject} correlation is invalid: ${String(error)}`)
-  }
-}
-
-const normalizeTurnCorrelation = (
-  value: unknown,
-  operation: CodexAppServerOperation
-): PlannedAttemptExecutorCorrelation | CodexAppServerFailure | undefined =>
-  normalizeCorrelation(value, operation, "turn")
-
 const normalizeOwnedTurnToken = (
   value: unknown,
   operation: CodexAppServerOperation
 ): CodexOwnedTurnToken | CodexAppServerFailure | undefined => {
   if (value === undefined || value === null) return undefined
-  const token = stringValue(value)
-  if (token === undefined) return operationFailure(operation, "Malformed", "owned turn token is invalid")
-  return CodexOwnedTurnToken.make(token)
+  const decoded = Schema.decodeUnknownResult(CodexOwnedTurnToken)(value)
+  return Result.isSuccess(decoded)
+    ? decoded.success
+    : operationFailure(operation, "Malformed", `owned turn token is invalid: ${String(decoded.failure)}`)
 }
 
 const hasDuplicateOwnedTurnMarkers = (
@@ -1167,11 +1162,9 @@ type TurnMarkerValues = {
   readonly distinctMarkerValues: ReadonlyArray<string>
 }
 
-const turnMarkerValues = (source: JsonObject): TurnMarkerValues => {
-  const rawInputTexts = Array.isArray(source["input"])
-    ? source["input"].flatMap((item) => inputTextValues(item, true))
-    : []
-  const rawItemTexts = Array.isArray(source["items"]) ? source["items"].flatMap((item) => inputTextValues(item)) : []
+const turnMarkerValues = (source: CodexTurnBoundary): TurnMarkerValues => {
+  const rawInputTexts = source.input?.flatMap((item) => inputTextValues(item, true)) ?? []
+  const rawItemTexts = source.items?.flatMap((item) => inputTextValues(item)) ?? []
   const inputMarkerValues = rawInputTexts.flatMap(markerTokenFromText)
   const itemMarkerValues = rawItemTexts.flatMap(markerTokenFromText)
   return {
@@ -1182,12 +1175,11 @@ const turnMarkerValues = (source: JsonObject): TurnMarkerValues => {
 }
 
 const normalizeOwnedTurnTokenFromTurnSource = (
-  source: JsonObject,
+  source: CodexTurnBoundary,
   operation: CodexAppServerOperation
 ): CodexOwnedTurnToken | CodexAppServerFailure | undefined => {
   const { distinctMarkerValues, inputMarkerValues, itemMarkerValues } = turnMarkerValues(source)
-  const directToken = normalizeOwnedTurnToken(source["ownedTurnToken"], operation)
-  if (directToken instanceof CodexAppServerFailure) return directToken
+  const directToken = source.ownedTurnToken ?? undefined
   if (hasDuplicateOwnedTurnMarkers(inputMarkerValues, itemMarkerValues, distinctMarkerValues)) {
     return operationFailure(operation, "Malformed", "owned turn token marker is duplicated")
   }
@@ -1216,116 +1208,104 @@ const normalizedTurnSnapshot = (
   ...(correlation === undefined ? {} : { correlation })
 })
 
-const normalizeTurnItems = (
-  value: unknown,
+const normalizeTurnBoundary = (
+  source: CodexTurnBoundary,
   operation: CodexAppServerOperation
-): ReadonlyArray<unknown> | CodexAppServerFailure => {
-  if (value === undefined) return []
-  const decoded = Schema.decodeUnknownResult(CodexTurnItems)(value)
-  return Result.isSuccess(decoded)
-    ? decoded.success
-    : operationFailure(operation, "Malformed", "turn items are invalid")
+): CodexTurnSnapshot | CodexAppServerFailure => {
+  const ownedTurnToken = normalizeOwnedTurnTokenFromTurnSource(source, operation)
+  if (ownedTurnToken instanceof CodexAppServerFailure) return ownedTurnToken
+  return normalizedTurnSnapshot(
+    source.id,
+    source.status,
+    source.items ?? [],
+    ownedTurnToken,
+    source.correlation ?? undefined
+  )
 }
 
 const normalizeTurn = (
   value: unknown,
   operation: CodexAppServerOperation
 ): CodexTurnSnapshot | CodexAppServerFailure => {
-  if (!isJsonObject(value)) return operationFailure(operation, "Malformed", "missing turn object")
-  const source = value
-  const decoded = Schema.decodeUnknownResult(CodexTurnBoundaryIdentity)(source)
-  if (Result.isFailure(decoded)) {
-    return operationFailure(operation, "Malformed", "turn id or status is invalid")
-  }
-  const items = normalizeTurnItems(source["items"], operation)
-  if (items instanceof CodexAppServerFailure) return items
-  const normalizedCorrelation = normalizeTurnCorrelation(source["correlation"], operation)
-  if (normalizedCorrelation instanceof CodexAppServerFailure) return normalizedCorrelation
-  const ownedTurnToken = normalizeOwnedTurnTokenFromTurnSource(source, operation)
-  if (ownedTurnToken instanceof CodexAppServerFailure) return ownedTurnToken
-  return normalizedTurnSnapshot(
-    decoded.success.id,
-    decoded.success.status,
-    items,
-    ownedTurnToken,
-    normalizedCorrelation
-  )
+  const decoded = Schema.decodeUnknownResult(CodexTurnBoundary)(value)
+  return Result.isSuccess(decoded)
+    ? normalizeTurnBoundary(decoded.success, operation)
+    : operationFailure(operation, "Malformed", `turn payload is invalid: ${String(decoded.failure)}`)
 }
 
 const normalizeThreadTurns = (
-  rawTurns: unknown,
+  rawTurns: ReadonlyArray<CodexTurnBoundary> | undefined,
   operation: CodexAppServerOperation
 ): ReadonlyArray<CodexTurnSnapshot> | CodexAppServerFailure => {
-  if (rawTurns !== undefined && !Array.isArray(rawTurns)) {
-    return operationFailure(operation, "Malformed", "thread turns are invalid")
-  }
-  const turns = (rawTurns ?? []).map((rawTurn) => normalizeTurn(rawTurn, operation))
+  const turns = (rawTurns ?? []).map((rawTurn) => normalizeTurnBoundary(rawTurn, operation))
   const failure = turns.find((turn): turn is CodexAppServerFailure => turn instanceof CodexAppServerFailure)
   if (failure !== undefined) return failure
   return turns.filter((turn): turn is CodexTurnSnapshot => !(turn instanceof CodexAppServerFailure))
 }
 
-const threadStatusValue = (value: unknown): CodexThreadStatus | undefined => {
-  const decoded = Schema.decodeUnknownResult(CodexThreadStatusBoundary)(value)
-  if (Result.isFailure(decoded)) return undefined
-  return typeof decoded.success === "string" ? decoded.success : decoded.success.type
-}
+const threadStatusValue = (value: CodexThreadBoundary["status"]): CodexThreadStatus | undefined =>
+  typeof value === "string" ? value : value?.type
 
-const normalizedThreadIdentity = (
-  value: JsonObject,
+const threadStatusForOperation = (
+  source: CodexThreadBoundary,
   operation: CodexAppServerOperation
-):
-  | {
-      readonly source: JsonObject
-      readonly id: CodexThreadId
-      readonly cwd: CodexThreadWorkingDirectory
-      readonly status: CodexThreadSnapshot["status"]
-    }
-  | CodexAppServerFailure => {
-  const decoded = Schema.decodeUnknownResult(CodexThreadBoundaryIdentity)(value)
-  const rawStatus =
-    value["status"] === undefined && operation === "thread/list" ? "idle" : threadStatusValue(value["status"])
-  // `thread/list` summaries may omit a live status while still carrying the
-  // durable id and cwd needed to resume and complete the identity read.
-  return Result.isFailure(decoded) || rawStatus === undefined
-    ? operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
-    : { source: value, id: decoded.success.id, cwd: decoded.success.cwd, status: rawStatus }
-}
+): CodexThreadStatus | undefined =>
+  source.status === undefined && operation === "thread/list" ? "idle" : threadStatusValue(source.status)
 
-const normalizeOwnedThreadToken = (
-  source: JsonObject,
+const normalizeThreadOwnership = (
+  source: CodexThreadBoundary,
   operation: CodexAppServerOperation
 ): CodexThreadOwnershipToken | CodexAppServerFailure | undefined => {
-  const rawToken =
-    source["ownedThreadToken"] ??
-    (isJsonObject(source["metadata"]) ? source["metadata"]["dalphOwnedThreadToken"] : undefined)
-  if (rawToken === undefined || rawToken === null) return undefined
-  return typeof rawToken === "string" && rawToken.length > 0
-    ? CodexThreadOwnershipToken.make(rawToken)
-    : operationFailure(operation, "Malformed", "thread ownership token is invalid")
+  const directToken = source.ownedThreadToken ?? undefined
+  const metadataToken = source.metadata?.dalphOwnedThreadToken ?? undefined
+  if (directToken !== undefined && metadataToken !== undefined && directToken !== metadataToken) {
+    return operationFailure(operation, "Malformed", "thread ownership token fields contradict each other")
+  }
+  return directToken ?? metadataToken
+}
+
+const normalizedThreadSnapshot = (
+  source: CodexThreadBoundary,
+  status: CodexThreadStatus,
+  turns: ReadonlyArray<CodexTurnSnapshot>,
+  ownedThreadToken: CodexThreadOwnershipToken | undefined
+): CodexThreadSnapshot => {
+  const correlation = source.correlation ?? undefined
+  return {
+    id: source.id,
+    cwd: source.cwd,
+    status,
+    turns,
+    ...(ownedThreadToken === undefined ? {} : { ownedThreadToken }),
+    ...(correlation === undefined ? {} : { correlation })
+  }
+}
+
+const normalizeThreadBoundary = (
+  source: CodexThreadBoundary,
+  operation: CodexAppServerOperation
+): CodexThreadSnapshot | CodexAppServerFailure => {
+  const status = threadStatusForOperation(source, operation)
+  // `thread/list` summaries may omit a live status while still carrying the
+  // durable id and cwd needed to resume and complete the identity read.
+  if (status === undefined) {
+    return operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
+  }
+  const normalizedTurns = normalizeThreadTurns(source.turns, operation)
+  if (normalizedTurns instanceof CodexAppServerFailure) return normalizedTurns
+  const ownedThreadToken = normalizeThreadOwnership(source, operation)
+  if (ownedThreadToken instanceof CodexAppServerFailure) return ownedThreadToken
+  return normalizedThreadSnapshot(source, status, normalizedTurns, ownedThreadToken)
 }
 
 const normalizeThread = (
   value: unknown,
   operation: CodexAppServerOperation
 ): CodexThreadSnapshot | CodexAppServerFailure => {
-  if (!isJsonObject(value)) return operationFailure(operation, "Malformed", "missing thread object")
-  const identity = normalizedThreadIdentity(value, operation)
-  if (identity instanceof CodexAppServerFailure) return identity
-  const normalizedTurns = normalizeThreadTurns(identity.source["turns"], operation)
-  if (normalizedTurns instanceof CodexAppServerFailure) return normalizedTurns
-  const correlation = normalizeCorrelation(identity.source["correlation"], operation, "thread")
-  if (correlation instanceof CodexAppServerFailure) return correlation
-  const ownedThreadToken = normalizeOwnedThreadToken(identity.source, operation)
-  if (ownedThreadToken instanceof CodexAppServerFailure) return ownedThreadToken
-  return {
-    id: identity.id,
-    cwd: identity.cwd,
-    status: identity.status,
-    turns: normalizedTurns,
-    ...(ownedThreadToken === undefined ? {} : { ownedThreadToken }),
-    ...(correlation === undefined ? {} : { correlation })
-  }
+  const decoded = Schema.decodeUnknownResult(CodexThreadBoundary)(value)
+  return Result.isSuccess(decoded)
+    ? normalizeThreadBoundary(decoded.success, operation)
+    : operationFailure(operation, "Malformed", `thread payload is invalid: ${String(decoded.failure)}`)
 }
 
 const normalizedThreadEffect = (
@@ -1339,8 +1319,10 @@ const normalizeThreadListThreads = (
   rawThreads: unknown
 ): ReadonlyArray<CodexThreadSnapshot> | CodexAppServerFailure => {
   const decoded = Schema.decodeUnknownResult(CodexThreadListValues)(rawThreads)
-  if (Result.isFailure(decoded)) return operationFailure("thread/list", "Malformed", "thread list is invalid")
-  const normalizedThreads = decoded.success.map((thread) => normalizeThread(thread, "thread/list"))
+  if (Result.isFailure(decoded)) {
+    return operationFailure("thread/list", "Malformed", `thread list is invalid: ${String(decoded.failure)}`)
+  }
+  const normalizedThreads = decoded.success.map((thread) => normalizeThreadBoundary(thread, "thread/list"))
   const failure = normalizedThreads.find(
     (thread): thread is CodexAppServerFailure => thread instanceof CodexAppServerFailure
   )

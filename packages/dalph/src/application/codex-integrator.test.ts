@@ -490,14 +490,14 @@ const fixtureLayer = (
                   ? {
                       exitCode: 0,
                       stderr: "",
-                      stdout: `worktree ${fixtureWorktreePath}\nHEAD ${sha("c")}\nbranch refs/heads/foreign\n\n`
+                      stdout: `worktree ${fixtureWorktreePath}\0HEAD ${sha("c")}\0branch refs/heads/foreign\0\0`
                     }
                   : {
                       exitCode: 0,
                       stderr: "",
-                      stdout: `worktree ${fixtureWorktreePath}\nHEAD ${targetHead}\ndetached\n${
-                        options.prunableWorktree === true ? "prunable stale\n" : ""
-                      }\n`
+                      stdout: `worktree ${fixtureWorktreePath}\0HEAD ${targetHead}\0detached\0${
+                        options.prunableWorktree === true ? "prunable stale\0" : ""
+                      }\0`
                     }
                 : { exitCode: 0, stderr: "", stdout: "" }
             }

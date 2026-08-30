@@ -96,15 +96,11 @@ const porcelain = (
   mode: "detached" | "branch" = "detached",
   extra = ""
 ): string =>
-  [
-    `worktree ${candidatePath}`,
-    `HEAD ${head}`,
-    mode === "detached" ? "detached" : "branch refs/heads/foreign",
-    extra,
-    ""
-  ]
+  [`worktree ${candidatePath}`, `HEAD ${head}`, mode === "detached" ? "detached" : "branch refs/heads/foreign", extra]
     .filter((line) => line.length > 0)
-    .join("\n")
+    .join("\0") + "\0\0"
+
+const porcelainRecord = (fields: ReadonlyArray<string>): string => `${fields.join("\0")}\0\0`
 
 const privateStoreFor = (writes: Array<CodexIntegratorPrivateRecord>): CodexIntegratorPrivateStoreService => ({
   read: () => Effect.succeed(Option.none()),
@@ -194,20 +190,35 @@ const read = (stdout: string, exitCode = 0, stderr = "") =>
   Effect.runPromise(Effect.exit(readWorktrees(commandsFor({ exitCode, stderr, stdout }), config)))
 
 describe("Codex Integrator worktree parser", () => {
+  it("requests the NUL-delimited Git porcelain contract", async () => {
+    const invocations: Array<ReadonlyArray<string>> = []
+    const commands: GitCommandService = {
+      ...commandsFor({ exitCode: 0, stderr: "", stdout: "" }),
+      run: (_directory, args) =>
+        Effect.sync(() => {
+          invocations.push(args)
+          return { exitCode: 0, stderr: "", stdout: "" }
+        })
+    }
+    const exit = await Effect.runPromise(Effect.exit(readWorktrees(commands, config)))
+    expect(Exit.isSuccess(exit)).toBe(true)
+    expect(invocations).toEqual([["worktree", "list", "--porcelain", "-z"]])
+  })
+
   it("accepts exact branch and detached registrations", async () => {
     const exit = await read(
-      [
+      porcelainRecord([
         "worktree /tmp/branch",
         "HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "branch refs/heads/topic",
-        "locked",
-        "",
-        "worktree /tmp/detached",
-        "HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "detached",
-        "prunable stale",
-        ""
-      ].join("\n")
+        "locked"
+      ]) +
+        porcelainRecord([
+          'worktree /tmp/space quote" tab\tline\nbreak',
+          "HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "detached",
+          "prunable stale"
+        ])
     )
     expect(Exit.isSuccess(exit)).toBe(true)
     if (Exit.isSuccess(exit)) {
@@ -219,7 +230,12 @@ describe("Codex Integrator worktree parser", () => {
           detached: false,
           prunable: false
         },
-        { worktree: "/tmp/detached", head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", detached: true, prunable: true }
+        {
+          worktree: '/tmp/space quote" tab\tline\nbreak',
+          head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          detached: true,
+          prunable: true
+        }
       ])
     }
   })
@@ -227,23 +243,29 @@ describe("Codex Integrator worktree parser", () => {
   it("fails closed for provider errors and malformed porcelain blocks", async () => {
     const cases = [
       await read("", 1, "permission denied"),
-      await read("worktree /tmp/candidate\nHEAD abc\nunknown field\n"),
-      await read("worktree /tmp/candidate\nworktree /tmp/other\nHEAD abc\ndetached\n"),
-      await read("worktree /tmp/candidate\nHEAD abc\n"),
-      await read("HEAD abc\ndetached\n"),
+      await read(porcelainRecord(["worktree /tmp/candidate", "HEAD abc", "unknown field"])),
+      await read(porcelainRecord(["worktree /tmp/candidate", "worktree /tmp/other", "HEAD abc", "detached"])),
+      await read(porcelainRecord(["worktree /tmp/candidate", "HEAD abc"])),
+      await read(porcelainRecord(["HEAD abc", "detached"])),
+      await read(`worktree /tmp/candidate\0HEAD ${"a".repeat(40)}\0detached\0`),
       await read(
-        ["worktree /tmp/candidate", "HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "branch refs/heads/"].join("\n")
+        porcelainRecord([
+          "worktree /tmp/candidate",
+          "HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "branch refs/heads/"
+        ])
       ),
       await read(
-        [
+        porcelainRecord([
           "worktree /tmp/candidate",
           "HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "branch refs/heads/",
           "detached"
-        ].join("\n")
+        ])
       ),
       await read(
-        ["worktree /tmp/one", "HEAD abc", "detached", "", "worktree /tmp/one", "HEAD def", "detached", ""].join("\n")
+        porcelainRecord(["worktree /tmp/one", `HEAD ${"a".repeat(40)}`, "detached"]) +
+          porcelainRecord(["worktree /tmp/one", `HEAD ${"b".repeat(40)}`, "detached"])
       )
     ]
     for (const exit of cases) expect(Exit.isFailure(exit)).toBe(true)

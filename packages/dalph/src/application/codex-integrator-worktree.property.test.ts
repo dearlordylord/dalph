@@ -24,6 +24,9 @@ const commandsFor = (stdout: string): GitCommandServiceShape => ({
 })
 
 const safeSuffix = fc.stringMatching(/^[a-z0-9]{1,20}$/)
+const pathSuffix = fc
+  .array(fc.constantFrom(...Array.from("abcXYZ019-_"), " ", '"', "\t", "\n"), { minLength: 1, maxLength: 20 })
+  .map((characters) => characters.join(""))
 const commitSha = fc
   .array(fc.constantFrom("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"), {
     minLength: 40,
@@ -34,31 +37,38 @@ const registration = fc.record({
   detached: fc.boolean(),
   head: commitSha,
   locked: fc.boolean(),
+  pathSuffix,
   prunable: fc.boolean(),
-  suffix: safeSuffix
+  branchSuffix: safeSuffix
 })
-const registrations = fc.uniqueArray(registration, { maxLength: 20, minLength: 1, selector: (record) => record.suffix })
+const registrations = fc.uniqueArray(registration, {
+  maxLength: 20,
+  minLength: 1,
+  selector: (record) => record.pathSuffix
+})
 
 type Registration = {
   readonly detached: boolean
   readonly head: string
   readonly locked: boolean
+  readonly pathSuffix: string
   readonly prunable: boolean
-  readonly suffix: string
+  readonly branchSuffix: string
 }
 
 const porcelainFor = (records: ReadonlyArray<Registration>): string =>
   records
-    .map((record) =>
-      [
-        `worktree /tmp/${record.suffix}`,
-        `HEAD ${record.head}`,
-        record.detached ? "detached" : `branch refs/heads/${record.suffix}`,
-        ...(record.locked ? ["locked"] : []),
-        ...(record.prunable ? ["prunable stale metadata"] : [])
-      ].join("\n")
+    .map(
+      (record) =>
+        [
+          `worktree /tmp/${record.pathSuffix}`,
+          `HEAD ${record.head}`,
+          record.detached ? "detached" : `branch refs/heads/${record.branchSuffix}`,
+          ...(record.locked ? ["locked"] : []),
+          ...(record.prunable ? ["prunable stale metadata"] : [])
+        ].join("\0") + "\0\0"
     )
-    .join("\n\n")
+    .join("")
 
 it("preserves every generated valid Git worktree registration through the porcelain boundary", async () => {
   await fc.assert(
@@ -68,9 +78,9 @@ it("preserves every generated valid Git worktree registration through the porcel
       if (Exit.isSuccess(exit)) {
         expect(exit.value).toEqual(
           records.map((record) => ({
-            worktree: `/tmp/${record.suffix}`,
+            worktree: `/tmp/${record.pathSuffix}`,
             head: record.head,
-            ...(record.detached ? {} : { branch: `refs/heads/${record.suffix}` }),
+            ...(record.detached ? {} : { branch: `refs/heads/${record.branchSuffix}` }),
             detached: record.detached,
             prunable: record.prunable
           }))
