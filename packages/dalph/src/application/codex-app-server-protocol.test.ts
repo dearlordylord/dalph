@@ -64,6 +64,16 @@ const responseFor = (method, params = {}) => {
   }
   if (mode === "thread-list-valid" && method === "thread/list") return { data: [validThread] }
   if (mode === "thread-list-threads-key" && method === "thread/list") return { threads: [validThread] }
+  if (mode === "thread-list-identical-aliases" && method === "thread/list") {
+    return { data: [validThread], threads: [validThread], nextCursor: null, next_cursor: null }
+  }
+  if (mode === "thread-list-contradictory-values" && method === "thread/list") {
+    return { data: [], threads: [validThread] }
+  }
+  if (mode === "thread-list-contradictory-cursors" && method === "thread/list") {
+    return { data: [validThread], nextCursor: null, next_cursor: "hidden-page" }
+  }
+  if (mode === "thread-list-missing-values" && method === "thread/list") return { nextCursor: null }
   if (mode === "thread-list-missing-status" && method === "thread/list") {
     const { status: _status, ...threadWithoutStatus } = validThread
     return { data: [threadWithoutStatus] }
@@ -147,6 +157,63 @@ const responseFor = (method, params = {}) => {
   }
   if (mode === "invalid-turn-input-item" && method === "thread/start") {
     return { thread: { ...validThread, turns: [{ ...validTurn, input: [null] }] } }
+  }
+  if (mode === "turn-marker-top-level-input-text" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        turns: [{ ...validTurn, items: [{ type: "input_text", text: "<!-- dalph-owned-turn-token:v1:provider -->" }] }]
+      }
+    }
+  }
+  if (mode === "turn-marker-assistant-message" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        turns: [{
+          ...validTurn,
+          items: [{ type: "agentMessage", role: "assistant", content: [{ type: "input_text", text: "<!-- dalph-owned-turn-token:v1:provider -->" }] }]
+        }]
+      }
+    }
+  }
+  if (mode === "turn-marker-provider-prose" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        turns: [{ ...validTurn, items: [{ type: "providerMessage", text: "<!-- dalph-owned-turn-token:v1:provider -->" }] }]
+      }
+    }
+  }
+  if (mode === "turn-marker-malformed-user-message" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        turns: [{ ...validTurn, items: [{ type: "userMessage", content: [{ type: "input_text", text: 42 }] }] }]
+      }
+    }
+  }
+  if (mode === "turn-marker-contradictory-user-message" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        turns: [{
+          ...validTurn,
+          items: [{ type: "agentMessage", role: "user", content: [{ type: "input_text", text: "<!-- dalph-owned-turn-token:v1:provider -->" }] }]
+        }]
+      }
+    }
+  }
+  if (mode === "turn-marker-user-message" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        turns: [{
+          ...validTurn,
+          items: [{ type: "userMessage", content: [{ type: "input_text", text: "<!-- dalph-owned-turn-token:v1:user-owned -->" }] }]
+        }]
+      }
+    }
   }
   if (mode === "thread-no-turns" && method === "thread/start") {
     const { turns: _turns, ...threadWithoutTurns } = validThread
@@ -346,6 +413,9 @@ it.effect("maps malformed thread and turn state to typed protocol failures", () 
       ["invalid-turn-correlation-empty", "thread/start"],
       ["invalid-turn-token", "thread/start"],
       ["invalid-turn-token-empty", "thread/start"],
+      ["invalid-turn-input-item", "thread/start"],
+      ["turn-marker-malformed-user-message", "thread/start"],
+      ["turn-marker-contradictory-user-message", "thread/start"],
       ["thread-start-invalid-metadata-token", "thread/start"],
       ["thread-start-invalid-direct-token", "thread/start"],
       ["thread-start-contradictory-tokens", "thread/start"],
@@ -440,11 +510,26 @@ it.effect("reconciles valid turn markers, metadata, status, and correlation thro
       const started = yield* withFixture(mode, (app) => app.startThread("/fixture/worktree"))
       expect(started.status).toBe(mode === "thread-status-not-loaded" ? "notLoaded" : "systemError")
     }
+  })
+)
 
-    const ignoredInputShape = yield* withFixture("invalid-turn-input-item", (app) =>
-      Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.id)
+it.effect("accepts ownership markers only from schema-decoded user-authored input", () =>
+  Effect.gen(function* () {
+    const owned = yield* withFixture("turn-marker-user-message", (app) =>
+      Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.turns[0]?.ownedTurnToken)
     )
-    expect(ignoredInputShape).toBe("protocol-thread")
+    expect(owned).toBe("user-owned")
+
+    for (const mode of [
+      "turn-marker-top-level-input-text",
+      "turn-marker-assistant-message",
+      "turn-marker-provider-prose"
+    ] as const) {
+      const token = yield* withFixture(mode, (app) =>
+        Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.turns[0]?.ownedTurnToken)
+      )
+      expect(token).toBeUndefined()
+    }
   })
 )
 
@@ -484,6 +569,12 @@ it.effect("reads a complete persistent thread list and preserves malformed-list 
     })
     expect(alternateKey).toEqual(["protocol-thread"])
 
+    const identicalAliases = yield* withFixture("thread-list-identical-aliases", (app) => {
+      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
+    })
+    expect(identicalAliases).toEqual(["protocol-thread"])
+
     const paginated = yield* withFixture("thread-list-paginated", (app) => {
       if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
       return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
@@ -497,6 +588,9 @@ it.effect("reads a complete persistent thread list and preserves malformed-list 
       "thread-list-invalid-status",
       "thread-list-invalid-correlation",
       "thread-list-invalid-token",
+      "thread-list-contradictory-values",
+      "thread-list-contradictory-cursors",
+      "thread-list-missing-values",
       "thread-list-rpc-error"
     ] as const) {
       const result = yield* withFixture(mode, (app) => {

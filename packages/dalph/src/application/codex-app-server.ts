@@ -48,14 +48,43 @@ type CodexThreadListCursor = typeof CodexThreadListCursor.Type
 
 const CodexTurnStatus = Schema.Literals(["completed", "interrupted", "failed", "inProgress"])
 
-const CodexTurnItems = Schema.Array(Schema.Unknown)
+const CodexExternalItem = Schema.Record(Schema.String, Schema.Json)
+type CodexExternalItem = typeof CodexExternalItem.Type
+
+/** User-authored request text returned through the Codex turn input field. */
+const CodexTurnInputItem = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })
+
+/** User-authored text nested inside a Codex user-message item. */
+const CodexUserMessageInputText = Schema.Struct({ type: Schema.Literal("input_text"), text: Schema.String })
+
+const CodexUserMessageByType = Schema.Struct({
+  type: Schema.Literals(["userMessage", "user_message"]),
+  role: Schema.optionalKey(Schema.Literal("user")),
+  content: Schema.Array(CodexExternalItem)
+})
+
+const CodexUserMessageByRole = Schema.Struct({
+  type: Schema.optionalKey(Schema.Literals(["userMessage", "user_message"])),
+  role: Schema.Literal("user"),
+  content: Schema.Array(CodexExternalItem)
+})
+
+const CodexUserMessage = Schema.Union([CodexUserMessageByType, CodexUserMessageByRole])
+
+const CodexExternalItemDiscriminator = Schema.Struct({
+  type: Schema.optionalKey(Schema.String),
+  role: Schema.optionalKey(Schema.String)
+})
+type CodexExternalItemDiscriminator = typeof CodexExternalItemDiscriminator.Type
+
+const CodexTurnItems = Schema.Array(CodexExternalItem)
 
 const CodexThreadStatusBoundary = Schema.Union([CodexThreadStatus, Schema.Struct({ type: CodexThreadStatus })])
 
 const CodexTurnBoundary = Schema.Struct({
   correlation: Schema.optionalKey(Schema.NullOr(PlannedAttemptExecutorCorrelation)),
   id: CodexTurnId,
-  input: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  input: Schema.optionalKey(Schema.Array(CodexTurnInputItem)),
   items: Schema.optionalKey(CodexTurnItems),
   ownedTurnToken: Schema.optionalKey(Schema.NullOr(CodexOwnedTurnToken)),
   status: CodexTurnStatus
@@ -78,6 +107,41 @@ const CodexThreadBoundary = Schema.Struct({
 type CodexThreadBoundary = typeof CodexThreadBoundary.Type
 
 const CodexThreadListValues = Schema.Array(CodexThreadBoundary)
+
+const sameCodexThreadListValues = Schema.toEquivalence(CodexThreadListValues)
+
+const CodexThreadListEnvelopeFields = Schema.Struct({
+  data: Schema.optionalKey(CodexThreadListValues),
+  threads: Schema.optionalKey(CodexThreadListValues),
+  nextCursor: Schema.optionalKey(Schema.NullOr(CodexThreadListCursor)),
+  next_cursor: Schema.optionalKey(Schema.NullOr(CodexThreadListCursor))
+})
+
+const threadListValuesPresent = Schema.makeFilter<typeof CodexThreadListEnvelopeFields.Type>((response) =>
+  response.data === undefined && response.threads === undefined ? "thread list values are missing" : undefined
+)
+
+const threadListAliasesAgree = Schema.makeFilter<typeof CodexThreadListEnvelopeFields.Type>((response) => {
+  if (
+    response.data !== undefined &&
+    response.threads !== undefined &&
+    !sameCodexThreadListValues(response.data, response.threads)
+  ) {
+    return "thread list value aliases contradict each other"
+  }
+  if (
+    response.nextCursor !== undefined &&
+    response.next_cursor !== undefined &&
+    response.nextCursor !== response.next_cursor
+  ) {
+    return "thread list cursor aliases contradict each other"
+  }
+})
+
+const CodexThreadListEnvelope = CodexThreadListEnvelopeFields.pipe(
+  Schema.check(threadListValuesPresent, threadListAliasesAgree)
+)
+type CodexThreadListEnvelope = typeof CodexThreadListEnvelope.Type
 
 /** One persisted Codex turn. Items remain opaque except for private input identity and correlation. */
 export interface CodexTurnSnapshot {
@@ -1104,39 +1168,52 @@ const markerTokenFromText = (text: string): ReadonlyArray<string> =>
     (token): token is string => token !== undefined
   )
 
-const isUserMessageContainer = (type: unknown, role: unknown): boolean =>
-  role === "user" || type === "userMessage" || type === "user_message"
+const isUserMessageDiscriminator = (discriminator: CodexExternalItemDiscriminator): boolean =>
+  discriminator.role === "user" || discriminator.type === "userMessage" || discriminator.type === "user_message"
 
-const inputTextValuesFromArray = (
-  value: unknown,
-  forceInputShape: boolean,
-  userMessageContext: boolean
-): ReadonlyArray<string> =>
-  Array.isArray(value) ? value.flatMap((item) => inputTextValues(item, forceInputShape, userMessageContext)) : []
+const userMessageContentText = (
+  content: CodexExternalItem,
+  operation: CodexAppServerOperation
+): string | CodexAppServerFailure | undefined => {
+  const discriminator = Schema.decodeUnknownResult(CodexExternalItemDiscriminator)(content)
+  if (Result.isFailure(discriminator)) {
+    return operationFailure(
+      operation,
+      "Malformed",
+      `user-authored turn content discriminator is invalid: ${String(discriminator.failure)}`
+    )
+  }
+  if (discriminator.success.type !== "input_text") return undefined
+  const inputText = Schema.decodeUnknownResult(CodexUserMessageInputText)(content)
+  return Result.isSuccess(inputText)
+    ? inputText.success.text
+    : operationFailure(operation, "Malformed", `user-authored input text is invalid: ${String(inputText.failure)}`)
+}
 
-const isRecognizedInputTextValue = (
-  forceInputShape: boolean,
-  userMessageContext: boolean,
-  userMessageContainer: boolean,
-  type: unknown
-): boolean => forceInputShape || userMessageContext || userMessageContainer || type === "input_text"
-
-const inputTextValues = (
-  value: unknown,
-  forceInputShape: boolean = false,
-  userMessageContext: boolean = false
-): ReadonlyArray<string> => {
-  if (!isJsonObject(value)) return []
-  const type = value["type"]
-  const role = value["role"]
-  const userMessageContainer = isUserMessageContainer(type, role)
-  const recognized = isRecognizedInputTextValue(forceInputShape, userMessageContext, userMessageContainer, type)
-  if (!recognized) return []
-  const text = typeof value["text"] === "string" ? [value["text"]] : []
-  const nestedContext = userMessageContext || userMessageContainer
-  const content = inputTextValuesFromArray(value["content"], false, nestedContext)
-  const input = inputTextValuesFromArray(value["input"], true, nestedContext)
-  return [...text, ...content, ...input]
+const userMessageInputTexts = (
+  item: CodexExternalItem,
+  operation: CodexAppServerOperation
+): ReadonlyArray<string> | CodexAppServerFailure => {
+  const discriminator = Schema.decodeUnknownResult(CodexExternalItemDiscriminator)(item)
+  if (Result.isFailure(discriminator)) {
+    return operationFailure(
+      operation,
+      "Malformed",
+      `turn item discriminator is invalid: ${String(discriminator.failure)}`
+    )
+  }
+  if (!isUserMessageDiscriminator(discriminator.success)) return []
+  const userMessage = Schema.decodeUnknownResult(CodexUserMessage)(item)
+  if (Result.isFailure(userMessage)) {
+    return operationFailure(
+      operation,
+      "Malformed",
+      `user-authored turn item is invalid: ${String(userMessage.failure)}`
+    )
+  }
+  const texts = userMessage.success.content.map((content) => userMessageContentText(content, operation))
+  const failure = texts.find((text): text is CodexAppServerFailure => text instanceof CodexAppServerFailure)
+  return failure ?? texts.filter((text): text is string => typeof text === "string")
 }
 
 const normalizeOwnedTurnToken = (
@@ -1162,9 +1239,22 @@ type TurnMarkerValues = {
   readonly distinctMarkerValues: ReadonlyArray<string>
 }
 
-const turnMarkerValues = (source: CodexTurnBoundary): TurnMarkerValues => {
-  const rawInputTexts = source.input?.flatMap((item) => inputTextValues(item, true)) ?? []
-  const rawItemTexts = source.items?.flatMap((item) => inputTextValues(item)) ?? []
+const userMessageTexts = (
+  items: ReadonlyArray<CodexExternalItem>,
+  operation: CodexAppServerOperation
+): ReadonlyArray<string> | CodexAppServerFailure => {
+  const itemTexts = items.map((item) => userMessageInputTexts(item, operation))
+  const failure = itemTexts.find((texts): texts is CodexAppServerFailure => texts instanceof CodexAppServerFailure)
+  return failure ?? itemTexts.flatMap((texts) => (texts instanceof CodexAppServerFailure ? [] : texts))
+}
+
+const turnMarkerValues = (
+  source: CodexTurnBoundary,
+  operation: CodexAppServerOperation
+): TurnMarkerValues | CodexAppServerFailure => {
+  const rawInputTexts = source.input?.map((item) => item.text) ?? []
+  const rawItemTexts = userMessageTexts(source.items ?? [], operation)
+  if (rawItemTexts instanceof CodexAppServerFailure) return rawItemTexts
   const inputMarkerValues = rawInputTexts.flatMap(markerTokenFromText)
   const itemMarkerValues = rawItemTexts.flatMap(markerTokenFromText)
   return {
@@ -1174,12 +1264,12 @@ const turnMarkerValues = (source: CodexTurnBoundary): TurnMarkerValues => {
   }
 }
 
-const normalizeOwnedTurnTokenFromTurnSource = (
-  source: CodexTurnBoundary,
+const normalizeOwnedTurnTokenFromMarkers = (
+  markerValues: TurnMarkerValues,
+  directToken: CodexOwnedTurnToken | undefined,
   operation: CodexAppServerOperation
 ): CodexOwnedTurnToken | CodexAppServerFailure | undefined => {
-  const { distinctMarkerValues, inputMarkerValues, itemMarkerValues } = turnMarkerValues(source)
-  const directToken = source.ownedTurnToken ?? undefined
+  const { distinctMarkerValues, inputMarkerValues, itemMarkerValues } = markerValues
   if (hasDuplicateOwnedTurnMarkers(inputMarkerValues, itemMarkerValues, distinctMarkerValues)) {
     return operationFailure(operation, "Malformed", "owned turn token marker is duplicated")
   }
@@ -1192,6 +1282,16 @@ const normalizeOwnedTurnTokenFromTurnSource = (
     return operationFailure(operation, "Malformed", "owned turn token metadata contradicts its input marker")
   }
   return directToken ?? normalizedToken
+}
+
+const normalizeOwnedTurnTokenFromTurnSource = (
+  source: CodexTurnBoundary,
+  operation: CodexAppServerOperation
+): CodexOwnedTurnToken | CodexAppServerFailure | undefined => {
+  const markerValues = turnMarkerValues(source, operation)
+  return markerValues instanceof CodexAppServerFailure
+    ? markerValues
+    : normalizeOwnedTurnTokenFromMarkers(markerValues, source.ownedTurnToken ?? undefined, operation)
 }
 
 const normalizedTurnSnapshot = (
@@ -1316,13 +1416,9 @@ const normalizedThreadEffect = (
 const maximumThreadListPages = 100
 
 const normalizeThreadListThreads = (
-  rawThreads: unknown
+  rawThreads: ReadonlyArray<CodexThreadBoundary>
 ): ReadonlyArray<CodexThreadSnapshot> | CodexAppServerFailure => {
-  const decoded = Schema.decodeUnknownResult(CodexThreadListValues)(rawThreads)
-  if (Result.isFailure(decoded)) {
-    return operationFailure("thread/list", "Malformed", `thread list is invalid: ${String(decoded.failure)}`)
-  }
-  const normalizedThreads = decoded.success.map((thread) => normalizeThreadBoundary(thread, "thread/list"))
+  const normalizedThreads = rawThreads.map((thread) => normalizeThreadBoundary(thread, "thread/list"))
   const failure = normalizedThreads.find(
     (thread): thread is CodexAppServerFailure => thread instanceof CodexAppServerFailure
   )
@@ -1330,30 +1426,34 @@ const normalizeThreadListThreads = (
   return normalizedThreads.filter((thread): thread is CodexThreadSnapshot => !(thread instanceof CodexAppServerFailure))
 }
 
-const normalizeThreadListCursor = (
-  response: Record<string, unknown>
-): CodexThreadListCursor | null | undefined | CodexAppServerFailure => {
-  const nextCursor = response["nextCursor"] ?? response["next_cursor"]
-  if (nextCursor === undefined || nextCursor === null) return nextCursor
-  const decoded = Schema.decodeUnknownResult(CodexThreadListCursor)(nextCursor)
-  return Result.isSuccess(decoded)
-    ? decoded.success
-    : operationFailure("thread/list", "Malformed", "thread list cursor is invalid")
-}
-
-const threadListPage = (
-  response: Record<string, unknown>
+const normalizedThreadListEnvelope = (
+  response: CodexThreadListEnvelope
 ):
   | {
       readonly threads: ReadonlyArray<CodexThreadSnapshot>
       readonly nextCursor: CodexThreadListCursor | null | undefined
     }
   | CodexAppServerFailure => {
-  const threads = normalizeThreadListThreads(response["data"] ?? response["threads"])
+  const rawThreads = response.data ?? response.threads
+  /* v8 ignore next -- @preserve The envelope Schema requires one decoded values alias. */
+  if (rawThreads === undefined) return operationFailure("thread/list", "Malformed", "thread list values are missing")
+  const threads = normalizeThreadListThreads(rawThreads)
   if (threads instanceof CodexAppServerFailure) return threads
-  const nextCursor = normalizeThreadListCursor(response)
-  if (nextCursor instanceof CodexAppServerFailure) return nextCursor
-  return { threads, nextCursor }
+  return { threads, nextCursor: response.nextCursor ?? response.next_cursor }
+}
+
+const threadListPage = (
+  response: unknown
+):
+  | {
+      readonly threads: ReadonlyArray<CodexThreadSnapshot>
+      readonly nextCursor: CodexThreadListCursor | null | undefined
+    }
+  | CodexAppServerFailure => {
+  const decoded = Schema.decodeUnknownResult(CodexThreadListEnvelope)(response)
+  return Result.isSuccess(decoded)
+    ? normalizedThreadListEnvelope(decoded.success)
+    : operationFailure("thread/list", "Malformed", `thread list response is invalid: ${String(decoded.failure)}`)
 }
 
 type NormalizedBackgroundTerminal = {
@@ -2615,15 +2715,11 @@ export const codexAppServerLayer = (
         let cursors: ReadonlySet<CodexThreadListCursor> = new Set<CodexThreadListCursor>()
         let cursor: CodexThreadListCursor | undefined
         for (let page = 0; page < maximumThreadListPages; page += 1) {
-          const response = responseObject(
-            yield* rpc.request(
-              "thread/list",
-              "thread/list",
-              cursor === undefined ? { includeTurns: false } : { includeTurns: false, cursor }
-            ),
-            "thread/list"
+          const response = yield* rpc.request(
+            "thread/list",
+            "thread/list",
+            cursor === undefined ? { includeTurns: false } : { includeTurns: false, cursor }
           )
-          if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
           const parsed = threadListPage(response)
           if (parsed instanceof CodexAppServerFailure) return yield* Effect.fail(parsed)
           pages = [...pages, parsed.threads]
