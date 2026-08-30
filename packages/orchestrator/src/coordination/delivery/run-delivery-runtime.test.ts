@@ -116,7 +116,7 @@ import {
 import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
-import type { ReconstructedRunState } from "../reconstruction/state.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 
@@ -2061,8 +2061,8 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
-      const g2AcceptedAt = JournalPosition.make(14)
-      const pauseAcceptedAt = JournalPosition.make(15)
+      const g2AcceptedAt = JournalPosition.make(7)
+      const pauseAcceptedAt = JournalPosition.make(8)
       const waitingTaskId = independentPlannedAttempt.taskId
       const occupiedTaskId = TaskId.make("post-g2-pause-capacity-holder")
       const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
@@ -2090,26 +2090,26 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
       })
       const executorChronology = [
         record(
-          7,
+          1,
           TaskClaimAcquisitionIntendedEvent.make({ operation: claimAcquisition, version: workflowJournalEventVersion })
         ),
         record(
-          8,
+          2,
           TaskClaimAcquiredEvent.make({
             claim: ActiveTaskClaim.make(acquisition),
             version: workflowJournalEventVersion
           })
         ),
-        record(9, TaskAttemptPlannedEvent.make({ operation: attemptPlan, version: workflowJournalEventVersion })),
+        record(3, TaskAttemptPlannedEvent.make({ operation: attemptPlan, version: workflowJournalEventVersion })),
         record(
-          10,
+          4,
           PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
             plannedAttempt: independentPlannedAttempt,
             version: workflowJournalEventVersion
           })
         ),
         record(
-          12,
+          5,
           PlannedAttemptExecutorCommandIntendedEvent.make({
             command: "Suspend",
             initiatedBy: { _tag: "DalphCoordinator" },
@@ -2120,7 +2120,7 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
           })
         ),
         record(
-          13,
+          6,
           PlannedAttemptExecutorCommandProjectionObservedEvent.make({
             commandOrdinal,
             observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
@@ -2133,25 +2133,18 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
           })
         )
       ]
-      const reconstructedB: ReconstructedRunState = {
-        appliedThrough: JournalPosition.make(13),
-        cancellation: { _tag: "RunCancellationNotApplied" },
-        controlPolicy: Option.none(),
-        graphKnowledge: { taskTrackerFacts: [] },
-        pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
-        responsibility: {
-          entries: [
-            {
-              _tag: "PlannedAttemptExecutorWorkResponsibility",
-              beganAt: JournalPosition.make(10),
-              plannedAttempt: independentPlannedAttempt
-            }
-          ]
-        },
-        runId,
-        workflowHistory: { records: executorChronology }
+      const reducedB = reduceWorkflowJournalHistory(runId, executorChronology)
+      if (reducedB._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `B's accepted executor chronology must reconstruct as valid journal history: ${JSON.stringify(reducedB.issues)}`
+        )
       }
-      const [bFacts] = deriveJournalResponsibilityFacts(reconstructedB)
+      const bFacts = deriveJournalResponsibilityFacts(reducedB.runState).find(
+        (facts) =>
+          facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+          facts.responsibility.plannedAttempt.runId === independentPlannedAttempt.runId &&
+          facts.responsibility.plannedAttempt.attemptId === independentPlannedAttempt.attemptId
+      )
       if (
         bFacts?._tag !== "PlannedAttemptExecutorFreshFacts" ||
         bFacts.disposition._tag !== "Ready" ||
@@ -2211,11 +2204,11 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
           ]
         }
       } satisfies DeliveryRuntimeEvaluation
-      expect(requiredPlannedAttemptPositionsOf(reconstructedB)).toEqual([])
+      expect(requiredPlannedAttemptPositionsOf(reducedB.runState)).toEqual([])
       expect(acceptedG2.taskWork.held.map(({ taskId }) => taskId)).toEqual([occupiedTaskId])
       expect(waiting.route).toMatchObject({
         transition: {
-          acceptedProgress: { _tag: "ExecutorProjectionAccepted", observedAt: JournalPosition.make(13) },
+          acceptedProgress: { _tag: "ExecutorProjectionAccepted", observedAt: JournalPosition.make(6) },
           plannedAttempt: independentPlannedAttempt
         }
       })
