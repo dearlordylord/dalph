@@ -1,5 +1,6 @@
 import {
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
@@ -8,14 +9,13 @@ import {
   type PlannedAttemptExecutorReport as PlannedAttemptExecutorReportType,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
-import { Effect, Layer, Ref } from "effect"
+import { Context, Effect, Layer, Ref, Stream } from "effect"
 
 /**
  * Deterministic executor boundary used only by the fixture dry-run command.
  * Production composition receives its boundary implementation from its caller.
  */
-export const dryRunPlannedAttemptExecutorLayer = Layer.effect(
-  PlannedAttemptExecutor,
+export const dryRunPlannedAttemptExecutorLayer = Layer.effectContext(
   Effect.gen(function* () {
     const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReportType>>(new Map())
     const record = (attempt: PlannedTaskAttempt, report: PlannedAttemptExecutorReportType) =>
@@ -38,7 +38,7 @@ export const dryRunPlannedAttemptExecutorLayer = Layer.effect(
         : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
     }
 
-    return PlannedAttemptExecutor.of({
+    const executor = PlannedAttemptExecutor.of({
       observe: Effect.fn("DryRunPlannedAttemptExecutor.observe")((correlation) =>
         Ref.get(reports).pipe(Effect.map((current) => projectionFor(correlation, current)))
       ),
@@ -66,5 +66,19 @@ export const dryRunPlannedAttemptExecutorLayer = Layer.effect(
           })
         )
     })
+    const lifecycle = PlannedAttemptExecutorLifecycleObservation.of({
+      attach: (correlation) =>
+        Ref.get(reports).pipe(
+          Effect.map((current) => ({
+            changes: Stream.never,
+            close: Effect.void,
+            current: projectionFor(correlation, current)
+          }))
+        )
+    })
+    return Context.empty().pipe(
+      Context.add(PlannedAttemptExecutor, executor),
+      Context.add(PlannedAttemptExecutorLifecycleObservation, lifecycle)
+    )
   })
 )

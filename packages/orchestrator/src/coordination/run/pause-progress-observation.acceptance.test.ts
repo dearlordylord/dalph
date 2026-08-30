@@ -5,6 +5,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   type RunId,
@@ -474,7 +475,8 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
       Layer.mergeAll(
         Layer.succeed(JournalStore, storage),
         Layer.succeed(RunLifecycleJournal, Context.get(capabilities, RunLifecycleJournal)),
-        Layer.succeed(CoordinatorOwnership, ownership)
+        Layer.succeed(CoordinatorOwnership, ownership),
+        Layer.mock(PlannedAttemptExecutorLifecycleObservation, {})
       )
     )
   )

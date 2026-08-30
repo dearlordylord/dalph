@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Run bootstrap keeps activation and its serialized operator controls in one ownership boundary. */
-import { type RunId } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, type RunId } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
@@ -83,6 +83,20 @@ import {
   activeWorkAuthorityRefreshSubjectsForRunState,
   RunActivationOpportunity
 } from "./run-activation-opportunity.js"
+import {
+  makePlannedAttemptProtocolController,
+  PlannedAttemptProtocolController
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import {
+  publishPlannedAttemptExecutorProjectionResultWithPermit,
+  type PlannedAttemptExecutorObservationResult
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+import {
+  makePassivePlannedAttemptObserver,
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication,
+  type PassivePlannedAttemptProjectionPublicationService
+} from "./passive-planned-attempt-observer.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -92,7 +106,11 @@ export interface JournaledRuntimeLayerInput {
 export type JournaledRuntimeLayer = Layer.Layer<
   Exclude<JournaledRunServices, Journal | JournaledRunProcessServices>,
   InvalidWorkflowJournalHistory | JournalAppendError | JournalReadError | StartupRecoveryBlocked,
-  ApplicationExitAdmission | CoordinatorOwnership | InRunJournal
+  | ApplicationExitAdmission
+  | CoordinatorOwnership
+  | InRunJournal
+  | JournaledRunProcessServices
+  | PlannedAttemptProtocolController
 >
 
 interface RuntimeControls {
@@ -258,8 +276,9 @@ export const journaledRunBootstrapLayer = (
         yield* makeIntegrationTargetResourceController(),
         admission
       )
+      const processPlannedAttemptProtocolController = yield* makePlannedAttemptProtocolController()
+      const processPassiveObserver = yield* makePassivePlannedAttemptObserver()
       yield* Effect.addFinalizer(() => processRuntimeCapabilities.observation.close)
-      const processRuntimeLayer = deliveryRuntimeResourceCapabilitiesLayer(processRuntimeCapabilities)
 
       const acquireControlLease = Effect.fn("JournaledRunBootstrap.acquireControlLease")(function* () {
         const forwardOwner = yield* admission.acquireForwardOwner("InterruptibleBoundary")
@@ -313,6 +332,72 @@ export const journaledRunBootstrapLayer = (
         withRuntimeControls(({ integrationQuarantineDirection }) => use(integrationQuarantineDirection)).pipe(
           Effect.catchTag("JournaledRunNotActive", () => withJournalControl(use(integrationQuarantineDirection)))
         )
+
+      const withPassivePublicationJournal = <A, E>(
+        use: (journal: InRunJournal["Service"], publishStoredFactHint: boolean) => Effect.Effect<A, E>
+      ) =>
+        withRuntimeControls(({ journal }) =>
+          use(InRunJournal.of({ append: journal.append, read: journal.read }), false)
+        ).pipe(Effect.catchTag("JournaledRunNotActive", () => withJournalControl(use(inRunJournal, true))))
+
+      const withActivePassivePublicationJournal = <A, E>(
+        use: (journal: InRunJournal["Service"]) => Effect.Effect<A, E>
+      ) =>
+        Ref.get(runtimeState).pipe(
+          Effect.flatMap((current) =>
+            current._tag === "RuntimeAcceptingControl"
+              ? use(InRunJournal.of({ append: current.controls.journal.append, read: current.controls.journal.read }))
+              : Effect.die("an admitted executor action lost its active Journal before current publication")
+          )
+        )
+
+      const releaseAcceptedPlannedAttemptPosition = (result: PlannedAttemptExecutorObservationResult) =>
+        result.report._tag === "ExecutorWorkSafelySuspended" || result.report._tag === "ExecutorWorkTerminal"
+          ? processRuntimeCapabilities.releasePlannedAttemptPosition(result.report.correlation)
+          : Effect.succeed("AlreadyAbsent" as const)
+
+      const passiveProjectionPublication: PassivePlannedAttemptProjectionPublicationService = {
+        publish: (plannedAttempt, projection) =>
+          withPassivePublicationJournal((journal, publishStoredFactHint) =>
+            processPlannedAttemptProtocolController
+              .withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+                publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, projection).pipe(
+                  Effect.provideService(InRunJournal, journal)
+                )
+              )
+              .pipe(
+                Effect.tap(releaseAcceptedPlannedAttemptPosition),
+                Effect.tap(() =>
+                  publishStoredFactHint
+                    ? Ref.get(acceptedRunReactivationObservers).pipe(
+                        Effect.flatMap((observers) =>
+                          Option.match(observers, {
+                            onNone: () => Effect.void,
+                            onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
+                          })
+                        )
+                      )
+                    : Effect.void
+                )
+              )
+          ),
+        publishWithPermit: (permit, plannedAttempt, projection) =>
+          withActivePassivePublicationJournal((journal) =>
+            publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, projection).pipe(
+              Effect.provideService(InRunJournal, journal),
+              Effect.tap(releaseAcceptedPlannedAttemptPosition)
+            )
+          )
+      }
+      const processRuntimeLayer = Layer.mergeAll(
+        deliveryRuntimeResourceCapabilitiesLayer(processRuntimeCapabilities),
+        Layer.succeed(PassivePlannedAttemptObserver, processPassiveObserver),
+        Layer.succeed(PlannedAttemptProtocolController, processPlannedAttemptProtocolController),
+        Layer.succeed(
+          PassivePlannedAttemptProjectionPublication,
+          PassivePlannedAttemptProjectionPublication.of(passiveProjectionPublication)
+        )
+      )
 
       const closeControlAdmission = Effect.fn("JournaledRunBootstrap.closeControlAdmission")(function* () {
         const wait = yield* Ref.modify(runtimeState, (current) => {

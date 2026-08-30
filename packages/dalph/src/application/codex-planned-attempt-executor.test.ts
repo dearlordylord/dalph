@@ -6,6 +6,7 @@ import {
   EvidenceReference,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   type PlannedAttemptExecutorService,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
@@ -33,7 +34,7 @@ import {
   type GitCommandService
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
-import { Crypto, Effect, FileSystem, Layer, Option, PlatformError, Ref, Schema } from "effect"
+import { Crypto, Effect, FileSystem, Layer, Option, PlatformError, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
@@ -130,6 +131,7 @@ type Harness = {
   readonly turnTexts: Array<string>
   readonly resumeCwds: Array<string>
   readonly threadStarts: () => number
+  readonly attemptReadCount: () => number
   readonly turnCount: () => number
   readonly associationAtTurn: () => CodexAttemptRecord | undefined
   readonly currentThread: () => CodexThreadSnapshot
@@ -193,6 +195,7 @@ const makeHarness = (
     readonly failAfterReplacementSealOnce?: boolean
     readonly dieAfterReplacementTurnStartOnce?: boolean
     readonly dieAfterFirstTurnStartOnce?: boolean
+    readonly lifecycleHintCount?: number
   } = {}
 ): Harness => {
   const threadId = CodexThreadId.make("codex-thread-issue-58")
@@ -214,6 +217,7 @@ const makeHarness = (
   let associatedRecord: CodexAttemptRecord | undefined
   let readOverride: CodexAttemptRecord | undefined
   let threadStartCount = 0
+  let attemptReadCount = 0
   let resumeUnavailable = false
   let resumeFailure: CodexAppServerFailure | undefined
   let readFailure = false
@@ -245,6 +249,9 @@ const makeHarness = (
 
   const app: CodexAppServerService = {
     incarnation: CodexServerIncarnation.make("controlled-issue-58"),
+    attachTurnCompletedHints: Effect.succeed(
+      Stream.fromIterable(Array.from({ length: options.lifecycleHintCount ?? 0 }, () => undefined))
+    ),
     startThread: (cwd) =>
       Effect.sync(() => {
         threadStartCount += 1
@@ -369,13 +376,15 @@ const makeHarness = (
   }
 
   const store: CodexAttemptStoreService = {
-    readAttempt: (runId, attemptId) =>
-      readFailure
+    readAttempt: (runId, attemptId) => {
+      attemptReadCount += 1
+      return readFailure
         ? Effect.fail(new CodexAttemptStoreFailure({ detail: "read failed", operation: "readAttempt" }))
         : Effect.sync(() => {
             const record = readOverride ?? records.get(keyOf(runId, attemptId))
             return record === undefined ? Option.none() : Option.some(record)
-          }),
+          })
+    },
     writeAttempt: (record) => {
       if (record._tag === "AssociatedPreTurn" && options.failAssociatedWriteOnce === true && !associatedWriteFailure) {
         associatedWriteFailure = true
@@ -452,6 +461,7 @@ const makeHarness = (
     turnTexts,
     resumeCwds,
     threadStarts: () => threadStartCount,
+    attemptReadCount: () => attemptReadCount,
     turnCount: () => turnNumber,
     associationAtTurn: () => associationAtTurn,
     currentThread: () => currentThread,
@@ -815,6 +825,28 @@ const observeExactReport = Effect.fn("CodexPlannedAttemptExecutorTest.observeExa
   const projection = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
   if (projection._tag === "Exact") return projection.report
   return yield* Effect.die(`expected exact executor report, received ${projection._tag}`)
+})
+
+it.effect("coalesces unrelated executor wakes without durable or command progress", () => {
+  const harness = makeHarness({ lifecycleHintCount: 3 })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+    yield* executor.begin(request)
+    const readsBeforeAttachment = harness.attemptReadCount()
+
+    const attachment = yield* lifecycle.attach(correlation)
+    const changed = yield* Stream.runCollect(attachment.changes)
+
+    expect(attachment.current).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      })
+    )
+    expect(Array.from(changed)).toEqual([])
+    expect(harness.attemptReadCount() - readsBeforeAttachment).toBe(4)
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
 })
 
 it.effect("persists the exact association before the first turn and seals Accepted from reread evidence", () => {

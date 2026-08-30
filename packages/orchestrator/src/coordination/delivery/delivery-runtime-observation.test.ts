@@ -197,3 +197,23 @@ it.effect("keeps Alice's runtime observation open when an ordinary runtime phase
     yield* observation.close
   })
 )
+
+it.effect("reuses one process admission controller and synchronizes recovered positions on each activation", () =>
+  Effect.gen(function* () {
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
+      integrationTargets,
+      (yield* makeApplicationExitLifecycle()).admission
+    )
+    const first = yield* capabilities.resources
+      .makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [{ correlation, taskId }] })
+      .pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
+    const second = yield* capabilities.resources
+      .makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [] })
+      .pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
+
+    expect(second).toBe(first)
+    expect((yield* second.snapshot).positions.size).toBe(0)
+    expect(yield* capabilities.releasePlannedAttemptPosition(correlation)).toBe("AlreadyAbsent")
+  })
+)

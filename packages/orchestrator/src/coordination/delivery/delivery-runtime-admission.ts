@@ -60,7 +60,9 @@ export interface DeliveryRuntimeAdmissionController {
     taskId: TaskId,
     correlation: PlannedAttemptExecutorCorrelation
   ) => Effect.Effect<void>
-  readonly releasePlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
+  readonly releasePlannedAttemptPosition: (
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<"Released" | "AlreadyAbsent">
   readonly complete: (reservation: DeliveryAdmissionReservation) => Effect.Effect<void>
   readonly rollback: (
     reservation: DeliveryAdmissionReservation,
@@ -375,15 +377,15 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
         }
       }),
     releasePlannedAttemptPosition: (correlation) =>
-      Ref.update(state, (current) => {
+      Ref.modify(state, (current) => {
         const found = [...current.positions].find(
           ([, position]) =>
             position._tag !== "PendingRuntimePosition" && sameCorrelation(position.correlation, correlation)
         )
-        if (found === undefined) return current
+        if (found === undefined) return ["AlreadyAbsent" as const, current]
         const positions = new Map(current.positions)
         positions.delete(found[0])
-        return { ...current, positions }
+        return ["Released" as const, { ...current, positions }]
       }),
     complete,
     rollback,

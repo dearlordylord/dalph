@@ -4,6 +4,7 @@ import {
   EvidenceDigest,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorObservationPurpose,
@@ -20,6 +21,7 @@ import {
   PlannedTaskAttempt,
   type PlannedAttemptExecutorRequest,
   samePlannedTaskAttempt,
+  samePlannedAttemptExecutorProjection,
   TaskRevision,
   TaskWorkSpecification,
   WorktreeLocator
@@ -31,7 +33,8 @@ import {
   isExactTaskClaim,
   type EvidenceStoreService
 } from "@dalph/orchestrator"
-import { Context, Crypto, Effect, Layer, Option, Ref, Result, Schema, Semaphore } from "effect"
+import { Context, Crypto, Effect, Exit, Layer, Option, Ref, Result, Schema, Semaphore, Stream } from "effect"
+import * as Scope from "effect/Scope"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -2369,8 +2372,32 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
         return gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(replacement(request))))
       }
     }
+    const lifecycleObservation = PlannedAttemptExecutorLifecycleObservation.of({
+      attach: (correlation) =>
+        Effect.gen(function* () {
+          const attachmentScope = yield* Scope.make()
+          yield* Effect.addFinalizer((exit) => Scope.close(attachmentScope, exit))
+          const hints =
+            app.attachTurnCompletedHints === undefined
+              ? Stream.never
+              : yield* app.attachTurnCompletedHints.pipe(Effect.provideService(Scope.Scope, attachmentScope))
+          const current = yield* project(correlation, { _tag: "PassiveLifecycleObservation" }).pipe(
+            Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))
+          )
+          const changes = hints.pipe(
+            Stream.mapEffect(() =>
+              project(correlation, { _tag: "PassiveLifecycleObservation" }).pipe(
+                Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))
+              )
+            ),
+            Stream.filter((candidate) => !samePlannedAttemptExecutorProjection(candidate, current))
+          )
+          return { changes, close: Scope.close(attachmentScope, Exit.void), current }
+        })
+    })
     return Context.empty().pipe(
       Context.add(PlannedAttemptExecutor, executor),
+      Context.add(PlannedAttemptExecutorLifecycleObservation, lifecycleObservation),
       Context.add(CodexProviderWorkUnitReplacement, replacementService)
     )
   })

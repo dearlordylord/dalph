@@ -1,4 +1,4 @@
-import { PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
+import { PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation, type RunId } from "@dalph/contracts"
 import { Effect, Layer } from "effect"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -33,6 +33,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       const interpreter = yield* WorkflowInterpreter
       const operationIdAllocator = yield* OperationIdAllocator
       const executor = yield* PlannedAttemptExecutor
+      const lifecycleObservation = yield* PlannedAttemptExecutorLifecycleObservation
       const trace = yield* WorkflowTrace
       const applicationExit = yield* makeApplicationExitShell(controlledOwnership, { requestEnd: () => Effect.void })
       const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
@@ -65,7 +66,8 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       return Layer.merge(
         journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit, defaultJournalMaintenanceObservation).pipe(
           Layer.provide(memoryJournalStoreLayer),
-          Layer.provide(controlledOwnershipLayer)
+          Layer.provide(controlledOwnershipLayer),
+          Layer.provide(Layer.succeed(PlannedAttemptExecutorLifecycleObservation, lifecycleObservation))
         ),
         Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary)
       )

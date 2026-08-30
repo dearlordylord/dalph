@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- The source-boundary test reads its neighboring module. */
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
+import { PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation, RunId, TaskId } from "@dalph/contracts"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -99,6 +99,7 @@ it.effect("lets the public controlled workflow terminate from its settled curren
           Layer.mock(TaskClaimAcquisitionPlanner, {}),
           Layer.mock(WorkflowInterpreter, { readTrackerGraph: () => Effect.succeed(projected.snapshot) }),
           Layer.mock(PlannedAttemptExecutor, {}),
+          Layer.mock(PlannedAttemptExecutorLifecycleObservation, {}),
           Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
         )
       )

@@ -391,8 +391,8 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
         _tag: "BoundRuntimePosition",
         correlation
       })
-      yield* admission.releasePlannedAttemptPosition(otherCorrelation)
-      yield* admission.releasePlannedAttemptPosition(otherCorrelation)
+      expect(yield* admission.releasePlannedAttemptPosition(otherCorrelation)).toBe("Released")
+      expect(yield* admission.releasePlannedAttemptPosition(otherCorrelation)).toBe("AlreadyAbsent")
 
       const integrationTarget = IntegrationTarget.make({
         repository: GitRepositoryLocator.make("/admission/repository.git"),

@@ -19,7 +19,8 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { AttemptQuiescenceProof } from "../../workflow/protocols/attempt-choice/events.js"
 import {
-  observePlannedAttemptExecutorStateResultWithPermit,
+  acceptPendingPlannedAttemptExecutorObservationWithPermit,
+  type observePlannedAttemptExecutorStateResultWithPermit,
   reconcileOrObservePlannedAttemptExecutorStateResultWithPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
@@ -38,6 +39,11 @@ import { advanceAttemptRestartWithPermit } from "../../workflow/protocols/attemp
 import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import type { IdentityFreeWorkflowRoute, IdentityFreeWorkflowTransition } from "./delivery-action-proposal.js"
+import {
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication
+} from "../run/passive-planned-attempt-observer.js"
+import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type PlannedAttemptTransition = Extract<
@@ -271,6 +277,21 @@ export const executeAttemptRestartTransition = Effect.fn("DeliveryAction.execute
   return deliveryActionCompleted(action.proposal.id)
 })
 
+const observeOrAttachPassiveOwner = Effect.fn("DeliveryAction.observeOrAttachPassiveOwner")(function* (
+  permit: PlannedAttemptProtocolPermit,
+  plannedAttempt: Parameters<typeof observePlannedAttemptExecutorStateResultWithPermit>[1]
+) {
+  const observer = yield* PassivePlannedAttemptObserver
+  const pending = yield* acceptPendingPlannedAttemptExecutorObservationWithPermit(permit, plannedAttempt)
+  if (pending !== undefined) return pending
+  const publication = yield* PassivePlannedAttemptProjectionPublication
+  return yield* observer.attach({
+    plannedAttempt,
+    publishCurrent: (projection) => publication.publishWithPermit(permit, plannedAttempt, projection),
+    publishChange: (projection) => publication.publish(plannedAttempt, projection).pipe(Effect.asVoid)
+  })
+})
+
 const executorReportFor = (
   transition: ExecutorTransition,
   correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>,
@@ -285,7 +306,7 @@ const executorReportFor = (
       )
     : transition._tag === "ObservePlannedAttemptExecutorWork"
       ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
-          observePlannedAttemptExecutorStateResultWithPermit(permit, transition.plannedAttempt)
+          observeOrAttachPassiveOwner(permit, transition.plannedAttempt)
         )
       : transition._tag === "ReconcilePlannedAttemptExecutorWork"
         ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
@@ -324,11 +345,19 @@ export const executeFreshPlannedAttempt = Effect.fn("DeliveryAction.executeFresh
   const result = yield* lease.withPlannedAttemptProtocol(correlation, (permit) =>
     Effect.gen(function* () {
       return route.step._tag === "BeginPlannedAttemptExecutorWork"
-        ? {
-            acceptedFacts: "Changed" as const,
-            report: yield* beginPlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, route.step.specification)
-          }
-        : yield* observePlannedAttemptExecutorStateResultWithPermit(permit, plannedAttempt)
+        ? yield* Effect.gen(function* () {
+            const begun = yield* beginPlannedAttemptExecutorWorkWithPermit(
+              permit,
+              plannedAttempt,
+              route.step.specification
+            )
+            if (begun._tag !== "ExecutorWorkExecuting") {
+              return { acceptedFacts: "Changed" as const, report: begun }
+            }
+            const observed = yield* observeOrAttachPassiveOwner(permit, plannedAttempt)
+            return { acceptedFacts: "Changed" as const, report: observed.report }
+          })
+        : yield* observeOrAttachPassiveOwner(permit, plannedAttempt)
     })
   )
   const report = result.report

@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only local protocol fixtures. */
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Cause, Effect, Exit, FileSystem, Layer, Option, Path } from "effect"
+import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
 import { expect } from "vitest"
 import {
   CodexAppServer,
@@ -195,6 +195,9 @@ const onMessage = (message) => {
   }
   if (mode === "no-id-response" && requestNumber === 1) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "fixture/notice" }) + "\n")
+  }
+  if (mode === "turn-completed-hint" && message.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { opaque: true } }) + "\n")
   }
   if (mode === "non-object-message" && requestNumber === 1) {
     process.stdout.write(JSON.stringify("not-an-object") + "\n")
@@ -497,6 +500,20 @@ it.effect("ignores a response for an unknown request id before matching the real
 it.effect("keeps diagnostic stderr, blank lines, and notifications outside protocol state", () =>
   Effect.forEach(["stderr-noise", "blank-line", "no-id-response"] as const, (mode) =>
     withFixture(mode, (app) => Effect.map(app.startThread("/fixture/worktree"), (started) => started.id))
+  )
+)
+
+it.effect("forwards only the qualified turn/completed method as a non-authoritative lifecycle hint", () =>
+  withFixture("turn-completed-hint", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if (app.attachTurnCompletedHints === undefined) return yield* Effect.die("live transport omitted hints")
+        const hints = yield* app.attachTurnCompletedHints
+        const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        yield* app.startThread("/fixture/worktree")
+        expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
+      })
+    )
   )
 )
 

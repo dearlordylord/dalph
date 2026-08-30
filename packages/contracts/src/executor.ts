@@ -1,4 +1,4 @@
-import type { Effect } from "effect"
+import type { Effect, Scope, Stream } from "effect"
 import { Context, Schema } from "effect"
 import { AttemptId, PlannedTaskAttempt } from "./planned-attempt.js"
 import { RunId } from "./workflow-identity.js"
@@ -115,6 +115,9 @@ const PlannedAttemptExecutorProjectionShape = Schema.TaggedUnion({
 export const PlannedAttemptExecutorProjection = PlannedAttemptExecutorProjectionShape
 export type PlannedAttemptExecutorProjection = typeof PlannedAttemptExecutorProjection.Type
 
+/** Exact equality for normalized lifecycle projections, including foreign evidence. */
+export const samePlannedAttemptExecutorProjection = Schema.toEquivalence(PlannedAttemptExecutorProjection)
+
 /** Distinguishes a passive lifecycle read from reconciliation of one exact ambiguous command. */
 export const PlannedAttemptExecutorObservationPurpose = Schema.TaggedUnion({
   PassiveLifecycleObservation: {},
@@ -180,3 +183,28 @@ export interface PlannedAttemptExecutorService {
 export class PlannedAttemptExecutor extends Context.Service<PlannedAttemptExecutor, PlannedAttemptExecutorService>()(
   "@dalph/PlannedAttemptExecutor"
 ) {}
+
+/**
+ * One loss-free process-local lifecycle attachment. `current` is read only
+ * after the provider change source is attached; every value in `changes` is a
+ * fresh authoritative projection, never a provider notification payload.
+ */
+export interface PlannedAttemptExecutorLifecycleAttachment {
+  readonly current: PlannedAttemptExecutorProjection
+  readonly changes: Stream.Stream<PlannedAttemptExecutorProjection>
+  /** Detaches the provider subscription; safe to call after completion or interruption. */
+  readonly close: Effect.Effect<void>
+}
+
+export interface PlannedAttemptExecutorLifecycleObservationService {
+  /** Opens one read-only current-first attachment for an exact correlation. */
+  readonly attach: (
+    correlation: PlannedAttemptExecutorCorrelation
+  ) => Effect.Effect<PlannedAttemptExecutorLifecycleAttachment, never, Scope.Scope>
+}
+
+/** Read-only lifecycle authority kept separate from executor command authority. */
+export class PlannedAttemptExecutorLifecycleObservation extends Context.Service<
+  PlannedAttemptExecutorLifecycleObservation,
+  PlannedAttemptExecutorLifecycleObservationService
+>()("@dalph/PlannedAttemptExecutorLifecycleObservation") {}

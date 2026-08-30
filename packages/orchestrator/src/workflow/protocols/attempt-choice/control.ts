@@ -312,7 +312,7 @@ const choicePreconditionError = (
     : new AttemptChoiceNotAvailable({ reason: unavailable, requestId: request.requestId, runId })
 }
 
-const attemptChoiceControlFromProtocolLayer = Layer.effect(
+export const attemptChoiceControlWithProvidedProtocolLayer = Layer.effect(
   AttemptChoiceControl,
   Effect.gen(function* () {
     const journal = yield* InRunJournal
@@ -391,6 +391,6 @@ const attemptChoiceControlFromProtocolLayer = Layer.effect(
 )
 
 /** One process-local exact-attempt guard shared by Operator choices and executor commands. */
-export const attemptChoiceControlLayer = attemptChoiceControlFromProtocolLayer.pipe(
+export const attemptChoiceControlLayer = attemptChoiceControlWithProvidedProtocolLayer.pipe(
   Layer.provideMerge(plannedAttemptProtocolControllerLayer)
 )

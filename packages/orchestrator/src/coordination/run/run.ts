@@ -53,11 +53,17 @@ import { DispositionCleanupActivation } from "../../workflow/protocols/dispositi
 import type { AppliedRunCancellation } from "../../workflow/protocols/run-cancellation/events.js"
 import type { ActiveWorkAuthorityRefreshSource } from "./run-activation-opportunity.js"
 import { RunActivationOpportunity } from "./run-activation-opportunity.js"
+import type {
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication
+} from "./passive-planned-attempt-observer.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
   | DeliveryRuntimeResources
   | DeliveryRuntimeObservationPublication
+  | PassivePlannedAttemptObserver
+  | PassivePlannedAttemptProjectionPublication
 
 /**
  * The accepted Run-level control fact that a later reactivation check reads

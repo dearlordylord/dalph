@@ -12,6 +12,7 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  passiveLifecycleObservationPurpose,
   plannedAttemptExecutorCorrelation,
   RunId,
   TaskBranchRef,
@@ -45,6 +46,8 @@ import {
 import { TaskLifecycle, type Task, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
@@ -170,7 +173,12 @@ import {
 } from "../../workflow/protocols/integrator/session.js"
 import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
-import { executePlannedAttemptTransition } from "./planned-attempt-delivery-action-adapter.js"
+import { executePlannedAttemptTransition as executePlannedAttemptTransitionRaw } from "./planned-attempt-delivery-action-adapter.js"
+import { publishPlannedAttemptExecutorProjectionResultWithPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+import {
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication
+} from "../run/passive-planned-attempt-observer.js"
 import { evaluatePlannedAttemptContinuationAuthorization } from "../../workflow/protocols/planned-attempt-continuation/authorization-evaluation.js"
 import {
   authorizePlannedAttemptContinuation,
@@ -178,6 +186,7 @@ import {
 } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import { liveDeliveryActionExecutorLayer, makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import {
   completionClaimDeletionRequestFor,
   CompletionClaimBoundary,
@@ -235,6 +244,35 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: specification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/A")
 })
+const inactivePassiveObserver = PassivePlannedAttemptObserver.of({
+  attach: () => Effect.die("the inactive route fixture must not attach executor lifecycle observation")
+})
+const inactivePassivePublication = PassivePlannedAttemptProjectionPublication.of({
+  publish: () => Effect.die("the inactive route fixture must not publish executor lifecycle changes"),
+  publishWithPermit: () => Effect.die("the inactive route fixture must not publish an executor current projection")
+})
+const executePlannedAttemptTransition = (...args: Parameters<typeof executePlannedAttemptTransitionRaw>) =>
+  Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const journal = yield* InRunJournal
+    const observer = PassivePlannedAttemptObserver.of({
+      attach: (input) =>
+        executor
+          .observe(plannedAttemptExecutorCorrelation(input.plannedAttempt), passiveLifecycleObservationPurpose)
+          .pipe(Effect.flatMap(input.publishCurrent))
+    })
+    const publication = PassivePlannedAttemptProjectionPublication.of({
+      publish: () => Effect.die("the one-shot route fixture emits no later lifecycle changes"),
+      publishWithPermit: (permit, plannedAttempt, projection) =>
+        publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, projection).pipe(
+          Effect.provideService(InRunJournal, journal)
+        )
+    })
+    return yield* executePlannedAttemptTransitionRaw(...args).pipe(
+      Effect.provideService(PassivePlannedAttemptObserver, observer),
+      Effect.provideService(PassivePlannedAttemptProjectionPublication, publication)
+    )
+  })
 const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repo/.git"),
   ref: IntegrationTargetRef.make("refs/heads/main")
@@ -698,6 +736,8 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
     const live = yield* makeLiveDeliveryActionExecutor(runId, target).pipe(
       Effect.provide(journaledInterpreter),
       Effect.provideService(InRunJournal, journal),
+      Effect.provideService(PassivePlannedAttemptObserver, inactivePassiveObserver),
+      Effect.provideService(PassivePlannedAttemptProjectionPublication, inactivePassivePublication),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provideService(
         PlannedAttemptExecutor,
@@ -3170,96 +3210,217 @@ describe("delivery proposal route matrix", () => {
     })
   )
 
-  effectIt.effect("releases the task position for safe and terminal passive executor results", () =>
+  const assertPassiveFinalProjection = (kind: "Safe" | "Terminal") =>
     Effect.gen(function* () {
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-      const cases = [
-        {
-          report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-            correlation,
-            result: { _tag: "Completed" }
-          }),
-          transition: RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
-            acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) },
-            plannedAttempt
-          })
-        },
-        {
-          report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
-          transition: RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })
-        }
-      ] as const
+      const testCase =
+        kind === "Terminal"
+          ? {
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                correlation,
+                result: { _tag: "Completed" }
+              }),
+              transition: RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+                acceptedProgress: {
+                  _tag: "ExecutorReportAccepted",
+                  ordinal: PlannedAttemptExecutorReportOrdinal.make(1)
+                },
+                plannedAttempt
+              })
+            }
+          : {
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+              transition: RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })
+            }
 
-      for (const testCase of cases) {
-        const proposal = proposalsFor(testCase.transition).proposals[0]
-        if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
-          return yield* Effect.die("missing passive executor proposal")
+      const proposal = proposalsFor(testCase.transition).proposals[0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("missing passive executor proposal")
+      }
+      const releases = yield* Ref.make(0)
+      const appends = yield* Ref.make(0)
+      const initialRecords = [...acceptedExecutingExecutorRecords()]
+      if (testCase.report._tag === "ExecutorWorkSafelySuspended") {
+        const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+        initialRecords.push({
+          event: PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "Suspend",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: suspendOrdinal,
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          }),
+          key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
+          position: JournalPosition.make(5),
+          runId
+        })
+        initialRecords.push({
+          event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+            commandOrdinal: suspendOrdinal,
+            occurrenceClassification: "NonActionOccurrence",
+            plannedAttempt,
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+            version: workflowJournalEventVersion
+          }),
+          key: plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
+          position: JournalPosition.make(6),
+          runId
+        })
+      }
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+      const protocolController = yield* makePlannedAttemptProtocolController()
+      const result = yield* executePlannedAttemptTransition(
+        { _tag: "IdentityFreeAction", proposal },
+        testCase.transition,
+        {
+          ...inertLease,
+          releasePlannedAttemptPosition: () => Ref.update(releases, (count) => count + 1),
+          withPlannedAttemptProtocol: (subject, effect) => protocolController.withPermit(subject, effect)
         }
-        const releases = yield* Ref.make(0)
-        const appends = yield* Ref.make(0)
-        const initialRecords = [...acceptedExecutingExecutorRecords()]
-        if (testCase.report._tag === "ExecutorWorkSafelySuspended") {
-          const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
-          initialRecords.push({
-            event: PlannedAttemptExecutorCommandIntendedEvent.make({
-              command: "Suspend",
-              initiatedBy: { _tag: "DalphCoordinator" },
-              occurrenceClassification: "InitiatedAction",
-              ordinal: suspendOrdinal,
-              plannedAttempt,
-              version: workflowJournalEventVersion
-            }),
-            key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
-            position: JournalPosition.make(5),
-            runId
+      ).pipe(
+        Effect.provideService(
+          InRunJournal,
+          InRunJournal.of({
+            append: (_requestedRunId, key, event) =>
+              Effect.gen(function* () {
+                const current = yield* Ref.get(records)
+                const record = { event, key, position: JournalPosition.make(current.length + 1), runId }
+                yield* Ref.update(records, (existing) => [...existing, record])
+                yield* Ref.update(appends, (count) => count + 1)
+                return record
+              }),
+            read: () => Ref.get(records)
           })
+        ),
+        Effect.provideService(
+          PlannedAttemptExecutor,
+          PlannedAttemptExecutor.of({
+            observe: () =>
+              Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report: testCase.report })),
+            requestSuspension: () => Effect.die("passive observation must not request suspension"),
+            begin: () => Effect.die("passive observation must not begin work"),
+            resume: () => Effect.die("passive observation must not resume work")
+          })
+        )
+      )
+
+      expect(result).toMatchObject({
+        _tag: "ExecutorReportPublished",
+        acceptedFacts: "Changed",
+        report: testCase.report
+      })
+      expect(yield* Ref.get(appends)).toBe(2)
+      expect(yield* Ref.get(releases)).toBe(1)
+    })
+
+  effectIt.effect("observes live terminal executor change once and releases the exact position", () =>
+    assertPassiveFinalProjection("Terminal")
+  )
+
+  effectIt.effect("observes safe suspension only after exact suspend intent and releases only that attempt", () =>
+    assertPassiveFinalProjection("Safe")
+  )
+
+  effectIt.effect(
+    "accepts a pending Safe observation after process death with causal Suspend history and one release",
+    () =>
+      Effect.gen(function* () {
+        const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+        const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+        const transition = RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })
+        const proposal = proposalsFor(transition).proposals[0]
+        if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+          return yield* Effect.die("missing pending Safe proposal")
         }
-        const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+        const records: Array<JournalRecord> = [...acceptedExecutingExecutorRecords()]
+        const append = (key: JournalRecordKey, event: JournalRecord["event"]) => {
+          records.push({ event, key, position: JournalPosition.make(records.length + 1), runId })
+        }
+        const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+        append(
+          plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "Suspend",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: suspendOrdinal,
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+        append(
+          plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, suspendOrdinal),
+          PlannedAttemptExecutorCommandResponseObservedEvent.make({
+            commandOrdinal: suspendOrdinal,
+            occurrenceClassification: "NonActionOccurrence",
+            plannedAttempt,
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+            version: workflowJournalEventVersion
+          })
+        )
+        const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+        append(
+          plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+          PlannedAttemptExecutorStateObservedEvent.make({
+            observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: safe }),
+            occurrenceClassification: "NonActionOccurrence",
+            ordinal: observationOrdinal,
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+        const executorCalls = yield* Ref.make(0)
         const protocolController = yield* makePlannedAttemptProtocolController()
-        const result = yield* executePlannedAttemptTransition(
-          { _tag: "IdentityFreeAction", proposal },
-          testCase.transition,
-          {
-            ...inertLease,
-            releasePlannedAttemptPosition: () => Ref.update(releases, (count) => count + 1),
-            withPlannedAttemptProtocol: (subject, effect) => protocolController.withPermit(subject, effect)
-          }
-        ).pipe(
+        const admission = yield* makeDeliveryRuntimeAdmissionController(
+          { capacity: TaskWorkCapacity.make(1), held: [{ correlation, taskId: plannedAttempt.taskId }] },
+          yield* makeIntegrationTargetResourceController(),
+          (yield* makeApplicationExitLifecycle()).admission
+        ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
+        const result = yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, {
+          ...inertLease,
+          releasePlannedAttemptPosition: admission.releasePlannedAttemptPosition,
+          withPlannedAttemptProtocol: (subject, effect) => protocolController.withPermit(subject, effect)
+        }).pipe(
           Effect.provideService(
             InRunJournal,
             InRunJournal.of({
               append: (_requestedRunId, key, event) =>
-                Effect.gen(function* () {
-                  const current = yield* Ref.get(records)
-                  const record = { event, key, position: JournalPosition.make(current.length + 1), runId }
-                  yield* Ref.update(records, (existing) => [...existing, record])
-                  yield* Ref.update(appends, (count) => count + 1)
+                Effect.sync(() => {
+                  const record = { event, key, position: JournalPosition.make(records.length + 1), runId }
+                  records.push(record)
                   return record
                 }),
-              read: () => Ref.get(records)
+              read: () => Effect.succeed(records)
             })
           ),
           Effect.provideService(
             PlannedAttemptExecutor,
             PlannedAttemptExecutor.of({
               observe: () =>
-                Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report: testCase.report })),
-              requestSuspension: () => Effect.die("passive observation must not request suspension"),
-              begin: () => Effect.die("passive observation must not begin work"),
-              resume: () => Effect.die("passive observation must not resume work")
+                Ref.update(executorCalls, (count) => count + 1).pipe(
+                  Effect.as(PlannedAttemptExecutorProjection.cases.Exact.make({ report: safe }))
+                ),
+              requestSuspension: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.as(safe)),
+              begin: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.as(safe)),
+              resume: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.as(safe))
             })
           )
         )
 
-        expect(result).toMatchObject({
-          _tag: "ExecutorReportPublished",
-          acceptedFacts: "Changed",
-          report: testCase.report
-        })
-        expect(yield* Ref.get(appends)).toBe(2)
-        expect(yield* Ref.get(releases)).toBe(1)
-      }
-    })
+        expect(result).toMatchObject({ _tag: "ExecutorReportPublished", report: safe })
+        expect(yield* Ref.get(executorCalls)).toBe(0)
+        expect((yield* admission.snapshot).positions.size).toBe(0)
+        expect(yield* admission.releasePlannedAttemptPosition(correlation)).toBe("AlreadyAbsent")
+        expect(
+          records.flatMap(({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" ? [[event.ordinal, event.report._tag] as const] : []
+          )
+        ).toEqual([
+          [1, "ExecutorWorkExecuting"],
+          [2, "ExecutorWorkSafelySuspended"]
+        ])
+      })
   )
 
   effectIt.effect("releases the task position without appending an exact accepted safe or terminal replay", () =>
@@ -4833,6 +4994,8 @@ describe("delivery proposal route matrix", () => {
             InRunJournal.of({ append: () => Effect.die("unused append"), read: () => Effect.succeed([]) })
           ),
           Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+          Effect.provideService(PassivePlannedAttemptObserver, inactivePassiveObserver),
+          Effect.provideService(PassivePlannedAttemptProjectionPublication, inactivePassivePublication),
           Effect.provideService(
             TaskClaimAcquisitionPlanner,
             TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unused claim planner") })

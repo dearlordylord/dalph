@@ -24,6 +24,7 @@ export {
   AttemptChoiceResultNotFound,
   AttemptChoiceRequestIdentityContradiction,
   AttemptChoiceRequestRunMismatch,
+  attemptChoiceControlWithProvidedProtocolLayer,
   attemptChoiceControlLayer
 } from "./workflow/protocols/attempt-choice/control.js"
 export {
@@ -387,6 +388,14 @@ export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
 export * from "./workflow/protocols/active-work-authority-refresh/events.js"
+export {
+  makePassivePlannedAttemptObserver,
+  passivePlannedAttemptObserverLayer,
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication,
+  type PassivePlannedAttemptObserverService,
+  type PassivePlannedAttemptProjectionPublicationService
+} from "./coordination/run/passive-planned-attempt-observer.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
 export * from "./workflow/protocols/evidence-store.js"

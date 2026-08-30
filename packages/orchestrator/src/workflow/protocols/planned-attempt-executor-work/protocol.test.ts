@@ -49,8 +49,10 @@ import {
   taskTrackerReadIntent
 } from "../../registry/event.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { plannedAttemptProtocolControllerLayer } from "./protocol-controller.js"
+import { PlannedAttemptProtocolController, plannedAttemptProtocolControllerLayer } from "./protocol-controller.js"
+import { publishPlannedAttemptExecutorProjectionResultWithPermit } from "./protocol.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
+import { requiredPlannedAttemptPositionsOf } from "../../../coordination/run/required-planned-attempt-positions.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -1117,6 +1119,175 @@ it.effect("records unavailable and contradictory read-only executor state", () =
   }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
+it.effect("accepts a passive exact candidate without a second executor read", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const controller = yield* PlannedAttemptProtocolController
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation,
+      result: { _tag: "Completed" }
+    })
+    yield* appendTaskWorkSpecification()
+    yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          observe: () => Effect.die("begin response must not reconcile"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          begin: () => Effect.succeed(executing),
+          resume: () => Effect.die("unused resume")
+        })
+      )
+    )
+
+    const result = yield* controller.withPermit(correlation, (permit) =>
+      publishPlannedAttemptExecutorProjectionResultWithPermit(
+        permit,
+        plannedAttempt,
+        PlannedAttemptExecutorProjection.cases.Exact.make({ report: terminal })
+      )
+    )
+
+    expect(result).toEqual({ acceptedFacts: "Changed", report: terminal })
+    expect((yield* journal.read(plannedAttempt.runId)).map(({ event }) => event._tag).slice(-3)).toEqual([
+      "PlannedAttemptExecutorWorkReported",
+      "PlannedAttemptExecutorStateObserved",
+      "PlannedAttemptExecutorWorkReported"
+    ])
+  }).pipe(
+    Effect.provideService(
+      PlannedAttemptExecutor,
+      PlannedAttemptExecutor.of({
+        observe: () => Effect.die("an exact passive candidate must not be reread"),
+        requestSuspension: () => Effect.die("unused suspension"),
+        begin: () => Effect.die("unused begin"),
+        resume: () => Effect.die("unused resume")
+      })
+    ),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(memoryJournalTestLayer)
+  )
+)
+
+it.effect("passive observation publication enters one serialized protocol owner", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const controller = yield* PlannedAttemptProtocolController
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation,
+      result: { _tag: "Completed" }
+    })
+    yield* appendTaskWorkSpecification()
+    yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          observe: () => Effect.die("passive candidate publication must not reread"),
+          requestSuspension: () => Effect.die("unused suspension"),
+          begin: () => Effect.succeed(executing),
+          resume: () => Effect.die("unused resume")
+        })
+      )
+    )
+    const publish = controller.withPermit(correlation, (permit) =>
+      publishPlannedAttemptExecutorProjectionResultWithPermit(
+        permit,
+        plannedAttempt,
+        PlannedAttemptExecutorProjection.cases.Exact.make({ report: terminal })
+      )
+    )
+
+    const results = yield* Effect.all([publish, publish], { concurrency: "unbounded" })
+    const records = yield* journal.read(plannedAttempt.runId)
+
+    expect(results.map(({ acceptedFacts }) => acceptedFacts).toSorted()).toEqual([
+      "Changed",
+      "UnchangedPassiveObservation"
+    ])
+    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorStateObserved")).toHaveLength(1)
+    expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("retains responsibility and position for absent unavailable unreadable or foreign projection", () => {
+  const foreignCorrelation = { attemptId: AttemptId.make("passive-foreign-attempt"), runId: plannedAttempt.runId }
+  const cases = [
+    {
+      error: "PlannedAttemptExecutorStateNoCurrentReport",
+      observation: "ExecutorStateNoCurrentReport",
+      projection: PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+    },
+    {
+      error: "PlannedAttemptExecutorStateTemporarilyUnavailable",
+      observation: "ExecutorStateTemporarilyUnavailable",
+      projection: PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
+    },
+    {
+      error: "PlannedAttemptExecutorStateUnreadable",
+      observation: "ExecutorStateUnreadable",
+      projection: PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+    },
+    {
+      error: "PlannedAttemptExecutorCorrelationMismatch",
+      observation: "ExecutorReportContradiction",
+      projection: PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+        expected: correlation,
+        observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: foreignCorrelation })
+      })
+    }
+  ] as const
+
+  return Effect.forEach(cases, (testCase) =>
+    Effect.gen(function* () {
+      const journal = yield* JournalStore
+      const controller = yield* PlannedAttemptProtocolController
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      const commandCalls = yield* Ref.make(0)
+      yield* appendTaskWorkSpecification()
+      yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(
+          PlannedAttemptExecutor,
+          PlannedAttemptExecutor.of({
+            observe: () => Effect.die("passive candidate publication must not reread"),
+            requestSuspension: () => Ref.update(commandCalls, (count) => count + 1).pipe(Effect.as(executing)),
+            begin: () => Ref.update(commandCalls, (count) => count + 1).pipe(Effect.as(executing)),
+            resume: () => Ref.update(commandCalls, (count) => count + 1).pipe(Effect.as(executing))
+          })
+        )
+      )
+
+      const failure = yield* controller
+        .withPermit(correlation, (permit) =>
+          publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, testCase.projection)
+        )
+        .pipe(Effect.flip)
+      yield* Effect.yieldNow
+
+      const records = yield* journal.read(plannedAttempt.runId)
+      expect(failure._tag).toBe(testCase.error)
+      expect(
+        records.flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorStateObserved" ? [event.observation._tag] : []
+        )
+      ).toEqual([testCase.observation])
+      expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(1)
+      expect(
+        records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")
+      ).toHaveLength(1)
+      const reconstruction = reconstructRunState(plannedAttempt.runId, records)
+      expect(reconstruction._tag).toBe("ValidReconstructedRun")
+      if (reconstruction._tag === "ValidReconstructedRun") {
+        expect(requiredPlannedAttemptPositionsOf(reconstruction.state)).toEqual([
+          { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId, taskId: plannedAttempt.taskId }
+        ])
+      }
+      expect(yield* Ref.get(commandCalls)).toBe(1)
+    }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+  )
+})
+
 it.effect("records temporary and unreadable outcomes without issuing an unmatched command", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
@@ -1741,7 +1912,7 @@ it("coalesces begin, observation, and suspension ownership by the same exact pai
   )
 })
 
-it.effect("records a distinct terminal observation after unchanged executing work", () =>
+it.effect("recovers process death before terminal publication by reprojecting and accepting terminal once", () =>
   Effect.gen(function* () {
     yield* appendTaskWorkSpecification()
     const firstProcess = makeControlledFakePlannedAttemptExecutorLayer([
@@ -1754,11 +1925,12 @@ it.effect("records a distinct terminal observation after unchanged executing wor
       correlation,
       result: { _tag: "Completed" }
     })
+    const restartReads = yield* Ref.make(0)
     const secondProcess = Layer.succeed(
       PlannedAttemptExecutor,
       PlannedAttemptExecutor.of({
         begin: () => Effect.die("must not begin again"),
-        observe: () => Effect.succeed(exactProjection(terminal)),
+        observe: () => Ref.update(restartReads, (count) => count + 1).pipe(Effect.as(exactProjection(terminal))),
         requestSuspension: () => Effect.die("unused suspension"),
         resume: () => Effect.die("unused resume")
       })
@@ -1770,6 +1942,7 @@ it.effect("records a distinct terminal observation after unchanged executing wor
     expect(yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(Effect.provide(secondProcess))).toEqual(
       terminal
     )
+    expect(yield* Ref.get(restartReads)).toBe(1)
 
     const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
@@ -1794,61 +1967,63 @@ it.effect("records a distinct terminal observation after unchanged executing wor
   }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("accepts a pending terminal state observation after restart without another executor call", () =>
-  Effect.gen(function* () {
-    yield* appendTaskWorkSpecification()
-    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
-    const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-      correlation,
-      result: { _tag: "Completed" }
-    })
-    const firstProcess = PlannedAttemptExecutor.of({
-      begin: () => Effect.succeed(executing),
-      observe: () => Effect.die("first process is lost after recording its observation"),
-      requestSuspension: () => Effect.die("unused suspension"),
-      resume: () => Effect.die("unused resume")
-    })
-
-    yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
-      Effect.provideService(PlannedAttemptExecutor, firstProcess)
-    )
-    const stateOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
-    yield* (yield* JournalStore).append(
-      plannedAttempt.runId,
-      plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, stateOrdinal),
-      PlannedAttemptExecutorStateObservedEvent.make({
-        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: terminal }),
-        occurrenceClassification: "NonActionOccurrence",
-        ordinal: stateOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
+it.effect(
+  "accepts a pending terminal observation after process death without rereading or duplicating the report",
+  () =>
+    Effect.gen(function* () {
+      yield* appendTaskWorkSpecification()
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Completed" }
       })
-    )
+      const firstProcess = PlannedAttemptExecutor.of({
+        begin: () => Effect.succeed(executing),
+        observe: () => Effect.die("first process is lost after recording its observation"),
+        requestSuspension: () => Effect.die("unused suspension"),
+        resume: () => Effect.die("unused resume")
+      })
 
-    const secondProcessCalls = yield* Ref.make(0)
-    const secondProcess = PlannedAttemptExecutor.of({
-      begin: () => Ref.update(secondProcessCalls, (count) => count + 1).pipe(Effect.as(executing)),
-      observe: () => Ref.update(secondProcessCalls, (count) => count + 1).pipe(Effect.as(exactProjection(terminal))),
-      requestSuspension: () => Ref.update(secondProcessCalls, (count) => count + 1).pipe(Effect.as(executing)),
-      resume: () => Ref.update(secondProcessCalls, (count) => count + 1).pipe(Effect.as(executing))
-    })
+      yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, firstProcess)
+      )
+      const stateOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+      yield* (yield* JournalStore).append(
+        plannedAttempt.runId,
+        plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, stateOrdinal),
+        PlannedAttemptExecutorStateObservedEvent.make({
+          observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: terminal }),
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: stateOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
 
-    expect(
-      yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
-        Effect.provideService(PlannedAttemptExecutor, secondProcess)
-      )
-    ).toEqual(terminal)
-    expect(yield* Ref.get(secondProcessCalls)).toBe(0)
-    const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
-    expect(
-      records.flatMap(({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" ? [[event.ordinal, event.report._tag] as const] : []
-      )
-    ).toEqual([
-      [1, "ExecutorWorkExecuting"],
-      [2, "ExecutorWorkTerminal"]
-    ])
-  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+      const secondProcessCalls = yield* Ref.make(0)
+      const secondProcess = PlannedAttemptExecutor.of({
+        begin: () => Ref.update(secondProcessCalls, (count) => count + 1).pipe(Effect.as(executing)),
+        observe: () => Ref.update(secondProcessCalls, (count) => count + 1).pipe(Effect.as(exactProjection(terminal))),
+        requestSuspension: () => Ref.update(secondProcessCalls, (count) => count + 1).pipe(Effect.as(executing)),
+        resume: () => Ref.update(secondProcessCalls, (count) => count + 1).pipe(Effect.as(executing))
+      })
+
+      expect(
+        yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, secondProcess)
+        )
+      ).toEqual(terminal)
+      expect(yield* Ref.get(secondProcessCalls)).toBe(0)
+      const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
+      expect(
+        records.flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" ? [[event.ordinal, event.report._tag] as const] : []
+        )
+      ).toEqual([
+        [1, "ExecutorWorkExecuting"],
+        [2, "ExecutorWorkTerminal"]
+      ])
+    }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("keeps terminal reports absorbing and replays the accepted terminal report without another event", () =>
