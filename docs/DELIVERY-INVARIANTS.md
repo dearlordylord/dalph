@@ -202,7 +202,14 @@ projection, and command-free state projection, permits one reconciliation read
 per activation, and keeps post-limit recovery read-only; its finite projections
 completely enumerate those rules. `integrationFinality` separately models lost
 replacement/deletion responses and requires a fresh claim read before a second
-request.
+request. `acceptedResultIntegration.promotionRetryAuthorityDeferralIsStable`
+and the production-backed conformance actions `reconcilePromotionReadOnlyOne`
+and `resumePromotionRetryWithAuthorityOne` preserve an exact-head read across
+restart without permitting another compare-and-set until tracker, claim, and
+target authority are current. The dual-store restart matrix records the same
+wait as `TargetPromotionReconciliationDeferred`, including exact-head and
+unreadable-target outcomes, and proves that reconstruction does not retry the
+Git mutation.
 
 **D23 Incomplete and unreadable never prove absence.** Missing coverage,
 pagination, a timeout, or a partial response cannot prove a task, blocker, or
@@ -248,7 +255,12 @@ reused against a different head; any later Integrator session receives its own
 freshly qualified head.
 → `exactCandidatePromotesWithDirectCompareAndSetTest`,
 `changedHeadMakesPromotionStaleAndPreservesCandidateTest`, and
-`ambiguousPromotionRequiresFreshGitBeforeRetryTest`.
+`ambiguousPromotionRequiresFreshGitBeforeRetryTest`. The collected
+`authorityFreeExpectedHeadWaitsDurablyForRetryAuthorityTest` plus its directed
+production-backed conformance sequence prove that rereading exact `H` records
+an authority deferral rather than forcing or immediately retrying. The
+dual-store restart matrix also covers `TargetReadFailed` and exact
+`RetryAuthorityRequired` deferrals.
 
 **D28 A prepared candidate is Git-qualified before promotion.** Dalph may offer
 only the commit explicitly reported by the Integrator after Git proves its
@@ -482,7 +494,12 @@ successor session bind the newly observed head. Exhaustion, a lost response, or
 a lost editing process never silently supersedes a session or creates a
 successor session or candidate, and a submission is routed by its exact session
 rather than guessed or inferred from a worktree tip.
-→ `—` D3's shape applied to sessions; no model has an integration session.
+→ `acceptedResultIntegration.noAutomaticIntegratorSuccessor`,
+`fullRerunPreservesPredecessorAndQueuePosition`, `successorAllocationIsBounded`,
+and `successorStartsAtFreshOrdinalOne`. The dual-store direction-only restart
+test reconstructs exact `(S, Q, FullRerun)`, records one fresh Git intent and
+observation, fixes exactly one correlated successor, and performs no premature
+Integrator delivery.
 
 **D45 Conflict work is isolated from the planned worktree.** Integration and
 conflict resolution never apply edits to the planned task worktree.

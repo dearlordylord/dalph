@@ -1,10 +1,13 @@
 import { it } from "@effect/vitest"
 import { GitCommitSha, PlannedAttemptExecutorReport } from "@dalph/contracts"
-import { Effect, Ref } from "effect"
+import { Context, Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   InRunJournal,
   IntegrationQuarantineBasis,
+  IntegrationQuarantineDirectionAppliedEvent,
+  IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineDirectionRequestId,
   IntegrationQuarantinedEvent,
   IntegratorRunQualifiedCandidate,
   type IntegratorSessionId,
@@ -13,6 +16,9 @@ import {
   JournalStore,
   CoordinatorOwnership,
   OperationId,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisition,
+  TaskClaimAcquisitionIntendedEvent,
   TaskTrackerReadIntentRecordedEvent,
   acquireStartedIntegrationTarget,
   deriveIntegrationAdmission,
@@ -42,6 +48,7 @@ import {
   TargetPromotionReconciliationDeferral,
   TargetPromotionRuntime,
   intentRecordKey,
+  outcomeRecordKey,
   integrationQuarantinedRecordKey,
   makeTrackerGraphObservationOperation,
   memoryJournalStoreLayer,
@@ -56,6 +63,8 @@ import {
   type JournalRecord,
   makeIntegrationTargetResourceController,
   makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
   makeTargetLineageObservationOperation,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -72,6 +81,11 @@ import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracke
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskClaimFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import {
   IntegratorRunCandidateGitObservedEvent,
   IntegratorRunCandidateGitReadIntendedEvent,
@@ -96,6 +110,13 @@ import {
 } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { deliveryProposalsOf } from "../../../orchestrator/src/coordination/delivery/delivery-proposal-derivation.js"
 import { executeIntegrationAction } from "../../../orchestrator/src/coordination/delivery/integration-delivery-action-adapter.js"
+import { executeAcceptedWorkflowAction } from "../../../orchestrator/src/coordination/delivery/recovered-delivery-action-adapter.js"
+import {
+  AuthoritativeTargetLineageObserved,
+  WorkflowInterpreter,
+  WorkflowTrace
+} from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
+import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
 import type { DeliveryActionExecutionLease } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
 import type {
   DeliveryActionProposal,
@@ -170,15 +191,15 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
   const candidateText = IntegratorCandidateText.make(fixture.qualifiedCandidate.candidateText)
   const session = IntegratorSessionCorrelation.make({
     ...fixture.qualifiedCandidate.run.session,
-    queuedAt: JournalPosition.make(6),
-    startedAt: JournalPosition.make(7),
-    targetLineageObservedAt: JournalPosition.make(9)
+    queuedAt: JournalPosition.make(8),
+    startedAt: JournalPosition.make(9),
+    targetLineageObservedAt: JournalPosition.make(11)
   })
   const integratorRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
   const candidate = IntegratorRunQualifiedCandidate.make({
     ...fixture.qualifiedCandidate,
     candidateText,
-    qualifiedAt: JournalPosition.make(14),
+    qualifiedAt: JournalPosition.make(16),
     run: integratorRun
   })
   const correlation = targetPromotionCorrelationFor(candidate)
@@ -193,6 +214,15 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
   const planOperation = makeTaskAttemptPlanOperation({
     operationId: OperationId.make("restart-prefix-direct-plan"),
     plannedAttempt: fixture.plannedAttempt,
+    predecessorOperationIds: [fixture.activeClaim.operationId]
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: TaskClaimAcquisition.make({
+      operationId: fixture.activeClaim.operationId,
+      owner: fixture.activeClaim.owner,
+      taskId: fixture.activeClaim.taskId,
+      token: fixture.activeClaim.token
+    }),
     predecessorOperationIds: []
   })
   const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
@@ -202,7 +232,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     runId: fixture.runId
   })
   const stale = record(
-    17,
+    19,
     TargetPromotionStaleEvent.make({
       basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
       correlation,
@@ -226,16 +256,21 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(2, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
     record(
-      3,
+      2,
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+    ),
+    record(3, TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion })),
+    record(4, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
+    record(
+      5,
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
         plannedAttempt: fixture.plannedAttempt,
         version: workflowJournalEventVersion
       })
     ),
     record(
-      4,
+      6,
       PlannedAttemptExecutorCommandIntendedEvent.make({
         command: "StartOrContinue",
         initiatedBy: { _tag: "DalphCoordinator" },
@@ -246,7 +281,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      5,
+      7,
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
         report: PlannedAttemptExecutorReport.cases.Terminal.make({
@@ -257,7 +292,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      6,
+      8,
       IntegrationResponsibilityBeganEvent.make({
         acceptedResult: session.acceptedResult,
         integrationTarget: fixture.integrationTarget,
@@ -266,17 +301,17 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      7,
+      9,
       IntegrationStartedEvent.make({
         acceptedResult: session.acceptedResult,
         integrationTarget: fixture.integrationTarget,
         plannedAttempt: fixture.plannedAttempt,
-        responsibilityBeganAt: JournalPosition.make(6),
+        responsibilityBeganAt: JournalPosition.make(8),
         version: workflowJournalEventVersion
       })
     ),
     record(
-      8,
+      10,
       GitReadIntentRecordedEvent.make({
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
@@ -285,7 +320,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      9,
+      11,
       TargetLineageObservedEvent.make({
         observation: TargetLineageObservation.make({
           plannedBaseIsAncestorOfTargetHead: true,
@@ -298,10 +333,10 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(10, IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })),
-    record(11, IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion })),
+    record(12, IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })),
+    record(13, IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion })),
     record(
-      12,
+      14,
       IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: integratorRun }),
         run: integratorRun,
@@ -309,7 +344,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      13,
+      15,
       IntegratorRunCandidateGitReadIntendedEvent.make({
         candidateText,
         run: integratorRun,
@@ -317,7 +352,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      14,
+      16,
       IntegratorRunCandidateGitObservedEvent.make({
         candidateText,
         observation: IntegratorGitObservation.cases.Commit.make({
@@ -329,9 +364,9 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(15, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
+    record(17, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
     record(
-      16,
+      18,
       TargetPromotionAttemptIntendedEvent.make({
         attemptOrdinal,
         correlation,
@@ -341,7 +376,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     ),
     stale,
     record(
-      18,
+      20,
       IntegrationQuarantinedEvent.make({
         basis: quarantineBasis,
         correlation: session,
@@ -350,6 +385,57 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     )
   ]
+}
+
+interface DirectionOnlyFullRerunPrefix {
+  readonly direction: JournalRecord
+  readonly prefix: RecoveryPrefix<"FullRerunDirection">
+  readonly quarantine: JournalRecord
+}
+
+const directionOnlyFullRerunPrefix = (): DirectionOnlyFullRerunPrefix => {
+  const matrix = restartPrefixesFrom(directPromotionRestartRecords())
+  const quarantined = exactlyOne(
+    matrix.prefixes.filter(({ cut }) => cut === "Quarantined"),
+    "promotion-stale quarantine prefix for FullRerun direction"
+  )
+  if (
+    matrix.quarantine.event._tag !== "IntegrationQuarantined" ||
+    matrix.quarantine.event.basis._tag !== "PromotionStale"
+  ) {
+    return expect.fail("FullRerun direction prefix lacks its exact promotion-stale quarantine")
+  }
+  const predecessor = matrix.quarantine.event.correlation
+  const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+    direction: "FullRerun",
+    quarantineAt: matrix.quarantine.position,
+    sessionId: predecessor.sessionId
+  })
+  const event = IntegrationQuarantineDirectionAppliedEvent.make({
+    fingerprint,
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    requestId: IntegrationQuarantineDirectionRequestId.make({
+      nonce: "restart-prefix-direction-only-full-rerun",
+      runId: matrix.quarantine.runId
+    }),
+    version: workflowJournalEventVersion
+  })
+  const direction: JournalRecord = {
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(Number(matrix.quarantine.position) + 1),
+    runId: matrix.quarantine.runId
+  }
+  return {
+    direction,
+    prefix: {
+      cut: "FullRerunDirection",
+      endpoint: "operator FullRerun direction without successor lineage",
+      records: [...quarantined.records, direction]
+    },
+    quarantine: matrix.quarantine
+  }
 }
 
 const disabledTargetPromotionRuntime: TargetPromotionRuntimeInput = {
@@ -885,6 +971,357 @@ it.effect(
   // outcomes through memory and SQLite. The final body measured 9.63s isolated
   // and 24.14s in the affected aggregate; 120s doubles the observed 60.112s
   // shared-runner contention ceiling for this one store-heavy test.
+  120_000
+)
+
+it.effect(
+  "restarts from only Alice's FullRerun direction, reads fresh Git once, and fixes one successor in both stores",
+  () =>
+    Effect.gen(function* () {
+      const authored = directionOnlyFullRerunPrefix()
+      const expected = yield* expectedRecoveryPrefix(authored.prefix)
+      expect(expected.historyTag).toBe("ValidWorkflowJournalHistory")
+
+      yield* Effect.forEach(
+        lanes,
+        (lane) =>
+          withRecoveryPrefixStore(authored.prefix, lane, (storage) =>
+            Effect.gen(function* () {
+              const began = authored.prefix.records[0]
+              const predecessorFixed = authored.prefix.records.find(
+                ({ event }) => event._tag === "IntegratorSessionFixed"
+              )
+              if (
+                began.event._tag !== "WorkflowRunBegan" ||
+                predecessorFixed?.event._tag !== "IntegratorSessionFixed" ||
+                authored.quarantine.event._tag !== "IntegrationQuarantined" ||
+                authored.direction.event._tag !== "IntegrationQuarantineDirectionApplied"
+              ) {
+                return yield* Effect.die("direction-only restart prefix failed exact event narrowing")
+              }
+              const predecessor = predecessorFixed.event.correlation
+              const chronology: Array<string> = []
+              const journal = InRunJournal.of({
+                append: (recordRunId, key, event) =>
+                  storage.append(recordRunId, key, event).pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        chronology.push("append:" + event._tag)
+                      })
+                    )
+                  ),
+                read: storage.read
+              })
+              const decodedRecords = yield* storage.read(began.runId)
+              const replay: RecoveryStoreReplay = {
+                decodedRecords,
+                historyTag: reduceWorkflowJournalHistory(began.runId, decodedRecords)._tag,
+                projection: yield* projectWorkflowOccurrences(decodedRecords)
+              }
+              expect(recoveryPrefixMismatch(authored.prefix.cut, lane, expected, replay)).toBeUndefined()
+
+              const resources = yield* makeIntegrationTargetResourceController()
+              const recovery = yield* makeRunRecoveryProjection(
+                began.runId,
+                predecessor.integrationTarget,
+                resources,
+                disabledTargetPromotionRuntime
+              ).pipe(Effect.provideService(InRunJournal, journal))
+              const directionOnly = yield* recovery.readDeliveryProjection
+              expect(exactAttemptTransitions(directionOnly, predecessor.plannedAttempt.attemptId), lane).toEqual([])
+              if (directionOnly.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
+                return yield* Effect.die("direction-only restart lost its available delivery evidence")
+              }
+              expect(directionOnly.evidence.integrationWaits, lane).toEqual([
+                expect.objectContaining({
+                  _tag: "IntegrationTrackerFactsWait",
+                  plannedAttempt: predecessor.plannedAttempt
+                })
+              ])
+              assertNoSuccessorTransition(directionOnly)
+              expect(
+                decodedRecords.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed"),
+                lane
+              ).toEqual([])
+
+              const claimOperation = makeTaskClaimObservationOperation(
+                OperationId.make(`restart-prefix-full-rerun-current-claim:${lane}`),
+                began.event.target,
+                predecessor.plannedAttempt.taskId,
+                [integrationFinalityFixture.activeClaim.operationId]
+              )
+              yield* storage.append(
+                began.runId,
+                intentRecordKey(claimOperation.operationId),
+                TaskTrackerReadIntentRecordedEvent.make({
+                  operation: claimOperation,
+                  version: workflowJournalEventVersion
+                })
+              )
+              yield* storage.append(
+                began.runId,
+                outcomeRecordKey(claimOperation.operationId),
+                taskTrackerFactsObservedEvent(
+                  claimOperation.operationId,
+                  makeFocusedTaskClaimFactsObserved(claimOperation, integrationFinalityFixture.activeClaim)
+                )
+              )
+              const graphOperation = makeTrackerGraphObservationOperation(
+                OperationId.make(`restart-prefix-full-rerun-current-graph:${lane}`),
+                began.event.target,
+                [claimOperation.operationId],
+                [predecessor.plannedAttempt.taskId]
+              )
+              yield* storage.append(
+                began.runId,
+                intentRecordKey(graphOperation.operationId),
+                TaskTrackerReadIntentRecordedEvent.make({
+                  operation: graphOperation,
+                  version: workflowJournalEventVersion
+                })
+              )
+              yield* storage.append(
+                began.runId,
+                outcomeRecordKey(graphOperation.operationId),
+                taskTrackerFactsObservedEvent(
+                  graphOperation.operationId,
+                  makeCompleteTaskTrackerFactsObserved(graphOperation, integrationFinalityFixture.graphSnapshot)
+                )
+              )
+
+              const beforeAcquire = yield* recovery.readDeliveryProjection
+              const before = exactAttemptTransitions(beforeAcquire, predecessor.plannedAttempt.attemptId)
+              expect(
+                before.map(({ _tag }) => _tag),
+                lane
+              ).toEqual(["AcquireStartedIntegrationTarget"])
+              expect(
+                (yield* storage.read(began.runId)).filter(
+                  ({ event }) => event._tag === "IntegratorSuccessorSessionFixed"
+                ),
+                lane
+              ).toEqual([])
+
+              const acquire = exactlyOne(before, lane + " direction-only target acquisition")
+              if (acquire._tag !== "AcquireStartedIntegrationTarget") {
+                return yield* Effect.die("direction-only restart did not first reacquire the integration target")
+              }
+              yield* acquireStartedIntegrationTarget(resources, acquire)
+              const afterAcquire = yield* recovery.readDeliveryProjection
+              const afterAcquireTransitions = exactAttemptTransitions(
+                afterAcquire,
+                predecessor.plannedAttempt.attemptId
+              )
+              expect(
+                afterAcquireTransitions.map(({ _tag }) => _tag),
+                lane
+              ).toEqual(["ObservePlannedAttemptContinuationTargetLineage"])
+              expect(afterAcquireTransitions.filter(({ _tag }) => _tag === "FixIntegratorSuccessorSession")).toEqual([])
+              expect(afterAcquireTransitions.filter(({ _tag }) => _tag === "RunIntegrator")).toEqual([])
+              const lineageTransition = exactlyOne(
+                afterAcquireTransitions,
+                lane + " fresh successor target-lineage observation"
+              )
+              if (lineageTransition._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
+                return yield* Effect.die("direction-only restart did not select its fresh Git lineage read")
+              }
+              expect(lineageTransition.operation).toMatchObject({
+                _tag: "ReadTargetLineage",
+                integrationTarget: predecessor.integrationTarget,
+                plannedAttempt: predecessor.plannedAttempt
+              })
+
+              const freshHead = GitCommitSha.make("4".repeat(40))
+              const freshLineage = TargetLineageObservation.make({
+                plannedBaseIsAncestorOfTargetHead: true,
+                plannedBaseSha: predecessor.plannedAttempt.baseSha,
+                targetHeadSha: freshHead
+              })
+              const boundaryInterpreter = WorkflowInterpreter.of({
+                acquireTaskClaim: () => Effect.die("direction-only restart must not acquire a claim"),
+                readTaskClaim: () => Effect.die("direction-only restart must not read a claim"),
+                readTaskWorktree: () => Effect.die("direction-only restart must not read a worktree"),
+                readTargetLineage: (operation) =>
+                  Effect.sync(() => {
+                    chronology.push("read:" + operation.operationId)
+                    expect(operation).toEqual(lineageTransition.operation)
+                    return AuthoritativeTargetLineageObserved.make({ observation: freshLineage })
+                  }),
+                readTrackerGraph: () => Effect.die("direction-only restart must not read the tracker graph"),
+                readTaskWorkSpecification: () =>
+                  Effect.die("direction-only restart must not read task-work specification"),
+                reconcileTaskWorktree: () => Effect.die("direction-only restart must not reconcile a worktree"),
+                recordTaskAttemptPlan: () => Effect.die("direction-only restart must not record another plan"),
+                releaseTaskClaim: () => Effect.die("direction-only restart must not release a claim")
+              })
+              const boundaryInterpreterLayer = Layer.effect(WorkflowInterpreter, Effect.succeed(boundaryInterpreter))
+              const journaledInterpreter = journaledWorkflowInterpreterLayer(
+                began.runId,
+                boundaryInterpreterLayer
+              ).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+              const journaledInterpreterContext = yield* Effect.scoped(Layer.build(journaledInterpreter))
+              const persistedBoundaryInterpreter = Context.get(journaledInterpreterContext, WorkflowInterpreter)
+              const lease: DeliveryActionExecutionLease = {
+                ...executionLeaseFor(resources),
+                forwardBoundary: {
+                  _tag: "InterruptibleBoundary",
+                  execution: { run: (_intent, call, recordResult) => call.pipe(Effect.flatMap(recordResult)) }
+                },
+                recordIntent: (operationId) =>
+                  Effect.sync(() => {
+                    chronology.push("intent:" + operationId)
+                  })
+              }
+              const observeLineage = executeAcceptedWorkflowAction(began.runId, lineageTransition, lease).pipe(
+                Effect.provideService(
+                  WorkflowTrace,
+                  WorkflowTrace.of({
+                    emit: (item) =>
+                      Effect.sync(() => {
+                        chronology.push("trace:" + item._tag)
+                      })
+                  })
+                ),
+                Effect.provideService(InRunJournal, journal),
+                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
+              ) satisfies Effect.Effect<unknown, unknown, never>
+              const observed = yield* observeLineage
+              expect(observed).toEqual(AuthoritativeTargetLineageObserved.make({ observation: freshLineage }))
+
+              const afterLineageRecords = yield* storage.read(began.runId)
+              const freshIntent = exactlyOne(
+                afterLineageRecords.filter(
+                  ({ event, position }) =>
+                    event._tag === "GitReadIntentRecorded" && position > authored.direction.position
+                ),
+                lane + " fresh successor Git intent"
+              )
+              const freshObservation = exactlyOne(
+                afterLineageRecords.filter(
+                  ({ event, position }) =>
+                    event._tag === "TargetLineageObserved" && position > authored.direction.position
+                ),
+                lane + " fresh successor target-lineage observation"
+              )
+              if (
+                freshIntent.event._tag !== "GitReadIntentRecorded" ||
+                freshIntent.event.operation._tag !== "ReadTargetLineage" ||
+                freshObservation.event._tag !== "TargetLineageObserved"
+              ) {
+                return yield* Effect.die("fresh successor lineage records failed exact event narrowing")
+              }
+              expect(freshIntent.event.operation).toEqual(lineageTransition.operation)
+              expect(freshObservation.event).toMatchObject({
+                observation: freshLineage,
+                operationId: lineageTransition.operation.operationId,
+                plannedAttempt: predecessor.plannedAttempt
+              })
+              expect(authored.direction.position < freshIntent.position, lane).toBe(true)
+              expect(freshIntent.position < freshObservation.position, lane).toBe(true)
+              expect(chronology, lane).toEqual([
+                "trace:OperationSelected",
+                "append:GitReadIntentRecorded",
+                "intent:" + lineageTransition.operation.operationId,
+                "read:" + lineageTransition.operation.operationId,
+                "append:TargetLineageObserved"
+              ])
+
+              const afterLineage = yield* recovery.readDeliveryProjection
+              const afterLineageTransitions = exactAttemptTransitions(
+                afterLineage,
+                predecessor.plannedAttempt.attemptId
+              )
+              expect(
+                afterLineageTransitions.map(({ _tag }) => _tag),
+                lane
+              ).toEqual(["FixIntegratorSuccessorSession"])
+              const fixSuccessor = exactlyOne(afterLineageTransitions, lane + " FullRerun successor fixation")
+              if (fixSuccessor._tag !== "FixIntegratorSuccessorSession") {
+                return yield* Effect.die("fresh successor lineage did not select exactly one successor fixation")
+              }
+              expect(fixSuccessor.input).toEqual({
+                directionAppliedAt: authored.direction.position,
+                predecessor,
+                quarantineAt: authored.quarantine.position,
+                targetLineage: freshLineage,
+                targetLineageObservedAt: freshObservation.position
+              })
+              expect(
+                afterLineageRecords.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed"),
+                lane
+              ).toEqual([])
+              expect(
+                afterLineageTransitions.filter(({ _tag }) => _tag === "RunIntegrator"),
+                lane
+              ).toEqual([])
+
+              const action = identityFreeActionFor(began.runId, afterLineageRecords, fixSuccessor)
+              const fix = executeIntegrationAction(action, fixSuccessor, lease, began.event.target).pipe(
+                Effect.provideService(InRunJournal, journal),
+                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
+              ) satisfies Effect.Effect<unknown, unknown, never>
+              expect(yield* fix).toMatchObject({ _tag: "ActionCompleted" })
+              expect(yield* fix).toMatchObject({ _tag: "ActionCompleted" })
+
+              const fixedRecords = yield* storage.read(began.runId)
+              const fixedSuccessor = exactlyOne(
+                fixedRecords.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed"),
+                lane + " durable FullRerun successor"
+              )
+              if (fixedSuccessor.event._tag !== "IntegratorSuccessorSessionFixed") {
+                return yield* Effect.die("fixed FullRerun successor record failed exact event narrowing")
+              }
+              expect(fixedSuccessor.event).toMatchObject({
+                direction: "FullRerun",
+                directionAppliedAt: authored.direction.position,
+                predecessor,
+                quarantineAt: authored.quarantine.position,
+                successor: {
+                  expectedTargetHead: freshHead,
+                  integrationTarget: predecessor.integrationTarget,
+                  plannedAttempt: predecessor.plannedAttempt,
+                  targetLineageObservedAt: freshObservation.position
+                }
+              })
+              expect(fixedSuccessor.event.successor.sessionId).not.toBe(predecessor.sessionId)
+              expect(
+                chronology.filter((entry) => entry === "append:IntegratorSuccessorSessionFixed"),
+                lane
+              ).toEqual(["append:IntegratorSuccessorSessionFixed"])
+              expect(
+                chronology.filter((entry) => entry.startsWith("read:")),
+                lane
+              ).toHaveLength(1)
+
+              const restartedResources = yield* makeIntegrationTargetResourceController()
+              const restartedRecovery = yield* makeRunRecoveryProjection(
+                began.runId,
+                predecessor.integrationTarget,
+                restartedResources,
+                disabledTargetPromotionRuntime
+              ).pipe(Effect.provideService(InRunJournal, journal))
+              const restarted = yield* restartedRecovery.readDeliveryProjection
+              expect(exactAttemptTransitions(restarted, predecessor.plannedAttempt.attemptId), lane).toEqual([])
+              if (restarted.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
+                return yield* Effect.die("fixed-successor restart lost its available delivery evidence")
+              }
+              expect(restarted.evidence.integrationWaits, lane).toEqual([
+                expect.objectContaining({
+                  _tag: "IntegrationTrackerFactsWait",
+                  plannedAttempt: predecessor.plannedAttempt
+                })
+              ])
+              expect(
+                (yield* storage.read(began.runId)).filter(
+                  ({ event }) => event._tag === "IntegratorSuccessorSessionFixed"
+                ),
+                lane
+              ).toHaveLength(1)
+            })
+          ),
+        { concurrency: 1 }
+      )
+    }),
   120_000
 )
 

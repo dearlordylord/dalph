@@ -165,6 +165,7 @@ type Phase =
   | "PromotionInFlight"
   | "PromotionResponseLost"
   | "PromotionReconciliation"
+  | "PromotionRetryAuthorityRequired"
   | "PromotionRetryReady"
   | "PromotionReadPending"
   | "PromotionSucceeded"
@@ -724,6 +725,7 @@ const phaseNeedsResult = (phase: Phase): boolean =>
     "PromotionInFlight",
     "PromotionResponseLost",
     "PromotionReconciliation",
+    "PromotionRetryAuthorityRequired",
     "PromotionRetryReady",
     "PromotionReadPending",
     "PromotionSucceeded",
@@ -744,6 +746,7 @@ const phaseNeedsPreparedResult = (phase: Phase): boolean =>
     "PromotionInFlight",
     "PromotionResponseLost",
     "PromotionReconciliation",
+    "PromotionRetryAuthorityRequired",
     "PromotionRetryReady",
     "PromotionReadPending",
     "PromotionSucceeded",
@@ -948,7 +951,9 @@ const acceptedResultIntegrationDriver = defineDriver(
     recordPromotionAttemptIntentOne: {},
     recordPromotionIntentOne: {},
     reconcileCandidateGitOne: {},
+    reconcilePromotionReadOnlyOne: {},
     reconcilePromotionOne: {},
+    resumePromotionRetryWithAuthorityOne: {},
     resumeIntegratorOne: {},
     sendPromotionAttemptOne: {},
     startFullRerunOne: {},
@@ -1646,7 +1651,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         promotionResponseAmbiguous: true
       }))
 
-    const modelReconcilePromotion = (id: bigint): void =>
+    const modelReconcilePromotion = (id: bigint): void => {
       updateModelResult(id, (result) => ({
         ...result,
         phase: "PromotionReconciliation",
@@ -1656,6 +1661,31 @@ const acceptedResultIntegrationDriver = defineDriver(
         promotionGitObservation: "NoPromotionGitObservation",
         promotionObservedTargetHead: 0n
       }))
+      targetReacquisitionRequired = false
+    }
+
+    const modelReconcilePromotionReadOnly = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionReconciliation",
+        targetHeld: true,
+        promotionFreshExactHeadObservation: false,
+        promotionTargetFactsCurrent: false,
+        promotionGitObservation: "NoPromotionGitObservation",
+        promotionObservedTargetHead: 0n
+      }))
+      targetReacquisitionRequired = false
+    }
+
+    const modelResumePromotionRetryWithAuthority = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PromotionRetryReady",
+        targetHeld: true,
+        promotionTargetFactsCurrent: true
+      }))
+      targetReacquisitionRequired = false
+    }
 
     const modelPromotionCurrent = (id: bigint, ancestor: boolean): void =>
       updateModelResult(id, (result) => ({
@@ -1669,21 +1699,27 @@ const acceptedResultIntegrationDriver = defineDriver(
         promotionResponseAmbiguous: false
       }))
 
-    const modelPromotionExactHead = (id: bigint): void =>
+    const modelPromotionExactHead = (id: bigint, retryAuthorityCurrent: boolean): void =>
       updateModelResult(id, (result) => {
         const exhausted = result.promotionAttemptCount >= 3n
         return {
           ...result,
-          phase: exhausted ? "PromotionExhausted" : "PromotionRetryReady",
-          targetHeld: !exhausted,
+          phase: exhausted
+            ? "PromotionExhausted"
+            : retryAuthorityCurrent
+              ? "PromotionRetryReady"
+              : "PromotionRetryAuthorityRequired",
+          targetHeld: !exhausted && retryAuthorityCurrent,
           promotionFreshExactHeadReads: result.promotionFreshExactHeadReads + 1n,
           promotionFreshExactHeadObservation: true,
-          promotionTargetFactsCurrent: true,
+          promotionTargetFactsCurrent: exhausted || retryAuthorityCurrent,
           promotionExpectedHeadVerified: true,
           promotionGitObservation: "PromotionExactExpectedHead",
           promotionObservedTargetHead: result.expectedTargetHead,
           promotionResultRecorded: false,
-          promotionResponseAmbiguous: false
+          promotionResponseAmbiguous: false,
+          promotionCompareAndSetRequested:
+            exhausted || retryAuthorityCurrent ? result.promotionCompareAndSetRequested : false
         }
       })
 
@@ -1699,7 +1735,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         promotionResponseAmbiguous: false
       }))
 
-    const modelPromotionUnreadable = (id: bigint): void =>
+    const modelPromotionUnreadable = (id: bigint): void => {
       updateModelResult(id, (result) => ({
         ...result,
         phase: result.promotionAttemptCount >= 3n ? "PromotionExhausted" : "PromotionReadPending",
@@ -1708,8 +1744,11 @@ const acceptedResultIntegrationDriver = defineDriver(
         promotionGitObservation: "PromotionUnreadableHead",
         promotionObservedTargetHead: 0n,
         promotionCandidateAncestryProven: false,
-        promotionResultRecorded: false
+        promotionResultRecorded: false,
+        promotionCompareAndSetRequested: false
       }))
+      targetReacquisitionRequired = true
+    }
 
     const modelRecover = (): void => {
       const requiresFreshFacts = [...modelResults.values()].some(
@@ -1732,11 +1771,7 @@ const acceptedResultIntegrationDriver = defineDriver(
                     result.phase === "PromotionReconciliation" ||
                     result.phase === "PromotionRetryReady"
                   ? "PromotionResponseLost"
-                  : result.phase === "PromotionReadPending" && result.promotionAttemptCount === 0n
-                    ? "PromotionIntent"
-                    : result.phase === "PromotionReadPending"
-                      ? "PromotionResponseLost"
-                      : result.phase,
+                  : result.phase,
         integratorResponseAmbiguous: result.phase === "IntegratorInFlight" ? true : result.integratorResponseAmbiguous,
         targetHeld: false,
         lastRecoveryRunSession:
@@ -1756,17 +1791,31 @@ const acceptedResultIntegrationDriver = defineDriver(
               ? result.successorRunOrdinal
               : result.lastRecoveryRunOrdinal,
         promotionTargetFactsCurrent: result.phase.startsWith("Promotion") ? false : result.promotionTargetFactsCurrent,
-        promotionFreshExactHeadObservation: result.phase.startsWith("Promotion")
-          ? false
-          : result.promotionFreshExactHeadObservation,
+        promotionFreshExactHeadObservation:
+          result.phase.startsWith("Promotion") &&
+          !new Set<Phase>(["PromotionRetryAuthorityRequired", "PromotionReadPending"]).has(result.phase)
+            ? false
+            : result.promotionFreshExactHeadObservation,
         promotionGitObservation:
           result.phase.startsWith("Promotion") &&
-          !new Set<Phase>(["PromotionSucceeded", "PromotionStale", "PromotionExhausted"]).has(result.phase)
+          !new Set<Phase>([
+            "PromotionRetryAuthorityRequired",
+            "PromotionReadPending",
+            "PromotionSucceeded",
+            "PromotionStale",
+            "PromotionExhausted"
+          ]).has(result.phase)
             ? "NoPromotionGitObservation"
             : result.promotionGitObservation,
         promotionObservedTargetHead:
           result.phase.startsWith("Promotion") &&
-          !new Set<Phase>(["PromotionSucceeded", "PromotionStale", "PromotionExhausted"]).has(result.phase)
+          !new Set<Phase>([
+            "PromotionRetryAuthorityRequired",
+            "PromotionReadPending",
+            "PromotionSucceeded",
+            "PromotionStale",
+            "PromotionExhausted"
+          ]).has(result.phase)
             ? 0n
             : result.promotionObservedTargetHead
       }))
@@ -2116,9 +2165,10 @@ const acceptedResultIntegrationDriver = defineDriver(
       observePromotionCandidateCurrentOne: () => Effect.sync(() => modelPromotionCurrent(1n, false)),
       observePromotionExactExpectedHeadOne: () =>
         Effect.sync(() => {
+          const retryAuthorityCurrent = trackerFactsCurrent && targetFactsCurrent
           targetFactsCurrent = true
           targetHeadProof = modelResultFor(1n).expectedTargetHead
-          modelPromotionExactHead(1n)
+          modelPromotionExactHead(1n, retryAuthorityCurrent)
         }),
       observePromotionGitUnreadableOne: () => Effect.sync(() => modelPromotionUnreadable(1n)),
       observePromotionOtherHeadOne: () => Effect.sync(() => modelPromotionOtherHead(1n)),
@@ -2309,7 +2359,9 @@ const acceptedResultIntegrationDriver = defineDriver(
       recordPromotionIntentOne: () => Effect.sync(() => modelPromotionIntent(1n)),
       readCandidateGitOne: () => Effect.sync(() => modelReadGit(1n)),
       reconcileCandidateGitOne: () => Effect.sync(() => modelReconcileGit(1n)),
+      reconcilePromotionReadOnlyOne: () => Effect.sync(() => modelReconcilePromotionReadOnly(1n)),
       reconcilePromotionOne: () => Effect.sync(() => modelReconcilePromotion(1n)),
+      resumePromotionRetryWithAuthorityOne: () => Effect.sync(() => modelResumePromotionRetryWithAuthority(1n)),
       resumeIntegratorOne: () =>
         Effect.gen(function* () {
           const request = IntegratorRequest.make({ correlation: runFor(1n) })
@@ -2332,6 +2384,27 @@ const acceptedResultIntegrationDriver = defineDriver(
     }
   }
 )
+
+const promotionReadOnlyReconciliationActions = [
+  "init",
+  "acceptResultOne",
+  "queueAcceptedResultOne",
+  "startIntegrationOne",
+  "fixIntegratorSessionOne",
+  "invokeIntegratorOne",
+  "reportIntegratorCandidateOne31",
+  "recordCandidateGitReadIntentOne",
+  "readCandidateGitOne",
+  "observeExactCandidateOne",
+  "offerPromotionPremiseOne",
+  "recordPromotionIntentOne",
+  "observePromotionExactExpectedHeadOne",
+  "recordPromotionAttemptIntentOne",
+  "sendPromotionAttemptOne",
+  "losePromotionAttemptResponseOne",
+  "recoverCoordinatorStep",
+  "reconcilePromotionReadOnlyOne"
+] as const
 
 it.effect("detects a chooseRetry projection that leaves its exact direction subject at zero", () =>
   Effect.sync(() => {
@@ -2368,6 +2441,123 @@ it.effect(
         if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
         yield* action.handler({})
       }
+    }),
+  30_000
+)
+
+it.effect(
+  "keeps an exact-head promotion deferral stable until fresh retry authority resumes it",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* acceptedResultIntegrationDriver.create()
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("accepted-result integration driver lacks getState")
+      const reachAuthorityFreeExactHead = [
+        ...promotionReadOnlyReconciliationActions,
+        "observePromotionExactExpectedHeadOne"
+      ] as const
+      for (const actionName of reachAuthorityFreeExactHead) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+      }
+
+      const deferred = (yield* getState()).results.get(1n)
+      expect(deferred).toMatchObject({
+        phase: "PromotionRetryAuthorityRequired",
+        promotionAttemptCount: 1n,
+        promotionCompareAndSetRequested: false,
+        promotionExpectedHeadVerified: true,
+        promotionFreshExactHeadObservation: true,
+        promotionGitObservation: "PromotionExactExpectedHead",
+        promotionResultRecorded: false,
+        promotionTargetFactsCurrent: false,
+        targetHeld: false
+      })
+      expect(deferred?.promotionObservedTargetHead).toBe(deferred?.expectedTargetHead)
+
+      for (const actionName of ["recoverCoordinatorStep", "acceptResultTwo"] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+      }
+      const recovered = (yield* getState()).results.get(1n)
+      expect(recovered).toMatchObject({
+        phase: "PromotionRetryAuthorityRequired",
+        promotionCompareAndSetRequested: false,
+        promotionFreshExactHeadObservation: true,
+        promotionGitObservation: "PromotionExactExpectedHead",
+        targetHeld: false
+      })
+      expect(recovered?.promotionObservedTargetHead).toBe(recovered?.expectedTargetHead)
+
+      for (const actionName of [
+        "observeTrackerFactsStep",
+        "observeTargetFactsOne",
+        "resumePromotionRetryWithAuthorityOne"
+      ] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+      }
+      expect((yield* getState()).results.get(1n)).toMatchObject({
+        phase: "PromotionRetryReady",
+        promotionAttemptCount: 1n,
+        promotionCompareAndSetRequested: false,
+        promotionFreshExactHeadObservation: true,
+        promotionTargetFactsCurrent: true,
+        targetHeld: true
+      })
+    }),
+  30_000
+)
+
+it.effect(
+  "keeps an unreadable promotion reconciliation pending across restart until a fresh exact-head read",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* acceptedResultIntegrationDriver.create()
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("accepted-result integration driver lacks getState")
+      for (const actionName of [
+        ...promotionReadOnlyReconciliationActions,
+        "observePromotionGitUnreadableOne",
+        "recoverCoordinatorStep",
+        "acceptResultTwo"
+      ] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+      }
+
+      expect((yield* getState()).results.get(1n)).toMatchObject({
+        phase: "PromotionReadPending",
+        promotionAttemptCount: 1n,
+        promotionCompareAndSetRequested: false,
+        promotionFreshExactHeadObservation: false,
+        promotionGitObservation: "PromotionUnreadableHead",
+        promotionResultRecorded: false,
+        targetHeld: false
+      })
+
+      for (const actionName of [
+        "observeTrackerFactsStep",
+        "observeTargetFactsOne",
+        "reconcilePromotionOne",
+        "observePromotionExactExpectedHeadOne"
+      ] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+      }
+      expect((yield* getState()).results.get(1n)).toMatchObject({
+        phase: "PromotionRetryReady",
+        promotionAttemptCount: 1n,
+        promotionFreshExactHeadObservation: true,
+        promotionGitObservation: "PromotionExactExpectedHead",
+        promotionTargetFactsCurrent: true,
+        targetHeld: true
+      })
     }),
   30_000
 )

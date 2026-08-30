@@ -134,6 +134,14 @@ Session S is quarantined at Q. The client submits Full rerun with fingerprint
 4. If Dalph disappears at any point, restart continues the recorded direction
    and creates or restores at most that one S2.
 
+At the direction-only restart cut, no process-local tracker, claim, target, or
+Git fact survives. Dalph first checks current tracker and exact claim facts,
+reacquires the integration target, records one target-lineage read intent,
+reads Git once, and records that observation. Only the exact chronology
+`S < Q < FullRerun < intent < L` may fix S2. Before L it neither fixes a
+successor nor calls the Integrator; replaying successor fixation records no
+second S2.
+
 The operator sees a fresh run of the same queued integration responsibility.
 Dalph must not move A behind later work, reuse S's fixed H, delete S, create two
 successors, or special-case restart as a different delivery path.
@@ -143,4 +151,5 @@ successors, or special-case restart as a different delivery path.
 - `full rerun preserves queue position and starts one successor session at the fresh head`
 - `preserves predecessor resources for separately authorized cleanup`
 - `recovers a recorded full rerun without creating a second successor`
+- `restarts from only Alice's FullRerun direction, reads fresh Git once, and fixes one successor in both stores`
 - `delivers the already-recorded FullRerun successor after restart`
