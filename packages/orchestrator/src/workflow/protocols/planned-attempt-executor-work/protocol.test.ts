@@ -768,6 +768,30 @@ it.effect("records unavailable and contradictory projections while reconciling o
       expected: correlation,
       observed: foreignCorrelation
     })
+
+    const foreignProjectionCorrelation = {
+      attemptId: AttemptId.make("foreign-command-projection"),
+      runId: plannedAttempt.runId
+    }
+    const foreignProjection = yield* continuePlannedAttemptExecutorWork(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () =>
+            Effect.succeed(
+              PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation: foreignProjectionCorrelation })
+            ),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("mismatched projection must not start work")
+        })
+      ),
+      Effect.flip
+    )
+    expect(foreignProjection).toMatchObject({
+      _tag: "PlannedAttemptExecutorProjectionCorrelationMismatch",
+      expected: correlation,
+      observed: foreignProjectionCorrelation
+    })
   }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )
 
@@ -814,6 +838,30 @@ it.effect("records unavailable and contradictory read-only executor state", () =
       _tag: "PlannedAttemptExecutorCorrelationMismatch",
       expected: correlation,
       observed: foreignCorrelation
+    })
+
+    const foreignProjectionCorrelation = {
+      attemptId: AttemptId.make("foreign-state-projection"),
+      runId: plannedAttempt.runId
+    }
+    const foreignProjection = yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+      Effect.provideService(
+        PlannedAttemptExecutor,
+        PlannedAttemptExecutor.of({
+          project: () =>
+            Effect.succeed(
+              PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation: foreignProjectionCorrelation })
+            ),
+          requestSuspension: () => Effect.die("unused suspension"),
+          startOrContinue: () => Effect.die("unused continuation")
+        })
+      ),
+      Effect.flip
+    )
+    expect(foreignProjection).toMatchObject({
+      _tag: "PlannedAttemptExecutorProjectionCorrelationMismatch",
+      expected: correlation,
+      observed: foreignProjectionCorrelation
     })
 
     const divergent = PlannedTaskAttempt.make({ ...plannedAttempt, baseSha: GitCommitSha.make("3".repeat(40)) })
