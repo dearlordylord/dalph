@@ -157,6 +157,7 @@ import {
   makeFocusedTaskClaimFactsUnreadable,
   makeFocusedTaskWorkSpecificationFactsObserved,
   makeCompleteTaskTrackerFactsObserved,
+  TaskTrackerFactsObservedEvent,
   TaskTrackerFactsReadFailed,
   taskTrackerFactsObservedEvent
 } from "../workflow/task-tracker-facts/observation.js"
@@ -172,6 +173,7 @@ import {
   TraceIntegratorCandidateCleanupProgress,
   TraceCursor,
   TraceHistoricalFacets,
+  TraceHistoryItem,
   TraceItemIdentity,
   TraceIntegrationFact,
   TraceObservationGap,
@@ -183,9 +185,20 @@ import {
   TraceWorktreeCleanupProgress,
   makeTraceReader
 } from "./trace-reader.js"
-import { traceHistoricalFacetsIssue, type HistoricalFacetFactories } from "./trace-reader-historical-facets.js"
+import {
+  traceHistoricalFacetsAt,
+  traceHistoricalFacetsIssue,
+  type HistoricalFacetFactories
+} from "./trace-reader-historical-facets.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
-import { projectWorkflowOccurrences } from "../workflow/registry/occurrence-projection.js"
+import { projectWorkflowOccurrences, WorkflowOccurrence } from "../workflow/registry/occurrence-projection.js"
+import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task-tracker-read/protocol.js"
+import { appendReplacementProvenance } from "../workflow/protocols/disposition-cleanup/provenance-fixtures.js"
+import {
+  attempt as replacementAttempt,
+  runId as replacementRunId,
+  successor as replacementSuccessor
+} from "../workflow/protocols/disposition-cleanup/fixtures.js"
 
 const runId = RunId.make("historical-81-82-run")
 const trackerTarget = FixtureTarget.make("historical-81-82-target")
@@ -499,6 +512,209 @@ it.effect("#81 rejects foreign nested Run identities before exposing recovery hi
       vitestExpect(failure).toBeInstanceOf(TraceProjectionInvalid)
     }
   })
+)
+
+it.effect("#83/#84 rejects schema-valid facet sources that contradict the committed occurrence prefix", () =>
+  Effect.gen(function* () {
+    const issue = (
+      view: TraceAtCursor,
+      facets: TraceAtCursor["facets"],
+      items: TraceAtCursor["items"] = view.items
+    ): string | undefined =>
+      traceHistoricalFacetsIssue({ cursor: view.cursor, facets, items }, historicalFacetFactories)
+
+    const reconciliationOperation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make("historical-83-reconciliation-gap"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const reconciliation = yield* makeTraceReader({
+      read: () =>
+        Effect.succeed([
+          record(1, runBeginning),
+          record(
+            2,
+            TaskWorktreeReconciliationIntendedEvent.make({
+              operation: reconciliationOperation,
+              version: workflowJournalEventVersion
+            })
+          )
+        ])
+    }).readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
+    vitestExpect(issue(reconciliation, reconciliation.facets)).toBeUndefined()
+    const reconciliationGap = reconciliation.facets.recovery.observationGaps.find(
+      ({ _tag }) => _tag === "GitObservation"
+    )
+    if (reconciliationGap?._tag !== "GitObservation") {
+      return yield* Effect.die("worktree reconciliation gap is missing")
+    }
+    vitestExpect(
+      issue(reconciliation, {
+        ...reconciliation.facets,
+        recovery: {
+          ...reconciliation.facets.recovery,
+          observationGaps: [
+            { ...reconciliationGap, operationId: OperationId.make("historical-83-foreign-reconciliation") }
+          ]
+        }
+      })
+    ).toBe("Git-observation gap must identify its exact worktree reconciliation intent")
+
+    const preservation = yield* makeTraceReader({ read: () => Effect.succeed(preservationRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(8), runId })
+    )
+    const control = preservation.facets.controlDisposition.controls[0]
+    if (control === undefined) return yield* Effect.die("attempt-choice control source is missing")
+    vitestExpect(
+      issue(preservation, {
+        ...preservation.facets,
+        controlDisposition: {
+          ...preservation.facets.controlDisposition,
+          controls: [{ ...control, source: TraceItemIdentity.make({ position: JournalPosition.make(99), runId }) }]
+        }
+      })
+    ).toBe("Every control, disposition, and cleanup source must resolve to an item in the cursor prefix")
+
+    const integration = yield* makeTraceReader({ read: () => Effect.succeed(integrationRecords()) }).readAt(
+      TraceCursor.make({ position: JournalPosition.make(15), runId: integrationFinalityFixture.runId })
+    )
+    const prepared = integration.items.find(
+      ({ occurrence }) =>
+        occurrence._tag === "IntegratorRunResultRecorded" && occurrence.result._tag === "PreparedCandidate"
+    )
+    if (prepared === undefined) return yield* Effect.die("PreparedCandidate occurrence is missing")
+    const withoutPreparedItems = integration.items.filter((item) => item !== prepared)
+    const withoutPreparedFacts = integration.facets.integration.facts.filter(
+      (fact) => !(fact._tag === "IntegratorResult" && fact.source.position === prepared.identity.position)
+    )
+    vitestExpect(
+      issue(integration, { ...integration.facets, integration: { facts: withoutPreparedFacts } }, withoutPreparedItems)
+    ).toBe("Candidate qualification fact must preserve PreparedCandidate and ordered Git parents [H, C]")
+
+    const withoutExecutorResponsibility = integration.items.filter(
+      ({ occurrence }) => occurrence._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan"
+    )
+    const withoutIntegrationResponsibility = integration.items.filter(
+      ({ occurrence }) => occurrence._tag !== "IntegrationResponsibilityBegan"
+    )
+    vitestExpect(
+      traceHistoricalFacetsAt(withoutExecutorResponsibility, historicalFacetFactories).integration.facts.some(
+        ({ _tag }) => _tag === "AcceptedResult"
+      )
+    ).toBe(false)
+    vitestExpect(
+      traceHistoricalFacetsAt(withoutIntegrationResponsibility, historicalFacetFactories).integration.facts.some(
+        ({ _tag }) => _tag === "SessionStarted"
+      )
+    ).toBe(false)
+    vitestExpect(
+      traceHistoricalFacetsAt(withoutPreparedItems, historicalFacetFactories).integration.facts.some(
+        ({ _tag }) => _tag === "CandidateQualification"
+      )
+    ).toBe(false)
+
+    const finality = yield* makeTraceReader({ read: () => Effect.succeed(finalityRecords()) }).readAt(
+      TraceCursor.make({
+        position: JournalPosition.make(finalityPosition.graphObserved),
+        runId: integrationFinalityFixture.runId
+      })
+    )
+    const dependant = finality.facets.integration.facts.find(({ _tag }) => _tag === "DependantRelease")
+    const foreignSource = finality.items.find(({ identity }) => identity.position === JournalPosition.make(2))
+    if (dependant?._tag !== "DependantRelease" || foreignSource === undefined) {
+      return yield* Effect.die("dependant-release source fixture is incomplete")
+    }
+    vitestExpect(
+      issue(finality, {
+        ...finality.facets,
+        integration: {
+          facts: finality.facets.integration.facts.map((fact) =>
+            fact === dependant ? { ...fact, source: foreignSource.identity } : fact
+          )
+        }
+      })
+    ).toBe("Dependant-release evidence must bind the exact later complete graph and earlier settlement")
+
+    const graphSource = finality.items.find(({ identity }) => identity.position === dependant.graphSource.position)
+    if (graphSource === undefined) return yield* Effect.die("dependant-release graph source is missing")
+    const reconfirmationOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("historical-83-missing-prior-reconfirmation"),
+      integrationFinalityFixture.target
+    )
+    const reconfirmed = makeTaskTrackerFactsObservedFromRead(
+      finalityRecords(),
+      reconfirmationOperation,
+      integrationFinalityFixture.graphSnapshot
+    )
+    if (reconfirmed.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed") {
+      return yield* Effect.die("dependant-release reconfirmation fixture is not compact")
+    }
+    const missingPrior = Schema.decodeUnknownSync(TaskTrackerFactsObservedEvent)({
+      ...reconfirmed,
+      observation: {
+        ...reconfirmed.observation,
+        priorFullObservationOperationId: OperationId.make("historical-83-missing-full-observation")
+      }
+    })
+    const reconfirmationProjection = yield* projectWorkflowOccurrences([
+      record(1, taskTrackerReadIntent(reconfirmationOperation), integrationFinalityFixture.runId),
+      record(2, missingPrior, integrationFinalityFixture.runId)
+    ])
+    const reconfirmationOccurrence = reconfirmationProjection.occurrences[1]
+    if (reconfirmationOccurrence?._tag !== "TaskTrackerFactsObserved") {
+      return yield* Effect.die("reconfirmation occurrence is missing")
+    }
+    const transplantedOccurrence = Schema.decodeUnknownSync(WorkflowOccurrence)({
+      ...Schema.encodeUnknownSync(WorkflowOccurrence)(reconfirmationOccurrence),
+      recordedAt: graphSource.identity.position,
+      runId: graphSource.identity.runId
+    })
+    const transplantedGraphSource = Schema.decodeUnknownSync(TraceHistoryItem)({
+      ...Schema.encodeUnknownSync(TraceHistoryItem)(graphSource),
+      occurrence: Schema.encodeUnknownSync(WorkflowOccurrence)(transplantedOccurrence),
+      operationIds: [reconfirmationOperation.operationId]
+    })
+    const itemsWithMissingPrior = finality.items.map((item) => (item === graphSource ? transplantedGraphSource : item))
+    const facetsWithMissingPrior = {
+      ...finality.facets,
+      integration: {
+        facts: finality.facets.integration.facts.map((fact) =>
+          fact === dependant ? { ...fact, graphObservation: missingPrior.observation } : fact
+        )
+      }
+    }
+    vitestExpect(issue(finality, facetsWithMissingPrior, itemsWithMissingPrior)).toBe(
+      "Dependant-release evidence must bind the exact later complete graph and earlier settlement"
+    )
+
+    const journal = yield* JournalStore
+    yield* journal.beginRun(replacementRunId, FixtureTarget.make("historical-83-replacement-retention"), initialPolicy)
+    yield* appendReplacementProvenance(replacementAttempt, replacementSuccessor)
+    const replacementRecords = yield* journal.read(replacementRunId)
+    const replacementCursor = TraceCursor.make({
+      position: Option.getOrThrow(Option.fromUndefinedOr(replacementRecords.at(-1)?.position)),
+      runId: replacementRunId
+    })
+    const replacement = yield* makeTraceReader({ read: journal.read }).readAt(replacementCursor)
+    vitestExpect(issue(replacement, replacement.facets)).toBeUndefined()
+    const retainedReplacement = replacement.facets.recovery.retainedResponsibilities.find(
+      (responsibility) =>
+        responsibility._tag === "TaskAttempt" &&
+        responsibility.plannedAttempt.attemptId === replacementSuccessor.attemptId
+    )
+    if (retainedReplacement?._tag !== "TaskAttempt") {
+      return yield* Effect.die("replacement successor retention is missing")
+    }
+    vitestExpect(
+      issue(replacement, {
+        ...replacement.facets,
+        recovery: {
+          ...replacement.facets.recovery,
+          retainedResponsibilities: [{ ...retainedReplacement, plannedAttempt: replacementAttempt }]
+        }
+      })
+    ).toBe("Retained task attempt must identify its exact plan or replacement successor")
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
 const integrationRecords = (): ReadonlyArray<JournalRecord> => {
@@ -2088,6 +2304,98 @@ it.effect("#82 rejects a bare settlement and duplicate nested finality operation
       )
       vitestExpect(failure).toBeInstanceOf(TraceProjectionInvalid)
     }
+  })
+)
+
+it.effect("#83 rejects contradictory finality cleanup and post-promotion ancestry chronology", () =>
+  Effect.gen(function* () {
+    const records = finalityRecords()
+    const releaseIntentRecord = records.find(
+      ({ position }) => position === JournalPosition.make(finalityPosition.originalReleaseIntent)
+    )
+    const deletionIntentRecord = records.find(
+      ({ position }) => position === JournalPosition.make(finalityPosition.deletionIntent)
+    )
+    const settlementRecord = records.find(({ position }) => position === JournalPosition.make(finalityPosition.settled))
+    if (
+      releaseIntentRecord?.event._tag !== "TaskClaimReleaseIntended" ||
+      deletionIntentRecord?.event._tag !== "CompletionClaimDeletionIntended" ||
+      settlementRecord?.event._tag !== "IntegrationFinalitySettled"
+    ) {
+      return yield* Effect.die("finality chronology fixture is incomplete")
+    }
+
+    const releaseIntent = releaseIntentRecord.event
+    const wrongClaimRelease = makeTaskClaimReleaseOperation({
+      authority: releaseIntent.operation.authority,
+      predecessorOperationIds: releaseIntent.operation.predecessorOperationIds,
+      release: {
+        ...releaseIntent.operation.release,
+        claim: ActiveTaskClaim.make({
+          ...releaseIntent.operation.release.claim,
+          token: ClaimToken.make("historical-wrong-original-claim-token")
+        })
+      }
+    })
+    const missingPredecessorRelease = makeTaskClaimReleaseOperation({
+      authority: releaseIntent.operation.authority,
+      predecessorOperationIds: releaseIntent.operation.predecessorOperationIds.filter(
+        (operationId) => operationId !== deletionIntentRecord.event.successObservation.operationId
+      ),
+      release: releaseIntent.operation.release
+    })
+    for (const { detail, operation } of [
+      {
+        detail: "completion cleanup release intent contradicts its exact original claim",
+        operation: wrongClaimRelease
+      },
+      {
+        detail: "completion cleanup release intent requires its exact claim and focused-success predecessors",
+        operation: missingPredecessorRelease
+      }
+    ]) {
+      const prefix = records
+        .slice(0, finalityPosition.originalReleaseIntent)
+        .map((item) =>
+          item.position === JournalPosition.make(finalityPosition.originalReleaseIntent)
+            ? withEvent(item, TaskClaimReleaseIntendedEvent.make({ operation, version: workflowJournalEventVersion }))
+            : item
+        )
+      const failure = yield* Effect.flip(
+        makeTraceReader({ read: () => Effect.succeed(prefix) }).readAt(
+          TraceCursor.make({
+            position: JournalPosition.make(finalityPosition.originalReleaseIntent),
+            runId: integrationFinalityFixture.runId
+          })
+        )
+      )
+      vitestExpect(failure).toMatchObject({ _tag: "TraceProjectionInvalid", detail })
+    }
+
+    const ancestryPosition = finalityPosition.graphObserved + 1
+    const authorization = PostPromotionBlockerClearAuthorization.make({
+      blockerClearedAt: JournalPosition.make(finalityPosition.graphObserved),
+      blockerObservedAt: JournalPosition.make(finalityPosition.graphReadIntent),
+      claim: settlementRecord.event.claim
+    })
+    const operationId = postPromotionBlockerAncestryOperationIdFor(authorization)
+    const ancestryIntent = PostPromotionBlockerCandidateAncestryReadIntendedEvent.make({
+      authorization,
+      operationId,
+      version: workflowJournalEventVersion
+    })
+    const ancestryFailure = yield* Effect.flip(
+      makeTraceReader({
+        read: () =>
+          Effect.succeed([...records, record(ancestryPosition, ancestryIntent, integrationFinalityFixture.runId)])
+      }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(ancestryPosition), runId: integrationFinalityFixture.runId })
+      )
+    )
+    vitestExpect(ancestryFailure).toMatchObject({
+      _tag: "TraceProjectionInvalid",
+      detail: "post-promotion blocker ancestry read lacks its exact promotion, blocker, and later-clear chronology"
+    })
   })
 )
 

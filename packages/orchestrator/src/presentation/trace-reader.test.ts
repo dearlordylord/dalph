@@ -20,6 +20,7 @@ import {
 import { acceptedResultFixture } from "../../test/support/evidence.js"
 import { completedRunFinalityFixture } from "../../test/run-finality.js"
 import { GitCommand } from "../authorities/git/command.js"
+import { GitWorktreeReadFailure } from "../authorities/git/worktree.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { TargetLineageObservation } from "../authorities/git/target-lineage.js"
@@ -34,6 +35,7 @@ import {
   CompletionClaimRequestOrdinal,
   CompletionClaimReplacedEvent,
   CompletionTaskAttemptIntendedEvent,
+  CompletionTaskAcknowledgedEvent,
   CompletionTaskCandidateAncestryObservedEvent,
   CompletionTaskCandidateAncestryReadIntendedEvent,
   CompletionTaskRequestLookup,
@@ -97,6 +99,7 @@ import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import {
   makeTaskClaimAcquisitionOperation,
   makeCompletionTaskFactsObservationOperation,
+  makeTaskWorktreeObservationOperation,
   makeTargetLineageObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../workflow/registry/operation.js"
@@ -107,6 +110,12 @@ import {
 } from "../workflow/protocols/integration-finality/completion-task-operation-identity.js"
 import { makeFocusedTaskCompletionFactsObserved } from "../workflow/task-tracker-facts/focused-completion-observation.js"
 import { integrationFinalityFixture } from "../workflow/protocols/integration-finality/fixtures.js"
+import {
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshGitReadFailedEvent,
+  ActiveWorkAuthorityRefreshOrdinal,
+  makeActiveWorkAuthorityRefreshGitReadOperation
+} from "../workflow/protocols/active-work-authority-refresh/events.js"
 import {
   IntegratorRunCorrelation,
   IntegratorRunCandidateGitObservedEvent,
@@ -810,6 +819,124 @@ it.effect("indexes completion lookup and candidate ancestry roles in the public 
         })
       ])
     )
+  })
+)
+
+it.effect("maps a missing active-refresh Git intent through complete, history, and cursor reads", () =>
+  Effect.gen(function* () {
+    const authority = ActiveWorkAuthorityRefreshAuthority.make({
+      attemptId: integrationPlannedAttempt.attemptId,
+      runId
+    })
+    const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
+    const operation = makeActiveWorkAuthorityRefreshGitReadOperation(
+      makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make("trace-reader-active-refresh-without-intent"),
+        plannedAttempt: integrationPlannedAttempt,
+        predecessorOperationIds: []
+      }),
+      authority,
+      ordinal
+    )
+    const failureEvent = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
+      authority,
+      failure: new GitWorktreeReadFailure({
+        detail: "the committed prefix omitted the Git intent",
+        worktree: integrationPlannedAttempt.worktree
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operation,
+      ordinal,
+      source: "Timer",
+      version: workflowJournalEventVersion
+    })
+    const beginningEvent = WorkflowRunBeganEvent.make({
+      initialControlPolicy: initialPolicy,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      target,
+      version: workflowJournalEventVersion
+    })
+    const records: ReadonlyArray<JournalRecord> = [
+      {
+        event: beginningEvent,
+        key: describeJournalEvent(beginningEvent).expectedKey,
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: failureEvent,
+        key: describeJournalEvent(failureEvent).expectedKey,
+        position: JournalPosition.make(2),
+        runId
+      }
+    ]
+    const reader = readerFromRecords(records)
+    const historyFailure = yield* reader.read(runId).pipe(Effect.flip)
+    expect(historyFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+    const cursorFailure = yield* reader
+      .readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
+      .pipe(Effect.flip)
+    expect(cursorFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+  })
+)
+
+it.effect("rejects a finality acknowledgement whose nested request identity contradicts its request", () =>
+  Effect.gen(function* () {
+    const records = historicalLookupRecords()
+    const lost = records.find(({ event }) => event._tag === "CompletionTaskResponseLost")
+    if (lost?.event._tag !== "CompletionTaskResponseLost") {
+      return yield* Effect.die("completion response fixture is missing")
+    }
+    const acknowledgement = CompletionTaskAcknowledgedEvent.make({
+      acknowledgement: {
+        operationId: OperationId.make("trace-reader-foreign-completion-acknowledgement"),
+        taskId: lost.event.request.taskId
+      },
+      attemptOrdinal: lost.event.attemptOrdinal,
+      request: lost.event.request,
+      version: workflowJournalEventVersion
+    })
+    const malformed = records.map((item) =>
+      item === lost ? { ...item, event: acknowledgement, key: describeJournalEvent(acknowledgement).expectedKey } : item
+    )
+    const failure = yield* readerFromRecords(malformed)
+      .readAt(TraceCursor.make({ position: JournalPosition.make(32), runId: integrationFinalityFixture.runId }))
+      .pipe(Effect.flip)
+    expect(failure).toMatchObject({ _tag: "TraceProjectionInvalid", runId: integrationFinalityFixture.runId })
+  })
+)
+
+it.effect("rejects a later top-level read that reuses a nested finality operation identity", () =>
+  Effect.gen(function* () {
+    const records = historicalLookupRecords()
+    const lookup = records.find(({ event }) => event._tag === "CompletionTaskRequestLookupIntended")
+    if (lookup?.event._tag !== "CompletionTaskRequestLookupIntended") {
+      return yield* Effect.die("completion lookup fixture is missing")
+    }
+    const collidingOperation = makeTrackerGraphObservationOperation(
+      lookup.event.operationId,
+      integrationFinalityFixture.target
+    )
+    const collidingIntent = taskTrackerReadIntent(collidingOperation)
+    const malformed = [
+      ...records,
+      {
+        event: collidingIntent,
+        key: describeJournalEvent(collidingIntent).expectedKey,
+        position: JournalPosition.make(33),
+        runId: integrationFinalityFixture.runId
+      }
+    ]
+    const failure = yield* readerFromRecords(malformed)
+      .readAt(TraceCursor.make({ position: JournalPosition.make(33), runId: integrationFinalityFixture.runId }))
+      .pipe(Effect.flip)
+    expect(failure).toMatchObject({
+      _tag: "TraceCausalPredecessorContradiction",
+      predecessorOperationId: lookup.event.operationId,
+      reason: "DuplicateOperation",
+      successorOperationId: lookup.event.operationId
+    })
   })
 )
 
