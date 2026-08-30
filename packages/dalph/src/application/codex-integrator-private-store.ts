@@ -4,28 +4,29 @@ import { createHash } from "node:crypto"
 import nodePath from "node:path"
 import { GitRepositoryLocator } from "@dalph/contracts"
 import { Context, Effect, FileSystem, Layer, Option, Ref, Schema, Semaphore } from "effect"
-import {
-  CodexOwnedTurnToken,
-  CodexServerIncarnation,
-  CodexThreadId,
-  CodexThreadOwnershipToken,
-  CodexTurnId
-} from "./codex-attempt-store.js"
+import { CodexServerIncarnation, CodexThreadId, CodexThreadOwnershipToken } from "./codex-attempt-store.js"
 import {
   GitCommonDirectoryLocator,
   type IntegratorCandidateResourceLocator,
-  IntegratorResult,
   IntegratorRunCorrelation,
   IntegratorSessionCorrelation
 } from "@dalph/orchestrator"
 import {
+  appendPrivateRunHistory,
   codexIntegratorProviderRunOrdinals,
+  type CodexIntegratorPrivateRun,
+  CodexIntegratorPrivateRunHistory,
+  CodexIntegratorSealedPrivateRunHistory,
   expectedProviderRunOrdinalAt,
   isInitialProviderRun,
   isRetryProviderRun,
+  isSealedPrivateRun,
   isSupportedProviderRun,
-  providerRunAdmissionError
+  providerRunAdmissionError,
+  sealedPrivateRunHistoryFrom
 } from "./codex-integrator-private-lifecycle.js"
+
+export { CodexIntegratorPrivateRun } from "./codex-integrator-private-lifecycle.js"
 
 const sameSessionValue = Schema.toEquivalence(IntegratorSessionCorrelation)
 const sameRunValue = Schema.toEquivalence(IntegratorRunCorrelation)
@@ -71,33 +72,6 @@ const CodexIntegratorPrivateRevision = Schema.Int.check(Schema.isGreaterThanOrEq
 )
 type CodexIntegratorPrivateRevision = typeof CodexIntegratorPrivateRevision.Type
 
-const privateRunIdentityFields = { correlation: IntegratorRunCorrelation, token: CodexOwnedTurnToken }
-
-/** One exact provider turn, whose variant carries only facts established at that chronological boundary. */
-export const CodexIntegratorPrivateRun = Schema.TaggedUnion({
-  IntentRecorded: privateRunIdentityFields,
-  TurnBoundaryCrossing: privateRunIdentityFields,
-  TurnObserved: { ...privateRunIdentityFields, turnId: CodexTurnId },
-  CompletedTurnSealed: { ...privateRunIdentityFields, result: IntegratorResult, turnId: CodexTurnId },
-  FailedTurnSealed: { ...privateRunIdentityFields, result: IntegratorResult.cases.NotPrepared, turnId: CodexTurnId }
-})
-export type CodexIntegratorPrivateRun = typeof CodexIntegratorPrivateRun.Type
-
-const CodexIntegratorSealedPrivateRun = Schema.Union([
-  CodexIntegratorPrivateRun.cases.CompletedTurnSealed,
-  CodexIntegratorPrivateRun.cases.FailedTurnSealed
-])
-type CodexIntegratorSealedPrivateRun = typeof CodexIntegratorSealedPrivateRun.Type
-
-const privateRunHistory = Schema.Union([
-  Schema.Tuple([CodexIntegratorPrivateRun]),
-  Schema.Tuple([CodexIntegratorPrivateRun, CodexIntegratorPrivateRun])
-])
-const sealedPrivateRunHistory = Schema.Union([
-  Schema.Tuple([CodexIntegratorSealedPrivateRun]),
-  Schema.Tuple([CodexIntegratorSealedPrivateRun, CodexIntegratorSealedPrivateRun])
-])
-
 const privateRecordFields = {
   appServerIncarnation: CodexServerIncarnation,
   candidatePath: IntegratorCandidateWorktreePath,
@@ -140,7 +114,7 @@ const validatePrivateRunTokens = (record: CodexIntegratorPrivateRecordShape): st
   if (new Set(runTokens).size !== runTokens.length) return "private record repeats a provider turn token"
   const retry = runs.find((run) => isRetryProviderRun(run.correlation))
   const initial = runs.find((run) => isInitialProviderRun(run.correlation))
-  const hasSealedInitialRun = initial?._tag === "CompletedTurnSealed" || initial?._tag === "FailedTurnSealed"
+  const hasSealedInitialRun = isSealedPrivateRun(initial)
   return retry !== undefined && providerRunAdmissionError(retry.correlation, hasSealedInitialRun) !== undefined
     ? "private retry run requires a sealed initial run"
     : undefined
@@ -156,11 +130,7 @@ const validatePrivateRecordCorrelations = (record: CodexIntegratorPrivateRecordS
   if (runs[0] !== undefined && !sameRunValue(runs[0].correlation, record.initialRun)) {
     return "private run history does not begin with the durably bound initial run"
   }
-  return runs.some(
-    (run) =>
-      (run._tag === "CompletedTurnSealed" || run._tag === "FailedTurnSealed") &&
-      !sameRunValue(run.result.correlation, run.correlation)
-  )
+  return runs.some((run) => isSealedPrivateRun(run) && !sameRunValue(run.result.correlation, run.correlation))
     ? "private terminal result correlation does not match its provider run"
     : undefined
 }
@@ -185,11 +155,15 @@ export const CodexIntegratorPrivateRecord = Schema.TaggedUnion({
   /** Codex returned the owned thread; the initial run is bound, but no turn token or intent exists yet. */
   ThreadReady: { ...privateRecordFields, threadId: CodexThreadId },
   /** At least one provider-run intent is durable for the exact owned thread. */
-  ThreadWithRuns: { ...privateRecordFields, runs: privateRunHistory, threadId: CodexThreadId },
+  ThreadWithRuns: { ...privateRecordFields, runs: CodexIntegratorPrivateRunHistory, threadId: CodexThreadId },
   /** Cleanup may cross the Git removal boundary only with sealed terminal evidence. */
-  RemovalIntentRecorded: { ...privateRecordFields, runs: sealedPrivateRunHistory, threadId: CodexThreadId },
+  RemovalIntentRecorded: {
+    ...privateRecordFields,
+    runs: CodexIntegratorSealedPrivateRunHistory,
+    threadId: CodexThreadId
+  },
   /** The removed candidate retains sealed terminal evidence but no live thread ownership fact. */
-  Removed: { ...privateRecordFields, runs: sealedPrivateRunHistory }
+  Removed: { ...privateRecordFields, runs: CodexIntegratorSealedPrivateRunHistory }
 }).check(Schema.makeFilter(validatePrivateRecord))
 export type CodexIntegratorPrivateRecord = typeof CodexIntegratorPrivateRecord.Type
 
@@ -414,45 +388,23 @@ export const recordRunIntent = (
   run: Extract<CodexIntegratorPrivateRun, { readonly _tag: "IntentRecorded" }>,
   appServerIncarnation: CodexServerIncarnation
 ): Extract<CodexIntegratorPrivateRecord, { readonly _tag: "ThreadWithRuns" }> | undefined => {
-  if (record._tag === "ThreadReady") {
-    return CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
-      ...nextPrivateRecordFields(record),
-      appServerIncarnation,
-      runs: [run],
-      threadId: record.threadId
-    })
-  }
-  return record._tag === "ThreadWithRuns" && record.runs.length === 1
-    ? CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+  if (record._tag !== "ThreadReady" && record._tag !== "ThreadWithRuns") return undefined
+  const runs = appendPrivateRunHistory(privateRuns(record), run)
+  return runs === undefined
+    ? undefined
+    : CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
         ...nextPrivateRecordFields(record),
         appServerIncarnation,
-        runs: [record.runs[0], run],
+        runs,
         threadId: record.threadId
       })
-    : undefined
-}
-
-const sealedRunHistory = (
-  record: CodexIntegratorPrivateRecord
-):
-  | readonly [CodexIntegratorSealedPrivateRun]
-  | readonly [CodexIntegratorSealedPrivateRun, CodexIntegratorSealedPrivateRun]
-  | undefined => {
-  const runs = privateRuns(record)
-  const first = runs[0]
-  if (first === undefined || (first._tag !== "CompletedTurnSealed" && first._tag !== "FailedTurnSealed")) {
-    return undefined
-  }
-  const second = runs[1]
-  if (second === undefined) return [first]
-  return second._tag === "CompletedTurnSealed" || second._tag === "FailedTurnSealed" ? [first, second] : undefined
 }
 
 export const removalIntentRecordFor = (
   record: CodexIntegratorPrivateRecord
 ): Extract<CodexIntegratorPrivateRecord, { readonly _tag: "RemovalIntentRecorded" }> | undefined => {
   if (record._tag !== "ThreadWithRuns") return undefined
-  const runs = sealedRunHistory(record)
+  const runs = sealedPrivateRunHistoryFrom(privateRuns(record))
   return runs === undefined
     ? undefined
     : CodexIntegratorPrivateRecord.cases.RemovalIntentRecorded.make({
@@ -465,7 +417,7 @@ export const removalIntentRecordFor = (
 export const removedRecordFor = (
   record: CodexIntegratorPrivateRecord
 ): Extract<CodexIntegratorPrivateRecord, { readonly _tag: "Removed" }> | undefined => {
-  const runs = sealedRunHistory(record)
+  const runs = sealedPrivateRunHistoryFrom(privateRuns(record))
   return runs === undefined
     ? undefined
     : CodexIntegratorPrivateRecord.cases.Removed.make({ ...preservedPrivateRecordFields(record), runs })

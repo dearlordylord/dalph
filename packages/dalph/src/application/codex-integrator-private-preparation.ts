@@ -1,5 +1,9 @@
 import type { IntegratorRunCorrelation } from "@dalph/orchestrator"
-import { isRetryProviderRun, providerRunAdmissionError } from "./codex-integrator-private-lifecycle.js"
+import {
+  isRetryProviderRun,
+  isSealedPrivateRun,
+  providerRunAdmissionError
+} from "./codex-integrator-private-lifecycle.js"
 import {
   type CodexIntegratorPrivateRecord,
   privateRuns,
@@ -19,7 +23,7 @@ const sealedInitialRunAllowsRetry = (
 ): boolean => {
   if (!isRetryProviderRun(requestedRun)) return false
   const first = privateRuns(record)[0]
-  const hasSealedInitialRun = first?._tag === "CompletedTurnSealed" || first?._tag === "FailedTurnSealed"
+  const hasSealedInitialRun = isSealedPrivateRun(first)
   return providerRunAdmissionError(requestedRun, hasSealedInitialRun) === undefined
 }
 

@@ -30,6 +30,7 @@ import {
 } from "./codex-integrator-private-store.js"
 import {
   isInitialProviderRun,
+  isSealedPrivateRun,
   newPrivateRecordRunError,
   providerRunAdmissionError
 } from "./codex-integrator-private-lifecycle.js"
@@ -109,7 +110,7 @@ const ensureRunPreconditionError = (
   run: IntegratorRunCorrelation
 ): string | undefined => {
   const first = privateRuns(record).find((item) => isInitialProviderRun(item.correlation))
-  const hasSealedInitialRun = first?._tag === "CompletedTurnSealed" || first?._tag === "FailedTurnSealed"
+  const hasSealedInitialRun = isSealedPrivateRun(first)
   return providerRunAdmissionError(run, hasSealedInitialRun)
 }
 
@@ -190,10 +191,7 @@ const contradictoryProviderTurn = (
     if (item.ownedTurnToken === token) return false
     if (item.ownedTurnToken === undefined) return true
     const known = privateRuns(record).find((candidate) => candidate.token === item.ownedTurnToken)
-    return (
-      !knownTokens.has(item.ownedTurnToken) ||
-      (known?._tag !== "CompletedTurnSealed" && known?._tag !== "FailedTurnSealed")
-    )
+    return !knownTokens.has(item.ownedTurnToken) || !isSealedPrivateRun(known)
   })
 }
 
@@ -201,10 +199,7 @@ const matchingProviderTurnError = (
   run: CodexIntegratorPrivateRun,
   matchingTurn: CodexThreadSnapshot["turns"][number]
 ): string | undefined => {
-  if (
-    (run._tag === "TurnObserved" || run._tag === "CompletedTurnSealed" || run._tag === "FailedTurnSealed") &&
-    matchingTurn.id !== run.turnId
-  ) {
+  if ((run._tag === "TurnObserved" || isSealedPrivateRun(run)) && matchingTurn.id !== run.turnId) {
     return "owned turn id does not match the exact durable turn"
   }
   return matchingTurn.correlation !== undefined ? "owned provider turn carries a foreign correlation" : undefined
@@ -321,7 +316,7 @@ const executeRun = Effect.fn("CodexIntegrator.executeRun")(function* (
   run: CodexIntegratorPrivateRun,
   thread: CodexThreadSnapshot
 ) {
-  if (run._tag === "CompletedTurnSealed" || run._tag === "FailedTurnSealed") {
+  if (isSealedPrivateRun(run)) {
     return yield* replaySealedRun(app, census, store, record, run, thread, run.result)
   }
   return yield* sealObservedRun(app, census, store, record, run, thread)

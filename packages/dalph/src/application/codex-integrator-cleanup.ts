@@ -21,6 +21,7 @@ import {
   removedRecordFor,
   sameSession
 } from "./codex-integrator-private-store.js"
+import { type CodexIntegratorSealedPrivateRun, isSealedPrivateRun } from "./codex-integrator-private-lifecycle.js"
 import { boundary, errorDetail, observedThread, providerFailure } from "./codex-integrator-runtime.js"
 import { type GitWorktreeRecord, readWorktrees } from "./codex-integrator-worktree.js"
 import {
@@ -66,22 +67,13 @@ const cleanupUnreadable = (
   IntegratorCandidateCleanupObservation.cases.Unreadable.make({ detail, locator: authorization.locator })
 
 type SealedTerminalRunValidation =
-  | { readonly _tag: "Valid"; readonly expected: SealedTerminalRun }
+  | { readonly _tag: "Valid"; readonly expected: CodexIntegratorSealedPrivateRun }
   | { readonly _tag: "Invalid"; readonly detail: string }
-
-/** Cleanup evidence whose durable result, turn, and terminal status are mutually compatible. */
-type SealedTerminalRun = Extract<
-  CodexIntegratorPrivateRun,
-  { readonly _tag: "CompletedTurnSealed" | "FailedTurnSealed" }
->
-
-const hasSealedTerminalRunEvidence = (expected: CodexIntegratorPrivateRun | undefined): expected is SealedTerminalRun =>
-  expected?._tag === "CompletedTurnSealed" || expected?._tag === "FailedTurnSealed"
 
 const validateSealedTerminalRun = (record: CodexIntegratorPrivateRecord): SealedTerminalRunValidation => {
   const runs = privateRuns(record)
   const expected = runs[runs.length - 1]
-  if (!hasSealedTerminalRunEvidence(expected)) {
+  if (!isSealedPrivateRun(expected)) {
     return { _tag: "Invalid", detail: "private predecessor has no sealed terminal turn evidence" }
   }
   return { _tag: "Valid", expected }
@@ -102,20 +94,22 @@ const terminalThreadTokenObservation = (
   return foreign === undefined ? undefined : cleanupForeign(authorization, predecessor.sessionId, "OtherSession")
 }
 
-const terminalTurnIdMismatch = (exact: CodexThreadSnapshot["turns"][number], expected: SealedTerminalRun): boolean =>
-  exact.id !== expected.turnId
+const terminalTurnIdMismatch = (
+  exact: CodexThreadSnapshot["turns"][number],
+  expected: CodexIntegratorSealedPrivateRun
+): boolean => exact.id !== expected.turnId
 
 const isConclusiveTerminalStatus = (status: CodexThreadSnapshot["turns"][number]["status"]): boolean =>
   status === "completed" || status === "failed"
 
-const providerTerminalStatusFor = (run: SealedTerminalRun): "completed" | "failed" =>
+const providerTerminalStatusFor = (run: CodexIntegratorSealedPrivateRun): "completed" | "failed" =>
   run._tag === "FailedTurnSealed" ? "failed" : "completed"
 
 const terminalTurnObservation = (
   authorization: IntegratorCandidateCleanupAuthorization,
   predecessor: IntegratorSessionCorrelation,
   thread: CodexThreadSnapshot,
-  expected: SealedTerminalRun
+  expected: CodexIntegratorSealedPrivateRun
 ): IntegratorCandidateCleanupObservation | undefined => {
   const matching = thread.turns.filter((turn) => turn.ownedTurnToken === expected.token)
   if (matching.length !== 1) {
