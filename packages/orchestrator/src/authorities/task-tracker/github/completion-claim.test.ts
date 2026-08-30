@@ -636,7 +636,7 @@ it.effect("classifies ambiguous create acknowledgements and refuses deletion whe
   })
 )
 
-it.effect("deletes no completion marker when local evidence or GitHub acknowledgement is not exact", () =>
+it.effect("deletes no completion marker when local identity or digest evidence cannot be proven", () =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto
     const observationFor = (preparedClaim: CompletionTaskClaim) =>
@@ -658,17 +658,6 @@ it.effect("deletes no completion marker when local evidence or GitHub acknowledg
     const observation = observationFor(prepared.claim)
     const deletion = completionClaimDeletionRequestFor(prepared.claim, observation)
     const fingerprint = yield* githubCompletionClaimFingerprintFor(crypto, prepared.claim)
-    const readThen = (
-      response: (request: Extract<GithubGraphqlRequest, { readonly _tag: "DeleteClaimLabel" }>) => GithubGraphqlResponse
-    ) =>
-      adapterLayer((request) =>
-        request._tag === "FindClaimLabel"
-          ? Effect.succeed(completionFindResponse(request, `1|sha256|${fingerprint}`))
-          : request._tag === "DeleteClaimLabel"
-            ? Effect.succeed(response(request))
-            : Effect.die("unexpected completion deletion request")
-      )
-
     const digestFailure = yield* Effect.gen(function* () {
       return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(deletion).pipe(Effect.flip)
     }).pipe(
@@ -683,19 +672,49 @@ it.effect("deletes no completion marker when local evidence or GitHub acknowledg
       )
     )
     expect(digestFailure).toMatchObject({ outcome: "DefinitelyNotApplied", request: deletion })
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
 
-    for (const [name, layer] of [
-      ["malformed", readThen(() => ({ body: "not-an-envelope" }))],
-      ["rejected", readThen(() => ({ body: { errors: [{ message: "delete denied" }] } }))],
-      [
-        "mismatched",
-        readThen(() => ({ body: { data: { deleteLabel: { clientMutationId: "another-completion-deletion" } } } }))
-      ]
+it.effect("reports Unknown after one delete request when GitHub acknowledgement is not exact", () =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto
+    const observation = FocusedCompletedTaskObservation.make({
+      ...integrationFinalityFixture.successObservation,
+      claim: prepared.claim,
+      taskId: prepared.claim.plannedAttempt.taskId,
+      taskRevision: prepared.claim.plannedAttempt.taskRevision
+    })
+    const deletion = completionClaimDeletionRequestFor(prepared.claim, observation)
+    const fingerprint = yield* githubCompletionClaimFingerprintFor(crypto, prepared.claim)
+
+    for (const [name, response] of [
+      ["malformed", () => ({ body: "not-an-envelope" })],
+      ["rejected", () => ({ body: { errors: [{ message: "delete denied" }] } })],
+      ["mismatched", () => ({ body: { data: { deleteLabel: { clientMutationId: "another-completion-deletion" } } } })]
     ] as const) {
+      const calls = yield* Ref.make<ReadonlyArray<GithubGraphqlRequest>>([])
+      const layer = adapterLayer((request) =>
+        Ref.update(calls, (current) => [...current, request]).pipe(
+          Effect.andThen(
+            request._tag === "FindClaimLabel"
+              ? Effect.succeed(completionFindResponse(request, `1|sha256|${fingerprint}`))
+              : request._tag === "DeleteClaimLabel"
+                ? Effect.succeed(response())
+                : Effect.die("unexpected completion deletion request")
+          )
+        )
+      )
       const failure = yield* Effect.gen(function* () {
         return yield* (yield* CompletionClaimBoundary).deleteTaskClaim(deletion).pipe(Effect.flip)
       }).pipe(Effect.provide(layer))
       expect(failure, name).toMatchObject({ outcome: "Unknown", request: deletion })
+      expect(
+        (yield* Ref.get(calls)).filter(
+          (request): request is Extract<GithubGraphqlRequest, { readonly _tag: "DeleteClaimLabel" }> =>
+            request._tag === "DeleteClaimLabel"
+        ),
+        name
+      ).toEqual([expect.objectContaining({ _tag: "DeleteClaimLabel", operationId: deletion.operationId })])
     }
   }).pipe(Effect.provide(NodeCrypto.layer))
 )

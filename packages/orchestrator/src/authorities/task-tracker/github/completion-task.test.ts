@@ -580,6 +580,7 @@ it.effect("rejects a fixture target before reading GitHub task facts", () =>
       return yield* (yield* CompletionTaskBoundary).readFocusedTaskCompletion(request).pipe(Effect.flip)
     }).pipe(Effect.provide(harness.layer))
     expect(failure).toBeInstanceOf(FocusedTaskCompletionReadFailure)
+    expect(yield* Ref.get(harness.calls)).toEqual([])
   })
 )
 
