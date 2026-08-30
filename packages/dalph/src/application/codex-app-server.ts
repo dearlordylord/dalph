@@ -95,18 +95,30 @@ const CodexThreadBoundaryMetadata = Schema.Struct({
   dalphOwnedThreadToken: Schema.optionalKey(Schema.NullOr(CodexThreadOwnershipToken))
 })
 
-const CodexThreadBoundary = Schema.Struct({
+const CodexThreadBoundaryFields = {
   correlation: Schema.optionalKey(Schema.NullOr(PlannedAttemptExecutorCorrelation)),
   cwd: CodexThreadWorkingDirectory,
   id: CodexThreadId,
   metadata: Schema.optionalKey(CodexThreadBoundaryMetadata),
   ownedThreadToken: Schema.optionalKey(Schema.NullOr(CodexThreadOwnershipToken)),
-  status: Schema.optionalKey(CodexThreadStatusBoundary),
+  status: Schema.optionalKey(CodexThreadStatusBoundary)
+}
+
+/** A Codex thread summary that does not claim complete turn coverage. */
+const CodexThreadSummaryBoundary = Schema.Struct({
+  ...CodexThreadBoundaryFields,
   turns: Schema.optionalKey(Schema.Array(CodexTurnBoundary))
 })
-type CodexThreadBoundary = typeof CodexThreadBoundary.Type
+type CodexThreadSummaryBoundary = typeof CodexThreadSummaryBoundary.Type
 
-const CodexThreadListValues = Schema.Array(CodexThreadBoundary)
+/** A Codex thread observation whose required turns field is a complete turn census. */
+const CodexThreadTurnCensusBoundary = Schema.Struct({
+  ...CodexThreadBoundaryFields,
+  turns: Schema.Array(CodexTurnBoundary)
+})
+type CodexThreadTurnCensusBoundary = typeof CodexThreadTurnCensusBoundary.Type
+
+const CodexThreadListValues = Schema.Array(CodexThreadSummaryBoundary)
 
 const sameCodexThreadListValues = Schema.toEquivalence(CodexThreadListValues)
 
@@ -1343,17 +1355,17 @@ const normalizeThreadTurns = (
   return turns.filter((turn): turn is CodexTurnSnapshot => !(turn instanceof CodexAppServerFailure))
 }
 
-const threadStatusValue = (value: CodexThreadBoundary["status"]): CodexThreadStatus | undefined =>
+const threadStatusValue = (value: CodexThreadSummaryBoundary["status"]): CodexThreadStatus | undefined =>
   typeof value === "string" ? value : value?.type
 
 const threadStatusForOperation = (
-  source: CodexThreadBoundary,
+  source: CodexThreadSummaryBoundary,
   operation: CodexAppServerOperation
 ): CodexThreadStatus | undefined =>
   source.status === undefined && operation === "thread/list" ? "idle" : threadStatusValue(source.status)
 
 const normalizeThreadOwnership = (
-  source: CodexThreadBoundary,
+  source: CodexThreadSummaryBoundary,
   operation: CodexAppServerOperation
 ): CodexThreadOwnershipToken | CodexAppServerFailure | undefined => {
   const directToken = source.ownedThreadToken ?? undefined
@@ -1365,7 +1377,7 @@ const normalizeThreadOwnership = (
 }
 
 const normalizedThreadSnapshot = (
-  source: CodexThreadBoundary,
+  source: CodexThreadSummaryBoundary,
   status: CodexThreadStatus,
   turns: ReadonlyArray<CodexTurnSnapshot>,
   ownedThreadToken: CodexThreadOwnershipToken | undefined
@@ -1382,7 +1394,7 @@ const normalizedThreadSnapshot = (
 }
 
 const normalizeThreadBoundary = (
-  source: CodexThreadBoundary,
+  source: CodexThreadSummaryBoundary,
   operation: CodexAppServerOperation
 ): CodexThreadSnapshot | CodexAppServerFailure => {
   const status = threadStatusForOperation(source, operation)
@@ -1398,14 +1410,24 @@ const normalizeThreadBoundary = (
   return normalizedThreadSnapshot(source, status, normalizedTurns, ownedThreadToken)
 }
 
-const normalizeThread = (
+const normalizeThreadSummary = (
   value: unknown,
-  operation: CodexAppServerOperation
+  operation: "thread/start"
 ): CodexThreadSnapshot | CodexAppServerFailure => {
-  const decoded = Schema.decodeUnknownResult(CodexThreadBoundary)(value)
+  const decoded = Schema.decodeUnknownResult(CodexThreadSummaryBoundary)(value)
   return Result.isSuccess(decoded)
     ? normalizeThreadBoundary(decoded.success, operation)
     : operationFailure(operation, "Malformed", `thread payload is invalid: ${String(decoded.failure)}`)
+}
+
+const normalizeThreadTurnCensus = (
+  value: unknown,
+  operation: "thread/read" | "thread/resume"
+): CodexThreadSnapshot | CodexAppServerFailure => {
+  const decoded = Schema.decodeUnknownResult(CodexThreadTurnCensusBoundary)(value)
+  return Result.isSuccess(decoded)
+    ? normalizeThreadBoundary(decoded.success, operation)
+    : operationFailure(operation, "Malformed", `thread turn census is invalid: ${String(decoded.failure)}`)
 }
 
 const normalizedThreadEffect = (
@@ -1416,7 +1438,7 @@ const normalizedThreadEffect = (
 const maximumThreadListPages = 100
 
 const normalizeThreadListThreads = (
-  rawThreads: ReadonlyArray<CodexThreadBoundary>
+  rawThreads: ReadonlyArray<CodexThreadSummaryBoundary>
 ): ReadonlyArray<CodexThreadSnapshot> | CodexAppServerFailure => {
   const normalizedThreads = rawThreads.map((thread) => normalizeThreadBoundary(thread, "thread/list"))
   const failure = normalizedThreads.find(
@@ -2708,7 +2730,7 @@ export const codexAppServerLayer = (
           "thread/start"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        return yield* normalizedThreadEffect(normalizeThread(response["thread"], "thread/start"))
+        return yield* normalizedThreadEffect(normalizeThreadSummary(response["thread"], "thread/start"))
       })
       const listThreads = Effect.fn("CodexAppServer.listThreads")(function* () {
         let pages: ReadonlyArray<ReadonlyArray<CodexThreadSnapshot>> = []
@@ -2740,7 +2762,7 @@ export const codexAppServerLayer = (
           "thread/read"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        return yield* normalizedThreadEffect(normalizeThread(response["thread"], "thread/read"))
+        return yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/read"))
       })
       const resumeThread = Effect.fn("CodexAppServer.resumeThread")(function* (threadId: CodexThreadId, cwd: string) {
         const response = responseObject(
@@ -2748,7 +2770,7 @@ export const codexAppServerLayer = (
           "thread/resume"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        return yield* normalizedThreadEffect(normalizeThread(response["thread"], "thread/resume"))
+        return yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/resume"))
       })
       const startTurn = Effect.fn("CodexAppServer.startTurn")(function* (
         threadId: CodexThreadId,

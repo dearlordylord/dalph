@@ -18,6 +18,7 @@ import {
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 
 const protocolFixture = String.raw`#!/usr/bin/env node
+const fs = require("node:fs")
 const path = require("node:path")
 let buffer = ""
 let requestNumber = 0
@@ -47,6 +48,17 @@ const responseFor = (method, params = {}) => {
   if (mode === "response-not-object" && method === "thread/start") return "not-an-object"
   if (mode === "read-response-not-object" && method === "thread/read") return "not-an-object"
   if (mode === "resume-response-not-object" && method === "thread/resume") return "not-an-object"
+  if (mode === "turn-census-omitted" && (method === "thread/read" || method === "thread/resume")) {
+    const { turns: _turns, ...threadWithoutTurns } = validThread
+    return { thread: threadWithoutTurns }
+  }
+  if (mode === "turn-census-malformed" && (method === "thread/read" || method === "thread/resume")) {
+    return { thread: { ...validThread, turns: {} } }
+  }
+  if (mode === "turn-census-omitted" && method === "turn/start") {
+    fs.writeFileSync(path.join(params.cwd, "turn-started"), "started")
+    return { turn: validTurn }
+  }
   if (mode === "thread-list-not-array" && method === "thread/list") return { data: {} }
   if (mode === "thread-list-rpc-error" && method === "thread/list") return { error: true }
   if (mode === "thread-list-invalid-item" && method === "thread/list") return { data: [null] }
@@ -379,7 +391,10 @@ const expectAppFailure = (exit: Exit.Exit<unknown, unknown>, operation: string):
   }
 }
 
-const withFixture = <A>(mode: string, action: (app: CodexAppServerService) => Effect.Effect<A, unknown>) =>
+const withFixture = <A>(
+  mode: string,
+  action: (app: CodexAppServerService, root: string) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -393,7 +408,7 @@ const withFixture = <A>(mode: string, action: (app: CodexAppServerService) => Ef
       )
       return yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
-        return yield* action(app).pipe(Effect.ensuring(app.close.pipe(Effect.orDie)))
+        return yield* action(app, root).pipe(Effect.ensuring(app.close.pipe(Effect.orDie)))
       }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer))
     }).pipe(Effect.provide(NodeServices.layer))
   )
@@ -661,6 +676,54 @@ it.effect("keeps every real RPC operation failure typed at its public boundary",
           expectAppFailure(result, operation)
         })
       )
+  )
+)
+
+it.effect("does not retry turn/start when a complete thread census omits turns", () =>
+  Effect.forEach(["thread/read", "thread/resume"] as const, (operation) =>
+    withFixture("turn-census-omitted", (app, root) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const started = yield* app.startThread(root)
+        const read = operation === "thread/read" ? app.readThread(started.id) : app.resumeThread(started.id, root)
+        const result = yield* Effect.exit(
+          read.pipe(
+            Effect.flatMap((thread) =>
+              thread.turns.length === 0
+                ? app.startTurn(thread.id, root, "retry", CodexOwnedTurnToken.make("retry-token"))
+                : Effect.void
+            )
+          )
+        )
+        expectAppFailure(result, operation)
+        expect(yield* fileSystem.exists(path.join(root, "turn-started"))).toBe(false)
+      })
+    )
+  )
+)
+
+it.effect("accepts explicit empty turn censuses from thread/read and thread/resume", () =>
+  withFixture("happy", (app) =>
+    Effect.gen(function* () {
+      const started = yield* app.startThread("/fixture/worktree")
+      expect((yield* app.readThread(started.id)).turns).toEqual([])
+      expect((yield* app.resumeThread(started.id, "/fixture/worktree")).turns).toEqual([])
+    })
+  )
+)
+
+it.effect("rejects malformed turn censuses from thread/read and thread/resume", () =>
+  Effect.forEach(["thread/read", "thread/resume"] as const, (operation) =>
+    withFixture("turn-census-malformed", (app) =>
+      Effect.gen(function* () {
+        const started = yield* app.startThread("/fixture/worktree")
+        const result = yield* Effect.exit(
+          operation === "thread/read" ? app.readThread(started.id) : app.resumeThread(started.id, "/fixture/worktree")
+        )
+        expectAppFailure(result, operation)
+      })
+    )
   )
 )
 
