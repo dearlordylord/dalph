@@ -60,6 +60,14 @@ import {
   TargetPromotionHistoryContradiction,
   TargetPromotionResultContradiction
 } from "./protocol.js"
+import {
+  observeTargetPromotionRead,
+  recordTargetPromotionAttemptIntent,
+  recordTargetPromotionIntent,
+  sendTargetPromotionAttempt,
+  settleTargetPromotionAttempt
+} from "./transitions.js"
+import type { TargetPromotionObservedAttempt } from "./transition-authority.js"
 import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
 
 const runId = RunId.make("outer-promotion-test-run")
@@ -185,6 +193,57 @@ it.effect("promotes exact M once and records its Integrator correlation and ance
     ])
     expect((yield* run(service, records))._tag).toBe("PromotionSucceeded")
     expect(yield* Ref.get(requests)).toEqual([targetPromotionGitRequestFor(request)])
+  })
+)
+
+it.effect("consumes one attempt permission and accepts settlement only from its Git response", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const compareAndSetCalls = yield* Ref.make(0)
+    const service: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Ref.update(compareAndSetCalls, (count) => count + 1).pipe(
+          Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
+        ),
+      read: () =>
+        Effect.succeed(
+          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+        )
+    }
+    const layer = Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read))
+
+    const readAuthorization = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(layer))
+    const attemptAuthorization = yield* observeTargetPromotionRead(readAuthorization).pipe(Effect.provide(layer))
+    expect(attemptAuthorization._tag).toBe("TargetPromotionAttemptAuthorized")
+    if (attemptAuthorization._tag !== "TargetPromotionAttemptAuthorized") return
+    const intended = yield* recordTargetPromotionAttemptIntent(attemptAuthorization).pipe(Effect.provide(layer))
+    const observed = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer))
+    expect(observed._tag).toBe("TargetPromotionAttemptObserved")
+    expect(yield* Ref.get(compareAndSetCalls)).toBe(1)
+
+    const duplicate = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer), Effect.flip)
+    expect(duplicate._tag).toBe("TargetPromotionResultContradiction")
+    if (duplicate._tag !== "TargetPromotionResultContradiction") return
+    expect(duplicate.detail).toContain("already consumed")
+    expect(yield* Ref.get(compareAndSetCalls)).toBe(1)
+
+    const forged = {
+      _tag: "TargetPromotionAttemptObserved",
+      attemptOrdinal: intended.attemptOrdinal,
+      correlation: intended.correlation,
+      result: TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })
+    } as TargetPromotionObservedAttempt
+    const forgedSettlement = yield* settleTargetPromotionAttempt(forged).pipe(Effect.provide(layer), Effect.flip)
+    expect(forgedSettlement._tag).toBe("TargetPromotionResultContradiction")
+    if (forgedSettlement._tag !== "TargetPromotionResultContradiction") return
+    expect(forgedSettlement.detail).toContain("did not originate from the Git boundary")
+    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+      "TargetPromotionIntended",
+      "TargetPromotionAttemptIntended"
+    ])
+
+    if (observed._tag !== "TargetPromotionAttemptObserved") return
+    expect((yield* settleTargetPromotionAttempt(observed).pipe(Effect.provide(layer)))._tag).toBe("PromotionSucceeded")
   })
 )
 

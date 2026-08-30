@@ -6,9 +6,12 @@ import type {
 } from "./events.js"
 import type { TargetPromotionState } from "./state.js"
 
-const readAuthorizationBrand: unique symbol = Symbol.for("@dalph/TargetPromotionReadAuthorization")
-const attemptAuthorizationBrand: unique symbol = Symbol.for("@dalph/TargetPromotionAttemptAuthorization")
-const intendedAttemptBrand: unique symbol = Symbol.for("@dalph/TargetPromotionIntendedAttempt")
+const readAuthorizationBrand: unique symbol = Symbol("TargetPromotionReadAuthorization")
+const attemptAuthorizationBrand: unique symbol = Symbol("TargetPromotionAttemptAuthorization")
+const intendedAttemptBrand: unique symbol = Symbol("TargetPromotionIntendedAttempt")
+const observedAttemptBrand: unique symbol = Symbol("TargetPromotionObservedAttempt")
+const availableIntendedAttempts = new WeakSet<object>()
+const availableObservedAttempts = new WeakSet<object>()
 
 /** Process-local permission to perform exactly one promotion read; it is never durable authority. */
 export type TargetPromotionReadAuthorization = {
@@ -42,6 +45,7 @@ export type TargetPromotionIntendedAttempt = {
 /** The one Git compare-and-set returned a result that a later transition must settle durably. */
 export type TargetPromotionObservedAttempt = {
   readonly _tag: "TargetPromotionAttemptObserved"
+  readonly [observedAttemptBrand]: true
   readonly attemptOrdinal: TargetPromotionAttemptOrdinal
   readonly correlation: TargetPromotionCorrelation
   readonly result: TargetPromotionCompareAndSetResult
@@ -91,10 +95,38 @@ export const makeTargetPromotionAttemptAuthorization = (
 
 export const makeTargetPromotionIntendedAttempt = (
   authorization: TargetPromotionAttemptAuthorization
-): TargetPromotionIntendedAttempt => ({
-  _tag: "TargetPromotionAttemptIntended",
-  [intendedAttemptBrand]: true,
-  attemptOrdinal: authorization.attemptOrdinal,
-  correlation: authorization.correlation,
-  reason: authorization.reason
-})
+): TargetPromotionIntendedAttempt => {
+  const intended = {
+    _tag: "TargetPromotionAttemptIntended" as const,
+    [intendedAttemptBrand]: true as const,
+    attemptOrdinal: authorization.attemptOrdinal,
+    correlation: authorization.correlation,
+    reason: authorization.reason
+  }
+  availableIntendedAttempts.add(intended)
+  return intended
+}
+
+/** Consumes the process-local permission immediately before its one Git mutation. */
+export const consumeTargetPromotionIntendedAttempt = (attempt: TargetPromotionIntendedAttempt): boolean =>
+  availableIntendedAttempts.delete(attempt)
+
+/** Creates the only process-local proof accepted by the later settlement transition. */
+export const makeTargetPromotionObservedAttempt = (
+  intended: TargetPromotionIntendedAttempt,
+  result: TargetPromotionCompareAndSetResult
+): TargetPromotionObservedAttempt => {
+  const observed = {
+    _tag: "TargetPromotionAttemptObserved" as const,
+    [observedAttemptBrand]: true as const,
+    attemptOrdinal: intended.attemptOrdinal,
+    correlation: intended.correlation,
+    result
+  }
+  availableObservedAttempts.add(observed)
+  return observed
+}
+
+/** Consumes the exact response proof immediately before its one durable settlement. */
+export const consumeTargetPromotionObservedAttempt = (attempt: TargetPromotionObservedAttempt): boolean =>
+  availableObservedAttempts.delete(attempt)

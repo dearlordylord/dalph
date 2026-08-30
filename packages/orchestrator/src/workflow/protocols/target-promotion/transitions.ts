@@ -24,8 +24,11 @@ import { TargetPromotionResultContradiction } from "./errors.js"
 import { successObservationForCompareAndSet } from "./read-observation.js"
 import { TargetPromotionPendingRetry, TargetPromotionState } from "./state.js"
 import {
+  consumeTargetPromotionIntendedAttempt,
+  consumeTargetPromotionObservedAttempt,
   makeTargetPromotionAttemptAuthorization,
   makeTargetPromotionIntendedAttempt,
+  makeTargetPromotionObservedAttempt,
   makeTargetPromotionReadAuthorization,
   type TargetPromotionAmbiguousAttempt,
   type TargetPromotionAttemptAuthorization,
@@ -244,6 +247,12 @@ export const sendTargetPromotionAttempt = Effect.fn("TargetPromotion.sendAttempt
       detail: "promotion attempt intent no longer matches the exact durable state"
     })
   }
+  if (!consumeTargetPromotionIntendedAttempt(attempt)) {
+    return yield* new TargetPromotionResultContradiction({
+      candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
+      detail: "promotion attempt permission was already consumed or did not originate in this process"
+    })
+  }
   const git = yield* TargetPromotionGit
   const result = yield* git.compareAndSet(targetPromotionGitRequestFor(attempt.correlation)).pipe(Effect.result)
   return result._tag === "Failure"
@@ -252,12 +261,7 @@ export const sendTargetPromotionAttempt = Effect.fn("TargetPromotion.sendAttempt
         attemptOrdinal: attempt.attemptOrdinal,
         correlation: attempt.correlation
       }
-    : {
-        _tag: "TargetPromotionAttemptObserved" as const,
-        attemptOrdinal: attempt.attemptOrdinal,
-        correlation: attempt.correlation,
-        result: result.success
-      }
+    : makeTargetPromotionObservedAttempt(attempt, result.success)
 })
 
 const settleRejectedCompareAndSet = Effect.fn("TargetPromotion.settleRejectedCompareAndSet")(function* (
@@ -315,6 +319,12 @@ export const settleTargetPromotionAttempt = Effect.fn("TargetPromotion.settleAtt
     return yield* new TargetPromotionResultContradiction({
       candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
       detail: "observed promotion attempt no longer matches the exact durable state"
+    })
+  }
+  if (!consumeTargetPromotionObservedAttempt(attempt)) {
+    return yield* new TargetPromotionResultContradiction({
+      candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
+      detail: "promotion result proof was already consumed or did not originate from the Git boundary"
     })
   }
   const result = attempt.result
