@@ -85,7 +85,7 @@ claim that the correction is already shipped.
 
 | File | Owning issue | Status |
 |---|---:|---|
-| `issue-265-observe-autonomous-executor-work.md` | 265 | Accepted specification; implementation and integration pending |
+| `issue-265-passive-executor-observation-through-restart.md` | 265 | Accepted specification; implementation candidate under review before integration |
 | `issue-266-active-work-authority-refresh.md` | 266 | Accepted correction; implementation and integration pending |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files

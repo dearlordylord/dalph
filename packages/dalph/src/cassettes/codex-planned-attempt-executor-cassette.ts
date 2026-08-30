@@ -353,6 +353,7 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
     incarnation: CodexServerIncarnation.make("codex-cassette-incarnation"),
     // Cassette turns advance only through the scripted fixture actions; the
     // controlled provider has no autonomous notification boundary.
+    attachOwnedActivityHints: Effect.succeed(Stream.empty),
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     startThread: (cwd) =>
       Ref.updateAndGet(thread, (current) => ({ ...current, cwd })).pipe(

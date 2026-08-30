@@ -201,6 +201,9 @@ const onMessage = (message) => {
   if (mode === "turn-completed-hint" && message.method === "thread/start") {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { opaque: true } }) + "\n")
   }
+  if (mode === "owned-activity-hint" && message.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "item/completed", params: { opaque: true } }) + "\n")
+  }
   if (mode === "turn-completed-burst" && message.method === "thread/start") {
     for (let index = 0; index < 64; index += 1) {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "thread/status/changed", params: { index } }) + "\n")
@@ -524,6 +527,19 @@ it.effect("forwards only the qualified turn/completed method as a non-authoritat
     Effect.scoped(
       Effect.gen(function* () {
         const hints = yield* app.attachTurnCompletedHints
+        const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        yield* app.startThread("/fixture/worktree")
+        expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
+      })
+    )
+  )
+)
+
+it.effect("forwards a late item completion as a non-authoritative owned-activity hint", () =>
+  withFixture("owned-activity-hint", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* app.attachOwnedActivityHints
         const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
         yield* app.startThread("/fixture/worktree")
         expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))

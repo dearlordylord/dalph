@@ -14,10 +14,12 @@ review. It changes no Dalph runtime behavior.
   model-based tests, and one final `pnpm check:quint` run. Repeated unchanged
   `ExecutorWorkExecuting` observations create no additional executor command,
   accepted report, proposal identity, report ordinal, or command-budget entry.
-- Issue #265 remains unimplemented. The current runtime deliberately settles
-  one unchanged passive observation owner and waits for a later accepted
-  signal. It does not yet attach a passive lifecycle owner that publishes a
-  later Safe or Terminal change, including after process restart.
+- Issue #265 has an implementation candidate under focused review. It attaches
+  one process-local passive lifecycle owner, publishes a later Safe or Terminal
+  change through the ordinary serialized report protocol, reconstructs the
+  owner from durable history after same-host restart, and fails closed on
+  unresolved non-exact evidence. It is not integrated until the scenario and
+  focused review gates below are green.
 - Issue #266 behavior was already present in the integration baseline before
   #264 was merged. Its notification/timer owner and task-local consequences are
   useful, but its private Git-read history protocol contradicts #266's accepted
@@ -90,10 +92,11 @@ Scenario-to-test mapping:
 - Resume only the same accepted safely suspended attempt → the named Resume
   scenarios in the issue-264 scenario and planned-attempt executor model.
 
-### 2. Implement #265: passive lifecycle observation through restart
+### 2. Review and integrate #265: passive lifecycle observation through restart
 
-Before implementation, add or accept a chronological issue-265 scenario under
-`docs/scenarios/`. It must distinguish these real events:
+The accepted chronological scenario is
+`docs/scenarios/issue-265-passive-executor-observation-through-restart.md`.
+The implementation and review must preserve these real events:
 
 1. Dalph has accepted `ExecutorWorkExecuting` for exact `(RunId, AttemptId)`.
 2. A process-local observer first reads the executor's exact current

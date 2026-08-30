@@ -2377,7 +2377,13 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
         Effect.gen(function* () {
           const attachmentScope = yield* Scope.make()
           yield* Effect.addFinalizer((exit) => Scope.close(attachmentScope, exit))
-          const hints = yield* app.attachTurnCompletedHints.pipe(Effect.provideService(Scope.Scope, attachmentScope))
+          const turnHints = yield* app.attachTurnCompletedHints.pipe(
+            Effect.provideService(Scope.Scope, attachmentScope)
+          )
+          const activityHints = yield* app.attachOwnedActivityHints.pipe(
+            Effect.provideService(Scope.Scope, attachmentScope)
+          )
+          const hints = Stream.merge(turnHints, activityHints)
           const current = yield* project(correlation, { _tag: "PassiveLifecycleObservation" }).pipe(
             Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))
           )

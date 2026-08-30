@@ -1743,6 +1743,75 @@ it.each([
   )
 )
 
+it("reconciles one unsettled command when its prior activation recorded a non-exact projection", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      const began = makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy)
+      const records = [
+        began,
+        ...coveragePlanRecords().map((record) => ({
+          ...record,
+          position: JournalPosition.make(Number(record.position) + 1)
+        })),
+        coverageRecord(
+          6,
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "Begin",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: beginOrdinal,
+            plannedAttempt: coverageAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        coverageRecord(
+          7,
+          PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+            commandOrdinal: beginOrdinal,
+            observation:
+              PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+            occurrenceClassification: "NonActionOccurrence",
+            plannedAttempt: coverageAttempt,
+            projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+      const reconstructed: ReconstructedRunState = {
+        ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
+        controlPolicy: Option.some({ ...coveragePolicy, revision: initialRunPolicyRevision })
+      }
+      const resources = yield* makeIntegrationTargetResourceController()
+      const restartedJournal = Object.assign(
+        InRunJournal.of({
+          append: () => Effect.die("command projection selection must not append"),
+          read: () => Effect.succeed(records)
+        }),
+        { state: { get: Effect.succeed({ reconstructed }) } }
+      )
+      const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
+        Effect.provideService(InRunJournal, restartedJournal)
+      )
+
+      const projection = yield* recovery.readDeliveryProjection
+      expect(
+        projection.frontier.transitions.filter(
+          (transition) => transition._tag === "ReconcilePlannedAttemptExecutorWork"
+        )
+      ).toEqual([RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: coverageAttempt })])
+      expect(
+        projection.frontier.transitions.filter(
+          (transition) =>
+            transition._tag === "ObservePlannedAttemptExecutorWork" ||
+            transition._tag === "BeginPlannedAttemptExecutorWork" ||
+            transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+            transition._tag === "SuspendPlannedAttemptExecutorWork"
+        )
+      ).toEqual([])
+    })
+  ))
+
 it.each([
   {
     name: "contradictory",

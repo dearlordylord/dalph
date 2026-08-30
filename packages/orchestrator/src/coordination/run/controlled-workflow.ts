@@ -9,7 +9,7 @@ import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/task-claim-reacquisition/control.js"
-import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
+import { attemptChoiceControlWithProvidedProtocolLayer } from "../../workflow/protocols/attempt-choice/control.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./journaled-run-bootstrap.js"
 import { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
@@ -38,7 +38,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       const applicationExit = yield* makeApplicationExitShell(controlledOwnership, { requestEnd: () => Effect.void })
       const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const controls = Layer.mergeAll(
-          attemptChoiceControlLayer,
+          attemptChoiceControlWithProvidedProtocolLayer,
           controlDirectionApplicationLayer,
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer

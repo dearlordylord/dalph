@@ -11,6 +11,9 @@ const stabilizationSourcePath = `${orchestratorSource}/coordination/run/run-stab
 const deliverySourcePath = `${orchestratorSource}/coordination/delivery/delivery.ts`
 const deliveryRuntimeSourcePath = `${orchestratorSource}/coordination/delivery/run-delivery-runtime.ts`
 const pauseObserverSourcePath = `${orchestratorSource}/coordination/run/pause-progress-observer.ts`
+const controlledWorkflowSourcePath = `${orchestratorSource}/coordination/run/controlled-workflow.ts`
+const authoredRunnerSourcePath = `${dalphSource}/cassettes/authored-runner.ts`
+const productionSourcePath = `${dalphSource}/application/production.ts`
 
 const sourceFilesUnder = (root: string): ReadonlyArray<string> =>
   readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -35,6 +38,20 @@ it("one idempotent Run entry installs the delivery service contracts", () => {
   expect(runSource).not.toContain("bootstrap.fresh")
   expect(runSource).not.toContain("bootstrap.recovered")
   expect(runSource).not.toContain("bootstrap.controlled")
+})
+
+it("bootstrap-composed workflows reuse the process attempt guard and passive observer", () => {
+  const controlledWorkflowSource = readFileSync(controlledWorkflowSourcePath, "utf8")
+  const authoredRunnerSource = readFileSync(authoredRunnerSourcePath, "utf8")
+  const productionSource = readFileSync(productionSourcePath, "utf8")
+
+  for (const source of [controlledWorkflowSource, authoredRunnerSource]) {
+    expect(source).toContain("attemptChoiceControlWithProvidedProtocolLayer")
+    expect(source).not.toMatch(/\battemptChoiceControlLayer\b/)
+  }
+  expect(productionSource).not.toContain("passivePlannedAttemptObserverLayer")
+  expect(productionSource).not.toMatch(/yield\* PassivePlannedAttemptObserver/)
+  expect(productionSource).not.toMatch(/Layer\.succeed\(PassivePlannedAttemptObserver/)
 })
 
 it("delivery consumers use the CurrentSignal attachment contract instead of local race protocols", () => {

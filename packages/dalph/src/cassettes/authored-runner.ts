@@ -31,7 +31,7 @@ import {
 import {
   AuthoritativeTaskWorktreeReady,
   type AttemptChoiceApplicationResult,
-  attemptChoiceControlLayer,
+  attemptChoiceControlWithProvidedProtocolLayer,
   AttemptChoiceRequestId,
   controlDirectionApplicationLayer,
   taskClaimReacquisitionControlLayer,
@@ -1888,7 +1888,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       ).pipe(Layer.provide(ordinaryInterpreterLayer), Layer.provide(gitWorktreeLayer))
       const baseControlPolicyLayer = taskWorkCapacityControlLayer
       const operatorControlLayer = Layer.mergeAll(
-        attemptChoiceControlLayer,
+        attemptChoiceControlWithProvidedProtocolLayer,
         controlDirectionApplicationLayer,
         taskClaimReacquisitionControlLayer
       )

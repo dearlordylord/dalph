@@ -212,6 +212,12 @@ export interface CodexAppServerService {
    * payload is deliberately not authority; callers must reread exact state.
    */
   readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  /**
+   * Opens a broadcast subscription for execution-substrate activity changes
+   * that can settle after the owning turn. The notification remains only a
+   * wake hint; callers must reread the thread and owned-activity census.
+   */
+  readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly startThread: (cwd: string) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
@@ -1293,6 +1299,7 @@ const normalizeBackgroundTerminals = (
 // eslint-disable-next-line functional/no-mixed-types -- The private JSON-RPC transport closes as an effect value after request methods finish.
 interface JsonRpcClient {
   readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly request: (
     operation: CodexAppServerOperation,
     method: string,
@@ -1334,7 +1341,9 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   // Provider notifications are non-authoritative wake hints. One pending wake
   // is sufficient because every consumer rereads exact provider state.
   const turnCompletedHints = yield* PubSub.sliding<void>(1)
+  const ownedActivityHints = yield* PubSub.sliding<void>(1)
   yield* Effect.addFinalizer(() => PubSub.shutdown(turnCompletedHints))
+  yield* Effect.addFinalizer(() => PubSub.shutdown(ownedActivityHints))
   const encoder = new TextEncoder()
   const failPending = (failure: CodexAppServerFailure) =>
     Ref.modify(
@@ -1362,8 +1371,11 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
         Effect.flatMap((message) => {
           const id = message["id"]
           if (id === undefined) {
-            return message["method"] === "turn/completed"
-              ? PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
+            if (message["method"] === "turn/completed") {
+              return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
+            }
+            return message["method"] === "item/completed" || message["method"] === "process/exited"
+              ? PubSub.publish(ownedActivityHints, undefined).pipe(Effect.asVoid)
               : Effect.void
           }
           if (typeof id !== "number") {
@@ -1459,6 +1471,11 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     yield* failPending(operationFailure("close", "Unavailable", `app-server ${incarnation} closed`))
   })
   return {
+    attachOwnedActivityHints: PubSub.subscribe(ownedActivityHints).pipe(
+      Effect.map((subscription) =>
+        Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
+      )
+    ),
     attachTurnCompletedHints: PubSub.subscribe(turnCompletedHints).pipe(
       Effect.map((subscription) =>
         Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
@@ -1555,6 +1572,7 @@ const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerSer
     // Initialization failed before a provider process existed, so there can
     // be no later provider notification for this explicit unavailable value.
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
+    attachOwnedActivityHints: Effect.succeed(Stream.empty),
     startThread: () => fail("thread/start"),
     readThread: () => fail("thread/read"),
     resumeThread: () => fail("thread/resume"),
@@ -2581,6 +2599,7 @@ export const codexAppServerLayer = (
       })
       return {
         attachTurnCompletedHints: rpc.attachTurnCompletedHints,
+        attachOwnedActivityHints: rpc.attachOwnedActivityHints,
         incarnation: liveIncarnation,
         serverPid: childPid,
         startThread,

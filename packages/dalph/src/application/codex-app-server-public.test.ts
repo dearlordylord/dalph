@@ -288,6 +288,7 @@ it.effect("keeps controlled app-server and owned-activity substitutions at their
   Effect.gen(function* () {
     const service: CodexAppServerService = {
       incarnation: CodexServerIncarnation.make("controlled-incarnation"),
+      attachOwnedActivityHints: Effect.succeed(Stream.empty),
       attachTurnCompletedHints: Effect.succeed(Stream.empty),
       startThread: (cwd: string) =>
         Effect.succeed(thread("idle", [] as const) as CodexThreadSnapshot).pipe(

@@ -56,9 +56,7 @@ import {
   type CurrentSignal,
   type TrackerTarget,
   WorkflowRunAlreadyTerminated,
-  defaultJournalMaintenanceObservation,
-  PassivePlannedAttemptObserver,
-  passivePlannedAttemptObserverLayer
+  defaultJournalMaintenanceObservation
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
 import { Crypto, Duration, Effect, Layer, Schema } from "effect"
@@ -237,18 +235,14 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     })
   )
   const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))
-  const executorWithPassiveObservation = passivePlannedAttemptObserverLayer.pipe(
-    Layer.provideMerge(executorWithApplicationExit)
-  )
   const integratorLayer = integrator === undefined ? Layer.empty : Layer.succeed(Integrator, Integrator.of(integrator))
-  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithPassiveObservation)
+  const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithApplicationExit)
 
   return Layer.unwrap(
     Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
       const crypto = yield* Crypto.Crypto
       const executor = yield* PlannedAttemptExecutor
-      const passiveObserver = yield* PassivePlannedAttemptObserver
       const trace = yield* WorkflowTrace
       const applicationExit = yield* ApplicationExitShell
       const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
@@ -280,7 +274,6 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           Layer.provide(operatorControlLayer),
           Layer.provide(freshOperationIdAllocatorLayer.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, crypto)))),
           Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
-          Layer.provide(Layer.succeed(PassivePlannedAttemptObserver, passiveObserver)),
           Layer.provide(Layer.succeed(WorkflowTrace, trace))
         )
       }

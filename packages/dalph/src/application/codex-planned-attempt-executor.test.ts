@@ -139,18 +139,21 @@ type Harness = {
   readonly currentRecord: () => CodexAttemptRecord | undefined
   readonly replacementLedger: () => CodexPurgedWorkUnitReplacementLedger | undefined
   readonly setThread: (thread: CodexThreadSnapshot) => void
+  readonly restoreProviderThread: (thread: CodexThreadSnapshot) => void
   readonly preserveResumeCwd: () => void
   readonly setRecord: (record: CodexAttemptRecord) => void
   readonly setReadOverride: (record: CodexAttemptRecord | undefined) => void
   readonly complete: (message: string) => void
   readonly completeWithItems: (items: ReadonlyArray<unknown>) => void
   readonly makeTerminalActivity: () => void
+  readonly finishTerminalActivity: () => void
   readonly setActivityCensus: (projection: CodexOwnedActivityCensusProjection | undefined) => void
   readonly setActivityCensusSequence: (projections: ReadonlyArray<CodexOwnedActivityCensusProjection>) => void
   readonly observeActivityCensus: (
     thread: CodexThreadSnapshot,
     backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
   ) => CodexOwnedActivityCensusProjection
+  readonly afterActivityCensus: () => Effect.Effect<void>
   readonly terminateDescendants: (descendants: ReadonlyArray<CodexOwnedProcessIdentity>) => void
   readonly backgroundTerminationCount: () => number
   readonly descendantTerminationCount: () => number
@@ -198,7 +201,9 @@ const makeHarness = (
     readonly dieAfterFirstTurnStartOnce?: boolean
     readonly lifecycleHintCount?: number
     readonly lifecycleHints?: CodexAppServerService["attachTurnCompletedHints"]
+    readonly activityHints?: CodexAppServerService["attachOwnedActivityHints"]
     readonly beforeAttemptRead?: () => Effect.Effect<void>
+    readonly afterActivityCensus?: () => Effect.Effect<void>
   } = {}
 ): Harness => {
   const threadId = CodexThreadId.make("codex-thread-issue-58")
@@ -255,6 +260,7 @@ const makeHarness = (
     attachTurnCompletedHints:
       options.lifecycleHints ??
       Effect.succeed(Stream.fromIterable(Array.from({ length: options.lifecycleHintCount ?? 0 }, () => undefined))),
+    attachOwnedActivityHints: options.activityHints ?? Effect.succeed(Stream.empty),
     startThread: (cwd) =>
       Effect.sync(() => {
         threadStartCount += 1
@@ -477,6 +483,12 @@ const makeHarness = (
     setThread: (thread) => {
       currentThread = thread
     },
+    restoreProviderThread: (thread) => {
+      turns.splice(0, turns.length, ...thread.turns)
+      currentThread = { ...thread, turns }
+      currentTurn = turns.findLast((turn) => turn.ownedTurnToken !== undefined)
+      turnNumber = turns.length
+    },
     preserveResumeCwd: () => {
       preserveResumeCwdOnResume = true
     },
@@ -512,6 +524,9 @@ const makeHarness = (
     makeTerminalActivity: () => {
       terminalActivity = true
     },
+    finishTerminalActivity: () => {
+      terminalActivity = false
+    },
     setActivityCensus: (projection) => {
       activityCensusOverride = projection
       activityCensusSequence = []
@@ -535,6 +550,7 @@ const makeHarness = (
       ]
       return activities.length === 0 ? { _tag: "Absent" } : { _tag: "ExactLive", activities }
     },
+    afterActivityCensus: () => options.afterActivityCensus?.() ?? Effect.void,
     terminateDescendants: (descendants) => {
       descendantTerminationCount += descendants.length
     },
@@ -633,7 +649,9 @@ const layerForImplementation =
             controlledCodexAppServerLayer(harness.app),
             controlledCodexOwnedActivityCensusLayer({
               observe: (thread, backgroundTerminals) =>
-                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)).pipe(
+                  Effect.tap(() => harness.afterActivityCensus())
+                ),
               terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
             }),
             Layer.succeed(CodexAttemptStore, store),
@@ -643,7 +661,9 @@ const layerForImplementation =
             controlledCodexAppServerLayer(harness.app),
             controlledCodexOwnedActivityCensusLayer({
               observe: (thread, backgroundTerminals) =>
-                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)).pipe(
+                  Effect.tap(() => harness.afterActivityCensus())
+                ),
               terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
             }),
             Layer.succeed(CodexAttemptStore, store),
@@ -943,6 +963,88 @@ it.effect("keeps equal executing provider wakes inside one passive owner without
   )
 )
 
+it.effect("observes activity exit after an equal turn-completed wake without another turn hint", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const turnHints = yield* PubSub.unbounded<void>()
+      const activityHints = yield* PubSub.unbounded<void>()
+      const equalProjectionObserved = yield* Deferred.make<void>()
+      const terminalPublished = yield* Deferred.make<void>()
+      let observerObservationCount = 0
+      let observerActive = false
+      const harness = makeHarness({
+        afterActivityCensus: () =>
+          Effect.sync(() => {
+            if (!observerActive) return observerObservationCount
+            observerObservationCount += 1
+            return observerObservationCount
+          }).pipe(
+            Effect.flatMap((observationCount) =>
+              observationCount === 2 ? Deferred.succeed(equalProjectionObserved, undefined) : Effect.void
+            )
+          ),
+        lifecycleHints: PubSub.subscribe(turnHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        ),
+        activityHints: PubSub.subscribe(activityHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const observer = yield* makePassivePlannedAttemptObserver()
+        yield* executor.begin(request)
+        harness.makeTerminalActivity()
+        harness.complete(finalResponse(head))
+        const changedPublications = yield* Ref.make(0)
+        observerActive = true
+        const observed = yield* observer.attach({
+          plannedAttempt: attempt,
+          publishCurrent: (projection) => {
+            if (projection._tag !== "Exact") {
+              return Effect.die("owned activity must keep the exact attempt Executing")
+            }
+            return Effect.succeed({ acceptedFacts: "UnchangedPassiveObservation" as const, report: projection.report })
+          },
+          publishChange: (projection) =>
+            projection._tag === "Exact" && projection.report._tag === "ExecutorWorkTerminal"
+              ? Ref.update(changedPublications, (count) => count + 1).pipe(
+                  Effect.andThen(Deferred.succeed(terminalPublished, undefined)),
+                  Effect.asVoid
+                )
+              : Effect.die("owned-activity exit must publish the retained terminal projection")
+        })
+
+        expect(observed).toMatchObject({
+          acceptedFacts: "UnchangedPassiveObservation",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+        yield* PubSub.publish(turnHints, undefined)
+        yield* Deferred.await(equalProjectionObserved)
+        expect(yield* Ref.get(changedPublications)).toBe(0)
+
+        harness.finishTerminalActivity()
+        yield* PubSub.publish(activityHints, undefined)
+        yield* Deferred.await(terminalPublished)
+        expect(yield* Ref.get(changedPublications)).toBe(1)
+        // Terminal sealing deliberately performs a second census after the
+        // accepted-result evidence read, so the three projections make four
+        // authoritative activity observations in total.
+        expect(observerObservationCount).toBe(4)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
 it.effect("current-first attachment cannot miss a terminal change between projection and await", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -982,6 +1084,86 @@ it.effect("current-first attachment cannot miss a terminal change between projec
       expect(harness.turnCount()).toBe(1)
       yield* attachment.attached.close
     })
+  )
+)
+
+it.effect("rebuilds Codex lifecycle attachment from durable association across scoped restart", () =>
+  Effect.forEach(
+    ["Terminal", "Safe"] as const,
+    (outcome) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const firstHarness = makeHarness()
+          const sharedStore = firstHarness.store
+          const firstCurrent = yield* Effect.gen(function* () {
+            const executor = yield* PlannedAttemptExecutor
+            const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+            yield* executor.begin(request)
+            return (yield* lifecycle.attach(correlation)).current
+          }).pipe(Effect.provide(layerFor(firstHarness, defaultGitCommand, undefined, undefined, sharedStore)))
+
+          expect(firstCurrent).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkExecuting", correlation } })
+          expect(firstHarness.currentRecord()).toMatchObject({
+            _tag: "Running",
+            correlationRunId: correlation.runId,
+            correlationAttemptId: correlation.attemptId,
+            threadId: firstHarness.currentThread().id
+          })
+
+          const lifecycleHints = yield* PubSub.unbounded<void>()
+          const secondHarness = makeHarness({
+            lifecycleHints: PubSub.subscribe(lifecycleHints).pipe(
+              Effect.map((subscription) =>
+                Stream.unfold(undefined, () =>
+                  PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+                )
+              )
+            )
+          })
+          secondHarness.restoreProviderThread(firstHarness.currentThread())
+
+          const changed = yield* Effect.gen(function* () {
+            const executor = yield* PlannedAttemptExecutor
+            const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+            const attachment = yield* lifecycle.attach(correlation)
+            expect(attachment.current).toMatchObject({
+              _tag: "Exact",
+              report: { _tag: "ExecutorWorkExecuting", correlation }
+            })
+
+            if (outcome === "Terminal") {
+              const thread = secondHarness.currentThread()
+              const retainedTurn = thread.turns.findLast((turn) => turn.ownedTurnToken !== undefined)
+              if (retainedTurn === undefined) return yield* Effect.die("restart fixture lost the durable owned turn")
+              secondHarness.restoreProviderThread({
+                ...thread,
+                status: "idle",
+                turns: [
+                  ...thread.turns.filter((turn) => turn.id !== retainedTurn.id),
+                  { ...retainedTurn, status: "completed", items: [{ type: "agentMessage", text: finalResponse(head) }] }
+                ]
+              })
+            } else {
+              expect(yield* executor.requestSuspension(attempt)).toEqual(
+                PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+              )
+            }
+            yield* PubSub.publish(lifecycleHints, undefined)
+            return yield* attachment.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+          }).pipe(Effect.provide(layerFor(secondHarness, defaultGitCommand, undefined, undefined, sharedStore)))
+
+          expect(changed).toMatchObject({
+            _tag: "Exact",
+            report: {
+              _tag: outcome === "Terminal" ? "ExecutorWorkTerminal" : "ExecutorWorkSafelySuspended",
+              correlation
+            }
+          })
+          expect(firstHarness.turnCount()).toBe(1)
+          expect(secondHarness.turnCwds).toHaveLength(0)
+        })
+      ),
+    { discard: true }
   )
 )
 
